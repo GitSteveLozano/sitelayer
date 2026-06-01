@@ -10,9 +10,11 @@ import { useMemo } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import { MKpi, MKpiRow, MTopBar, MBody } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
+import { deriveAutoPostMeta } from '../desktop/owner-money.js'
 
 export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const model = useMemo(() => deriveMoney(bootstrap), [bootstrap])
+  const autoPostMeta = useMemo(() => deriveAutoPostMeta(bootstrap?.laborPayrollAutoPost ?? null), [bootstrap])
 
   if (!bootstrap) {
     return (
@@ -95,6 +97,13 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
           <MKpi label="In" value={formatMoney(model.inflow)} meta="Active bid value" metaTone="green" />
           <MKpi label="Out" value={formatMoney(model.outflow)} meta="Labor cost burned" metaTone="red" />
         </MKpiRow>
+
+        {/* THIS WEEK PAYROLL — labor due this week; "AUTO <date>" sub-label
+            once the company opts into the weekly auto-post (migration 116).
+            Full-width tile (override the 2-col KPI grid to a single column). */}
+        <div className="m-kpi-row" style={{ gridTemplateColumns: '1fr' }}>
+          <MKpi label="This week payroll" value={formatMoney(model.weekPayroll)} meta={autoPostMeta} />
+        </div>
 
         {/* PENDING section bar + list rows */}
         <div
@@ -183,13 +192,16 @@ type MoneyModel = {
   net: number
   inflow: number
   outflow: number
+  /** This-week labor burn (payroll due this week) — sum of hours × rate for
+   *  labor entries whose occurred_on falls in the current Mon–Sun week. */
+  weekPayroll: number
   trend: number[]
   pending: PendingRow[]
 }
 
 function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
   if (!bootstrap) {
-    return { net: 0, inflow: 0, outflow: 0, trend: new Array(12).fill(0), pending: [] }
+    return { net: 0, inflow: 0, outflow: 0, weekPayroll: 0, trend: new Array(12).fill(0), pending: [] }
   }
 
   const projects = bootstrap.projects ?? []
@@ -203,9 +215,16 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
 
   const rateById = new Map<string, number>()
   for (const p of projects) rateById.set(p.id, Number(p.labor_rate ?? 0))
-  const outflow = labor
-    .filter((l) => !l.deleted_at)
-    .reduce((sum, l) => sum + Number(l.hours ?? 0) * (rateById.get(l.project_id) ?? 0), 0)
+  const liveLabor = labor.filter((l) => !l.deleted_at)
+  const laborCost = (l: (typeof liveLabor)[number]) => Number(l.hours ?? 0) * (rateById.get(l.project_id) ?? 0)
+  const outflow = liveLabor.reduce((sum, l) => sum + laborCost(l), 0)
+
+  // THIS WEEK PAYROLL ≈ labor cost for entries occurring in the current
+  // Mon–Sun week (mirrors the desktop OwnerMoney tile + design dsg__03).
+  const { start: weekStart, end: weekEnd } = currentWeekBounds()
+  const weekPayroll = liveLabor
+    .filter((l) => withinWeek(l.occurred_on, weekStart, weekEnd))
+    .reduce((sum, l) => sum + laborCost(l), 0)
 
   const net = inflow - outflow
 
@@ -227,7 +246,26 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
       tone: 'good' as const,
     }))
 
-  return { net, inflow, outflow, trend, pending }
+  return { net, inflow, outflow, weekPayroll, trend, pending }
+}
+
+/** Current Monday-anchored week [start, end] as Date objects (local). */
+function currentWeekBounds(): { start: Date; end: Date } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const dow = start.getDay() // 0=Sun..6=Sat
+  start.setDate(start.getDate() + (dow === 0 ? -6 : 1 - dow))
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  end.setHours(23, 59, 59, 999)
+  return { start, end }
+}
+
+function withinWeek(iso: string | undefined, start: Date, end: Date): boolean {
+  if (!iso) return false
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  return d >= start && d <= end
 }
 
 function buildTrend(net: number): number[] {

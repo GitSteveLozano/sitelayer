@@ -2,9 +2,18 @@ import type { IncomingMessage } from 'node:http'
 import { createPublicKey, createVerify } from 'node:crypto'
 
 export type Identity = {
+  /** The EFFECTIVE/subject user — every data-scoping consumer reads this. Under
+   *  impersonation this is the impersonated user, not the actor. */
   userId: string
   source: 'clerk' | 'internal' | 'header' | 'default'
   role?: string
+  /** The acting user when this request is on behalf of someone else (the dev
+   *  act-as caller, or the prod impersonator from a Clerk `act` claim). Audit
+   *  writes stamp this; data scoping never does. Absent for normal self-auth. */
+  actorUserId?: string
+  /** How `userId` was assumed. 'self' (or absent) = normal; 'act_as' = dev/demo
+   *  RoleSwitcher override; 'impersonate' = prod Clerk actor-token session. */
+  mode?: 'self' | 'act_as' | 'impersonate'
 }
 
 /**
@@ -66,7 +75,11 @@ export class AuthConfigError extends Error {
 
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
   const tier = env.APP_TIER ?? 'local'
-  const clerkJwtKey = env.CLERK_JWT_KEY?.trim() || null
+  // Accept a single-line PEM with literal `\n` escapes — required so the key
+  // survives env-file transports that can't carry multi-line values (the
+  // preview/demo deploy passes envs via `docker compose --env-file`). A
+  // real-newline PEM has no `\n` literals, so this is a no-op for it (prod-safe).
+  const clerkJwtKey = env.CLERK_JWT_KEY?.trim().replace(/\\n/g, '\n') || null
   const internalAuthToken = env.INTERNAL_AUTH_TOKEN?.trim() || null
   const authConfigured = Boolean(clerkJwtKey || internalAuthToken)
   const allowHeaderFallback = env.AUTH_ALLOW_HEADER_FALLBACK
@@ -153,6 +166,21 @@ function verifyClerkJwt(token: string, config: AuthConfig): Identity {
   }
   const sub = typeof payload.sub === 'string' ? payload.sub : null
   if (!sub) throw new AuthError(401, 'token missing sub')
+  // Clerk actor-token sessions carry an `act` claim identifying the impersonator
+  // (the real admin). `sub` stays the impersonated subject so data scoping is
+  // unchanged; we surface the actor so the audit layer can stamp impersonated_by
+  // and the SPA can show the "viewing as X" banner. Accept both the object form
+  // ({ sub }) and a bare string, fail-open to normal self-auth when absent.
+  const actClaim = payload.act
+  let actorUserId: string | undefined
+  if (actClaim && typeof actClaim === 'object' && typeof (actClaim as { sub?: unknown }).sub === 'string') {
+    actorUserId = (actClaim as { sub: string }).sub
+  } else if (typeof actClaim === 'string' && actClaim.trim()) {
+    actorUserId = actClaim.trim()
+  }
+  if (actorUserId) {
+    return { userId: sub, source: 'clerk', actorUserId, mode: 'impersonate' }
+  }
   return { userId: sub, source: 'clerk' }
 }
 

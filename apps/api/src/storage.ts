@@ -103,6 +103,25 @@ export function buildWorkerIssueAttachmentStorageKey(
   return `${companyId}/worker-issues/${workerIssueId}/${sanitizeFileName(fileName)}`
 }
 
+/**
+ * Storage key for narrated feedback / replay artifacts captured under the
+ * session spine. Kept under a dedicated prefix because these blobs often have
+ * stricter retention and access handling than ordinary project media.
+ */
+export function buildCaptureArtifactStorageKey(companyId: string, captureSessionId: string, fileName: string): string {
+  return `${companyId}/capture-sessions/${captureSessionId}/${sanitizeFileName(fileName)}`
+}
+
+/**
+ * Storage key for rental dispatch / return condition photos. Lives under
+ * an `/inventory-movements/` prefix in the same bucket — same first-segment
+ * companyId guard as the other photo helpers, so assertKeyInCompany still
+ * blocks cross-tenant access via path manipulation.
+ */
+export function buildInventoryMovementPhotoStorageKey(companyId: string, movementId: string, fileName: string): string {
+  return `${companyId}/inventory-movements/${movementId}/${sanitizeFileName(fileName)}`
+}
+
 export function formatS3CopySource(bucket: string, key: string): string {
   return `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`
 }

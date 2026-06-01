@@ -62,7 +62,12 @@ describe('rental-billing — next_events per state (golden)', () => {
           },
         ],
         "posted": [],
-        "posting": [],
+        "posting": [
+          {
+            "label": "Cancel stuck QuickBooks post",
+            "type": "CANCEL_POST",
+          },
+        ],
         "voided": [],
       }
     `)
@@ -109,6 +114,56 @@ describe('rental-billing — replay harness against synthetic event log', () => 
     expect(result.ok).toBe(true)
     expect(result.issues).toEqual([])
     expect(result.finalSnapshot).toEqual(posted)
+  })
+
+  it('escape-hatch path: generated → approve → post → CANCEL_POST → failed → retry → post → posted', () => {
+    const initial: RentalBillingWorkflowSnapshot = { state: 'generated', state_version: 1 }
+    const approveEvent = { type: 'APPROVE', approved_at: '2026-04-29T10:00:00.000Z', approved_by: 'office-user' }
+    const approved = transitionRentalBillingWorkflow(initial, approveEvent as never)
+    const posting = transitionRentalBillingWorkflow(approved, { type: 'POST_REQUESTED' })
+    const cancelEvent = {
+      type: 'CANCEL_POST',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+    }
+    const failed = transitionRentalBillingWorkflow(posting, cancelEvent as never)
+    const reapproved = transitionRentalBillingWorkflow(failed, { type: 'RETRY_POST' })
+    const reposting = transitionRentalBillingWorkflow(reapproved, { type: 'POST_REQUESTED' })
+    const postedEvent = { type: 'POST_SUCCEEDED', posted_at: '2026-04-29T10:06:00.000Z', qbo_invoice_id: 'qbo-9002' }
+    const posted = transitionRentalBillingWorkflow(reposting, postedEvent as never)
+
+    const entity_id = '00000000-0000-0000-0000-000000000002'
+    const mk = (
+      state_version: number,
+      event_payload: { type: string; [k: string]: unknown },
+      snapshot_after: RentalBillingWorkflowSnapshot,
+    ): WorkflowEventLogEntry => ({
+      workflow_name: RENTAL_BILLING_WORKFLOW_NAME,
+      schema_version: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+      entity_id,
+      state_version,
+      event_payload,
+      snapshot_after: snapshot_after as unknown as Record<string, unknown> & { state: string; state_version: number },
+    })
+
+    const log: WorkflowEventLogEntry[] = [
+      mk(1, approveEvent, approved),
+      mk(2, { type: 'POST_REQUESTED' }, posting),
+      mk(3, cancelEvent, failed),
+      mk(4, { type: 'RETRY_POST' }, reapproved),
+      mk(5, { type: 'POST_REQUESTED' }, reposting),
+      mk(6, postedEvent, posted),
+    ]
+
+    const result = applyEventLog<RentalBillingWorkflowSnapshot>(initial, log)
+    expect(result.ok).toBe(true)
+    expect(result.issues).toEqual([])
+    expect(result.finalSnapshot).toEqual(posted)
+    expect(failed).toMatchObject({
+      state: 'failed',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+    })
   })
 
   it('detects a forged snapshot_after as snapshot_divergence', () => {

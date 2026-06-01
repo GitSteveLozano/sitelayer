@@ -45,6 +45,20 @@ export {
 } from './project-lifecycle'
 
 export {
+  appendCaptureArtifacts,
+  appendCaptureSessionEvents,
+  createCaptureSession,
+  discardCaptureSession,
+  ensureCaptureSession,
+  startCaptureSession,
+  stopCaptureSession,
+  type CaptureArtifactInput,
+  type CaptureSessionEventInput,
+  type CaptureSessionCreateInput,
+  type CaptureSessionResponse,
+} from './capture-sessions'
+
+export {
   createSupportPacket,
   fetchSupportPacketAccessLog,
   fetchSupportPacket,
@@ -126,9 +140,11 @@ export {
   createDailyLog,
   dailyLogPhotoUrl,
   deleteDailyLogPhoto,
+  dispatchDailyLogEvent,
   fetchDailyLog,
   fetchDailyLogPhotos,
   fetchDailyLogs,
+  fetchDailyLogSnapshot,
   patchDailyLog,
   submitDailyLog,
   uploadDailyLogPhoto,
@@ -143,6 +159,7 @@ export {
   type DailyLog,
   type DailyLogCreateRequest,
   type DailyLogDetailResponse,
+  type DailyLogHumanEvent,
   type DailyLogListParams,
   type DailyLogListResponse,
   type DailyLogPatchRequest,
@@ -150,6 +167,8 @@ export {
   type DailyLogPhotoMetadata,
   type DailyLogPhotoUploadOptions,
   type DailyLogPhotoUploadResponse,
+  type DailyLogSnapshot,
+  type DailyLogSnapshotContext,
   type DailyLogStatus,
   type DailyLogSubmitRequest,
   type UseUploadDailyLogPhotoInput,
@@ -337,7 +356,6 @@ export {
   fetchLaborPayrollRuns,
   laborPayrollRunQueryKeys,
   previewLaborPayrollCoverage,
-  useDispatchLaborPayrollRunEvent,
   useLaborPayrollRun,
   useLaborPayrollRuns,
   type LaborPayrollHumanEvent,
@@ -384,19 +402,33 @@ export {
   type QboMappingPatchRequest,
   type QboMappingUpsertRequest,
   type QboSyncStatus,
+  type QboSyncTriggerResponse,
 } from './qbo'
 
 export {
   countFailedOutbox,
+  dispatchQboSyncRunEvent,
   fetchQboSyncOutbox,
+  fetchQboSyncRun,
+  fetchQboSyncRuns,
   fetchQboSyncStatus,
+  isQboSyncRunInFlight,
   qboSyncQueryKeys,
+  qboSyncRunQueryKeys,
+  useDispatchQboSyncRunEvent,
   useQboSyncOutbox,
+  useQboSyncRun,
+  useQboSyncRuns,
   useQboSyncStatus,
   type QboLatestSyncEvent,
   type QboSyncOutboxResponse,
   type QboSyncOutboxRow,
   type QboSyncRowStatus,
+  type QboSyncRunContext,
+  type QboSyncRunHumanEvent,
+  type QboSyncRunListResponse,
+  type QboSyncRunSnapshot,
+  type QboSyncRunState,
   type QboSyncStatusConnection,
   type QboSyncStatusResponse,
 } from './qbo-sync'
@@ -461,6 +493,38 @@ export {
   type WorkingHoursResponse,
   type WorkingHoursWeekday,
 } from './companies'
+
+export {
+  useAcceptInvite,
+  useCompanyInvites,
+  useCreateInvite,
+  useInviteView,
+  useRevokeInvite,
+  type AcceptInviteResponse,
+  type CompanyInvite,
+  type CreateInviteRequest,
+  type CreateInviteResponse,
+  type InviteStatus,
+  type InviteViewResponse,
+  type ListInvitesResponse,
+  type PublicInviteView,
+} from './invites'
+
+export {
+  useAssignMembershipRole,
+  useCompanyRoles,
+  useCreateCustomRole,
+  useDeleteCustomRole,
+  usePatchCustomRole,
+  type AssignMembershipRoleRequest,
+  type AssignMembershipRoleResponse,
+  type BuiltinRoleView,
+  type CompanyRolesResponse,
+  type CreateCustomRoleRequest,
+  type CustomRole,
+  type CustomRoleGrant,
+  type PatchCustomRoleRequest,
+} from './company-roles'
 
 export { useActiveCompanyId, useActiveCompanyModules } from './active-company'
 
@@ -563,6 +627,7 @@ export {
   useUpdateTakeoffTag,
   useUploadBlueprint,
   useUpsertQboCustomField,
+  useVerifyPage,
   type Assembly,
   type AssemblyComponent,
   type BlueprintDocument,
@@ -687,6 +752,10 @@ export {
   useApproveRentalRequest,
   useDeclineRentalRequest,
   useRentalRequests,
+  useRentalRequestSnapshot,
+  useDispatchRentalRequestEvent,
+  fetchRentalRequestSnapshot,
+  dispatchRentalRequestEvent,
   type ApproveRentalRequestInput,
   type ApproveRentalRequestResponse,
   type DeclineRentalRequestInput,
@@ -695,6 +764,9 @@ export {
   type RentalRequestItem,
   type RentalRequestListResponse,
   type RentalRequestStatus,
+  type RentalRequestSnapshot,
+  type RentalRequestApprovalState,
+  type RentalRequestApprovalEvent,
 } from './rental-requests'
 
 // Phase 3.1 — admin notification queue (isolated block; see notifications-queue.ts)

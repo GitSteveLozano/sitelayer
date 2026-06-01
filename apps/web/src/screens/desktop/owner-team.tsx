@@ -7,9 +7,12 @@
  */
 import { useMemo, useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
+import type { LaborRow } from '@/lib/api/bootstrap'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
 import { MAvatar, MChip, MChipRow, MPill, avatarToneFor, initialsFor } from '@/components/m'
 import { formatDecimalHours, formatMoney, todayIso } from '../mobile/format.js'
+
+type WorkerStatus = 'on' | 'blocked' | 'noshow' | 'off'
 
 type CrewRow = {
   id: string
@@ -17,13 +20,27 @@ type CrewRow = {
   role: string
   rate: number | null
   weekHours: number
-  onClock: boolean
+  onProject: string | null
+  status: WorkerStatus
 }
 
-type Filter = 'all' | 'foremen' | 'crew'
+type Filter = 'all' | 'foremen' | 'crew' | 'estimators'
 
 function isForeman(role: string): boolean {
   return /foreman|lead|super/i.test(role)
+}
+
+function isEstimator(role: string): boolean {
+  return /estimat/i.test(role)
+}
+
+// Status pill set matches the design's dot pills: ON (green) / BLOCKED (red) /
+// NOSHOW (red) / OFF (neutral). See dsg__15.
+const STATUS_META: Record<WorkerStatus, { label: string; tone: 'green' | 'red' | undefined }> = {
+  on: { label: 'On', tone: 'green' },
+  blocked: { label: 'Blocked', tone: 'red' },
+  noshow: { label: 'Noshow', tone: 'red' },
+  off: { label: 'Off', tone: undefined },
 }
 
 function weekStartIso(): string {
@@ -43,14 +60,23 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
 
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
   const { rows, activeCount, onClockCount, foremenCount, weekTotal } = useMemo(() => {
     const active = workers.filter((w) => !w.deleted_at)
     const weekStart = weekStartIso()
     const today = todayIso()
 
+    // Project-name lookup so the "On project" column can resolve each
+    // worker's current assignment from labor (which only carries project_id).
+    const projectName = new Map<string, string>()
+    for (const p of projects) projectName.set(p.id, p.name)
+
     const weekHoursByWorker = new Map<string, number>()
     const onClockToday = new Set<string>()
+    // Most-recent this-week labor entry per worker → the project they're on.
+    const latestEntry = new Map<string, LaborRow>()
+    const blockedToday = new Set<string>()
     for (const l of labor) {
       if (l.deleted_at || !l.worker_id) continue
       if (l.occurred_on < weekStart) continue
@@ -58,16 +84,35 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
       if (!Number.isFinite(hrs)) continue
       weekHoursByWorker.set(l.worker_id, (weekHoursByWorker.get(l.worker_id) ?? 0) + hrs)
       if (l.occurred_on === today && hrs > 0) onClockToday.add(l.worker_id)
+      // A zero-hour entry dated today reads as a no-show / blocked signal.
+      if (l.occurred_on === today && hrs === 0) blockedToday.add(l.worker_id)
+      const prev = latestEntry.get(l.worker_id)
+      if (
+        !prev ||
+        l.occurred_on > prev.occurred_on ||
+        (l.occurred_on === prev.occurred_on && l.created_at > prev.created_at)
+      ) {
+        latestEntry.set(l.worker_id, l)
+      }
     }
 
-    const rows: CrewRow[] = active.map((w) => ({
-      id: w.id,
-      name: w.name,
-      role: w.role,
-      rate: null, // hourly rate is not carried on the worker roster
-      weekHours: weekHoursByWorker.get(w.id) ?? 0,
-      onClock: onClockToday.has(w.id),
-    }))
+    const rows: CrewRow[] = active.map((w) => {
+      const onClock = onClockToday.has(w.id)
+      const latest = latestEntry.get(w.id)
+      const onProject = latest ? (projectName.get(latest.project_id) ?? null) : null
+      let status: WorkerStatus = 'off'
+      if (onClock) status = 'on'
+      else if (blockedToday.has(w.id)) status = 'noshow'
+      return {
+        id: w.id,
+        name: w.name,
+        role: w.role,
+        rate: null, // hourly rate is not carried on the worker roster
+        weekHours: weekHoursByWorker.get(w.id) ?? 0,
+        onProject,
+        status,
+      }
+    })
 
     let weekTotal = 0
     for (const v of weekHoursByWorker.values()) weekTotal += v
@@ -79,11 +124,12 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
       foremenCount: active.filter((w) => isForeman(w.role)).length,
       weekTotal,
     }
-  }, [workers, labor])
+  }, [workers, labor, projects])
 
   const visibleRows = useMemo(() => {
     if (filter === 'foremen') return rows.filter((r) => isForeman(r.role))
-    if (filter === 'crew') return rows.filter((r) => !isForeman(r.role))
+    if (filter === 'estimators') return rows.filter((r) => isEstimator(r.role))
+    if (filter === 'crew') return rows.filter((r) => !isForeman(r.role) && !isEstimator(r.role))
     return rows
   }, [rows, filter])
 
@@ -98,7 +144,11 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
         </span>
       ),
     },
-    { key: 'role', header: 'Role', render: (r) => r.role || '—' },
+    {
+      key: 'role',
+      header: 'Role',
+      render: (r) => (r.role ? <MPill>{r.role.toUpperCase()}</MPill> : '—'),
+    },
     { key: 'rate', header: 'Rate', numeric: true, render: (r) => (r.rate == null ? '—' : `${formatMoney(r.rate)}/h`) },
     {
       key: 'week',
@@ -106,14 +156,18 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
       numeric: true,
       render: (r) => (r.weekHours > 0 ? formatDecimalHours(r.weekHours, 1) : '—'),
     },
+    { key: 'onProject', header: 'On project', render: (r) => r.onProject ?? '—' },
     {
       key: 'status',
       header: 'Status',
-      render: (r) => (
-        <MPill tone={r.onClock ? 'green' : undefined} dot>
-          {r.onClock ? 'On clock' : 'Off'}
-        </MPill>
-      ),
+      render: (r) => {
+        const meta = STATUS_META[r.status]
+        return (
+          <MPill tone={meta.tone} dot>
+            {meta.label}
+          </MPill>
+        )
+      },
     },
   ]
 
@@ -161,9 +215,16 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
           <MChip
             active={filter === 'crew'}
             onClick={() => setFilter('crew')}
-            count={rows.filter((r) => !isForeman(r.role)).length}
+            count={rows.filter((r) => !isForeman(r.role) && !isEstimator(r.role)).length}
           >
             Crew
+          </MChip>
+          <MChip
+            active={filter === 'estimators'}
+            onClick={() => setFilter('estimators')}
+            count={rows.filter((r) => isEstimator(r.role)).length}
+          >
+            Estimators
           </MChip>
         </MChipRow>
 

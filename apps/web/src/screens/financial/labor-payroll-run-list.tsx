@@ -32,10 +32,20 @@ export function LaborPayrollRunListScreen() {
       <Link to="/financial" className="text-[12px] text-ink-3">
         ← Financial
       </Link>
-      <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Labor payroll runs</h1>
-      <p className="text-[12px] text-ink-3 mt-1">
-        {rows.length} run{rows.length === 1 ? '' : 's'}
-      </p>
+      <div className="mt-2 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Labor payroll runs</h1>
+          <p className="text-[12px] text-ink-3 mt-1">
+            {rows.length} run{rows.length === 1 ? '' : 's'}
+          </p>
+        </div>
+        <Link
+          to="/financial/labor-payroll-runs/new"
+          className="shrink-0 mt-1 px-3 py-1.5 rounded-full text-[12px] font-medium bg-accent text-white"
+        >
+          + New run
+        </Link>
+      </div>
 
       <div className="mt-4 flex gap-1.5 overflow-x-auto scrollbar-hide pb-2">
         {STATES.map((s) => (

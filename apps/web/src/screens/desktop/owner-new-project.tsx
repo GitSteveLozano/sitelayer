@@ -27,8 +27,8 @@ type StartKind = 'takeoff' | 'clone' | 'blank'
 const START_OPTIONS: Array<{ kind: StartKind; label: string; sub: string; tag: string | null }> = [
   {
     kind: 'takeoff',
-    label: 'From a takeoff',
-    sub: 'Pull quantities + price straight from an estimator deliverable',
+    label: 'From a blueprint',
+    sub: 'Upload a PDF plan — take off quantities in the canvas, then price',
     tag: 'AI',
   },
   { kind: 'clone', label: 'Clone past project', sub: 'Same client or scope — copy the structure', tag: null },
@@ -39,6 +39,12 @@ function fmtValue(v: string | number | null | undefined): string {
   const n = Number(v ?? 0)
   if (!Number.isFinite(n) || n === 0) return '—'
   return `$${Math.round(n).toLocaleString('en-US')}`
+}
+
+function fmtSize(v: string | number | null | undefined): string {
+  const n = Number(v ?? 0)
+  if (!Number.isFinite(n) || n === 0) return '—'
+  return `${Math.round(n).toLocaleString('en-US')} SF`
 }
 
 export function OwnerNewProject({ bootstrap = null }: { bootstrap?: BootstrapResponse | null }) {
@@ -253,15 +259,15 @@ export function OwnerNewProject({ bootstrap = null }: { bootstrap?: BootstrapRes
           {recent.length > 0 ? (
             <div className="d-table-wrap">
               <div className="d-table-head">
-                <div className="d-table-head-title">Recent projects · ready to convert</div>
+                <div className="d-table-head-title">Recent takeoffs · ready to convert</div>
               </div>
               <table className="d-table">
                 <thead>
                   <tr>
-                    <th>Project</th>
+                    <th>Takeoff</th>
                     <th>Client</th>
-                    <th>Division</th>
-                    <th data-num="true">Value</th>
+                    <th data-num="true">Size</th>
+                    <th data-num="true">Sell value</th>
                     <th data-num="true"></th>
                   </tr>
                 </thead>
@@ -270,7 +276,7 @@ export function OwnerNewProject({ bootstrap = null }: { bootstrap?: BootstrapRes
                     <tr key={p.id} data-tap="true" onClick={() => convertFrom(p)}>
                       <td className="d-table-cell-strong">{p.name}</td>
                       <td>{p.customer_name || '—'}</td>
-                      <td>{p.division_code || '—'}</td>
+                      <td data-num="true">{fmtSize(p.target_sqft_per_hr)}</td>
                       <td data-num="true">{fmtValue(p.bid_total)}</td>
                       <td data-num="true">
                         <MButton
@@ -296,7 +302,7 @@ export function OwnerNewProject({ bootstrap = null }: { bootstrap?: BootstrapRes
   }
 
   // ---- STEP 2 — details (auto-filled per path) ------------------------------
-  const stepTitle = kind === 'takeoff' ? 'From a takeoff' : kind === 'clone' ? 'Clone past project' : 'Blank project'
+  const stepTitle = kind === 'takeoff' ? 'From a blueprint' : kind === 'clone' ? 'Clone past project' : 'Blank project'
 
   return (
     <div className="d-content">

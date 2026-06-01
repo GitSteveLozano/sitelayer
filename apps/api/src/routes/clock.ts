@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { haversineDistanceMeters, isInsideGeofence } from '@sitelayer/domain'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseOptionalNumber } from '../http-utils.js'
@@ -16,6 +17,8 @@ export type ClockRouteCtx = {
    */
   currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   /** Shared blueprint storage instance — also serves clock-event photos under a clock-events/ prefix. */
@@ -176,6 +179,13 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       )
       workerId = workerLookup.rows[0]?.id ?? null
     }
+
+    // LAYER 2: clock_in_out — matrix base owner+estimator+foreman+crew (every
+    // built-in EXCEPT bookkeeper). The self path above has no requireRole, and
+    // the foreman_override branch already ran its own requireRole; this overlay
+    // runs after both so a custom role can narrow it and a bookkeeper base is
+    // denied (bookkeeper holds only flag_issue + stop_work in the matrix).
+    if (!ctx.requirePermission('clock_in_out')) return true
 
     let projectId: string | null = null
     let insideGeofence = false
@@ -399,6 +409,11 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       )
       workerId = workerLookup.rows[0]?.id ?? null
     }
+
+    // LAYER 2: clock_in_out — same overlay as /in (after the conditional
+    // foreman_override requireRole), so the matrix + custom roles gate the out
+    // tap too and a bookkeeper base is denied.
+    if (!ctx.requirePermission('clock_in_out')) return true
 
     const openInLookup = await withCompanyClient(ctx.company.id, (c) =>
       c.query<{

@@ -495,6 +495,41 @@ export function calculateMargin(inputs: { revenue: number; cost: number }): Marg
   }
 }
 
+/**
+ * Re-price a project's contract bid to hit a target margin off a fixed cost
+ * basis. This is the pure core of the interactive margin slider (D10 · MARGIN):
+ * the sell/bid price that yields the requested margin is `cost / (1 - margin)`,
+ * since margin = (bid - cost) / bid.
+ *
+ * Pure + deterministic (no clock/db) so the reducer/route can call it inside a
+ * transaction and a test can pin it. `targetMarginPct` is a fraction in
+ * [0, 1) (e.g. 0.22 for 22%); it is clamped to a safe band so a 100% margin
+ * (division by zero) or a negative margin can never produce a nonsensical bid.
+ *
+ *   - cost <= 0:   no cost basis, so there is nothing to mark up — bidTotal 0.
+ *   - margin >= MAX: clamped to MAX_MARGIN (a 100% margin is unreachable).
+ *   - margin < 0:  clamped to 0 (sell at cost, never below).
+ *
+ * The returned `bidTotal` is rounded to cents (matching numeric(12,2)); the
+ * returned `marginPct` echoes the clamped fraction actually applied so the
+ * caller can persist the exact value the price reflects.
+ */
+export const MAX_TARGET_MARGIN = 0.95
+
+export function repriceForTargetMargin(inputs: { cost: number; targetMarginPct: number }): {
+  bidTotal: number
+  marginPct: number
+} {
+  const cost = Number.isFinite(inputs.cost) ? inputs.cost : 0
+  const rawMargin = Number.isFinite(inputs.targetMarginPct) ? inputs.targetMarginPct : 0
+  const marginPct = Math.min(MAX_TARGET_MARGIN, Math.max(0, rawMargin))
+  if (cost <= 0) {
+    return { bidTotal: 0, marginPct: roundPercent(marginPct) }
+  }
+  const bidTotal = roundMoney(cost / (1 - marginPct))
+  return { bidTotal, marginPct: roundPercent(marginPct) }
+}
+
 export type BidVsScopeStatus = 'ok' | 'warn' | 'mismatch'
 
 export interface BidVsScopeComparison {
@@ -1544,6 +1579,28 @@ export {
   type IntegrationEntityType,
   type ProjectRole,
 } from './roles.js'
+
+export {
+  PERMISSION_ACTIONS,
+  BUILTIN_ROLES,
+  BUILTIN_ROLE_PERMISSIONS,
+  CONSTRAINABLE_ACTIONS,
+  CONSTRAINT_ENFORCEMENT,
+  companyRoleToBuiltin,
+  builtinToCompanyRole,
+  resolveEffectivePermissions,
+  hasPermission,
+  checkConstraint,
+  isPermissionAction,
+  isBuiltinRole,
+  isConstrainableAction,
+  type PermissionAction,
+  type BuiltinRole,
+  type ConstrainableAction,
+  type PermissionGrant,
+  type EffectivePermission,
+  type EffectivePermissionMap,
+} from './permissions.js'
 
 // ---------------------------------------------------------------------------
 // v2 entities (Steve's v2 design — see docker/postgres/init/097-099). Shared

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import ExcelJS from 'exceljs'
-import { compareBidVsScope } from '@sitelayer/domain'
+import { compareBidVsScope, repriceForTargetMargin } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import {
   recordMutationLedger,
@@ -742,6 +742,82 @@ export async function handleEstimateRoutes(
     // contract the recompute route uses.
     const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, line.project_id, { draftId: line.draft_id })
     ctx.sendJson(200, { line: updated, scope_vs_bid: scopeVsBid })
+    return true
+  }
+
+  // POST /api/projects/:id/estimate/margin — interactive margin re-pricing
+  // (D10 · MARGIN slider). The body carries a single SET_MARGIN intent
+  // ({ event: 'SET_MARGIN', target_margin_pct }); the route reprices the
+  // project's contract bid off the internal cost basis via the pure
+  // repriceForTargetMargin reducer (bid = cost / (1 - margin)) and persists
+  // both target_margin_pct (so the slider survives reload) and the recomputed
+  // bid_total. The per-line solver is untouched — only the revenue side moves.
+  if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/margin$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    if (body.event !== undefined && body.event !== 'SET_MARGIN') {
+      ctx.sendJson(400, { error: `unsupported event ${String(body.event)} — only SET_MARGIN is accepted` })
+      return true
+    }
+    const raw = body.target_margin_pct
+    const targetMargin = typeof raw === 'string' ? Number(raw) : raw
+    if (typeof targetMargin !== 'number' || !Number.isFinite(targetMargin) || targetMargin < 0 || targetMargin >= 1) {
+      ctx.sendJson(400, { error: 'target_margin_pct must be a number in [0, 1)' })
+      return true
+    }
+
+    // The cost basis is the project's internal cost (labor + materials + subs),
+    // the same figure summarizeProject/calculateMargin already use as `cost`.
+    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId)
+    if (!summary) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    const cost = Number(summary.metrics.totalCost ?? 0)
+    const { bidTotal, marginPct } = repriceForTargetMargin({ cost, targetMarginPct: targetMargin })
+
+    const updated = await withMutationTx(ctx.company.id, async (client) => {
+      const result = await client.query<{ id: string; bid_total: string | number | null; version: number }>(
+        `update projects
+            set target_margin_pct = $1,
+                bid_total = $2,
+                updated_at = now(),
+                version = version + 1
+          where company_id = $3 and id = $4
+          returning id, bid_total, version`,
+        [marginPct, bidTotal, ctx.company.id, projectId],
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'project',
+        entityId: projectId,
+        action: 'set_margin',
+        row: { id: projectId, target_margin_pct: marginPct, bid_total: bidTotal, cost },
+        idempotencyKey: `project:set_margin:${projectId}:${row.version}`,
+        actorUserId: ctx.currentUserId ?? null,
+      })
+      return row
+    })
+    if (!updated) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+
+    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId)
+    ctx.sendJson(200, {
+      project_id: projectId,
+      target_margin_pct: marginPct,
+      bid_total: bidTotal,
+      cost,
+      scope_vs_bid: scopeVsBid,
+    })
     return true
   }
 

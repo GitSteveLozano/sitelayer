@@ -39,7 +39,16 @@ import {
   backfillServiceItemMapping,
   upsertIntegrationMapping,
 } from '../qbo-integration-mapping.js'
-import { completeQboSyncRunFailure, completeQboSyncRunSuccess, startQboSyncRun } from '../qbo-sync-run.js'
+import {
+  completeQboSyncRunFailure,
+  completeQboSyncRunSuccess,
+  dispatchQboSyncRunHumanEvent,
+  QBO_SYNC_RUN_COLUMNS,
+  qboSyncRunSnapshotResponse,
+  startQboSyncRun,
+  type QboSyncRunRow,
+} from '../qbo-sync-run.js'
+import { parseQboSyncRunEventRequest, type QboSyncRunWorkflowState } from '@sitelayer/workflows'
 import { getSyncStatus } from './sync.js'
 
 // Re-exports so existing consumers (server.ts, dispatch.ts) keep working.
@@ -880,6 +889,175 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       sendJson(500, { error: 'sync failed', qbo_sync_run_id: qboSyncRunId })
     }
     return true
+  }
+
+  // POST /api/integrations/qbo/pull — enqueue the worker-backed reference
+  // backfill (customers + items + classes). The operator-facing "Backfill
+  // from QBO" trigger. Unlike the inline POST /api/integrations/qbo/sync
+  // (which pulls synchronously inside the request thread), this enqueues a
+  // single mutation_outbox row with a per-connection idempotency key and lets
+  // the leased, circuit-broken, lane-gated worker runner (processQboPull)
+  // drain it. The legacy inline /sync stays for one release.
+  if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/pull') {
+    if (!requireRole(['admin', 'office'])) return true
+    // Ensure a connection row exists so entity_id resolves. The upsert here
+    // is a no-op when a connection already exists (status preserved when
+    // omitted) and creates a placeholder otherwise — mirroring the /sync
+    // ensure-a-connection-row step.
+    const connectionPre = await upsertIntegrationConnection(pool, company.id, 'qbo', {})
+    const connectionId: string = (connectionPre as { id?: string }).id ?? ''
+    if (!connectionId) {
+      sendJson(500, { error: 'failed to resolve qbo connection' })
+      return true
+    }
+    const idempotencyKey = `integration_connection:qbo:pull:${connectionId}`
+    const { sentryTrace, baggage } = currentTraceHeaders()
+    const reqCtx = getRequestContext()
+    const requestId = reqCtx?.requestId ?? null
+    const captureSessionId = reqCtx?.captureSessionId ?? null
+    await withMutationTx(company.id, async (client) => {
+      // Stable-per-connection idempotency key + a re-arm upsert: a second
+      // "Backfill" click while a pull is queued/processing is a no-op insert,
+      // but a finished pull (applied / failed / dead) is re-armed back to
+      // 'pending' with a fresh next_attempt_at so it runs again. Without the
+      // re-arm the UNIQUE(company_id, idempotency_key) would make every
+      // re-click after the first completed pull a silent forever no-op.
+      await client.query(
+        `
+        insert into mutation_outbox (
+          company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status,
+          sentry_trace, sentry_baggage, request_id, capture_session_id
+        )
+        values ($1, 'server', $2, 'integration_connection', $3, 'pull_qbo_reference', '{}'::jsonb, $4, 'pending', $5, $6, $7, $8)
+        on conflict (company_id, idempotency_key) do update
+          set status = 'pending',
+              next_attempt_at = now(),
+              error = null,
+              sentry_trace = excluded.sentry_trace,
+              sentry_baggage = excluded.sentry_baggage,
+              request_id = excluded.request_id,
+              capture_session_id = excluded.capture_session_id
+          where mutation_outbox.status in ('applied', 'failed', 'dead')
+        `,
+        [company.id, currentUserId, connectionId, idempotencyKey, sentryTrace, baggage, requestId, captureSessionId],
+      )
+      await recordSyncEvent(
+        company.id,
+        'integration_connection',
+        connectionId,
+        { action: 'pull_enqueued', provider: 'qbo', mutation_type: 'pull_qbo_reference' },
+        connectionId,
+        { executor: client },
+      )
+    })
+    sendJson(200, { enqueued: true, mutation_type: 'pull_qbo_reference' })
+    return true
+  }
+
+  // ---------------------------------------------------------------------------
+  // qbo_sync_run workflow surface — headless ADR-5 contract (see
+  // docs/DETERMINISTIC_WORKFLOWS.md). The UI reads `state` + `next_events`
+  // from these instead of re-deriving the run state from the cached
+  // integration_connections.status flag.
+  //
+  //   GET  /api/integrations/qbo/sync-runs                → company-scoped list
+  //   GET  /api/integrations/qbo/sync-runs/:id            → WorkflowSnapshot
+  //   POST /api/integrations/qbo/sync-runs/:id/events     → { event, state_version }
+  //
+  // POST /api/integrations/qbo/sync stays the *create-a-new-run* entry;
+  // the /events START_SYNC is the *resume-a-retrying-run* entry.
+  // ---------------------------------------------------------------------------
+  if (req.method === 'GET' && url.pathname === '/api/integrations/qbo/sync-runs') {
+    if (!requireRole(['admin', 'office'])) return true
+    const stateFilter = url.searchParams.get('state')
+    const allowedStates: QboSyncRunWorkflowState[] = ['pending', 'syncing', 'succeeded', 'failed', 'retrying']
+    const limitParamRaw = Number(url.searchParams.get('limit'))
+    const limit = Number.isFinite(limitParamRaw) && limitParamRaw > 0 ? Math.min(limitParamRaw, 100) : 20
+    const params: unknown[] = [company.id]
+    let where = `company_id = $1 and deleted_at is null`
+    if (stateFilter && allowedStates.includes(stateFilter as QboSyncRunWorkflowState)) {
+      params.push(stateFilter)
+      where += ` and status = $${params.length}`
+    }
+    params.push(limit)
+    const runs = await withCompanyClient(company.id, (c) =>
+      c.query<QboSyncRunRow>(
+        `select ${QBO_SYNC_RUN_COLUMNS}
+           from qbo_sync_runs
+           where ${where}
+           order by created_at desc
+           limit $${params.length}`,
+        params,
+      ),
+    )
+    sendJson(200, { syncRuns: runs.rows.map((row) => qboSyncRunSnapshotResponse(row)) })
+    return true
+  }
+
+  const syncRunSnapshotMatch = url.pathname.match(/^\/api\/integrations\/qbo\/sync-runs\/([^/]+)$/)
+  if (req.method === 'GET' && syncRunSnapshotMatch) {
+    if (!requireRole(['admin', 'office'])) return true
+    const runId = syncRunSnapshotMatch[1]!
+    const runResult = await withCompanyClient(company.id, (c) =>
+      c.query<QboSyncRunRow>(
+        `select ${QBO_SYNC_RUN_COLUMNS}
+           from qbo_sync_runs
+           where company_id = $1 and id = $2 and deleted_at is null
+           limit 1`,
+        [company.id, runId],
+      ),
+    )
+    const run = runResult.rows[0]
+    if (!run) {
+      sendJson(404, { error: 'qbo sync run not found' })
+      return true
+    }
+    sendJson(200, qboSyncRunSnapshotResponse(run))
+    return true
+  }
+
+  const syncRunEventMatch = url.pathname.match(/^\/api\/integrations\/qbo\/sync-runs\/([^/]+)\/events$/)
+  if (req.method === 'POST' && syncRunEventMatch) {
+    if (!requireRole(['admin', 'office'])) return true
+    const runId = syncRunEventMatch[1]!
+    const body = await readBody()
+    const parsed = parseQboSyncRunEventRequest(body)
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    const { event: eventType, state_version: stateVersion } = parsed.value
+    try {
+      const result = await withMutationTx((client) =>
+        dispatchQboSyncRunHumanEvent(client, {
+          companyId: company.id,
+          runId,
+          eventType,
+          expectedStateVersion: stateVersion,
+          actorUserId: currentUserId,
+        }),
+      )
+      if (result.kind === 'not_found') {
+        sendJson(404, { error: 'qbo sync run not found' })
+        return true
+      }
+      if (result.kind === 'version_conflict') {
+        sendJson(409, {
+          error: 'state_version mismatch — reload and retry',
+          snapshot: qboSyncRunSnapshotResponse(result.row),
+        })
+        return true
+      }
+      if (result.kind === 'illegal_transition') {
+        sendJson(409, { error: result.message, snapshot: qboSyncRunSnapshotResponse(result.row) })
+        return true
+      }
+      sendJson(200, qboSyncRunSnapshotResponse(result.row))
+      return true
+    } catch (err) {
+      sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })
+      return true
+    }
   }
 
   // POST /api/integrations/qbo/sync/material-bills — push unsynced material_bills to QBO

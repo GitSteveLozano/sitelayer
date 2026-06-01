@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { MBanner, MBody, MChip, MChipRow, MPill, MTopBar } from '../../components/m/index.js'
+import { MBanner, MBody, MPill, MTopBar } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
+import { useRole, type Role } from '../../lib/role.js'
 import {
   fetchNotifications,
   notificationQueryKeys,
@@ -77,21 +78,31 @@ function groupFor(iso: string): Group {
 
 const GROUP_ORDER: readonly Group[] = ['NOW', 'TODAY', 'EARLIER']
 
-type Filter = 'all' | 'unread'
-
-const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'unread', label: 'Unread' },
-]
+// Role → header framing (msg__78/79/80). Owner & crew show the live unread
+// count as the headline ("4 NEW") under a "<ROLE> · INBOX" eyebrow; the foreman
+// inbox is the "FROM THE FIELD" framing. The crew/worker variant additionally
+// renders on the dark surface (see `.m-dark`).
+function inboxFraming(role: Role, unread: number): { eyebrow: string; title: string; dark: boolean } {
+  const countTitle = unread > 0 ? `${unread} NEW` : 'INBOX'
+  switch (role) {
+    case 'owner':
+      return { eyebrow: 'OWNER · INBOX', title: countTitle, dark: false }
+    case 'foreman':
+      return { eyebrow: 'FOREMAN · INBOX', title: 'FROM THE FIELD', dark: false }
+    case 'bookkeeper':
+      return { eyebrow: 'BOOKKEEPER · INBOX', title: countTitle, dark: false }
+    case 'worker':
+    default:
+      return { eyebrow: 'CREW · INBOX', title: countTitle, dark: true }
+  }
+}
 
 export function MobileNotificationsInbox() {
-  const [filter, setFilter] = useState<Filter>('all')
   const navigate = useNavigate()
+  const role = useRole()
   const markRead = useMarkNotificationRead()
 
-  // Reuse the existing notifications API surface (no new endpoint): the list
-  // request supports an `unread` flag, so the chip just toggles that param.
-  const params = useMemo(() => (filter === 'unread' ? { unread: true, limit: 75 } : { limit: 75 }), [filter])
+  const params = useMemo(() => ({ limit: 75 }), [])
   const query = useQuery({
     queryKey: notificationQueryKeys.list(params),
     queryFn: () => fetchNotifications(params),
@@ -100,6 +111,8 @@ export function MobileNotificationsInbox() {
   })
 
   const rows = query.data?.notifications ?? []
+  const unread = useMemo(() => rows.filter((n) => !n.read_at).length, [rows])
+  const framing = inboxFraming(role, unread)
 
   // Group rows into NOW / TODAY / EARLIER section bars (design grouping),
   // preserving the API's newest-first order within each group.
@@ -116,17 +129,12 @@ export function MobileNotificationsInbox() {
   }
 
   return (
-    <>
-      <MTopBar back title="Notifications" eyebrow="INBOX" onBack={() => navigate(-1)} />
+    <div
+      className={framing.dark ? 'm-dark' : undefined}
+      style={framing.dark ? { background: 'var(--m-bg)', minHeight: '100%' } : undefined}
+    >
+      <MTopBar back title={framing.title} eyebrow={framing.eyebrow} onBack={() => navigate(-1)} />
       <MBody>
-        <MChipRow>
-          {FILTERS.map((f) => (
-            <MChip key={f.id} active={filter === f.id} onClick={() => setFilter(f.id)}>
-              {f.label}
-            </MChip>
-          ))}
-        </MChipRow>
-
         {query.error ? (
           <div style={{ padding: '0 16px 8px' }}>
             <MBanner
@@ -151,7 +159,7 @@ export function MobileNotificationsInbox() {
               color: 'var(--m-ink-3)',
             }}
           >
-            {filter === 'unread' ? 'NO UNREAD NOTIFICATIONS' : 'INBOX EMPTY'}
+            INBOX EMPTY
           </div>
         ) : (
           grouped.map((section) => (
@@ -161,7 +169,7 @@ export function MobileNotificationsInbox() {
                   padding: '10px 16px',
                   borderTop: '2px solid var(--m-ink)',
                   borderBottom: '1px solid var(--m-line-2)',
-                  background: 'var(--m-sand-2)',
+                  background: 'var(--m-card-soft)',
                   fontFamily: 'var(--m-num)',
                   fontSize: 10,
                   fontWeight: 700,
@@ -178,12 +186,23 @@ export function MobileNotificationsInbox() {
           ))
         )}
       </MBody>
-    </>
+    </div>
   )
+}
+
+// Map the canonical delivery `state` to a small inbox badge. Returns null
+// for the common/happy states (pending/sending/sent) so the inbox stays
+// quiet and only flags problems.
+function deliveryBadge(state: string | null | undefined): { label: string; tone: PillTone } | null {
+  if (!state) return null
+  if (state.startsWith('failed')) return { label: 'Delivery failed', tone: 'red' }
+  if (state === 'voided') return { label: 'Canceled', tone: 'amber' }
+  return null
 }
 
 function NotificationRowView({ n, onTap }: { n: NotificationRow; onTap: () => void }) {
   const tag = kindTag(n.kind)
+  const delivery = deliveryBadge(n.state)
   const unread = !n.read_at
   const hasTarget = targetFor(n) != null
   const Tag = hasTarget || unread ? 'button' : 'div'
@@ -225,6 +244,11 @@ function NotificationRowView({ n, onTap }: { n: NotificationRow; onTap: () => vo
         >
           {n.subject}
         </div>
+        {delivery ? (
+          <span style={{ display: 'inline-block', marginTop: 5 }}>
+            <MPill tone={delivery.tone}>{delivery.label}</MPill>
+          </span>
+        ) : null}
         {n.body_text ? (
           <div
             style={{

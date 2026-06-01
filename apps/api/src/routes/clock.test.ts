@@ -5,6 +5,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleClockRoutes, type ClockRouteCtx } from './clock.js'
+import { permissionDecision } from '../permission-seam.js'
 import type { BlueprintStorage } from '../storage.js'
 
 /**
@@ -219,6 +220,16 @@ beforeAll(async () => {
       company: { id: COMPANY_ID, slug: 'co', name: 'Co', created_at: '', role: 'member' as const },
       currentUserId: 'u-1',
       requireRole: () => true,
+      // member → crew base, which holds clock_in_out in the matrix, so this
+      // faithful overlay always allows here; on a hypothetical deny it 403s
+      // through the same res sink as sendJson.
+      requirePermission: (action, opts = {}) => {
+        const verdict = permissionDecision('crew', [], action, opts)
+        if (verdict.outcome === 'allowed') return true
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'forbidden', action }))
+        return false
+      },
       readBody: () =>
         new Promise<Record<string, unknown>>((resolve) => {
           const chunks: Buffer[] = []

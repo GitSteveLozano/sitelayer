@@ -332,6 +332,8 @@ export function MPermissionState({
   secondaryLabel,
   onSecondary,
   icon,
+  benefits,
+  benefitsLabel = 'When enabled',
 }: {
   title: ReactNode
   body: ReactNode
@@ -340,6 +342,14 @@ export function MPermissionState({
   secondaryLabel?: string
   onSecondary?: () => void
   icon?: ReactNode
+  /**
+   * Optional benefits list rendered in a bordered "WHEN ENABLED" box under
+   * the body copy — mirrors the design's location-permission takeover
+   * (AUTO CLOCK-IN ON ARRIVAL / LIVE CREW MAP / OUT-OF-FENCE ALERTS).
+   */
+  benefits?: readonly string[]
+  /** Mono header above the benefits list. Defaults to "When enabled". */
+  benefitsLabel?: string
 }) {
   return (
     <div style={{ padding: '32px 20px 24px' }}>
@@ -372,7 +382,179 @@ export function MPermissionState({
       </div>
       <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5, marginTop: 12 }}>{body}</div>
 
+      {/* WHEN ENABLED benefits box — bordered, mono header + bullet list. */}
+      {benefits && benefits.length > 0 ? (
+        <div
+          style={{
+            marginTop: 24,
+            padding: 16,
+            background: 'var(--m-card-soft)',
+            border: '2px solid var(--m-ink)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              fontWeight: 500,
+              color: 'var(--m-ink-3)',
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {benefitsLabel}
+          </div>
+          <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'grid', gap: 8 }}>
+            {benefits.map((benefit) => (
+              <li
+                key={benefit}
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  display: 'flex',
+                  gap: 8,
+                }}
+              >
+                <span aria-hidden="true">·</span>
+                <span>{benefit}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div style={{ marginTop: 32 }}>
+        <MButtonStack>
+          <MButton variant="primary" onClick={onPrimary}>
+            {primaryLabel}
+          </MButton>
+          {secondaryLabel ? (
+            <MButton variant="ghost" onClick={onSecondary}>
+              {secondaryLabel}
+            </MButton>
+          ) : null}
+        </MButtonStack>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Full-screen "NEW VERSION" update takeover (design msg__06). A service-worker
+ * update is available — accent (#FFD400) hero block with a "● NEW VERSION"
+ * mono eyebrow, bold "Sitelayer got an update." headline, body, an optional
+ * "WHAT'S NEW" bordered list, then RELOAD APP (primary) + LATER (secondary).
+ *
+ * Mirrors MErrorState / MPermissionState body shape; v2 brutalist — square
+ * corners, hard 2px ink borders, mono UPPERCASE micro-labels, full-fill accent
+ * hero (no soft tints). All colors come from `--m-*` tokens.
+ */
+export function MUpdateState({
+  eyebrow = '● New version',
+  title,
+  body,
+  changes,
+  changesLabel = "What's new",
+  primaryLabel = 'Reload app',
+  onPrimary,
+  secondaryLabel = 'Later',
+  onSecondary,
+}: {
+  eyebrow?: string
+  title: ReactNode
+  body: ReactNode
+  /** Optional "WHAT'S NEW" bullet list rendered in a bordered box. */
+  changes?: readonly string[]
+  changesLabel?: string
+  primaryLabel?: string
+  onPrimary?: () => void
+  secondaryLabel?: string
+  onSecondary?: () => void
+}) {
+  return (
+    <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+      {/* Full-fill accent hero — eyebrow + headline + body. */}
+      <div
+        style={{
+          background: 'var(--m-accent)',
+          color: 'var(--m-accent-ink)',
+          borderBottom: '2px solid var(--m-ink)',
+          padding: '24px 20px 28px',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          {eyebrow}
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontSize: 30,
+            fontWeight: 800,
+            letterSpacing: '-0.025em',
+            lineHeight: 1,
+            marginTop: 14,
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.45, marginTop: 12, maxWidth: 320 }}>{body}</div>
+      </div>
+
+      {/* WHAT'S NEW box — bordered, mono header + bullet list. */}
+      {changes && changes.length > 0 ? (
+        <div
+          style={{
+            margin: '20px 20px 0',
+            padding: 16,
+            background: 'var(--m-card-soft)',
+            border: '2px solid var(--m-ink)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              fontWeight: 500,
+              color: 'var(--m-ink-3)',
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {changesLabel}
+          </div>
+          <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+            {changes.map((change) => (
+              <li
+                key={change}
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  display: 'flex',
+                  gap: 8,
+                }}
+              >
+                <span aria-hidden="true">+</span>
+                <span>{change}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {/* Actions pinned to the bottom of the takeover. */}
+      <div style={{ marginTop: 'auto', padding: '24px 20px' }}>
         <MButtonStack>
           <MButton variant="primary" onClick={onPrimary}>
             {primaryLabel}

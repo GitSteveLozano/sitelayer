@@ -3,13 +3,16 @@ import type { Pool, PoolClient } from 'pg'
 import {
   CREW_SCHEDULE_WORKFLOW_NAME,
   CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+  nextCrewScheduleEvents,
   parseCrewScheduleEventRequest,
   transitionCrewScheduleWorkflow,
   type CrewScheduleHumanEventType,
+  type CrewScheduleLaborEntryInput,
   type CrewScheduleWorkflowEvent,
   type CrewScheduleWorkflowSnapshot,
   type CrewScheduleWorkflowState,
 } from '@sitelayer/workflows'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
@@ -33,6 +36,8 @@ export type CrewScheduleEventRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -40,7 +45,8 @@ export type CrewScheduleEventRouteCtx = {
 
 const CREW_SCHEDULE_COLUMNS = `
   id, project_id, scheduled_for, crew, status, version,
-  state_version, confirmed_at, confirmed_by,
+  state_version, confirmed_at, confirmed_by, created_by,
+  declined_at, declined_by, decline_reason,
   start_time, end_time, takeoff_measurement_id,
   deleted_at, created_at
 `
@@ -55,6 +61,10 @@ type CrewScheduleRow = {
   state_version: number
   confirmed_at: string | null
   confirmed_by: string | null
+  created_by: string | null
+  declined_at: string | null
+  declined_by: string | null
+  decline_reason: string | null
   start_time: string | null
   end_time: string | null
   takeoff_measurement_id: string | null
@@ -68,15 +78,10 @@ function rowToSnapshot(row: CrewScheduleRow): CrewScheduleWorkflowSnapshot {
     state_version: row.state_version,
     confirmed_at: row.confirmed_at,
     confirmed_by: row.confirmed_by,
-  }
-}
-
-function workflowNextEvents(state: CrewScheduleWorkflowState): Array<{ type: string; label: string }> {
-  switch (state) {
-    case 'draft':
-      return [{ type: 'CONFIRM', label: 'Confirm crew schedule' }]
-    case 'confirmed':
-      return []
+    created_by: row.created_by,
+    declined_at: row.declined_at,
+    declined_by: row.declined_by,
+    decline_reason: row.decline_reason,
   }
 }
 
@@ -84,7 +89,9 @@ function snapshotResponse(row: CrewScheduleRow): {
   state: CrewScheduleWorkflowState
   state_version: number
   context: Omit<CrewScheduleRow, 'state_version' | 'deleted_at'>
-  next_events: ReturnType<typeof workflowNextEvents>
+  // Single source of truth: the registered reducer's nextEvents selector
+  // (Gap 3 — the route no longer hand-duplicates the transition table).
+  next_events: ReturnType<typeof nextCrewScheduleEvents>
 } {
   const { status, state_version, deleted_at, ...rest } = row
   void deleted_at
@@ -97,7 +104,7 @@ function snapshotResponse(row: CrewScheduleRow): {
     state: status,
     state_version,
     context,
-    next_events: workflowNextEvents(status),
+    next_events: nextCrewScheduleEvents(status),
   }
 }
 
@@ -107,9 +114,40 @@ function buildReducerEvent(
   body: Record<string, unknown>,
 ): CrewScheduleWorkflowEvent {
   const nowIso = new Date().toISOString()
+  if (eventType === 'DECLINE') {
+    const declinedAt = typeof body.declined_at === 'string' && body.declined_at ? body.declined_at : nowIso
+    const declinedBy = typeof body.declined_by === 'string' && body.declined_by ? body.declined_by : actorUserId
+    const reason = typeof body.reason === 'string' ? body.reason : ''
+    return { type: 'DECLINE', declined_at: declinedAt, declined_by: declinedBy, reason }
+  }
+  if (eventType === 'REASSIGN') {
+    return { type: 'REASSIGN' }
+  }
   const confirmedAt = typeof body.confirmed_at === 'string' && body.confirmed_at ? body.confirmed_at : nowIso
   const confirmedBy = typeof body.confirmed_by === 'string' && body.confirmed_by ? body.confirmed_by : actorUserId
-  return { type: eventType, confirmed_at: confirmedAt, confirmed_by: confirmedBy }
+  return { type: 'CONFIRM', confirmed_at: confirmedAt, confirmed_by: confirmedBy }
+}
+
+/** Validated per-worker labor entries on a CONFIRM body, for the
+ * materialize_labor_entries outbox payload (Gap 1). */
+function parseConfirmEntries(body: Record<string, unknown>): CrewScheduleLaborEntryInput[] {
+  if (!Array.isArray(body.entries)) return []
+  const out: CrewScheduleLaborEntryInput[] = []
+  for (const raw of body.entries) {
+    if (!raw || typeof raw !== 'object') continue
+    const e = raw as Record<string, unknown>
+    if (typeof e.service_item_code !== 'string' || typeof e.hours !== 'number' || typeof e.occurred_on !== 'string') {
+      continue
+    }
+    out.push({
+      worker_id: typeof e.worker_id === 'string' ? e.worker_id : null,
+      service_item_code: e.service_item_code,
+      hours: e.hours,
+      sqft_done: typeof e.sqft_done === 'number' ? e.sqft_done : null,
+      occurred_on: e.occurred_on,
+    })
+  }
+  return out
 }
 
 /**
@@ -166,6 +204,14 @@ export async function handleCrewScheduleEventRoutes(
     }
     const { event: eventType, state_version: stateVersion } = parsed.value
 
+    // LAYER 2: brief_crew — gates the CONFIRM event (the act that briefs the
+    // crew: confirms the schedule and locks the labor entries). Matrix base
+    // owner+foreman, so this round-trips the requireRole(['admin','foreman'])
+    // gate above for built-in roles; a custom role can narrow it. DECLINE /
+    // REASSIGN stay on the requireRole gate alone (schedule housekeeping, not
+    // the brief itself).
+    if (eventType === 'CONFIRM' && !ctx.requirePermission('brief_crew')) return true
+
     try {
       const result = await withMutationTx(async (client: PoolClient) => {
         const lockedResult = await client.query<CrewScheduleRow>(
@@ -204,6 +250,9 @@ export async function handleCrewScheduleEventRoutes(
                  state_version = $4,
                  confirmed_at = $5,
                  confirmed_by = $6,
+                 declined_at = $7,
+                 declined_by = $8,
+                 decline_reason = $9,
                  version = version + 1
            where company_id = $1 and id = $2
            returning ${CREW_SCHEDULE_COLUMNS}`,
@@ -214,6 +263,9 @@ export async function handleCrewScheduleEventRoutes(
             nextSnapshot.state_version,
             nextSnapshot.confirmed_at ?? null,
             nextSnapshot.confirmed_by ?? null,
+            nextSnapshot.declined_at ?? null,
+            nextSnapshot.declined_by ?? null,
+            nextSnapshot.decline_reason ?? null,
           ],
         )
         const updated = updateResult.rows[0]
@@ -237,9 +289,56 @@ export async function handleCrewScheduleEventRoutes(
           entityId: updated.id,
           action: `event:${eventType.toLowerCase()}`,
           row: updated,
-          syncPayload: { action: 'confirm', schedule: updated },
+          syncPayload: { action: eventType.toLowerCase(), schedule: updated },
           idempotencyKey: `crew_schedule:event:${updated.id}:${updated.state_version}`,
         })
+
+        // Declared outbox side effects (mirrors rental-billing-state.ts).
+        if (eventType === 'CONFIRM') {
+          // Gap 1 — labor-entry materialization + project version bump move
+          // out of the legacy /confirm route body and behind the CONFIRM
+          // event as a declared, worker-drained side effect so BOTH confirm
+          // paths produce identical labor_entries. Per-entity idempotency key
+          // (NOT per-state_version) so a replay/retry upserts the same row.
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'crew_schedule',
+            entityId: updated.id,
+            action: 'materialize_labor_entries',
+            mutationType: 'materialize_labor_entries',
+            row: updated,
+            outboxPayload: {
+              schedule_id: updated.id,
+              project_id: updated.project_id,
+              scheduled_for: updated.scheduled_for,
+              crew: updated.crew,
+              confirmed_by: nextSnapshot.confirmed_by ?? ctx.currentUserId,
+              entries: parseConfirmEntries(body),
+            },
+            idempotencyKey: `crew_schedule:materialize_labor:${updated.id}`,
+          })
+        } else if (eventType === 'DECLINE') {
+          // Gap 5 — notify the project foreman in-band (replaces the old
+          // /api/worker-issues note). Per-transition key so a re-decline
+          // after REASSIGN is a genuinely new notification.
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'crew_schedule',
+            entityId: updated.id,
+            action: 'notify_foreman_decline',
+            mutationType: 'notify_foreman_decline',
+            row: updated,
+            outboxPayload: {
+              schedule_id: updated.id,
+              project_id: updated.project_id,
+              scheduled_for: updated.scheduled_for,
+              declined_by: nextSnapshot.declined_by ?? ctx.currentUserId,
+              reason: nextSnapshot.decline_reason ?? '',
+              state_version: updated.state_version,
+            },
+            idempotencyKey: `crew_schedule:notify_decline:${updated.id}:${updated.state_version}`,
+          })
+        }
 
         return { kind: 'ok' as const, row: updated, eventType, noop: false }
       })

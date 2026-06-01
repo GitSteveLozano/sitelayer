@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
+import { AuthenticatedFeedbackDock } from '@/components/capture/AuthenticatedFeedbackDock'
 import {
   ApiError,
   getActiveCompanySlug,
@@ -114,14 +115,18 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
 
-  // Desktop v2 gate: owners on a wide viewport land on the command-center
-  // surface (mounted at /desktop). Scoped to the workspace ROOT only — deep
-  // routes (/projects/:id, /money, /schedule, …) still render in the shell so
-  // direct links + the mobile persona screens keep working for everyone; the
-  // command center keeps its own nav under /desktop/*. Foreman/worker always
-  // stay on the mobile shell.
-  if (isDesktop && persona === 'owner' && location.pathname === '/') {
-    return <Navigate to="/desktop" replace />
+  // Desktop v2 gate: owners + foremen on a wide viewport land on the
+  // command-center surface (mounted at /desktop). Owners land on the owner
+  // dashboard (/desktop); foremen land on their command center
+  // (/desktop/fm/today), which the desktop shell already routes + nav-links.
+  // Scoped to the workspace ROOT only — deep routes (/projects/:id, /money,
+  // /schedule, …) still render in the shell so direct links + the mobile
+  // persona screens keep working for everyone; the command center keeps its
+  // own nav under /desktop/*. Workers always stay on the mobile shell (the
+  // crew/jobsite surface is phone-only by design).
+  if (isDesktop && location.pathname === '/') {
+    if (persona === 'owner') return <Navigate to="/desktop" replace />
+    if (persona === 'foreman') return <Navigate to="/desktop/fm/today" replace />
   }
 
   const activeProjectName =
@@ -147,6 +152,7 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
         timeReviewState={null}
         billingReviewState={null}
       />
+      <AuthenticatedFeedbackDock companySlug={companySlug} />
       <MobileShell
         bootstrap={bootstrapQuery.data ?? null}
         companyRole={companyRole}

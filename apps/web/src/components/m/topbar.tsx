@@ -3,6 +3,9 @@ import type { ReactNode } from 'react'
 
 export type MTopBarProps = {
   back?: boolean | undefined
+  /** Use a modal-dismiss "X" in the left button instead of the back chevron. */
+  backVariant?: 'back' | 'close' | undefined
+  backLabel?: string | undefined
   title: string
   sub?: string | undefined
   eyebrow?: string | undefined
@@ -13,15 +16,33 @@ export type MTopBarProps = {
 }
 
 /**
- * Top app bar. 52px min-height, 1px bottom border. Back button is a
- * 36×36 circular tap target; the action slot mirrors it on the right.
+ * Top app bar. 56px min-height, 2px bottom border. The left button is a
+ * 48×48 square tap target (back chevron, or a close "X" for modal-style
+ * full-screen flows); the action slot mirrors it on the right.
  */
-export function MTopBar({ back, title, sub, eyebrow, actionLabel, actionIcon, onBack, onAction }: MTopBarProps) {
+export function MTopBar({
+  back,
+  backVariant = 'back',
+  backLabel,
+  title,
+  sub,
+  eyebrow,
+  actionLabel,
+  actionIcon,
+  onBack,
+  onAction,
+}: MTopBarProps) {
+  const isClose = backVariant === 'close'
   return (
     <div className="m-topbar">
       {back ? (
-        <button type="button" className="m-topbar-back" aria-label="Back" onClick={onBack}>
-          <MI.ChevLeft size={22} />
+        <button
+          type="button"
+          className="m-topbar-back"
+          aria-label={backLabel ?? (isClose ? 'Close' : 'Back')}
+          onClick={onBack}
+        >
+          {isClose ? <MI.X size={22} /> : <MI.ChevLeft size={22} />}
         </button>
       ) : null}
       <div className="m-topbar-title">

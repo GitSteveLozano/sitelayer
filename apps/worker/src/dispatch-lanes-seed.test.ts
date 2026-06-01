@@ -9,7 +9,7 @@
 // pause). Either way, this test fires.
 
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 function readMigrationSeedLanes(): string[] {
@@ -26,11 +26,23 @@ function readMigrationSeedLanes(): string[] {
 }
 
 function readFollowupLaneSeeds(): string[] {
-  const path = resolve(__dirname, '..', '..', '..', 'docker', 'postgres', 'init', '095_audit_escrow.sql')
-  const sql = readFileSync(path, 'utf-8')
-  return Array.from(sql.matchAll(/VALUES\s*\(\s*'([a-z_]+)'\s*,\s*'active'\s*,\s*'system:seed'\s*\)/gi)).map(
-    (m) => m[1] as string,
-  )
+  // 094 seeds the original lanes in one bulk INSERT. Later lanes land as
+  // forward-only migrations (094/095 are immutable once applied), each
+  // seeding a single lane via the canonical
+  // `VALUES ('<name>', 'active', 'system:seed')` shape. Scan every later
+  // migration for that pattern so a new lane-seed file (e.g. 095, 135)
+  // counts as seeded without editing this test per file.
+  const dir = resolve(__dirname, '..', '..', '..', 'docker', 'postgres', 'init')
+  const seeds: string[] = []
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith('.sql')) continue
+    if (file.startsWith('094_')) continue
+    const sql = readFileSync(resolve(dir, file), 'utf-8')
+    for (const m of sql.matchAll(/VALUES\s*\(\s*'([a-z_]+)'\s*,\s*'active'\s*,\s*'system:seed'\s*\)/gi)) {
+      seeds.push(m[1] as string)
+    }
+  }
+  return seeds
 }
 
 function readWorkerLaneReferences(): string[] {

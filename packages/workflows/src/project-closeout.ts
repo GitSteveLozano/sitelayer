@@ -6,42 +6,61 @@ import { registerWorkflow } from './registry.js'
  * Project-closeout workflow — fifth deterministic workflow.
  *
  * Lifts the existing POST /api/projects/:id/closeout flow into the
- * deterministic-workflow framework. The route already sets
- *   - status='completed'
- *   - closed_at = coalesce(closed_at, now())
- *   - summary_locked_at = coalesce(summary_locked_at, now())
- *   - version = version + 1
- *
- * Workflowization adds:
- *   - state_version optimistic-concurrency check
- *   - workflow_event_log row per transition
- *   - closed_by audit field
+ * deterministic-workflow framework. As of the canonical-route refactor
+ * the reducer owns every durable closeout column:
+ *   - status='completed'         (projection of `state`)
+ *   - closed_at / closed_by
+ *   - summary_locked_at          (now reducer-owned, see CLOSEOUT below)
+ *   - post_mortem_acknowledged_at / post_mortem_acknowledged_by
+ *   - state_version              (optimistic-concurrency + event-log key)
  *
  * The margin-shortfall alert (best-effort post-commit) stays in the
  * route — it's an after-effect, not part of the durable transition.
  *
- * States: active → completed.
+ * COLUMN-OWNERSHIP CONTRACT (read alongside project-lifecycle.ts):
+ *   - `project_closeout` OWNS `status` (the active/completed/post_mortem
+ *     projection), `closed_at`, `closed_by`, `summary_locked_at`,
+ *     `state_version`, and `post_mortem_acknowledged_{at,by}`.
+ *   - `project_lifecycle` OWNS the `lifecycle_*` columns and never writes
+ *     `status` (its UPDATE touches only `lifecycle_*`).
+ *   - CLOSEOUT is gated route-side on the *real* `lifecycle_state` (only
+ *     `in_progress`/`done` may close out) rather than the lossy `status`
+ *     projection — see `projectStatusToCloseoutState` below.
+ *
+ * States: active → completed → post_mortem.
  *   active is the catch-all label for any non-completed project
  *   status today ('lead', or anything else PATCH might set).
- *   completed is terminal for v1.
+ *   completed is the work-done / summary-locked state.
+ *   post_mortem is terminal — the owner has reviewed the post-mortem and
+ *   the record is closed.
  *
  * Future v2 could add 'archived' or 'reopened' transitions; defer
  * until the UI surfaces them.
  */
 
-export type ProjectCloseoutWorkflowState = 'active' | 'completed'
+export type ProjectCloseoutWorkflowState = 'active' | 'completed' | 'post_mortem'
 
 export const PROJECT_CLOSEOUT_WORKFLOW_NAME = 'project_closeout'
 export const PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION = 1
-export const PROJECT_CLOSEOUT_ALL_STATES: readonly ProjectCloseoutWorkflowState[] = ['active', 'completed']
-export const PROJECT_CLOSEOUT_TERMINAL_STATES: readonly ProjectCloseoutWorkflowState[] = ['completed']
-export const PROJECT_CLOSEOUT_EVENT_TYPES = ['CLOSEOUT'] as const
+export const PROJECT_CLOSEOUT_ALL_STATES: readonly ProjectCloseoutWorkflowState[] = [
+  'active',
+  'completed',
+  'post_mortem',
+]
+export const PROJECT_CLOSEOUT_TERMINAL_STATES: readonly ProjectCloseoutWorkflowState[] = ['post_mortem']
+export const PROJECT_CLOSEOUT_EVENT_TYPES = ['CLOSEOUT', 'ACKNOWLEDGE_POST_MORTEM'] as const
 
-export type ProjectCloseoutWorkflowEvent = {
-  type: 'CLOSEOUT'
-  closed_at: string
-  closed_by: string
-}
+export type ProjectCloseoutWorkflowEvent =
+  | {
+      type: 'CLOSEOUT'
+      closed_at: string
+      closed_by: string
+    }
+  | {
+      type: 'ACKNOWLEDGE_POST_MORTEM'
+      acknowledged_at: string
+      acknowledged_by: string
+    }
 
 export interface ProjectCloseoutWorkflowSnapshot {
   state: ProjectCloseoutWorkflowState
@@ -49,6 +68,8 @@ export interface ProjectCloseoutWorkflowSnapshot {
   closed_at?: string | null
   closed_by?: string | null
   summary_locked_at?: string | null
+  post_mortem_acknowledged_at?: string | null
+  post_mortem_acknowledged_by?: string | null
 }
 
 function assertProjectCloseoutTransition(
@@ -73,16 +94,27 @@ export function transitionProjectCloseoutWorkflow(
       state_version: snapshot.state_version + 1,
       closed_at: event.closed_at,
       closed_by: event.closed_by,
-      // summary_locked_at is set by the route layer alongside the
-      // closed_at write — not modeled in the reducer because it's
-      // identical to closed_at for every legal transition.
+      // The reducer now owns summary_locked_at: it locks at the closeout
+      // moment (idempotent — preserve an existing lock) so the transition
+      // stays pure and replayable instead of the route stamping now().
+      summary_locked_at: snapshot.summary_locked_at ?? event.closed_at,
     }
   }
-  const exhaustive: never = event.type
-  throw new Error(`unhandled project closeout event ${exhaustive}`)
+  if (event.type === 'ACKNOWLEDGE_POST_MORTEM') {
+    assertProjectCloseoutTransition(snapshot.state, ['completed'], event.type)
+    return {
+      ...snapshot,
+      state: 'post_mortem',
+      state_version: snapshot.state_version + 1,
+      post_mortem_acknowledged_at: snapshot.post_mortem_acknowledged_at ?? event.acknowledged_at,
+      post_mortem_acknowledged_by: snapshot.post_mortem_acknowledged_by ?? event.acknowledged_by,
+    }
+  }
+  const exhaustive: never = event
+  throw new Error(`unhandled project closeout event ${(exhaustive as { type: string }).type}`)
 }
 
-export type ProjectCloseoutHumanEventType = 'CLOSEOUT'
+export type ProjectCloseoutHumanEventType = 'CLOSEOUT' | 'ACKNOWLEDGE_POST_MORTEM'
 
 export function nextProjectCloseoutEvents(
   state: ProjectCloseoutWorkflowState,
@@ -91,21 +123,35 @@ export function nextProjectCloseoutEvents(
     case 'active':
       return [{ type: 'CLOSEOUT', label: 'Mark project complete' }]
     case 'completed':
+      return [{ type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' }]
+    case 'post_mortem':
       return []
   }
 }
 
 export function isHumanProjectCloseoutEvent(eventType: string): eventType is ProjectCloseoutHumanEventType {
-  return eventType === 'CLOSEOUT'
+  return eventType === 'CLOSEOUT' || eventType === 'ACKNOWLEDGE_POST_MORTEM'
 }
 
 /**
- * Map a stored projects.status value to the reducer's two-state vocabulary.
- * Any value other than 'completed' is treated as 'active' so existing
- * 'lead' or PATCH-set values flow through the workflow.
+ * Map the closeout-owned projects.status (+ the post-mortem ack timestamp)
+ * to the reducer's three-state vocabulary. This is a projection over ONLY
+ * the closeout-owned `status` values (`active`/`completed`/`post_mortem`),
+ * not the polymorphic lifecycle state — lifecycle states never flow through
+ * it (CLOSEOUT eligibility is gated route-side on `lifecycle_state`).
+ *
+ * `status='completed'` reads as `post_mortem` once the owner has
+ * acknowledged the post-mortem (post_mortem_acknowledged_at set), else
+ * `completed`. Any other status is `active`.
  */
-export function projectStatusToCloseoutState(status: string): ProjectCloseoutWorkflowState {
-  return status === 'completed' ? 'completed' : 'active'
+export function projectStatusToCloseoutState(
+  status: string,
+  postMortemAcknowledgedAt?: string | null,
+): ProjectCloseoutWorkflowState {
+  if (status === 'completed') {
+    return postMortemAcknowledgedAt != null ? 'post_mortem' : 'completed'
+  }
+  return 'active'
 }
 
 export const projectCloseoutWorkflow = registerWorkflow<
@@ -129,7 +175,7 @@ export const projectCloseoutWorkflow = registerWorkflow<
 })
 
 export const ProjectCloseoutEventRequestSchema = z.object({
-  event: z.enum(['CLOSEOUT']),
+  event: z.enum(['CLOSEOUT', 'ACKNOWLEDGE_POST_MORTEM']),
   state_version: z.number().int().positive(),
 })
 

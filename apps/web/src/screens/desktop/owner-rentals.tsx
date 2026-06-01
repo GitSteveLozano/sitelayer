@@ -7,11 +7,17 @@
  * dispatch state instead of the old `active`-flag proxy. See
  * owner-dashboard.tsx for the d-content + '@/components/d' patterns.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useInventoryItems, useInventoryUtilization, type InventoryItem, type UtilizationRow } from '@/lib/api/rentals'
-import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import {
+  useCreateInventoryItem,
+  useInventoryItems,
+  useInventoryUtilization,
+  type InventoryItem,
+  type UtilizationRow,
+} from '@/lib/api/rentals'
+import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
+import { MButton, MInput, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
 
 // Real dispatch-derived status. on_rent_quantity > 0 → the item type has
@@ -54,6 +60,45 @@ export function OwnerRentals() {
   const navigate = useNavigate()
   const itemsQuery = useInventoryItems()
   const utilizationQuery = useInventoryUtilization()
+  const createItem = useCreateInventoryItem()
+
+  // Add-asset modal state. Code + description are the required fields (the
+  // create endpoint defaults the rest); day rate is optional. Mirrors the
+  // versioned rate-edit modal pattern in owner-rentals-asset.tsx.
+  const [addOpen, setAddOpen] = useState(false)
+  const [draftCode, setDraftCode] = useState('')
+  const [draftDescription, setDraftDescription] = useState('')
+  const [draftRate, setDraftRate] = useState('')
+
+  const openAddAsset = () => {
+    createItem.reset()
+    setDraftCode('')
+    setDraftDescription('')
+    setDraftRate('')
+    setAddOpen(true)
+  }
+
+  const parsedAddRate = Number(draftRate)
+  const addRateValid = draftRate.trim() === '' || (Number.isFinite(parsedAddRate) && parsedAddRate >= 0)
+  const canCreate = draftCode.trim() !== '' && draftDescription.trim() !== '' && addRateValid && !createItem.isPending
+
+  const handleCreateAsset = () => {
+    if (!canCreate) return
+    createItem.mutate(
+      {
+        code: draftCode.trim(),
+        description: draftDescription.trim(),
+        ...(draftRate.trim() !== '' ? { default_rental_rate: parsedAddRate } : {}),
+      },
+      {
+        onSuccess: (created) => {
+          setAddOpen(false)
+          // Drop straight onto the new asset's detail screen.
+          navigate(`/desktop/rentals/${created.id}`)
+        },
+      },
+    )
+  }
 
   const assets = useMemo(
     () => (itemsQuery.data?.inventoryItems ?? []).filter((i) => !i.deleted_at),
@@ -84,6 +129,9 @@ export function OwnerRentals() {
     }
   }, [assets, utilById, utilizationQuery.data?.totals?.utilization_pct])
 
+  // Column order mirrors the design: ASSET · TAG · WHERE · UTIL · RATE · STATUS
+  // (status is the right-most, right-aligned status-pill column). The repo's
+  // CATEGORY column is dropped — the design surfaces WHERE/UTIL instead.
   const columns: Array<DColumn<InventoryItem>> = [
     { key: 'asset', header: 'Asset', render: (r) => <span className="d-table-cell-strong">{r.description}</span> },
     {
@@ -94,25 +142,6 @@ export function OwnerRentals() {
           {r.code}
         </span>
       ),
-    },
-    { key: 'category', header: 'Category', render: (r) => r.category },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (r) => {
-        const status = utilFromRow(utilById.get(r.id)).status
-        return (
-          <MPill tone={statusTone(status)} dot>
-            {status}
-          </MPill>
-        )
-      },
-    },
-    {
-      key: 'rate',
-      header: 'Rate',
-      numeric: true,
-      render: (r) => `${formatMoney(r.default_rental_rate)}/${r.unit || 'day'}`,
     },
     { key: 'where', header: 'Where', render: (r) => utilFromRow(utilById.get(r.id)).where },
     {
@@ -148,6 +177,25 @@ export function OwnerRentals() {
         )
       },
     },
+    {
+      key: 'rate',
+      header: 'Rate',
+      numeric: true,
+      render: (r) => `${formatMoney(r.default_rental_rate)}/${r.unit || 'day'}`,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      numeric: true,
+      render: (r) => {
+        const status = utilFromRow(utilById.get(r.id)).status
+        return (
+          <MPill tone={statusTone(status)} dot>
+            {status}
+          </MPill>
+        )
+      },
+    },
   ]
 
   return (
@@ -176,10 +224,7 @@ export function OwnerRentals() {
         <DataTable<InventoryItem>
           title="Assets"
           action={
-            // TODO(wire): an inline add-asset modal (useCreateInventoryItem
-            // already exists); for now this routes to the asset list so the
-            // ADD ASSET affordance in the design is present.
-            <MButton size="sm" variant="ghost" onClick={() => navigate('/desktop/rentals')}>
+            <MButton size="sm" variant="primary" onClick={openAddAsset}>
               + ADD ASSET
             </MButton>
           }
@@ -190,6 +235,67 @@ export function OwnerRentals() {
           empty="No equipment yet. Assets land here once inventory is added."
         />
       </div>
+
+      {/* Add asset — POST /api/inventory/items via useCreateInventoryItem.
+          Code + description are required; an optional day rate seeds the
+          catalog rate. On success we land on the new asset's detail screen. */}
+      <DModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        title="Add asset"
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <MButton variant="ghost" onClick={() => setAddOpen(false)}>
+              Cancel
+            </MButton>
+            <MButton variant="primary" disabled={!canCreate} onClick={handleCreateAsset}>
+              {createItem.isPending ? 'Adding…' : 'Add asset'}
+            </MButton>
+          </div>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            Asset name
+            <MInput
+              value={draftDescription}
+              autoFocus
+              onChange={(e) => setDraftDescription(e.currentTarget.value)}
+              placeholder="e.g. Scaffold A · 24×8"
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            Tag / code
+            <MInput
+              value={draftCode}
+              onChange={(e) => setDraftCode(e.currentTarget.value)}
+              placeholder="e.g. SCF-001"
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, fontWeight: 600 }}>
+            Day rate (optional)
+            <MInput
+              type="number"
+              min={0}
+              step="0.01"
+              inputMode="decimal"
+              value={draftRate}
+              onChange={(e) => setDraftRate(e.currentTarget.value)}
+              placeholder="0.00"
+            />
+          </label>
+          {!addRateValid && draftRate.trim() !== '' ? (
+            <div style={{ fontSize: 13, color: 'var(--m-red)', fontWeight: 600 }}>
+              Enter a non-negative dollar amount.
+            </div>
+          ) : null}
+          {createItem.isError ? (
+            <div style={{ fontSize: 13, color: 'var(--m-red)', fontWeight: 600 }}>
+              {createItem.error instanceof Error ? createItem.error.message : 'Could not add the asset.'}
+            </div>
+          ) : null}
+        </div>
+      </DModal>
     </div>
   )
 }

@@ -12,9 +12,13 @@
  * docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useMemo, useState } from 'react'
-import type { BootstrapResponse } from '@/lib/api'
+import { useNavigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { apiGet, type BootstrapResponse } from '@/lib/api'
+import { getActiveCompanySlug } from '@/lib/api/client'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
 import { MAvatar, MChip, MChipRow, MPill, avatarToneFor, initialsFor } from '@/components/m'
+import { ForemanCrewMap } from '../mobile/foreman-crew.js'
 import { formatDecimalHours, todayIso } from '../mobile/format.js'
 
 type CrewRow = {
@@ -25,10 +29,21 @@ type CrewRow = {
   site: string
   hoursToday: number
   onSite: boolean
+  /** What the worker is on today (service-item code), or null. */
+  onTask: string | null
+  /** True when an open field blocker is tied to this worker / their site. */
+  blocked: boolean
 }
 
-// 'all' / 'on' are fixed; any other value is a project id (By site).
-type Filter = 'all' | 'on' | string
+type OpenIssueRow = {
+  id: string
+  project_id: string | null
+  worker_id: string | null
+  resolved_at: string | null
+}
+
+// 'all' / 'on' / 'map' are fixed; any other value is a project id (By site).
+type Filter = 'all' | 'on' | 'map' | string
 
 function weekStartIso(): string {
   // Monday-based week start in local time, as YYYY-MM-DD to compare against
@@ -44,21 +59,40 @@ function weekStartIso(): string {
 
 export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const [filter, setFilter] = useState<Filter>('all')
+  const navigate = useNavigate()
+  const companySlug = getActiveCompanySlug()
 
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const schedules = useMemo(() => bootstrap?.schedules ?? [], [bootstrap?.schedules])
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
+  // Open field blockers — same feed FM Today uses — to mark crew/sites blocked
+  // in the ON TASK column (design dsg__34: "Basecoat · blocked").
+  const issuesQuery = useQuery({
+    queryKey: ['worker-issues', 'open', companySlug],
+    queryFn: () => apiGet<{ worker_issues: OpenIssueRow[] }>('/api/worker-issues?resolved=false', companySlug),
+    enabled: Boolean(companySlug),
+    refetchInterval: 60_000,
+  })
+  const openIssues = useMemo(
+    () => (issuesQuery.data?.worker_issues ?? []).filter((i) => !i.resolved_at),
+    [issuesQuery.data],
+  )
+
   const { rows, onSiteCount, offCount, siteCount, weekTotal, sites } = useMemo(() => {
+    const blockedWorkerIds = new Set(openIssues.map((i) => i.worker_id).filter(Boolean) as string[])
+    const blockedSiteIds = new Set(openIssues.map((i) => i.project_id).filter(Boolean) as string[])
     const active = workers.filter((w) => !w.deleted_at)
     const today = todayIso()
     const weekStart = weekStartIso()
     const projectName = new Map(projects.map((p) => [p.id, p.name]))
 
-    // Today's hours + the site each worker logged the most hours against.
+    // Today's hours + the site each worker logged the most hours against, plus
+    // the service-item code they spent the most time on (the ON TASK column).
     const hoursToday = new Map<string, number>()
     const siteHours = new Map<string, Map<string, number>>() // worker -> (project -> hrs)
+    const taskHours = new Map<string, Map<string, number>>() // worker -> (service_item_code -> hrs)
     let weekTotal = 0
     for (const l of labor) {
       if (l.deleted_at || !l.worker_id) continue
@@ -71,6 +105,11 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
         const byProject = siteHours.get(l.worker_id) ?? new Map<string, number>()
         byProject.set(l.project_id, (byProject.get(l.project_id) ?? 0) + hrs)
         siteHours.set(l.worker_id, byProject)
+      }
+      if (l.service_item_code) {
+        const byTask = taskHours.get(l.worker_id) ?? new Map<string, number>()
+        byTask.set(l.service_item_code, (byTask.get(l.service_item_code) ?? 0) + hrs)
+        taskHours.set(l.worker_id, byTask)
       }
     }
 
@@ -95,6 +134,10 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
         byProject && byProject.size > 0
           ? [...byProject.entries()].sort((a, b) => b[1] - a[1])[0]![0]
           : (scheduledSite.get(w.id) ?? null)
+      const byTask = taskHours.get(w.id)
+      const onTask =
+        byTask && byTask.size > 0 ? ([...byTask.entries()].sort((a, b) => b[1] - a[1])[0]![0] ?? null) : null
+      const blocked = blockedWorkerIds.has(w.id) || (siteId !== null && blockedSiteIds.has(siteId))
       return {
         id: w.id,
         name: w.name,
@@ -103,6 +146,8 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
         site: siteId ? (projectName.get(siteId) ?? 'Unknown site') : 'Unassigned',
         hoursToday: hours,
         onSite: hours > 0,
+        onTask,
+        blocked,
       }
     })
 
@@ -119,10 +164,10 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
       weekTotal,
       sites,
     }
-  }, [workers, labor, schedules, projects])
+  }, [workers, labor, schedules, projects, openIssues])
 
   const visibleRows = useMemo(() => {
-    if (filter === 'all') return rows
+    if (filter === 'all' || filter === 'map') return rows
     if (filter === 'on') return rows.filter((r) => r.onSite)
     return rows.filter((r) => r.siteId === filter)
   }, [rows, filter])
@@ -138,8 +183,30 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
         </span>
       ),
     },
-    { key: 'site', header: 'Site / assignment', render: (r) => r.site },
-    { key: 'role', header: 'Role', render: (r) => r.role || '—' },
+    { key: 'site', header: 'Site', render: (r) => r.site },
+    {
+      key: 'onTask',
+      header: 'On task',
+      render: (r) =>
+        r.onTask ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, color: 'var(--m-ink-2)' }}>{r.onTask}</span>
+            {r.blocked ? (
+              <span
+                style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-bad, #b3261e)' }}
+              >
+                · BLOCKED
+              </span>
+            ) : null}
+          </span>
+        ) : r.blocked ? (
+          <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-bad, #b3261e)' }}>
+            BLOCKED
+          </span>
+        ) : (
+          <span style={{ color: 'var(--m-ink-3)' }}>—</span>
+        ),
+    },
     {
       key: 'hours',
       header: 'Hours today',
@@ -150,8 +217,8 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
       key: 'status',
       header: 'Status',
       render: (r) => (
-        <MPill tone={r.onSite ? 'green' : undefined} dot>
-          {r.onSite ? 'On site' : 'Off'}
+        <MPill tone={r.blocked ? 'red' : r.onSite ? 'green' : undefined} dot>
+          {r.blocked ? 'Blocked' : r.onSite ? 'On site' : 'Off'}
         </MPill>
       ),
     },
@@ -204,19 +271,35 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
               {s.name}
             </MChip>
           ))}
+          {/* MAP chip (design dsg__34): toggles the shared crew map body. */}
+          <MChip active={filter === 'map'} onClick={() => setFilter('map')}>
+            Map
+          </MChip>
         </MChipRow>
 
-        <DataTable<CrewRow>
-          title="Crew across sites"
-          columns={columns}
-          rows={visibleRows}
-          rowKey={(r) => r.id}
-          empty={
-            filter === 'all'
-              ? 'No crew yet. Workers land here once they’re added to the company.'
-              : 'No crew match this filter.'
-          }
-        />
+        {filter === 'map' ? (
+          <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <ForemanCrewMap
+              projects={projects}
+              workers={workers}
+              labor={labor}
+              today={todayIso()}
+              onOpenProject={(projectId) => navigate(`/desktop/projects/${projectId}`)}
+            />
+          </div>
+        ) : (
+          <DataTable<CrewRow>
+            title="Crew across sites"
+            columns={columns}
+            rows={visibleRows}
+            rowKey={(r) => r.id}
+            empty={
+              filter === 'all'
+                ? 'No crew yet. Workers land here once they’re added to the company.'
+                : 'No crew match this filter.'
+            }
+          />
+        )}
       </div>
     </div>
   )

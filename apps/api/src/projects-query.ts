@@ -90,6 +90,10 @@ export function buildListProjectsQuery(companyId: string, query: ProjectsQuery):
       p.id, p.customer_id, p.name, p.customer_name, p.division_code, p.status, p.bid_total,
       p.labor_rate, p.target_sqft_per_hr, p.bonus_pool, p.closed_at, p.summary_locked_at,
       p.site_lat, p.site_lng, p.site_radius_m,
+      p.lifecycle_state, p.lifecycle_state_version,
+      p.lifecycle_sent_at, p.lifecycle_accepted_at, p.lifecycle_declined_at,
+      p.lifecycle_decline_reason, p.lifecycle_started_at, p.lifecycle_completed_at,
+      p.lifecycle_archived_at,
       p.version, p.created_at, p.updated_at
     from projects p
     left join customers c on c.id = p.customer_id and c.company_id = p.company_id

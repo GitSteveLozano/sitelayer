@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@sitelayer/domain": "file:../domain",
+    "@sitelayer/workflows": "file:../workflows",
     "pg": "^8.13.1"
   },
   "devDependencies": {

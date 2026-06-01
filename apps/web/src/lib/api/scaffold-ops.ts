@@ -99,12 +99,21 @@ export interface Bom {
   name: string
   notes: string | null
   status: 'draft' | 'approved' | 'superseded'
+  state_version?: number
   approved_at: string | null
   approved_by: string | null
+  superseded_by?: string | null
   total_weight_kg: string
   total_lines: number
   created_at: string
   updated_at: string
+}
+
+/** Human events the scaffold_ops_approval reducer accepts. */
+export type BomEvent = 'APPROVE' | 'SUPERSEDE'
+export interface BomNextEvent {
+  type: BomEvent
+  label: string
 }
 
 export interface BomLine {
@@ -119,6 +128,9 @@ export interface BomLine {
 
 export interface BomDetail extends Bom {
   lines: BomLine[]
+  /** Headless ADR-5 envelope fields (additive on GET /api/boms/:id). */
+  state?: 'draft' | 'approved' | 'superseded'
+  next_events?: BomNextEvent[]
 }
 
 // ---- branches ----------------------------------------------------------------
@@ -290,10 +302,39 @@ export function useAppendBomLines(bomId: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bom', bomId] }),
   })
 }
+/**
+ * Dispatch APPROVE through the canonical headless `/events` envelope with
+ * the wire-level optimistic `state_version` the reducer's contract is
+ * built around (replaces the empty-body POST /approve bypass). On a 409
+ * the caller should refetch the BOM snapshot and retry.
+ */
 export function useApproveBom(bomId: string) {
   const qc = useQueryClient()
-  return useMutation<Bom, Error, void>({
-    mutationFn: () => request<Bom>(`/api/boms/${encodeURIComponent(bomId)}/approve`, { method: 'POST' }),
+  return useMutation<Bom, Error, { state_version: number }>({
+    mutationFn: ({ state_version }) =>
+      request<Bom>(`/api/boms/${encodeURIComponent(bomId)}/events`, {
+        method: 'POST',
+        json: { event: 'APPROVE', state_version },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bom', bomId] })
+      qc.invalidateQueries({ queryKey: ['project'] })
+    },
+  })
+}
+
+/**
+ * Dispatch SUPERSEDE through the headless `/events` envelope. Optionally
+ * links the replacement BOM via `superseded_by_bom_id`.
+ */
+export function useSupersedeBom(bomId: string) {
+  const qc = useQueryClient()
+  return useMutation<Bom, Error, { state_version: number; superseded_by_bom_id?: string | null }>({
+    mutationFn: ({ state_version, superseded_by_bom_id }) =>
+      request<Bom>(`/api/boms/${encodeURIComponent(bomId)}/events`, {
+        method: 'POST',
+        json: { event: 'SUPERSEDE', state_version, superseded_by_bom_id: superseded_by_bom_id ?? null },
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['bom', bomId] })
       qc.invalidateQueries({ queryKey: ['project'] })

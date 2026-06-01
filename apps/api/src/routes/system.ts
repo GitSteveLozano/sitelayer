@@ -37,6 +37,11 @@ export type SystemRouteCtx = {
   company: ActiveCompany
   /** Active Clerk (or fallback) user id; used by /api/session. */
   currentUserId: string
+  /** The real impersonator (Clerk `act` sub) when this is an impersonation
+   *  session, else null — surfaced by /api/session for the SPA banner. */
+  actorUserId?: string | null
+  /** 'self' | 'act_as' | 'impersonate' — how currentUserId was assumed. */
+  authMode?: string
   sendJson: (status: number, body: unknown) => void
   /**
    * Per-response side-channels for headers we can't drive through sendJson.
@@ -98,6 +103,9 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
       user: { id: ctx.currentUserId, role: membershipRows[0]?.role ?? 'admin' },
       activeCompany: ctx.company,
       memberships: membershipRows,
+      // Impersonation surface for the SPA "viewing as X" banner (design §7).
+      impersonated_by: ctx.actorUserId ?? null,
+      mode: ctx.authMode ?? 'self',
     })
     return true
   }
@@ -153,6 +161,7 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
     schedules,
     laborEntries,
     projectAssignments,
+    autoPostPolicy,
   ] = await withCompanyClient(companyId, (c) =>
     Promise.all([
       c.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
@@ -167,7 +176,7 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         [companyId],
       ),
       c.query(
-        'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
+        'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, lifecycle_state, lifecycle_state_version, lifecycle_sent_at, lifecycle_accepted_at, lifecycle_declined_at, lifecycle_decline_reason, lifecycle_started_at, lifecycle_completed_at, lifecycle_archived_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
         [companyId],
       ),
       c.query('select id, name, role, created_at from workers where company_id = $1 order by name asc', [companyId]),
@@ -223,6 +232,17 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         order by created_at asc`,
         [companyId, callerUserId],
       ),
+      // Per-company labor-payroll auto-post policy (migration 116). Drives the
+      // "THIS WEEK PAYROLL · AUTO" sub-label on the owner Money tile. OFF by
+      // default for every company → the tile reads as a manual payroll figure
+      // until a company opts in.
+      c.query(
+        `select labor_payroll_auto_post_enabled,
+                labor_payroll_auto_post_weekday,
+                to_char(labor_payroll_auto_post_after, 'HH24:MI') as labor_payroll_auto_post_after
+         from companies where id = $1 limit 1`,
+        [companyId],
+      ),
     ]),
   )
 
@@ -241,6 +261,24 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
     schedules: schedules.rows,
     laborEntries: laborEntries.rows,
     projectAssignments: projectAssignments.rows,
+    laborPayrollAutoPost: ((): {
+      enabled: boolean
+      weekday: number | null
+      after: string | null
+    } => {
+      const row = autoPostPolicy.rows[0] as
+        | {
+            labor_payroll_auto_post_enabled?: boolean
+            labor_payroll_auto_post_weekday?: number | null
+            labor_payroll_auto_post_after?: string | null
+          }
+        | undefined
+      return {
+        enabled: row?.labor_payroll_auto_post_enabled === true,
+        weekday: row?.labor_payroll_auto_post_weekday ?? null,
+        after: row?.labor_payroll_auto_post_after ?? null,
+      }
+    })(),
   }
 }
 

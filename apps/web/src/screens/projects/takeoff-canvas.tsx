@@ -3,6 +3,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
 import {
   useBlueprintPages,
   useCaptureTakeoffDraft,
@@ -27,6 +29,7 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { useRole } from '@/lib/role'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
 import { PageStrip } from './page-strip'
@@ -330,6 +333,50 @@ export function TakeoffCanvasScreen() {
     if (tool === 'lineal') return lineLength(draftPoints)
     return draftPoints.length
   }, [tool, draftPoints])
+
+  useEffect(() => {
+    if (!projectId) return
+    return registerCaptureArtifactProvider(`takeoff:project:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!activeBlueprint && blueprintMeasurements.length === 0 && draftPoints.length === 0) return null
+      const payload = buildCanvasGeometryArtifact({
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        active_draft_id: activeDraftId,
+        active_blueprint_id: activeBlueprint?.id ?? null,
+        active_page_id: activePage?.id ?? null,
+        blueprint: activeBlueprint,
+        page: activePage,
+        viewport: { zoom, mode: 'draw', tool },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          service_item_code: serviceItemCode,
+          elevation,
+        },
+        selection: {
+          tag_sheet_measurement_id: tagSheetMeasurementId,
+        },
+        measurements: blueprintMeasurements,
+      })
+      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+        ...metadata,
+        surface: 'project_takeoff_canvas',
+      })
+    })
+  }, [
+    activeBlueprint,
+    activeDraftId,
+    activePage,
+    blueprintMeasurements,
+    draftPoints,
+    draftQuantity,
+    elevation,
+    projectId,
+    serviceItemCode,
+    tagSheetMeasurementId,
+    tool,
+    zoom,
+  ])
 
   const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
   const canSave =

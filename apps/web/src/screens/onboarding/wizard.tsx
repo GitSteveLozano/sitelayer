@@ -14,6 +14,14 @@ import {
   type Company,
 } from '@/lib/api'
 import { useOnboardingWizard, type TeamForm, type SeedOptions } from '@/machines/onboarding-wizard'
+import { DESIGN_ROLE_TO_COMPANY_ROLE, INVITE_DESIGN_ROLES, type InviteDesignRole } from '@/machines/invite-teammate'
+
+const TEAM_ROLE_LABELS: Record<InviteDesignRole, string> = {
+  estimator: 'ESTIMATOR',
+  foreman: 'FOREMAN',
+  crew: 'CREW',
+  owner: 'OWNER',
+}
 
 /**
  * Onboarding wizard (Phase 6 Batch 7).
@@ -196,6 +204,15 @@ function TeamStep({ company, teamForm, error, onSetField, onAddInvite, onSetErro
   const invite = useInviteMember(company.id)
   const pendingId = teamForm.pendingClerkUserId
   const role = teamForm.pendingRole
+  // The design's 4-cell role grid (ESTIMATOR/FOREMAN/CREW/OWNER) is the
+  // canonical selector; it maps to the COMPANY_ROLE stored on the
+  // machine via the shared table so the wizard and the standalone
+  // invite-teammate screen converge on one mapping.
+  const [designRole, setDesignRole] = useState<InviteDesignRole>('foreman')
+  const selectDesignRole = (r: InviteDesignRole) => {
+    setDesignRole(r)
+    onSetField('pendingRole', DESIGN_ROLE_TO_COMPANY_ROLE[r])
+  }
 
   const submit = async () => {
     onSetError(null)
@@ -223,19 +240,33 @@ function TeamStep({ company, teamForm, error, onSetField, onAddInvite, onSetErro
         onChange={(v) => onSetField('pendingClerkUserId', v)}
         placeholder="user_2YXxX…"
       />
-      <label className="block mt-3">
+      <div className="block mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Role</div>
-        <select
-          value={role}
-          onChange={(e) => onSetField('pendingRole', e.target.value)}
-          className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-        >
-          <option value="admin">admin</option>
-          <option value="office">office</option>
-          <option value="foreman">foreman</option>
-          <option value="member">member</option>
-        </select>
-      </label>
+        <div className="mt-1 grid grid-cols-2 overflow-hidden rounded-[10px] border-2 border-ink">
+          {INVITE_DESIGN_ROLES.map((r, i) => {
+            const on = designRole === r
+            const rightEdge = i % 2 === 1
+            const bottomRow = i >= 2
+            return (
+              <button
+                key={r}
+                type="button"
+                aria-pressed={on}
+                onClick={() => selectDesignRole(r)}
+                className="py-3 text-[12px] font-bold tracking-[0.06em]"
+                style={{
+                  background: on ? 'var(--m-accent)' : 'transparent',
+                  color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                  borderRight: rightEdge ? 'none' : '2px solid var(--m-ink)',
+                  borderBottom: bottomRow ? 'none' : '2px solid var(--m-ink)',
+                }}
+              >
+                {TEAM_ROLE_LABELS[r]}
+              </button>
+            )
+          })}
+        </div>
+      </div>
       {teamForm.invited.length > 0 ? (
         <div className="mt-3 space-y-1">
           {teamForm.invited.map((row) => (

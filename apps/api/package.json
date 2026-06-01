@@ -24,6 +24,7 @@
     "@sitelayer/formula-evaluator": "file:../../packages/formula-evaluator",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
+    "@sitelayer/scenario": "file:../../packages/scenario",
     "@sitelayer/workflows": "file:../../packages/workflows",
     "@types/pdfkit": "^0.17.6",
     "busboy": "^1.6.0",

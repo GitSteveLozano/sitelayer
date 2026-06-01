@@ -60,4 +60,68 @@ describe('scaffold-ops-approval — applyEventLog replay', () => {
     expect(result.ok).toBe(false)
     expect(result.issues[0]?.reason).toBe('illegal_transition')
   })
+
+  it('supersede path: draft → approved → superseded', () => {
+    let snap: ScaffoldOpsApprovalWorkflowSnapshot = { state: 'draft', state_version: 1 }
+    const log: WorkflowEventLogEntry[] = []
+
+    const approveEvent = {
+      type: 'APPROVE' as const,
+      approved_at: '2026-05-01T07:00:00.000Z',
+      approved_by: 'office-user',
+    }
+    let prev = snap
+    snap = transitionScaffoldOpsApprovalWorkflow(snap, approveEvent)
+    log.push({
+      workflow_name: NAME,
+      schema_version: SCHEMA,
+      entity_id: ENTITY,
+      state_version: prev.state_version,
+      event_payload: approveEvent,
+      snapshot_after: snap as unknown as WorkflowEventLogEntry['snapshot_after'],
+    })
+
+    const supersedeEvent = {
+      type: 'SUPERSEDE' as const,
+      superseded_at: '2026-05-02T07:00:00.000Z',
+      superseded_by: 'admin-user',
+      superseded_by_bom_id: '00000000-0000-0000-0000-000000000999',
+    }
+    prev = snap
+    snap = transitionScaffoldOpsApprovalWorkflow(snap, supersedeEvent)
+    log.push({
+      workflow_name: NAME,
+      schema_version: SCHEMA,
+      entity_id: ENTITY,
+      state_version: prev.state_version,
+      event_payload: supersedeEvent,
+      snapshot_after: snap as unknown as WorkflowEventLogEntry['snapshot_after'],
+    })
+
+    const result = applyEventLog<ScaffoldOpsApprovalWorkflowSnapshot>({ state: 'draft', state_version: 1 }, log)
+    expect(result.ok, JSON.stringify(result.issues)).toBe(true)
+    expect(result.finalSnapshot?.state).toBe('superseded')
+    expect(result.finalSnapshot?.superseded_by_bom_id).toBe('00000000-0000-0000-0000-000000000999')
+  })
+
+  it('superseded is terminal — any further event is an illegal transition', () => {
+    const initial: ScaffoldOpsApprovalWorkflowSnapshot = { state: 'superseded', state_version: 3 }
+    const log: WorkflowEventLogEntry[] = [
+      {
+        workflow_name: NAME,
+        schema_version: SCHEMA,
+        entity_id: ENTITY,
+        state_version: 3,
+        event_payload: {
+          type: 'SUPERSEDE',
+          superseded_at: '2026-05-03T07:00:00.000Z',
+          superseded_by: 'admin-user',
+        },
+        snapshot_after: { state: 'superseded', state_version: 4 },
+      },
+    ]
+    const result = applyEventLog<ScaffoldOpsApprovalWorkflowSnapshot>(initial, log)
+    expect(result.ok).toBe(false)
+    expect(result.issues[0]?.reason).toBe('illegal_transition')
+  })
 })

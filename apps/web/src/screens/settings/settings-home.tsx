@@ -165,9 +165,41 @@ export function MobileSettingsHome({
           />
         </MListInset>
 
-        {/* Workspace group */}
+        {/* Workspace group — mirrors the design's settings hub
+            (Company / Pricing book / Loaded labor / Working hours / Team). */}
         <MSectionH>Workspace</MSectionH>
         <MListInset>
+          <MListRow
+            leading={<MI.Layers size={18} />}
+            leadingTone="accent"
+            headline="Pricing book"
+            supporting="Materials, labor rates, margins"
+            chev
+            onTap={() => go('/more/pricing-book')}
+          />
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            leadingTone="amber"
+            headline="Loaded labor · burden"
+            supporting="Your real hourly cost — base + all burdens"
+            chev
+            onTap={() => go('/more/loaded-labor')}
+          />
+          <MListRow
+            leading={<MI.Clock size={18} />}
+            headline="Working hours"
+            supporting="Work days, daily window, holidays"
+            chev
+            onTap={() => go('/more/working-hours')}
+          />
+          <MListRow
+            leading={<MI.ShieldAlert size={18} />}
+            leadingTone="green"
+            headline="Roles & permissions"
+            supporting="Built-in roles + custom role editor"
+            chev
+            onTap={() => go('/more/roles')}
+          />
           <MListRow
             leading={<MI.Users size={18} />}
             leadingTone="blue"
@@ -176,14 +208,6 @@ export function MobileSettingsHome({
             trailing={<span className="num">{bootstrap?.workers.filter((w) => !w.deleted_at).length ?? 0}</span>}
             chev
             onTap={() => go('/more/catalog/workers')}
-          />
-          <MListRow
-            leading={<MI.Layers size={18} />}
-            leadingTone="accent"
-            headline="Pricing book"
-            supporting="Materials, labor rates, margins"
-            chev
-            onTap={() => go('/more/catalog/service-items')}
           />
           <MListRow
             leading={<MI.Settings size={18} />}
@@ -228,11 +252,26 @@ export function MobileSettingsHome({
             }}
           />
           <MListRow
+            leading={<MI.Users size={18} />}
+            headline="Profile"
+            supporting="Your name, email, phone, password"
+            chev
+            onTap={() => go('/more/profile')}
+          />
+          <MListRow
             leading={<MI.ShieldAlert size={18} />}
             headline="Privacy & data"
             supporting="How Sitelayer handles your project data"
             chev
             onTap={() => go('/more/audit')}
+          />
+          <MListRow
+            leading={<MI.Alert size={18} />}
+            leadingTone="amber"
+            headline="Help & support"
+            supporting="Chat, book a call, email — we talk back quick"
+            chev
+            onTap={() => go('/more/help')}
           />
         </MListInset>
 
@@ -296,9 +335,9 @@ function IntegrationsStatusList({ navigate }: { navigate: (path: string) => void
         onTap={() => navigate('/more/integrations/qbo')}
       />
       <MListRow
-        leading={<IntegrationGlyph label="ST" connected={false} tone="blue" />}
-        headline="Stripe"
-        supporting="Card + ACH payments on invoices"
+        leading={<IntegrationGlyph label="G" connected={false} tone="green" />}
+        headline="Gusto"
+        supporting="Payroll · burden auto"
         trailing={
           <MPill dot tone={undefined}>
             Soon
@@ -306,12 +345,32 @@ function IntegrationsStatusList({ navigate }: { navigate: (path: string) => void
         }
       />
       <MListRow
-        leading={<IntegrationGlyph label="EM" connected={false} tone="accent" />}
-        headline="Email provider"
-        supporting="Send estimates + invoices from your domain"
+        leading={<IntegrationGlyph label="ST" connected={false} tone="blue" />}
+        headline="Stripe"
+        supporting="Collect payments — card + ACH on invoices"
         trailing={
           <MPill dot tone={undefined}>
-            Soon
+            Connect
+          </MPill>
+        }
+      />
+      <MListRow
+        leading={<IntegrationGlyph label="X" connected={false} tone="accent" />}
+        headline="Xero"
+        supporting="Books · alternative"
+        trailing={
+          <MPill dot tone={undefined}>
+            Connect
+          </MPill>
+        }
+      />
+      <MListRow
+        leading={<IntegrationGlyph label="P" connected={false} tone="amber" />}
+        headline="Procore"
+        supporting="GC project import"
+        trailing={
+          <MPill dot tone={undefined}>
+            Connect
           </MPill>
         }
       />

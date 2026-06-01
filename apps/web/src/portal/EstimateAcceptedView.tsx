@@ -2,6 +2,7 @@ import { useParams } from 'react-router-dom'
 import { MBanner, MBody, MTopBar } from '@/components/m'
 import { usePortalEstimateLoad } from '@/machines/portal-estimate-load'
 import { type PortalEstimateView } from './api'
+import { IssueReporter } from './IssueReporter'
 
 /**
  * Confirmation screen the customer sees after a successful accept.
@@ -18,7 +19,8 @@ import { type PortalEstimateView } from './api'
  */
 export function EstimateAcceptedView() {
   const { shareToken } = useParams<{ shareToken: string }>()
-  const { view, error, isLoading } = usePortalEstimateLoad(shareToken ?? '')
+  const token = shareToken ?? ''
+  const { view, error, isLoading } = usePortalEstimateLoad(token)
 
   return (
     <div data-theme="light" style={{ minHeight: '100vh', background: '#f1f5f9', color: '#0f172a' }}>
@@ -39,6 +41,7 @@ export function EstimateAcceptedView() {
           ) : null}
         </div>
       </MBody>
+      <IssueReporter surface="estimate_portal" shareToken={token} />
     </div>
   )
 }

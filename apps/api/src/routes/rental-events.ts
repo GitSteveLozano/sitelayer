@@ -170,8 +170,9 @@ export async function handleRentalEventRoutes(
         const current = lockedResult.rows[0]
         if (!current) return { kind: 'not_found' as const }
         // Post-lock version check — see rental-billing-state.ts comment.
-        // The workflow_event_log UNIQUE (entity_id, state_version) is a
-        // belt-and-braces backstop if a future caller forgets it.
+        // The workflow_event_log UNIQUE (entity_id, workflow_name, state_version)
+        // (migration 106) is a belt-and-braces backstop if a future caller
+        // forgets it.
         if (current.state_version !== stateVersion) {
           return { kind: 'version_conflict' as const, row: current }
         }

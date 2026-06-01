@@ -8,14 +8,21 @@
  * `apps/api/src/routes/rental-requests.ts` (this file's read/approve/
  * decline counterpart). Only admin/office personas reach this screen.
  *
+ * Headless: the list comes from GET /api/rental-requests, but each card's
+ * actions are driven by the per-row workflow snapshot
+ * (GET /api/rental-requests/:id → { state, state_version, next_events }).
+ * Buttons render ONE-per-`next_events` entry so the UI can only dispatch a
+ * transition the reducer allows, and every dispatch threads `state_version`
+ * (POST /api/rental-requests/:id/events) so two operators acting on the
+ * same request 409 on a stale version instead of silently racing.
+ *
  * Layout:
  *   - MTopBar with back navigation to /rentals.
- *   - Banner at the top when an approve/decline mutation errors.
+ *   - Banner at the top when a dispatch errors.
  *   - One MListInset per pending request, each showing customer name,
- *     line items + qty, requested date range, contact info, plus
- *     Approve / Decline action buttons.
- *   - Approve opens a confirmation Sheet with the line preview so the
- *     operator can sanity-check before converting into real `rentals`.
+ *     line items + qty, requested date range, contact info, plus the
+ *     reducer's next_events as action buttons.
+ *   - Approve opens a confirmation Sheet with the line preview.
  *   - Decline opens a Sheet asking for an optional reason string.
  */
 import { useState, type ReactNode } from 'react'
@@ -23,21 +30,22 @@ import { useNavigate } from 'react-router-dom'
 import { MBanner, MBody, MButton, MButtonRow, MListInset, MListRow, MTopBar } from '@/components/m'
 import { Sheet } from '@/components/mobile'
 import {
-  useApproveRentalRequest,
-  useDeclineRentalRequest,
+  useDispatchRentalRequestEvent,
   useRentalRequests,
+  useRentalRequestSnapshot,
   type RentalRequest,
+  type RentalRequestApprovalEvent,
   type RentalRequestItem,
 } from '@/lib/api'
 
-type ActiveSheet = { kind: 'approve'; request: RentalRequest } | { kind: 'decline'; request: RentalRequest } | null
+type ActiveSheet =
+  | { kind: 'approve'; request: RentalRequest; stateVersion: number }
+  | { kind: 'decline'; request: RentalRequest; stateVersion: number }
+  | null
 
 export function RentalRequestsQueueScreen() {
   const navigate = useNavigate()
   const pending = useRentalRequests('pending', 50)
-  const approve = useApproveRentalRequest()
-  const decline = useDeclineRentalRequest()
-  const [active, setActive] = useState<ActiveSheet>(null)
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const requests = pending.data?.rentalRequests ?? []
@@ -70,70 +78,53 @@ export function RentalRequestsQueueScreen() {
         ) : null}
 
         {requests.map((req) => (
-          <RentalRequestCard
-            key={req.id}
-            request={req}
-            onApprove={() => setActive({ kind: 'approve', request: req })}
-            onDecline={() => setActive({ kind: 'decline', request: req })}
-          />
+          <RentalRequestCard key={req.id} request={req} onError={setErrorBanner} onActed={() => pending.refetch()} />
         ))}
       </MBody>
-
-      <Sheet open={active?.kind === 'approve'} onClose={() => setActive(null)} title="Approve request?">
-        {active?.kind === 'approve' ? (
-          <ApproveSheetBody
-            request={active.request}
-            isPending={approve.isPending}
-            onCancel={() => setActive(null)}
-            onConfirm={() => {
-              setErrorBanner(null)
-              approve.mutate(
-                { id: active.request.id },
-                {
-                  onSuccess: () => setActive(null),
-                  onError: (err) => setErrorBanner(String(err?.message ?? 'Approve failed')),
-                },
-              )
-            }}
-          />
-        ) : null}
-      </Sheet>
-
-      <Sheet open={active?.kind === 'decline'} onClose={() => setActive(null)} title="Decline request">
-        {active?.kind === 'decline' ? (
-          <DeclineSheetBody
-            request={active.request}
-            isPending={decline.isPending}
-            onCancel={() => setActive(null)}
-            onConfirm={(reason) => {
-              setErrorBanner(null)
-              decline.mutate(
-                { id: active.request.id, input: { decline_reason: reason || null } },
-                {
-                  onSuccess: () => setActive(null),
-                  onError: (err) => setErrorBanner(String(err?.message ?? 'Decline failed')),
-                },
-              )
-            }}
-          />
-        ) : null}
-      </Sheet>
     </>
   )
 }
 
 interface RentalRequestCardProps {
   request: RentalRequest
-  onApprove: () => void
-  onDecline: () => void
+  onError: (msg: string | null) => void
+  onActed: () => void
 }
 
-function RentalRequestCard({ request, onApprove, onDecline }: RentalRequestCardProps) {
+function RentalRequestCard({ request, onError, onActed }: RentalRequestCardProps) {
+  const snapshot = useRentalRequestSnapshot(request.id)
+  const dispatch = useDispatchRentalRequestEvent(request.id)
+  const [active, setActive] = useState<ActiveSheet>(null)
+
   const items = Array.isArray(request.items) ? request.items : []
   const dateRange = formatDateRange(request.requested_start, request.requested_end)
   const contactPieces = [request.contact_name, request.contact_email, request.contact_phone]
     .filter((p): p is string => Boolean(p && p.length > 0))
     .join(' · ')
+
+  // Reducer-computed actions only. Until the snapshot loads, render no
+  // buttons (the screen never invents a transition the machine disallows).
+  const nextEvents = snapshot.data?.next_events ?? []
+  const stateVersion = snapshot.data?.state_version ?? 0
+
+  function runDispatch(event: RentalRequestApprovalEvent, declineReason?: string | null) {
+    onError(null)
+    dispatch.mutate(
+      { event, state_version: stateVersion, decline_reason: declineReason ?? null },
+      {
+        onSuccess: () => {
+          setActive(null)
+          onActed()
+        },
+        onError: (err) => {
+          // A 409 means another operator already acted; reload the snapshot
+          // so the fresh next_events re-render (likely empty → terminal).
+          snapshot.refetch()
+          onError(String(err?.message ?? `${event} failed`))
+        },
+      },
+    )
+  }
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -147,14 +138,40 @@ function RentalRequestCard({ request, onApprove, onDecline }: RentalRequestCardP
       </MListInset>
       <div style={{ marginTop: 8 }}>
         <MButtonRow>
-          <MButton variant="ghost" onClick={onDecline}>
-            Decline
-          </MButton>
-          <MButton variant="primary" onClick={onApprove}>
-            Approve
-          </MButton>
+          {nextEvents.map((evt) => (
+            <MButton
+              key={evt.type}
+              variant={evt.type === 'APPROVE' ? 'primary' : 'ghost'}
+              disabled={dispatch.isPending || snapshot.isPending}
+              onClick={() => setActive({ kind: evt.type === 'APPROVE' ? 'approve' : 'decline', request, stateVersion })}
+            >
+              {evt.label}
+            </MButton>
+          ))}
         </MButtonRow>
       </div>
+
+      <Sheet open={active?.kind === 'approve'} onClose={() => setActive(null)} title="Approve request?">
+        {active?.kind === 'approve' ? (
+          <ApproveSheetBody
+            request={active.request}
+            isPending={dispatch.isPending}
+            onCancel={() => setActive(null)}
+            onConfirm={() => runDispatch('APPROVE')}
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet open={active?.kind === 'decline'} onClose={() => setActive(null)} title="Decline request">
+        {active?.kind === 'decline' ? (
+          <DeclineSheetBody
+            request={active.request}
+            isPending={dispatch.isPending}
+            onCancel={() => setActive(null)}
+            onConfirm={(reason) => runDispatch('DECLINE', reason || null)}
+          />
+        ) : null}
+      </Sheet>
     </div>
   )
 }

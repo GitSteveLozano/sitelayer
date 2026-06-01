@@ -6,16 +6,19 @@ import {
   calculateProjectCost,
   DEFAULT_BONUS_RULE,
   sumMoney,
+  type PermissionAction,
 } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
 import { captureWithEntityContext } from '../instrument.js'
 import {
   nextProjectCloseoutEvents,
+  parseProjectCloseoutEventRequest,
   PROJECT_CLOSEOUT_WORKFLOW_NAME,
   PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
   projectStatusToCloseoutState,
   transitionProjectCloseoutWorkflow,
   type ProjectCloseoutHumanEventType,
+  type ProjectCloseoutWorkflowEvent,
   type ProjectCloseoutWorkflowSnapshot,
   type ProjectCloseoutWorkflowState,
   type WorkflowSnapshot,
@@ -103,6 +106,12 @@ export type ProjectRouteCtx = {
   /** Currently-active Clerk user id (for the workflow event log actor). */
   currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
+  /**
+   * LAYER 2 named-action overlay (the 9 PERMISSION_ACTIONS). Runs AFTER
+   * requireRole so the design matrix can further restrict the effective base
+   * role and apply custom-role grants. See server.ts:requirePermission.
+   */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -221,6 +230,9 @@ type ProjectCloseoutRow = {
   closed_at: string | null
   closed_by: string | null
   summary_locked_at: string | null
+  post_mortem_acknowledged_at: string | null
+  post_mortem_acknowledged_by: string | null
+  lifecycle_state: string | null
   workflow_engine: string
   workflow_run_id: string | null
   version: number
@@ -235,6 +247,8 @@ type ProjectCloseoutSnapshotContext = {
   closed_at: string | null
   closed_by: string | null
   summary_locked_at: string | null
+  post_mortem_acknowledged_at: string | null
+  post_mortem_acknowledged_by: string | null
   workflow_engine: string
   workflow_run_id: string | null
   version: number
@@ -242,14 +256,35 @@ type ProjectCloseoutSnapshotContext = {
   updated_at: string
 }
 
+// Column-ownership guard (Gap 4): CLOSEOUT depends on the *real*
+// project_lifecycle state, not the lossy `status` projection. Closing out
+// is only meaningful once work has started; `in_progress` and `done` are
+// the eligible lifecycle states. A null lifecycle_state (legacy rows that
+// predate the lifecycle workflow) is treated as eligible so the existing
+// closeout path keeps working.
+const CLOSEOUT_ELIGIBLE_LIFECYCLE_STATES = new Set(['in_progress', 'done'])
+
+function closeoutLifecycleDisabledReason(lifecycleState: string | null): string | null {
+  if (lifecycleState == null) return null
+  if (CLOSEOUT_ELIGIBLE_LIFECYCLE_STATES.has(lifecycleState)) return null
+  return `Project must be in progress before closeout (lifecycle is "${lifecycleState}")`
+}
+
 function projectCloseoutSnapshotResponse(
   row: ProjectCloseoutRow,
 ): WorkflowSnapshot<ProjectCloseoutWorkflowState, ProjectCloseoutHumanEventType, ProjectCloseoutSnapshotContext> {
-  const state = projectStatusToCloseoutState(row.status)
+  const state = projectStatusToCloseoutState(row.status, row.post_mortem_acknowledged_at)
+  // Surface the lifecycle-eligibility guard as a disabled_reason on the
+  // CLOSEOUT next-event so the UI can grey the button without inventing a
+  // transition. Only applies to the `active` state's CLOSEOUT affordance.
+  const disabledReason = closeoutLifecycleDisabledReason(row.lifecycle_state)
+  const nextEvents = nextProjectCloseoutEvents(state).map((ev) =>
+    ev.type === 'CLOSEOUT' && disabledReason ? { ...ev, disabled_reason: disabledReason } : ev,
+  )
   return {
     state,
     state_version: row.state_version,
-    next_events: nextProjectCloseoutEvents(state),
+    next_events: nextEvents,
     context: {
       id: row.id,
       company_id: row.company_id,
@@ -257,6 +292,8 @@ function projectCloseoutSnapshotResponse(
       closed_at: row.closed_at,
       closed_by: row.closed_by,
       summary_locked_at: row.summary_locked_at,
+      post_mortem_acknowledged_at: row.post_mortem_acknowledged_at,
+      post_mortem_acknowledged_by: row.post_mortem_acknowledged_by,
       workflow_engine: row.workflow_engine,
       workflow_run_id: row.workflow_run_id,
       version: row.version,
@@ -266,9 +303,54 @@ function projectCloseoutSnapshotResponse(
   }
 }
 
+/**
+ * Margin-shortfall admin alert, fired post-commit after a CLOSEOUT.
+ * Best-effort: alert delivery must never roll back the closeout, so all
+ * errors are swallowed + reported to Sentry. Shared by the canonical
+ * `/closeout/events` route and the legacy `/closeout` shim.
+ */
+async function fireMarginShortfallAlert(
+  ctx: ProjectRouteCtx,
+  projectId: string,
+  closed: { name?: string | null; customer_name?: string | null },
+): Promise<void> {
+  try {
+    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId)
+    const marginPct = summary?.metrics?.margin?.margin
+    if (typeof marginPct === 'number' && marginPct < 10) {
+      const projectName = closed.name ?? summary?.project?.name ?? projectId
+      const customerName = closed.customer_name ?? summary?.project?.customer_name ?? 'unknown customer'
+      const subject = `[Sitelayer] Margin shortfall on closeout: ${projectName}`
+      const text = [
+        `Project "${projectName}" (${customerName}) closed with a margin of ${marginPct.toFixed(2)}%.`,
+        `Target is 10%. Review cost entries and invoicing before finalizing.`,
+        `https://sitelayer.sandolab.xyz/projects/${projectId}`,
+      ].join('\n\n')
+      await enqueueAdminAlert(ctx.company.id, 'margin_shortfall', subject, text, {
+        project_id: projectId,
+        margin_pct: marginPct,
+        revenue: summary?.metrics?.margin?.revenue ?? null,
+        cost: summary?.metrics?.margin?.cost ?? null,
+      })
+    }
+  } catch (err) {
+    logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
+    captureWithEntityContext(err, {
+      scope: 'margin_shortfall_alert',
+      entity_type: 'project',
+      entity_id: projectId,
+      company_id: ctx.company.id,
+    })
+  }
+}
+
 export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, ctx: ProjectRouteCtx): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     if (!ctx.requireRole(['admin', 'office'])) return true
+    // LAYER 2: create_project — matrix base owner+estimator (== admin+office),
+    // so for built-in roles this round-trips the requireRole gate above; the
+    // overlay exists so a custom role (or future matrix change) can narrow it.
+    if (!ctx.requirePermission('create_project')) return true
     const parsed = parseJsonBody(ProjectCreateBodySchema, await ctx.readBody())
     if (!parsed.ok) {
       ctx.sendJson(400, { error: parsed.error })
@@ -299,7 +381,15 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         insert into projects (
           company_id, customer_id, name, customer_name, division_code, status,
           bid_total, labor_rate, target_sqft_per_hr, bonus_pool,
-          site_lat, site_lng, site_radius_m, version
+          site_lat, site_lng, site_radius_m, version,
+          -- Gap 4 (project-lifecycle): co-set lifecycle_state with status in
+          -- the same insert tx so the two columns start correlated rather
+          -- than leaning on the DB column default. The lifecycle reducer's
+          -- only entry is 'draft' (version 1) — creation is a row insert, not
+          -- a transition (DETERMINISTIC_WORKFLOWS.md), so no synthetic
+          -- workflow_event_log row is stamped here; the 'create' mutation
+          -- ledger row below is the creation breadcrumb.
+          lifecycle_state, lifecycle_state_version
         )
         values (
           $1,
@@ -315,6 +405,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
           $11,
           $12,
           coalesce($13, 100),
+          1,
+          'draft',
           1
         )
         returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
@@ -511,7 +603,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query<ProjectCloseoutRow>(
         `select id, company_id, status, state_version, closed_at, closed_by,
-              summary_locked_at, workflow_engine, workflow_run_id,
+              summary_locked_at, post_mortem_acknowledged_at, post_mortem_acknowledged_by,
+              lifecycle_state, workflow_engine, workflow_run_id,
               version, created_at, updated_at
          from projects
          where company_id = $1 and id = $2 and deleted_at is null
@@ -527,6 +620,178 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // Canonical workflow events route (Gap 3): POST
+  // /api/projects/:id/closeout/events with { event, state_version }.
+  // Mirrors handleProjectLifecycleRoutes — gates on state_version,
+  // runs the registered reducer in one tx, returns a fresh
+  // WorkflowSnapshot. Must be matched BEFORE the legacy
+  // /closeout shim regex below (which uses a non-anchored `/closeout`
+  // suffix match) — placed here so the `/closeout/events` suffix wins.
+  if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout\/events$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    const parsed = parseProjectCloseoutEventRequest(await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const { event: eventType, state_version: stateVersion } = parsed.value
+
+    const outcome = await withMutationTx(async (client) => {
+      const lockedResult = await client.query<ProjectCloseoutRow>(
+        `select id, company_id, status, state_version, closed_at, closed_by,
+              summary_locked_at, post_mortem_acknowledged_at, post_mortem_acknowledged_by,
+              lifecycle_state, workflow_engine, workflow_run_id,
+              version, created_at, updated_at
+         from projects
+         where company_id = $1 and id = $2 and deleted_at is null
+         for update`,
+        [ctx.company.id, projectId],
+      )
+      const current = lockedResult.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+      if (current.state_version !== stateVersion) {
+        return { kind: 'version_conflict' as const, row: current }
+      }
+
+      // Gap 4: gate CLOSEOUT on the real lifecycle_state, not the lossy
+      // status projection. Reject with an illegal-transition 409 if the
+      // project hasn't started.
+      if (eventType === 'CLOSEOUT') {
+        const disabledReason = closeoutLifecycleDisabledReason(current.lifecycle_state)
+        if (disabledReason) {
+          return { kind: 'illegal_transition' as const, row: current, message: disabledReason }
+        }
+      }
+
+      // Route stamps the clock/actor at the boundary; the reducer stays pure.
+      const now = new Date().toISOString()
+      const reducerEvent: ProjectCloseoutWorkflowEvent =
+        eventType === 'CLOSEOUT'
+          ? { type: 'CLOSEOUT', closed_at: now, closed_by: ctx.currentUserId }
+          : { type: 'ACKNOWLEDGE_POST_MORTEM', acknowledged_at: now, acknowledged_by: ctx.currentUserId }
+      const beforeStateVersion = current.state_version
+      let nextSnapshot: ProjectCloseoutWorkflowSnapshot
+      try {
+        nextSnapshot = transitionProjectCloseoutWorkflow(
+          {
+            state: projectStatusToCloseoutState(current.status, current.post_mortem_acknowledged_at),
+            state_version: current.state_version,
+            closed_at: current.closed_at,
+            closed_by: current.closed_by,
+            summary_locked_at: current.summary_locked_at,
+            post_mortem_acknowledged_at: current.post_mortem_acknowledged_at,
+            post_mortem_acknowledged_by: current.post_mortem_acknowledged_by,
+          },
+          reducerEvent,
+        )
+      } catch (err) {
+        return {
+          kind: 'illegal_transition' as const,
+          row: current,
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+
+      // Persist from the reducer's nextSnapshot only — the route never
+      // re-derives status/summary_locked_at in SQL. `status='completed'`
+      // is the projection of both completed and post_mortem states.
+      const updateResult = await client.query<ProjectCloseoutRow>(
+        `update projects
+           set status = 'completed',
+               state_version = $3,
+               closed_at = $4,
+               closed_by = $5,
+               summary_locked_at = $6,
+               post_mortem_acknowledged_at = $7,
+               post_mortem_acknowledged_by = $8,
+               updated_at = now(),
+               version = version + 1
+         where company_id = $1 and id = $2
+         returning id, company_id, status, state_version, closed_at, closed_by,
+              summary_locked_at, post_mortem_acknowledged_at, post_mortem_acknowledged_by,
+              lifecycle_state, workflow_engine, workflow_run_id,
+              version, created_at, updated_at`,
+        [
+          ctx.company.id,
+          projectId,
+          nextSnapshot.state_version,
+          nextSnapshot.closed_at ?? null,
+          nextSnapshot.closed_by ?? null,
+          nextSnapshot.summary_locked_at ?? null,
+          nextSnapshot.post_mortem_acknowledged_at ?? null,
+          nextSnapshot.post_mortem_acknowledged_by ?? null,
+        ],
+      )
+      const updated = updateResult.rows[0]
+      if (!updated) throw new HttpError(500, 'project closeout update returned no row')
+
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: PROJECT_CLOSEOUT_WORKFLOW_NAME,
+        schemaVersion: PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'project',
+        entityId: projectId,
+        stateVersion: beforeStateVersion,
+        eventType,
+        eventPayload: reducerEvent,
+        snapshotAfter: nextSnapshot,
+        actorUserId: ctx.currentUserId,
+      })
+      const observed = workflowEventOutcome(eventType)
+      if (observed) observeWorkflowEvent(PROJECT_CLOSEOUT_WORKFLOW_NAME, observed)
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'project',
+        entityId: projectId,
+        action: eventType === 'CLOSEOUT' ? 'closeout' : 'closeout:post_mortem',
+        row: updated,
+      })
+      return { kind: 'ok' as const, row: updated, eventType }
+    })
+
+    if (outcome.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    if (outcome.kind === 'version_conflict') {
+      ctx.sendJson(409, {
+        error: 'state_version mismatch — reload and retry',
+        snapshot: projectCloseoutSnapshotResponse(outcome.row),
+      })
+      return true
+    }
+    if (outcome.kind === 'illegal_transition') {
+      ctx.sendJson(409, {
+        error: outcome.message,
+        snapshot: projectCloseoutSnapshotResponse(outcome.row),
+      })
+      return true
+    }
+
+    // Margin-shortfall alert — only on the CLOSEOUT transition (the
+    // moment costs lock). Best-effort, post-commit (see legacy path).
+    // The closeout row lacks name/customer_name; the helper falls back to
+    // the summary's project name.
+    if (outcome.eventType === 'CLOSEOUT') {
+      await fireMarginShortfallAlert(ctx, projectId, {})
+    }
+    ctx.sendJson(200, projectCloseoutSnapshotResponse(outcome.row))
+    return true
+  }
+
+  // Legacy POST /api/projects/:id/closeout — DEPRECATED shim retained for
+  // one release so any unmigrated caller (offline-queue replays, older SPA
+  // builds) still works. It gates on the project row `version` via
+  // `expected_version`, internally dispatches the same `CLOSEOUT` reducer
+  // transition the canonical `/closeout/events` route uses, and stays
+  // idempotent (a re-close of an already-completed project is a 200 no-op).
+  // New clients POST `/closeout/events` with `state_version`. Remove this
+  // shim once clients have moved.
   if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
@@ -600,15 +865,19 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         return null
       }
 
+      // Persist from the reducer's nextSnapshot — summary_locked_at is now
+      // reducer-owned (no SQL coalesce(... now())). The reducer already
+      // preserves an existing closed_at/summary_locked_at via the snapshot
+      // it was given, so a re-close keeps the original lock.
       const result = await client.query(
         `
         update projects
         set
           status = 'completed',
           state_version = $4,
-          closed_at = coalesce(closed_at, $5::timestamptz),
-          closed_by = coalesce(closed_by, $6),
-          summary_locked_at = coalesce(summary_locked_at, $5::timestamptz),
+          closed_at = $5::timestamptz,
+          closed_by = $6,
+          summary_locked_at = $7::timestamptz,
           updated_at = now(),
           version = version + 1
         where company_id = $1 and id = $2 and ($3::int is null or version = $3)
@@ -619,8 +888,9 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
           projectId,
           expectedVersion,
           nextSnapshot.state_version,
-          reducerEvent.closed_at,
-          reducerEvent.closed_by,
+          nextSnapshot.closed_at ?? null,
+          nextSnapshot.closed_by ?? null,
+          nextSnapshot.summary_locked_at ?? null,
         ],
       )
       const row = result.rows[0]
@@ -665,35 +935,9 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     }
     // Margin shortfall alert: when the closing margin is below 10%,
     // notify company admins so they can review before invoicing.
-    // Best-effort, post-commit — alert delivery must not roll back
-    // the closeout.
-    try {
-      const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId)
-      const marginPct = summary?.metrics?.margin?.margin
-      if (typeof marginPct === 'number' && marginPct < 10) {
-        const project = closed as { name?: string; customer_name?: string }
-        const subject = `[Sitelayer] Margin shortfall on closeout: ${project.name ?? projectId}`
-        const text = [
-          `Project "${project.name ?? projectId}" (${project.customer_name ?? 'unknown customer'}) closed with a margin of ${marginPct.toFixed(2)}%.`,
-          `Target is 10%. Review cost entries and invoicing before finalizing.`,
-          `https://sitelayer.sandolab.xyz/projects/${projectId}`,
-        ].join('\n\n')
-        await enqueueAdminAlert(ctx.company.id, 'margin_shortfall', subject, text, {
-          project_id: projectId,
-          margin_pct: marginPct,
-          revenue: summary?.metrics?.margin?.revenue ?? null,
-          cost: summary?.metrics?.margin?.cost ?? null,
-        })
-      }
-    } catch (err) {
-      logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
-      captureWithEntityContext(err, {
-        scope: 'margin_shortfall_alert',
-        entity_type: 'project',
-        entity_id: projectId,
-        company_id: ctx.company.id,
-      })
-    }
+    // Best-effort, post-commit — alert delivery must not roll back the
+    // closeout. The shim's `closed` row carries name/customer_name.
+    await fireMarginShortfallAlert(ctx, projectId, closed as { name?: string | null; customer_name?: string | null })
     ctx.sendJson(200, closed)
     return true
   }

@@ -42,6 +42,10 @@ export interface AvailabilityRow {
   utilization_pct: number
   /** Rough dollars/day the in-stock units are failing to earn. */
   idle_revenue_per_day: number
+  /** Dollars/day the on-rent units are currently earning (units × day rate).
+   * The closest revenue figure the utilization payload supports — there is
+   * no cumulative YTD revenue field yet. */
+  on_rent_revenue_per_day: number
 }
 
 /** Headline counts for the availability section's KPI strip. */
@@ -60,6 +64,7 @@ function toAvailabilityRow(r: UtilizationRow): AvailabilityRow {
   const onRent = Number(r.on_rent_quantity) || 0
   const available = Number(r.available_quantity) || 0
   const total = onRent + available
+  const dayRate = Number(r.default_rental_rate) || 0
   return {
     inventory_item_id: r.inventory_item_id,
     code: r.code,
@@ -70,6 +75,7 @@ function toAvailabilityRow(r: UtilizationRow): AvailabilityRow {
     total_quantity: total,
     utilization_pct: total > 0 ? Math.round((onRent / total) * 1000) / 10 : 0,
     idle_revenue_per_day: (Number(r.idle_revenue_per_day_cents) || 0) / 100,
+    on_rent_revenue_per_day: onRent * dayRate,
   }
 }
 

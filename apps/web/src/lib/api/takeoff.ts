@@ -275,6 +275,12 @@ export interface PatchMeasurementInput {
    *   omitted → leave unchanged
    */
   assembly_id?: string | null
+  /**
+   * Replace the measurement's geometry (EDIT-GEOM vertex drag). The server
+   * re-normalizes the geometry and recomputes `quantity` from it, so a dragged
+   * vertex re-prices the takeoff. Omit to leave geometry unchanged.
+   */
+  geometry?: MeasurementGeometry
   expected_version?: number
 }
 
@@ -373,6 +379,9 @@ export interface BlueprintPage {
   calibration_x2: string | null
   calibration_y2: string | null
   calibration_set_at: string | null
+  /** Per-sheet human scale sign-off (migration 123). Non-null ⇒ VERIFIED. */
+  scale_verified_at: string | null
+  scale_verified_by: string | null
   measurement_count: number
 }
 
@@ -395,6 +404,25 @@ export function useCalibratePage() {
   >({
     mutationFn: ({ pageId, ...input }) =>
       request(`/api/blueprint-pages/${encodeURIComponent(pageId)}/calibrate`, { method: 'POST', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['blueprints'] }),
+  })
+}
+
+/**
+ * Persist a per-sheet scale VERIFIED sign-off (EST · SCALE VERIFY, dsg__31).
+ * Distinct from calibration: this is the estimator's "I trust this sheet's
+ * scale" confirmation. `verified: false` clears it for re-review. Invalidates
+ * the broad `['blueprints']` key so both the verify screen and the canvas
+ * SHEETS panel refetch.
+ */
+export function useVerifyPage() {
+  const qc = useQueryClient()
+  return useMutation<{ page: BlueprintPage }, Error, { pageId: string; verified?: boolean }>({
+    mutationFn: ({ pageId, verified = true }) =>
+      request(`/api/blueprint-pages/${encodeURIComponent(pageId)}/verify`, {
+        method: 'POST',
+        json: { verified },
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['blueprints'] }),
   })
 }

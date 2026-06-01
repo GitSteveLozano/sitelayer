@@ -32,6 +32,7 @@ import {
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
+import { formatMoney } from './format.js'
 
 type ServiceStatus = 'open' | 'done'
 
@@ -43,6 +44,8 @@ type ServiceEntry = {
   type: string
   notes: string
   status: ServiceStatus
+  /** Maintenance cost in dollars (feeds the SPENT · YTD total). */
+  cost: number
 }
 
 export function MobileRentalsService() {
@@ -58,6 +61,7 @@ export function MobileRentalsService() {
   const [showForm, setShowForm] = useState(false)
   const [formType, setFormType] = useState('')
   const [formNotes, setFormNotes] = useState('')
+  const [formCost, setFormCost] = useState('')
   const [formDate, setFormDate] = useState(() => new Date().toISOString().slice(0, 10))
 
   const asset: InventoryItem | undefined = useMemo(() => {
@@ -67,14 +71,9 @@ export function MobileRentalsService() {
 
   const openCount = entries.filter((e) => e.status === 'open').length
 
-  // Most-recent completed service date drives "Last service".
-  const lastService = useMemo(() => {
-    const done = entries
-      .filter((e) => e.status === 'done')
-      .map((e) => e.date)
-      .sort()
-    return done.length ? done[done.length - 1] : null
-  }, [entries])
+  // Cumulative maintenance spend across all logged entries — the design's
+  // "SPENT · YTD" headline KPI.
+  const spentYtd = useMemo(() => entries.reduce((sum, e) => sum + (e.cost || 0), 0), [entries])
 
   const submit = () => {
     if (!formType.trim()) return
@@ -86,10 +85,12 @@ export function MobileRentalsService() {
       type: formType.trim(),
       notes: formNotes.trim(),
       status: 'open',
+      cost: Number(formCost) || 0,
     }
     setEntries((prev) => [entry, ...prev])
     setFormType('')
     setFormNotes('')
+    setFormCost('')
     setFormDate(new Date().toISOString().slice(0, 10))
     setShowForm(false)
   }
@@ -104,11 +105,10 @@ export function MobileRentalsService() {
         onBack={() => navigate(-1)}
       />
       <MBody>
-        {/* KPI strip — square borders, mono micro-labels (Steve v2). */}
-        <MKpiRow cols={3}>
-          <MKpi label="Last service" value={lastService ? fmtDate(lastService) : '—'} />
-          <MKpi label="Next due" value="—" />
-          <MKpi label="Hours since" value="—" />
+        {/* KPI strip — two-up OPEN count + SPENT · YTD (Steve v2 msg__75). */}
+        <MKpiRow cols={2}>
+          <MKpi label="Open" value={String(openCount)} metaTone={openCount > 0 ? 'red' : undefined} />
+          <MKpi label="Spent · YTD" value={formatMoney(spentYtd)} />
         </MKpiRow>
 
         <div style={{ padding: '4px 16px 8px' }}>
@@ -149,6 +149,17 @@ export function MobileRentalsService() {
               />
             </label>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span className="m-kpi-eyebrow">Cost</span>
+              <MInput
+                type="number"
+                inputMode="decimal"
+                min="0"
+                placeholder="e.g. 120"
+                value={formCost}
+                onChange={(e) => setFormCost(e.currentTarget.value)}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span className="m-kpi-eyebrow">Date</span>
               <MInput type="date" value={formDate} onChange={(e) => setFormDate(e.currentTarget.value)} />
             </label>
@@ -186,6 +197,13 @@ export function MobileRentalsService() {
                   leadingTone={entry.status === 'open' ? 'red' : 'green'}
                   headline={entry.type}
                   supporting={entry.notes || undefined}
+                  trailing={
+                    entry.cost > 0 ? (
+                      <span className="num" style={{ fontWeight: 700, fontSize: 13 }}>
+                        {formatMoney(entry.cost)}
+                      </span>
+                    ) : undefined
+                  }
                   badge={
                     <MPill tone={entry.status === 'open' ? 'red' : 'green'} dot>
                       {entry.status === 'open' ? 'open' : 'done'}

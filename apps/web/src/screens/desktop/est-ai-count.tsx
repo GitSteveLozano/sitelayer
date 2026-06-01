@@ -110,8 +110,10 @@ export function EstAiCountSetupPanel({
     if (!projectId || capture.isPending) return
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
     // Anthropic spend). Carries the real draft id into the review lane.
+    // draft_kind='count' tags the draft so the company AI queue routes its
+    // "Review draft →" back to this count reviewer (migration 122).
     capture.mutate(
-      { kind: 'blueprint_vision', name: 'AI auto-count', payload: { dryRun: true } },
+      { kind: 'blueprint_vision', draft_kind: 'count', name: 'AI auto-count', payload: { dryRun: true } },
       {
         onSuccess: (res) => onReviewDraft(res.draft.id),
       },

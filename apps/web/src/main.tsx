@@ -5,6 +5,7 @@ import './instrument'
 import { lazy, StrictMode, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { installDemoTierNoIndex } from './lib/demo/robots-noindex'
 import { startOfflineReplayLoop } from './lib/offline/replay'
 import { installChunkReloadHandler } from './lib/pwa/chunk-reload'
 import { initVersionGuard } from './pwa/version-guard'
@@ -27,6 +28,11 @@ import './styles/d.css'
 // eager graph. Suspense fallback renders the children directly — no
 // spinner — so the app is visible while @sentry/react streams in.
 const SentryBoundary = lazy(() => import('./instrument-sentry-boundary'))
+
+// Site-wide robots noindex on the demo tier (no-op everywhere else). Runs
+// before render so the tag is in <head> as early as possible. See
+// lib/demo/robots-noindex.ts.
+installDemoTierNoIndex()
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root not found')

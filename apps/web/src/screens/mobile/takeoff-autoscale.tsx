@@ -27,6 +27,12 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { MButton, MI, Spark } from '../../components/m/index.js'
 import { useBlueprintPages, useProjectBlueprints } from '../../lib/api/takeoff.js'
 
+/** Verify-state confidence the row surfaces (msg17): calibrated ⇒ HIGH, a
+ * doc-level scale present but not yet calibrated ⇒ MED, no scale at all ⇒ LOW
+ * (red ! marker). No per-page suggested-scale + confidence API exists yet, so
+ * this is derived deterministically from what calibration data we DO have. */
+type Confidence = 'HIGH' | 'MED' | 'LOW'
+
 type ScaleSheet = {
   /** Real blueprint_pages.id when backed by data; synthetic for fallback. */
   id: string
@@ -34,6 +40,7 @@ type ScaleSheet = {
   label: string
   scale: string
   verified: boolean
+  confidence: Confidence
   /** Locally-checked this session (real calibration would need the canvas picker). */
   locallyChecked?: boolean
 }
@@ -62,12 +69,14 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
           calibrated && p.calibration_world_distance
             ? `${p.calibration_world_distance} ${p.calibration_world_unit ?? ''}`.trim()
             : (docScale ?? 'UNSET')
+        const confidence: Confidence = calibrated ? 'HIGH' : docScale ? 'MED' : 'LOW'
         return {
           id: p.id,
           code: `P-${p.page_number}`,
           label: `PAGE ${p.page_number}`,
           scale: scaleText,
           verified: calibrated,
+          confidence,
         }
       }),
     [pages, docScale],
@@ -79,7 +88,8 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
   const check = (id: string) => setChecked((prev) => ({ ...prev, [id]: true }))
 
   const sheets = useMemo<ScaleSheet[]>(
-    () => dataSheets.map((s) => (checked[s.id] ? { ...s, verified: true, locallyChecked: true } : s)),
+    () =>
+      dataSheets.map((s) => (checked[s.id] ? { ...s, verified: true, confidence: 'HIGH', locallyChecked: true } : s)),
     [dataSheets, checked],
   )
 
@@ -90,6 +100,12 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
 
   const back = () => navigate(`/projects/${projectId}/takeoff-ai/ingest`)
   const openTakeoff = () => navigate(`/projects/${projectId}/takeoff-mobile`)
+  // Two-point manual override for a sheet (msg18). Only real (data-backed)
+  // pages have a calibratable id; synthetic fallback rows omit the link.
+  const manualCalibrate = (sheetId: string) => {
+    const docQs = latestDoc ? `&blueprint=${latestDoc.id}` : ''
+    navigate(`/projects/${projectId}/takeoff-ai/scale-manual?page=${sheetId}${docQs}`)
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -173,8 +189,8 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
               style={{
                 width: 36,
                 height: 36,
-                background: s.verified ? 'var(--m-green)' : 'transparent',
-                color: s.verified ? '#fff' : 'var(--m-ink-3)',
+                background: s.verified ? 'var(--m-green)' : s.confidence === 'LOW' ? 'var(--m-red)' : 'transparent',
+                color: s.verified || s.confidence === 'LOW' ? '#fff' : 'var(--m-ink-3)',
                 border: '2px solid var(--m-ink)',
                 display: 'flex',
                 alignItems: 'center',
@@ -186,7 +202,7 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
               }}
               aria-hidden
             >
-              {s.verified ? '✓' : '○'}
+              {s.verified ? '✓' : s.confidence === 'LOW' ? '!' : '○'}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -201,31 +217,58 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
                   fontSize: 11,
                   fontWeight: 700,
                   marginTop: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  flexWrap: 'wrap',
                   color: 'var(--m-ink)',
                 }}
               >
-                {s.scale}
-                {s.locallyChecked ? ' · CHECKED' : s.verified ? ' · CALIBRATED' : ' · NEEDS SCALE'}
+                <span>{s.scale}</span>
+                <span style={{ color: 'var(--m-ink-4)' }}>·</span>
+                <span style={{ color: s.confidence === 'LOW' ? 'var(--m-red)' : 'var(--m-ink-2)' }}>
+                  {s.confidence} CONFIDENCE
+                </span>
+                {s.locallyChecked ? <span style={{ color: 'var(--m-green)' }}>· CHECKED</span> : null}
               </div>
             </div>
             {!s.verified ? (
-              <button
-                type="button"
-                onClick={() => check(s.id)}
-                style={{
-                  padding: '8px 12px',
-                  background: 'var(--m-ink)',
-                  color: 'var(--m-sand)',
-                  border: '2px solid var(--m-ink)',
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: '0.04em',
-                  cursor: 'pointer',
-                }}
-              >
-                CHECK
-              </button>
+              <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => manualCalibrate(s.id)}
+                  style={{
+                    padding: '8px 10px',
+                    background: 'transparent',
+                    color: 'var(--m-ink)',
+                    border: '2px solid var(--m-ink)',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  MANUAL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => check(s.id)}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'var(--m-ink)',
+                    color: 'var(--m-sand)',
+                    border: '2px solid var(--m-ink)',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  CHECK
+                </button>
+              </span>
             ) : null}
           </div>
         ))}

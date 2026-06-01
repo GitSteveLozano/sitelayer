@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from './auth-types.js'
 import type { Identity } from './auth.js'
 
@@ -23,6 +24,18 @@ export type RouteContext = {
    * helper has already sent the 403 response and the handler should return.
    */
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /**
+   * LAYER 2 of the RBAC overhaul (docs/RBAC_OVERHAUL_ANALYSIS.md): enforce one
+   * of the 9 named permission actions against the caller's EFFECTIVE authority
+   * (built-in base matrix + custom-role grants). Returns true when the action
+   * is held — and, for a constrainable action (auth_materials / approve_time)
+   * with a magnitude supplied via opts, within cap; on false the helper has
+   * already sent the 403 and the handler should return. The matrix is
+   * authoritative here (e.g. Foreman loses edit_pricing_book, auth_materials is
+   * Owner-only by default, office demotes to estimator). Wired in server.ts;
+   * NOT yet called from any route (that is the next phase).
+   */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   /**
    * Wrap `fn` in BEGIN/COMMIT and run it against a dedicated PoolClient.
    * Same shape as the module-level withMutationTx in mutation-tx.ts; passed

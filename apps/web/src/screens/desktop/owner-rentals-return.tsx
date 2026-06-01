@@ -19,12 +19,17 @@
  * operator-entered charge amount creates a real damage_charges row via
  * `useCreateDamageCharge`. The project/from-location are resolved from the
  * most recent deliver/transfer movement (`useInventoryMovements`).
- * GAP: there is no returns/damage photo-upload endpoint, so the dropzone
- * records placeholder names and the count rides in the movement notes.
+ *
+ * Condition photos are real now (migration 125): the movement is created
+ * first, then each chosen photo file is uploaded to
+ * POST /api/inventory/movements/:id/photos via `uploadMovementPhoto`.
+ * Upload failures are surfaced but never block the return (the movement +
+ * any damage charge already landed); the operator can re-pick and re-save.
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
+  uploadMovementPhoto,
   useDispatchMovement,
   useInventoryItems,
   useInventoryLocations,
@@ -110,16 +115,36 @@ export function OwnerRentalsReturn() {
 
   const [grade, setGrade] = useState<Grade>('good')
   const [note, setNote] = useState('')
-  // Presentational photo list — names only. There is no returns/damage photo
-  // upload endpoint yet (see GAP LIST); the count rides in the movement notes.
-  const [photos, setPhotos] = useState<string[]>([])
+  // Real condition photos — uploaded to the movement after it's created
+  // (migration 125). Kept as File objects until the movement id exists.
+  const [photos, setPhotos] = useState<File[]>([])
   const [damageCharge, setDamageCharge] = useState('')
+  const [uploadingPhotos, setUploadingPhotos] = useState(false)
+  const [photoError, setPhotoError] = useState<string | null>(null)
 
   // Always-constructed (hooks rule); only invoked when activeProjectId is set.
   const createDamageCharge = useCreateDamageCharge(activeProjectId ?? '')
 
   const isDamage = grade === 'damage'
-  const canReturn = Boolean(item) && Boolean(yard) && !returnMovement.isPending && !createDamageCharge.isPending
+  const canReturn =
+    Boolean(item) && Boolean(yard) && !returnMovement.isPending && !createDamageCharge.isPending && !uploadingPhotos
+
+  // Upload each captured photo to the freshly-created movement. Best-effort:
+  // a failed photo surfaces a banner but never rolls back the return.
+  const uploadPhotosFor = async (movementId: string) => {
+    if (photos.length === 0) return
+    setUploadingPhotos(true)
+    setPhotoError(null)
+    try {
+      for (const file of photos) {
+        await uploadMovementPhoto(movementId, file)
+      }
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'A condition photo failed to upload.')
+    } finally {
+      setUploadingPhotos(false)
+    }
+  }
 
   const handleReturn = () => {
     if (!canReturn || !item || !yard) return
@@ -149,7 +174,9 @@ export function OwnerRentalsReturn() {
         notes: summaryParts.join(' · '),
       },
       {
-        onSuccess: () => {
+        onSuccess: async (movement) => {
+          // Upload condition photos to the new movement before we move on.
+          await uploadPhotosFor(movement.id)
           // Operator-entered damage charge → a real damage_charges row
           // (kind='damage', open) the office can invoice/waive. Auto-bill in
           // the movement handler only fires off replacement_value, so this is
@@ -269,13 +296,12 @@ export function OwnerRentalsReturn() {
             ) : null}
 
             <div style={{ ...fieldLabel, marginTop: 22 }}>Photos</div>
-            {/* GAP: no returns/damage photo-upload endpoint yet. The dropzone
-                records placeholder names; the count rides in the movement notes. */}
-            <button
-              type="button"
-              onClick={() => setPhotos((cur) => [...cur, `photo-${cur.length + 1}.jpg`])}
+            {/* Real condition photos (migration 125): each chosen file is
+                uploaded to the movement after it's created. */}
+            <label
               style={{
                 marginTop: 8,
+                display: 'block',
                 width: '100%',
                 padding: '24px',
                 border: '2px dashed var(--m-ink)',
@@ -284,15 +310,27 @@ export function OwnerRentalsReturn() {
                 cursor: 'pointer',
                 font: 'inherit',
                 fontSize: 13,
+                textAlign: 'center',
               }}
             >
               + Add photo
-            </button>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const chosen = Array.from(e.currentTarget.files ?? [])
+                  if (chosen.length > 0) setPhotos((cur) => [...cur, ...chosen])
+                  e.currentTarget.value = ''
+                }}
+              />
+            </label>
             {photos.length > 0 ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 {photos.map((p, idx) => (
                   <div
-                    key={p}
+                    key={`${p.name}-${idx}`}
                     style={{
                       padding: '6px 10px',
                       border: '1px solid var(--m-ink)',
@@ -303,17 +341,33 @@ export function OwnerRentalsReturn() {
                       gap: 8,
                     }}
                   >
-                    {p}
+                    {p.name}
                     <button
                       type="button"
                       onClick={() => setPhotos((cur) => cur.filter((_, i) => i !== idx))}
-                      aria-label={`Remove ${p}`}
+                      aria-label={`Remove ${p.name}`}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}
                     >
                       ✕
                     </button>
                   </div>
                 ))}
+              </div>
+            ) : null}
+
+            {photoError ? (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '2px solid var(--m-amber)',
+                  color: 'var(--m-amber)',
+                  fontFamily: 'var(--m-num)',
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}
+              >
+                Return recorded, but a condition photo failed to upload: {photoError}
               </div>
             ) : null}
 
@@ -354,7 +408,11 @@ export function OwnerRentalsReturn() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 22 }}>
               <MButton variant="primary" disabled={!canReturn} onClick={handleReturn}>
-                {returnMovement.isPending || createDamageCharge.isPending ? 'Recording…' : 'Confirm return'}
+                {uploadingPhotos
+                  ? 'Uploading photos…'
+                  : returnMovement.isPending || createDamageCharge.isPending
+                    ? 'Recording…'
+                    : 'Confirm return'}
               </MButton>
               <MButton variant="ghost" onClick={() => navigate(`/desktop/rentals/${item.id}`)}>
                 Cancel

@@ -138,18 +138,29 @@ describe('scaffoldOpsApproval registry + helpers', () => {
     expect(scaffoldOpsApprovalWorkflow.allStates).toEqual(SCAFFOLD_OPS_APPROVAL_ALL_STATES)
   })
 
-  it('nextEvents on draft returns APPROVE; on approved returns []', () => {
-    expect(nextScaffoldOpsApprovalEvents('draft').map((e) => e.type)).toEqual(['APPROVE'])
-    expect(nextScaffoldOpsApprovalEvents('approved')).toEqual([])
+  it('nextEvents golden: draft → [APPROVE, SUPERSEDE]; approved → [SUPERSEDE]; superseded → []', () => {
+    expect(nextScaffoldOpsApprovalEvents('draft').map((e) => e.type)).toEqual(['APPROVE', 'SUPERSEDE'])
+    expect(nextScaffoldOpsApprovalEvents('approved').map((e) => e.type)).toEqual(['SUPERSEDE'])
+    expect(nextScaffoldOpsApprovalEvents('superseded')).toEqual([])
   })
 
   it('isHumanEvent partitions correctly', () => {
     expect(isHumanScaffoldOpsApprovalEvent('APPROVE')).toBe(true)
+    expect(isHumanScaffoldOpsApprovalEvent('SUPERSEDE')).toBe(true)
     expect(isHumanScaffoldOpsApprovalEvent('FOO')).toBe(false)
   })
 
   it('parse well-formed and malformed bodies', () => {
     expect(parseScaffoldOpsApprovalEventRequest({ event: 'APPROVE', state_version: 1 }).ok).toBe(true)
+    const supersede = parseScaffoldOpsApprovalEventRequest({
+      event: 'SUPERSEDE',
+      state_version: 2,
+      superseded_by_bom_id: '00000000-0000-0000-0000-000000000999',
+    })
+    expect(supersede.ok).toBe(true)
+    if (supersede.ok && supersede.value.event === 'SUPERSEDE') {
+      expect(supersede.value.superseded_by_bom_id).toBe('00000000-0000-0000-0000-000000000999')
+    }
     expect(parseScaffoldOpsApprovalEventRequest({}).ok).toBe(false)
   })
 
@@ -174,7 +185,35 @@ describe('scaffoldOpsApproval registry + helpers', () => {
     // tooling reads them.
     expect(SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME).toBe('scaffold_ops_approval')
     expect(SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION).toBe(1)
-    expect([...SCAFFOLD_OPS_APPROVAL_EVENT_TYPES]).toEqual(['APPROVE'])
+    expect([...SCAFFOLD_OPS_APPROVAL_EVENT_TYPES]).toEqual(['APPROVE', 'SUPERSEDE'])
     expect(scaffoldOpsApprovalWorkflow.schemaVersion).toBe(SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION)
+  })
+
+  it('SUPERSEDE: draft → superseded and approved → superseded; superseded is terminal', () => {
+    const fromDraft = transitionScaffoldOpsApprovalWorkflow(
+      { state: 'draft', state_version: 1 },
+      {
+        type: 'SUPERSEDE',
+        superseded_at: '2026-05-02T07:00:00.000Z',
+        superseded_by: 'admin',
+        superseded_by_bom_id: 'b2',
+      },
+    )
+    expect(fromDraft).toMatchObject({ state: 'superseded', state_version: 2, superseded_by_bom_id: 'b2' })
+
+    const fromApproved = transitionScaffoldOpsApprovalWorkflow(
+      { state: 'approved', state_version: 2, approved_by: 'office' },
+      { type: 'SUPERSEDE', superseded_at: '2026-05-02T07:00:00.000Z', superseded_by: 'admin' },
+    )
+    expect(fromApproved.state).toBe('superseded')
+    // approval audit fields survive the supersede transition
+    expect(fromApproved.approved_by).toBe('office')
+
+    expect(() =>
+      transitionScaffoldOpsApprovalWorkflow(
+        { state: 'superseded', state_version: 3 },
+        { type: 'APPROVE', approved_at: 'x', approved_by: 'x' },
+      ),
+    ).toThrow(/illegal transition/)
   })
 })

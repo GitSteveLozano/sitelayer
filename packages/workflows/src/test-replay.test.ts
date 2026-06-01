@@ -78,7 +78,7 @@ describe('applyEventSequence', () => {
     // Both inserts target workflow_event_log
     for (const call of calls) {
       expect(call.text).toMatch(/insert into workflow_event_log/i)
-      expect(call.text).toMatch(/on conflict \(entity_id, state_version\) do nothing/i)
+      expect(call.text).toMatch(/on conflict \(entity_id, workflow_name, state_version\) do nothing/i)
     }
     // state_version BEFORE the transition is what gets persisted
     expect(calls[0]!.values[5]).toBe(1)

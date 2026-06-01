@@ -22,6 +22,10 @@ PREVIEW_MODE="${PREVIEW_MODE:-dev}"
 #   dev               — long-running named stack against a dedicated database
 #                       (sitelayer_dev). No schema-per-slug; migrations land in
 #                       `public`. Used by .github/workflows/deploy-dev.yml.
+#   demo              — long-running named stack against a dedicated database
+#                       (sitelayer_demo). Same shape as `dev` (public schema,
+#                       no schema-per-slug). Used by
+#                       .github/workflows/deploy-demo.yml.
 PREVIEW_TIER="${PREVIEW_TIER:-preview}"
 
 append_optional_env() {
@@ -32,9 +36,9 @@ append_optional_env() {
 }
 
 case "$PREVIEW_TIER" in
-  preview|dev) ;;
+  preview|dev|demo) ;;
   *)
-    echo "ERROR: PREVIEW_TIER must be 'preview' or 'dev' (got '$PREVIEW_TIER')" >&2
+    echo "ERROR: PREVIEW_TIER must be 'preview', 'dev', or 'demo' (got '$PREVIEW_TIER')" >&2
     exit 1
     ;;
 esac
@@ -180,6 +184,9 @@ rsync -az --delete \
   printf 'VITE_API_URL=https://%s\n' "$preview_host"
   printf 'VITE_SENTRY_ENVIRONMENT=%s\n' "$PREVIEW_TIER"
   printf 'SITELAYER_PUBLIC_BASE=https://%s\n' "$preview_host"
+  if [ "$PREVIEW_TIER" = "demo" ]; then
+    printf 'DEMO_APP_ORIGIN=https://%s\n' "$preview_host"
+  fi
   append_optional_env NOTIFICATIONS_ENABLED
   append_optional_env MESH_WORK_REQUEST_DISPATCH_URL
   append_optional_env MESH_WORK_REQUEST_DISPATCH_TOKEN

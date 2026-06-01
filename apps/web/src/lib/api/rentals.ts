@@ -6,7 +6,7 @@
 // shape.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { request } from './client'
+import { API_URL, ApiError, buildAuthHeaders, request } from './client'
 
 // ---------------------------------------------------------------------------
 // Inventory catalog
@@ -185,6 +185,73 @@ export function useDispatchMovement() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory'] })
     },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch / return condition photos (migration 125)
+// ---------------------------------------------------------------------------
+
+export interface InventoryMovementPhoto {
+  id: string
+  company_id?: string
+  inventory_movement_id: string
+  storage_key: string
+  mime_type: string
+  size_bytes: string | number
+  created_at: string
+}
+
+export interface MovementPhotoUploadResponse {
+  photo: InventoryMovementPhoto
+  photos: InventoryMovementPhoto[]
+}
+
+/**
+ * Upload one condition photo for a dispatch/return movement. Mirrors the
+ * multipart pattern used by `uploadClockEventPhoto` / the worker-issue
+ * attachment upload — FormData body, standard auth headers from
+ * buildAuthHeaders, the browser sets the multipart boundary (we must NOT).
+ *
+ * The movement is created first (POST /api/inventory/movements returns the
+ * row id); the screen then uploads each captured photo to it. One file per
+ * request keeps a single failed photo retryable without re-creating the
+ * movement.
+ */
+export async function uploadMovementPhoto(movementId: string, file: File | Blob): Promise<MovementPhotoUploadResponse> {
+  const form = new FormData()
+  const fileName = file instanceof File ? file.name || 'photo.jpg' : 'photo.jpg'
+  form.append('file', file, fileName)
+  const headers = await buildAuthHeaders()
+  const path = `/api/inventory/movements/${encodeURIComponent(movementId)}/photos`
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
+  if (!response.ok) {
+    const requestId = response.headers.get('x-request-id')
+    let body: unknown
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      body = ct.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      body = null
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId, body })
+  }
+  return (await response.json()) as MovementPhotoUploadResponse
+}
+
+/** Build the streaming download URL for one stored movement photo (used by
+ *  the asset-detail movement ledger to render thumbnails). */
+export function movementPhotoFileUrl(movementId: string, storageKey: string): string {
+  return `${API_URL}/api/inventory/movements/${encodeURIComponent(movementId)}/photos/${encodeURIComponent(
+    storageKey,
+  )}/file`
+}
+
+export function useMovementPhotos(movementId: string | null | undefined) {
+  return useQuery<{ photos: InventoryMovementPhoto[] }>({
+    queryKey: ['inventory', 'movement-photos', movementId ?? ''],
+    queryFn: () => request(`/api/inventory/movements/${encodeURIComponent(movementId!)}/photos`),
+    enabled: Boolean(movementId),
   })
 }
 

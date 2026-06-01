@@ -73,6 +73,7 @@ type LaborPayrollRunRow = {
   workflow_run_id: string | null
   version: number
   origin: string | null
+  auto_posted: boolean
   deleted_at: string | null
   created_at: string
   updated_at: string
@@ -99,6 +100,7 @@ const LABOR_PAYROLL_RUN_COLUMNS = `
   workflow_run_id,
   version,
   origin,
+  auto_posted,
   deleted_at,
   created_at,
   updated_at
@@ -114,6 +116,7 @@ function rowToSnapshot(row: LaborPayrollRunRow): LaborPayrollWorkflowSnapshot {
     failed_at: row.failed_at,
     error: row.error_message,
     qbo_timeactivity_ids: row.qbo_payroll_batch_ref,
+    auto_posted: row.auto_posted,
   }
 }
 
@@ -134,6 +137,7 @@ type LaborPayrollWorkflowContext = {
   time_review_run_id: string | null
   workflow_engine: string
   workflow_run_id: string | null
+  auto_posted: boolean
   created_at: string
   updated_at: string
 }
@@ -162,6 +166,7 @@ function snapshotResponse(
       time_review_run_id: row.time_review_run_id,
       workflow_engine: row.workflow_engine,
       workflow_run_id: row.workflow_run_id,
+      auto_posted: row.auto_posted,
       created_at: row.created_at,
       updated_at: row.updated_at,
     },

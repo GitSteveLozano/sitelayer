@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleMaterialBillRoutes, type MaterialBillRouteCtx } from './material-bills.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // ---------------------------------------------------------------------------
 // material_bills CRUD — POST also bumps the parent project's version
@@ -203,6 +204,7 @@ function makeCtx(
         responses.push({ status: 403, body: { error: 'forbidden' } })
         return false
       },
+      requirePermission: makeTestRequirePermission(role, responses),
       readBody: async () => body,
       sendJson: (status, response) => {
         responses.push({ status, body: response })

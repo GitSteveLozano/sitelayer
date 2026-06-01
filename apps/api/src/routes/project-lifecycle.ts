@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import {
+  nextProjectLifecycleEvents,
   parseProjectLifecycleEventRequest,
   PROJECT_LIFECYCLE_WORKFLOW_NAME,
   PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION,
@@ -11,6 +12,7 @@ import {
   type ProjectLifecycleWorkflowSnapshot,
   type ProjectLifecycleWorkflowState,
 } from '@sitelayer/workflows'
+import type { WorkflowNextEvent } from '@sitelayer/workflows'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
@@ -69,33 +71,6 @@ function rowToSnapshot(row: ProjectLifecycleRow): ProjectLifecycleWorkflowSnapsh
   }
 }
 
-function workflowNextEvents(state: ProjectLifecycleWorkflowState): Array<{ type: string; label: string }> {
-  switch (state) {
-    case 'draft':
-      return [{ type: 'START_ESTIMATING', label: 'Start estimating' }]
-    case 'estimating':
-      return [{ type: 'SEND', label: 'Send to customer' }]
-    case 'sent':
-      return [
-        { type: 'ACCEPT', label: 'Mark accepted' },
-        { type: 'DECLINE', label: 'Mark declined' },
-      ]
-    case 'accepted':
-      return [{ type: 'START_WORK', label: 'Start work' }]
-    case 'in_progress':
-      return [{ type: 'COMPLETE', label: 'Mark complete' }]
-    case 'done':
-      return [
-        { type: 'ARCHIVE', label: 'Archive project' },
-        { type: 'REOPEN', label: 'Reopen project' },
-      ]
-    case 'declined':
-      return [{ type: 'ARCHIVE', label: 'Archive project' }]
-    case 'archived':
-      return [{ type: 'REOPEN', label: 'Reopen project' }]
-  }
-}
-
 function snapshotResponse(row: ProjectLifecycleRow): {
   state: ProjectLifecycleWorkflowState
   state_version: number
@@ -116,7 +91,7 @@ function snapshotResponse(row: ProjectLifecycleRow): {
     created_at: string
     updated_at: string
   }
-  next_events: Array<{ type: string; label: string }>
+  next_events: Array<WorkflowNextEvent<ProjectLifecycleHumanEventType>>
 } {
   return {
     state: row.lifecycle_state,
@@ -138,7 +113,11 @@ function snapshotResponse(row: ProjectLifecycleRow): {
       created_at: row.created_at,
       updated_at: row.updated_at,
     },
-    next_events: workflowNextEvents(row.lifecycle_state),
+    // Computed from the registered reducer selector (single source of
+    // truth) — never hand-listed in the route. Carries disabled_reason
+    // end-to-end (banner.tsx reads it) and stays typed against the event
+    // union. See packages/workflows/src/project-lifecycle.ts.
+    next_events: nextProjectLifecycleEvents(row.lifecycle_state),
   }
 }
 

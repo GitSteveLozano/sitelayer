@@ -20,7 +20,7 @@ import { useInventoryUtilization } from '@/lib/api'
 import { selectAvailabilityRows, selectAvailabilitySummary } from '@/lib/api/inventory-availability'
 import { RentalsAvailabilitySection } from './rentals-availability-section.js'
 import { RentalsForecastSection } from './rentals-forecast-section.js'
-import { formatMoney } from './format.js'
+import { formatMoney, formatMoneyCompact } from './format.js'
 
 type Tab = 'utilization' | 'availability' | 'forecast'
 
@@ -82,7 +82,6 @@ export function MobileRentalsUtilization({ companySlug: _companySlug }: { compan
         {tab === 'utilization' ? (
           <UtilizationTab
             utilizationPct={totals.utilization_pct}
-            idleDailyValue={totals.total_idle_revenue_per_day_cents / 100}
             availabilityRows={availabilityRows}
             onDispatch={() => navigate('/rentals/dispatch')}
           />
@@ -106,23 +105,29 @@ export function MobileRentalsUtilization({ companySlug: _companySlug }: { compan
  */
 function UtilizationTab({
   utilizationPct,
-  idleDailyValue,
   availabilityRows,
   onDispatch,
 }: {
   utilizationPct: number
-  idleDailyValue: number
   availabilityRows: ReturnType<typeof selectAvailabilityRows>
   onDispatch: () => void
 }) {
   const idle = availabilityRows.filter((r) => r.available_quantity > 0)
   const fleetTone = utilizationPct >= 70 ? 'var(--m-green)' : utilizationPct >= 40 ? 'var(--m-amber)' : 'var(--m-red)'
+  // Fleet revenue/day (on-rent units × day rate) drives the headline meta
+  // line "$X REVENUE · N ASSETS · 30 DAYS" (msg__74). There is no YTD
+  // revenue field, so we project the current on-rent daily run-rate over a
+  // 30-day window — the closest cumulative-revenue proxy the data supports.
+  const PERIOD_DAYS = 30
+  const fleetRevenuePerDay = availabilityRows.reduce((s, r) => s + r.on_rent_revenue_per_day, 0)
+  const fleetPeriodRevenue = fleetRevenuePerDay * PERIOD_DAYS
   // Per-asset utilization = on-rent share of total units for the item.
   const assetRows = availabilityRows.map((r) => {
     const total = r.available_quantity + r.on_rent_quantity
     const pct = total > 0 ? Math.round((r.on_rent_quantity / total) * 100) : 0
     const flag = pct < 30
-    return { row: r, pct, flag }
+    const periodRevenue = r.on_rent_revenue_per_day * PERIOD_DAYS
+    return { row: r, pct, flag, periodRevenue }
   })
 
   return (
@@ -148,7 +153,9 @@ function UtilizationTab({
           className="num"
           style={{ marginTop: 10, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.04em' }}
         >
-          {formatMoney(idleDailyValue)}/DAY IDLE · {idle.length} {idle.length === 1 ? 'ITEM' : 'ITEMS'} IDLE
+          {formatMoneyCompact(fleetPeriodRevenue).value}
+          {formatMoneyCompact(fleetPeriodRevenue).unit} REVENUE · {assetRows.length}{' '}
+          {assetRows.length === 1 ? 'ASSET' : 'ASSETS'} · {PERIOD_DAYS} DAYS
         </div>
       </div>
 
@@ -183,7 +190,7 @@ function UtilizationTab({
           <MListRow headline="No assets yet" supporting="Add inventory to see utilization." />
         </MListInset>
       ) : (
-        assetRows.map(({ row: r, pct, flag }) => (
+        assetRows.map(({ row: r, pct, flag, periodRevenue }) => (
           <div key={r.inventory_item_id} style={{ padding: '14px 20px', borderBottom: '1px solid var(--m-line-2)' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
               <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>{r.description}</div>
@@ -197,19 +204,35 @@ function UtilizationTab({
             <div className="m-progress" data-state={flag ? 'risk' : undefined} style={{ height: 6, marginTop: 8 }}>
               <div className="m-progress-fill" style={{ width: `${pct}%` }} />
             </div>
+            {/* Cumulative revenue beneath the bar (msg__74); the idle-rate
+                framing drops to a secondary caption only when underutilized. */}
             <div
               className="num"
-              style={{
-                fontSize: 10,
-                color: flag ? 'var(--m-red)' : 'var(--m-ink-4)',
-                marginTop: 6,
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-              }}
+              style={{ fontSize: 12, color: 'var(--m-ink)', marginTop: 6, fontWeight: 700, letterSpacing: '0.02em' }}
             >
-              {r.code} · {formatMoney(r.idle_revenue_per_day)}/DAY IDLE
-              {flag ? ' · UNDERUTILIZED' : ''}
+              {formatMoney(periodRevenue)}
             </div>
+            {flag ? (
+              <div
+                className="num"
+                style={{ fontSize: 10, color: 'var(--m-red)', marginTop: 3, fontWeight: 600, letterSpacing: '0.04em' }}
+              >
+                {r.code} · {formatMoney(r.idle_revenue_per_day)}/DAY IDLE · UNDERUTILIZED
+              </div>
+            ) : (
+              <div
+                className="num"
+                style={{
+                  fontSize: 10,
+                  color: 'var(--m-ink-4)',
+                  marginTop: 3,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                }}
+              >
+                {r.code}
+              </div>
+            )}
           </div>
         ))
       )}

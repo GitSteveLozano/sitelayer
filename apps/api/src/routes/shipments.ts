@@ -601,7 +601,8 @@ export async function handleShipmentRoutes(
         entityId: id,
         // state_version BEFORE the transition — matches the convention
         // used by rental_billing_state (see comment on the unique
-        // (entity_id, state_version) constraint in 020_workflow_event_log).
+        // (entity_id, workflow_name, state_version) constraint — added in
+        // 020_workflow_event_log, widened in 106).
         stateVersion: snapshot.state_version,
         eventType: parsed.value.event,
         eventPayload: event,

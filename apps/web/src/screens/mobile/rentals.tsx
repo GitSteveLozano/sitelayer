@@ -200,6 +200,7 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
           <MQuickAction Icon={MI.Check} label="Return" onClick={() => navigate('/rentals/return')} />
           <MQuickAction Icon={MI.Camera} label="Scan" onClick={() => navigate('/rentals/scan')} />
           <MQuickAction Icon={MI.FileText} label="Portal" onClick={() => navigate('/rentals/portal')} />
+          <MQuickAction Icon={MI.Layers} label="Billing runs" onClick={() => navigate('/rentals/billing')} />
         </MQuickActionGrid>
         <MSectionH>Assets</MSectionH>
         {error ? (

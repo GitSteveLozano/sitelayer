@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handlePricingOverrideRoutes, type PricingOverrideRouteCtx } from './pricing-overrides.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // In-memory pg double for the project/customer pricing-override routes. Matches
 // the route's SQL by substring (upsert / soft-delete / list) plus the
@@ -208,6 +209,7 @@ function makeCtx(pool: FakePool, opts: { role?: boolean } = {}) {
     pool: pool as unknown as Pool,
     company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' },
     requireRole: () => opts.role ?? true,
+    requirePermission: makeTestRequirePermission('admin', responses),
     readBody: async () => (reads.shift() ?? {}) as Record<string, unknown>,
     sendJson: (status, body) => {
       responses.push({ status, body })

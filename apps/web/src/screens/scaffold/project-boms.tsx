@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Banner } from '@/components/mobile'
-import { useProjectBoms, useBom, useApproveBom, type Bom, type BomLine } from '@/lib/api/scaffold-ops'
+import { useProjectBoms, useBom, useApproveBom, useSupersedeBom, type Bom, type BomLine } from '@/lib/api/scaffold-ops'
 
 const MM_PER_FOOT = 304.8
 
@@ -89,7 +89,14 @@ function StatusBadge({ status }: { status: Bom['status'] }) {
 function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void }) {
   const detail = useBom(bomId)
   const approve = useApproveBom(bomId)
+  const supersede = useSupersedeBom(bomId)
   const bom = detail.data
+  // Render affordances straight from the reducer's next_events (the
+  // UI-bypass guard); fall back to status only if the envelope is absent.
+  const stateVersion = bom?.state_version ?? 1
+  const nextEventTypes = new Set((bom?.next_events ?? []).map((e) => e.type))
+  const canApprove = bom ? (bom.next_events ? nextEventTypes.has('APPROVE') : bom.status === 'draft') : false
+  const canSupersede = bom ? (bom.next_events ? nextEventTypes.has('SUPERSEDE') : false) : false
 
   return (
     <div className="mt-5">
@@ -121,12 +128,28 @@ function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void 
               ))}
               {bom.lines.length === 0 ? <li className="py-2 text-[12px] text-ink-3">No lines.</li> : null}
             </ul>
-            {bom.status === 'draft' ? (
-              <div className="mt-3">
-                <MobileButton variant="primary" disabled={approve.isPending} onClick={() => approve.mutate()}>
-                  {approve.isPending ? 'Approving…' : 'Approve BOM'}
-                </MobileButton>
+            {canApprove || canSupersede ? (
+              <div className="mt-3 flex flex-col gap-2">
+                {canApprove ? (
+                  <MobileButton
+                    variant="primary"
+                    disabled={approve.isPending}
+                    onClick={() => approve.mutate({ state_version: stateVersion })}
+                  >
+                    {approve.isPending ? 'Approving…' : 'Approve BOM'}
+                  </MobileButton>
+                ) : null}
+                {canSupersede ? (
+                  <MobileButton
+                    variant="ghost"
+                    disabled={supersede.isPending}
+                    onClick={() => supersede.mutate({ state_version: stateVersion })}
+                  >
+                    {supersede.isPending ? 'Superseding…' : 'Supersede BOM'}
+                  </MobileButton>
+                ) : null}
                 {approve.isError ? <Banner tone="error" title={approve.error.message} className="mt-2" /> : null}
+                {supersede.isError ? <Banner tone="error" title={supersede.error.message} className="mt-2" /> : null}
               </div>
             ) : null}
           </>

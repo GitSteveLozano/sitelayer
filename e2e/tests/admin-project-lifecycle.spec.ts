@@ -74,6 +74,11 @@ runSpec('admin walks project lifecycle through every state', async ({ adminPage 
     // banner polls/refetches on its own; we trigger a refetch by
     // reloading rather than waiting on TanStack Query's stale window.
     await adminPage.reload()
-    await expect(adminPage.getByText(STATE_LABELS[step.expected], { exact: true })).toBeVisible()
+    // Scope to the LifecycleBanner specifically: the state label also appears
+    // in the topbar eyebrow + state hero, so an unscoped getByText is a
+    // strict-mode collision.
+    await expect(
+      adminPage.getByTestId('lifecycle-banner').getByText(STATE_LABELS[step.expected], { exact: true }),
+    ).toBeVisible()
   }
 })

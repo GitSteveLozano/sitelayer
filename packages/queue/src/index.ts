@@ -1,4 +1,5 @@
 import type { QueryResult, QueryResultRow } from 'pg'
+import { buildWorkflowEventLogInsert } from '@sitelayer/workflows'
 
 export {
   fetchDueRentals,
@@ -149,6 +150,14 @@ export {
   type EstimatePushSummary,
 } from './pushers/estimate-push.js'
 
+export {
+  processQboPull,
+  type QboPullInput,
+  type QboPullResult,
+  type QboPullFn,
+  type QboPullSummary,
+} from './pushers/qbo-pull.js'
+
 export interface QueueClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>
 }
@@ -165,6 +174,7 @@ export interface TraceContext {
   sentry_trace: string | null
   sentry_baggage: string | null
   request_id: string | null
+  capture_session_id?: string | null
 }
 
 export type ProcessedOutboxRow = {
@@ -212,6 +222,21 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // context-work-dispatch.ts so the generic drain cannot mark the
   // Mesh handoff applied before an agent system has actually accepted it.
   'dispatch_mesh_work_request',
+  // Crew-schedule confirm side effects — drained by apps/worker/src/runners/
+  // crew-schedule-confirm.ts (processCrewScheduleConfirm), which materializes
+  // confirmed labor_entries / bumps projects.version and fans out the foreman
+  // decline notification. Without these the generic drain would claim the row
+  // and mark it 'applied' without doing the work, silently dropping labor
+  // materialization — and every auto-confirmed new assignment now enqueues a
+  // materialize_labor_entries row, so the race is on the hot path.
+  'materialize_labor_entries',
+  'notify_foreman_decline',
+  // QBO reference-data pull (customers + items + classes backfill) —
+  // drained by apps/worker/src/runners/qbo-pull.ts (processQboPull). Without
+  // this entry the generic drain (processOutboxBatch) would claim the row and
+  // mark it 'applied' WITHOUT performing the pull — a silent data-drop, the
+  // exact footgun this exclusion list warns about.
+  'pull_qbo_reference',
 ] as const
 
 /**
@@ -251,32 +276,31 @@ export async function appendWorkflowEvent(
   const sentryTrace = args.trace?.sentry_trace ?? null
   const sentryBaggage = args.trace?.sentry_baggage ?? null
   const requestId = args.trace?.request_id ?? null
-  await client.query(
-    `
-    insert into workflow_event_log (
-      company_id, workflow_name, schema_version, entity_type, entity_id,
-      state_version, event_type, event_payload, snapshot_after, actor_user_id,
-      request_id, sentry_trace, sentry_baggage
-    )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
-    on conflict (entity_id, state_version) do nothing
-    `,
-    [
-      args.companyId,
-      args.workflowName,
-      args.schemaVersion,
-      args.entityType,
-      args.entityId,
-      args.stateVersion,
-      args.eventType,
-      JSON.stringify(args.eventPayload),
-      JSON.stringify(args.snapshotAfter),
-      args.actorUserId ?? null,
+  const captureSessionId = args.trace?.capture_session_id ?? null
+  // Shared INSERT builder — same column list as the API path
+  // (recordWorkflowEvent). The worker path differs only in: trace context
+  // comes off the claimed outbox row (args.trace), and conflict handling is
+  // idempotent `do nothing` so a retried drain is a safe no-op.
+  const { text, values } = buildWorkflowEventLogInsert(
+    {
+      companyId: args.companyId,
+      workflowName: args.workflowName,
+      schemaVersion: args.schemaVersion,
+      entityType: args.entityType,
+      entityId: args.entityId,
+      stateVersion: args.stateVersion,
+      eventType: args.eventType,
+      eventPayload: args.eventPayload,
+      snapshotAfter: args.snapshotAfter,
+      actorUserId: args.actorUserId ?? null,
       requestId,
       sentryTrace,
       sentryBaggage,
-    ],
+      captureSessionId,
+    },
+    { onConflict: 'do_nothing' },
   )
+  await client.query(text, values)
 }
 
 export async function processOutboxBatch(
@@ -319,7 +343,7 @@ export async function processOutboxBatch(
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
     returning id, entity_type, entity_id, mutation_type, attempt_count, created_at,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, capture_session_id
     `,
     [companyId, ids],
   )
@@ -365,7 +389,7 @@ export async function processSyncEventBatch(
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
     returning id, entity_type, entity_id, direction, attempt_count, created_at,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, capture_session_id
     `,
     [companyId, ids],
   )

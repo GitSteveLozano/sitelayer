@@ -2,20 +2,23 @@
  * Foreman desktop time-approval screen — "FM · TIME · FIRST-LINE APPROVAL"
  * (Desktop v2). The dense desktop composition of the mobile time-review
  * surface (../mobile/time-review.tsx): a TOTAL HOURS hero KPI strip plus a
- * crew DataTable with a per-row Approve action.
+ * crew DataTable, with a sticky footer that drives the run-level decision.
  *
- * Reuses the SAME data layer as mobile — bootstrap labor/workers/projects,
- * the time-review-run snapshot for per-entry anomalies
- * (useTimeReviewRuns/useTimeReviewRun), and usePatchLaborEntry for the
- * Approve action. No new state machine; TanStack only, per CLAUDE.md.
+ * Headless-first: the batch decision (sign off / push back) is dispatched
+ * through the registered `time_review_run` workflow via `useTimeReview`
+ * (APPROVE / REJECT / REOPEN) — the footer renders only the snapshot's
+ * `next_events`, so the UI can't invent a transition the reducer doesn't
+ * allow. Anomalies still ride the run snapshot. No per-row status PATCH.
  */
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { BootstrapResponse, TimeAnomaly } from '@/lib/api'
-import { usePatchLaborEntry } from '@/lib/api/labor-entries'
-import { useTimeReviewRun, useTimeReviewRuns } from '@/lib/api/time-review'
+import { getActiveCompanySlug } from '@/lib/api/client'
+import { useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
+import { useTimeReview } from '@/machines/time-review'
+import { anomalyChipLabel, useCreateTimeReviewRun, useTimeReviewRuns } from '@/lib/api/time-review'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
 import { MAvatar, MButton, MPill, avatarToneFor, initialsFor } from '@/components/m'
-import { formatDecimalHours, todayIso } from '../mobile/format.js'
+import { endOfWeek, formatDecimalHours, shortDate, startOfWeek } from '../mobile/format.js'
 
 type CrewTimeRow = {
   id: string
@@ -28,21 +31,17 @@ type CrewTimeRow = {
 }
 
 export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+  const companySlug = getActiveCompanySlug()
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
-  // Per-row PATCH /api/labor-entries/:id (same hook + invalidations as the
-  // mobile foreman flow). Tracks which row is mid-flight for the spinner.
-  const patchLabor = usePatchLaborEntry()
-  const pendingRowId = patchLabor.isPending ? (patchLabor.variables?.id ?? null) : null
+  // The review week (Monday-anchored) — the design header is week-scoped.
+  const weekStart = useMemo(() => startOfWeek(), [])
+  const weekEnd = useMemo(() => endOfWeek(), [])
 
-  const today = todayIso()
-  const todayLabor = useMemo(() => labor.filter((l) => l.occurred_on === today && !l.deleted_at), [labor, today])
-
-  // Latch onto the most recent pending time-review run (preferring one with
-  // anomalies) and pull its snapshot — exactly the mobile derivation — so we
-  // can join per-entry anomaly reasons back onto each labor row.
+  // Latch onto the most recent pending run (preferring one with anomalies)
+  // and mount the headless workflow machine on it.
   const pendingRuns = useTimeReviewRuns({ state: 'pending' })
   const latestRunId = useMemo(() => {
     const runs = pendingRuns.data?.timeReviewRuns ?? []
@@ -50,19 +49,39 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
     const flagged = runs.find((r) => r.anomaly_count > 0)
     return (flagged ?? runs[0])?.id ?? null
   }, [pendingRuns.data])
-  const runSnapshot = useTimeReviewRun(latestRunId)
+  const runId = latestRunId ?? ''
+
+  const tr = useTimeReview(runId, companySlug)
+  useControlPlaneProbePublish('timeReviewState', tr.snapshot?.state ?? null)
+
+  const createRun = useCreateTimeReviewRun()
+  const handleStartReview = () => {
+    if (createRun.isPending) return
+    createRun.mutate({ period_start: weekStart, period_end: weekEnd })
+  }
+
+  const ctx = tr.snapshot?.context
+  const coveredIds = useMemo(() => new Set(ctx?.covered_entry_ids ?? []), [ctx?.covered_entry_ids])
+  const periodStart = ctx?.period_start ?? weekStart
+  const periodEnd = ctx?.period_end ?? weekEnd
+  const hasRun = Boolean(tr.snapshot)
+
+  const weekLabor = useMemo(() => {
+    if (coveredIds.size > 0) return labor.filter((l) => coveredIds.has(l.id) && !l.deleted_at)
+    return labor.filter((l) => !l.deleted_at && l.occurred_on >= periodStart && l.occurred_on <= periodEnd)
+  }, [labor, coveredIds, periodStart, periodEnd])
 
   const flaggedById = useMemo(() => {
     const map = new Map<string, TimeAnomaly[]>()
-    for (const ea of runSnapshot.data?.context.anomalies ?? []) {
+    for (const ea of ctx?.anomalies ?? []) {
       if (ea.anomalies.length > 0) map.set(ea.entry_id, ea.anomalies)
     }
     return map
-  }, [runSnapshot.data])
+  }, [ctx?.anomalies])
 
   const rows = useMemo<CrewTimeRow[]>(
     () =>
-      todayLabor.map((l) => {
+      weekLabor.map((l) => {
         const w = workers.find((x) => x.id === l.worker_id)
         const p = projects.find((x) => x.id === l.project_id)
         return {
@@ -75,26 +94,14 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
           approved: isApproved(l.status),
         }
       }),
-    [todayLabor, workers, projects, flaggedById],
+    [weekLabor, workers, projects, flaggedById],
   )
 
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0)
-  const crewCount = new Set(todayLabor.map((l) => l.worker_id).filter(Boolean)).size
+  const crewCount = new Set(weekLabor.map((l) => l.worker_id).filter(Boolean)).size
   const flaggedCount = rows.filter((r) => r.anomalies.length > 0).length
   const pendingCount = rows.filter((r) => !r.approved).length
-
-  // Approve one row through the same PATCH the mobile inline editor uses.
-  // The time-review approve event is run-level; per-entry sign-off goes
-  // through labor-entries status='approved'.
-  const [rowError, setRowError] = useState<string | null>(null)
-  const handleApprove = async (id: string) => {
-    setRowError(null)
-    try {
-      await patchLabor.mutateAsync({ id, patch: { status: 'approved' } })
-    } catch (err) {
-      setRowError(err instanceof Error ? err.message : 'Could not approve entry')
-    }
-  }
+  const weekRangeLabel = `${shortDate(periodStart)} → ${shortDate(periodEnd)}`
 
   const columns: Array<DColumn<CrewTimeRow>> = [
     {
@@ -114,29 +121,17 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
       header: 'Anomaly',
       render: (r) =>
         r.anomalies.length > 0 ? (
-          <MPill tone="red" dot>
-            {r.anomalies[0]?.code ?? 'flag'}
-            {r.anomalies.length > 1 ? ` +${r.anomalies.length - 1}` : ''}
-          </MPill>
+          // Full anomaly flag stack — one chip per anomaly (design msg_68),
+          // not a single chip + "+N" collapse. Wrap so the cell stays tidy.
+          <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+            {r.anomalies.map((a, i) => (
+              <MPill key={`${r.id}-${a.code}-${i}`} tone="red" dot>
+                {anomalyChipLabel(a.code)}
+              </MPill>
+            ))}
+          </span>
         ) : (
           <span style={{ color: 'var(--m-ink-3)' }}>—</span>
-        ),
-    },
-    {
-      key: 'approve',
-      header: '',
-      render: (r) =>
-        r.approved ? (
-          <MPill tone="green">approved</MPill>
-        ) : (
-          <MButton
-            size="sm"
-            variant="primary"
-            onClick={() => void handleApprove(r.id)}
-            disabled={pendingRowId === r.id}
-          >
-            {pendingRowId === r.id ? 'Saving…' : 'Approve'}
-          </MButton>
         ),
     },
   ]
@@ -144,9 +139,16 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div>
-          <DEyebrow>Foreman · Time</DEyebrow>
-          <DH1>Approve hours</DH1>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <DEyebrow>Foreman · Time · Week {weekRangeLabel}</DEyebrow>
+            <DH1>Approve hours</DH1>
+          </div>
+          {!hasRun ? (
+            <MButton variant="primary" onClick={handleStartReview} disabled={createRun.isPending}>
+              {createRun.isPending ? 'Starting…' : "Start this week's review"}
+            </MButton>
+          ) : null}
         </div>
 
         <DKpiStrip>
@@ -154,7 +156,7 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
             label="Total hours"
             value={formatDecimalHours(totalHours, 1).replace('h', '')}
             unit="h"
-            meta={totalHours > 0 ? 'Today on the clock' : 'No clock-ins'}
+            meta={totalHours > 0 ? 'This review week' : 'No clock-ins'}
             metaTone={totalHours > 0 ? 'good' : undefined}
           />
           <DKpi label="Crew" value={String(crewCount)} meta={`${crewCount} on the clock`} />
@@ -173,19 +175,61 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
           />
         </DKpiStrip>
 
-        {rowError ? (
+        {tr.outOfSync ? (
           <div className="d-card" data-tone="accent" style={{ color: 'var(--m-accent-ink)' }}>
-            {rowError}
+            Run state moved on the server. Reloaded — pick the next action again.
+          </div>
+        ) : null}
+        {tr.error && !tr.outOfSync ? (
+          <div className="d-card" data-tone="accent" style={{ color: 'var(--m-accent-ink)' }}>
+            {tr.error}{' '}
+            <button type="button" onClick={tr.dismissError} style={{ textDecoration: 'underline' }}>
+              dismiss
+            </button>
           </div>
         ) : null}
 
         <DataTable<CrewTimeRow>
-          title="Crew time · today"
+          title={`Crew time · week of ${shortDate(periodStart)}`}
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          empty="No hours yet today. Crew clock-ins land here as they happen."
+          empty="No hours this week. Crew clock-ins land here as they happen."
         />
+
+        {/* Sticky run-level decision footer driven by the snapshot's
+            next_events. The APPROVE label communicates the downstream
+            hand-off ("SEND TO MIKE" / send-to-PM) the design references; the
+            dispatched event is still the plain workflow APPROVE. */}
+        {hasRun && tr.snapshot!.next_events.length > 0 ? (
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            {tr.snapshot!.next_events.map((ev) => {
+              const isApprove = ev.type === 'APPROVE'
+              const label = isApprove ? `Approve ${pendingCount} clean · Send to PM` : ev.label
+              return (
+                <MButton
+                  key={ev.type}
+                  variant={isApprove ? 'primary' : 'ghost'}
+                  disabled={tr.isSubmitting}
+                  onClick={() => {
+                    if (ev.type === 'APPROVE') {
+                      tr.dispatch({ event: 'APPROVE' })
+                    } else {
+                      const reason =
+                        typeof window !== 'undefined'
+                          ? (window.prompt(`${ev.label} — add a reason`) ?? '')
+                          : 'flagged for correction'
+                      if (reason.trim().length === 0) return
+                      tr.dispatch({ event: ev.type as 'REJECT' | 'REOPEN', reason })
+                    }
+                  }}
+                >
+                  {tr.isSubmitting ? 'Working…' : label}
+                </MButton>
+              )
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   )

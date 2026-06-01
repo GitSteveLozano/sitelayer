@@ -1,16 +1,22 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
 import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import {
-  DAILY_LOG_WORKFLOW_NAME,
-  DAILY_LOG_WORKFLOW_SCHEMA_VERSION,
   dailyLogStatusToWorkflowState,
-  transitionDailyLogWorkflow,
+  dailyLogWorkflow,
+  nextDailyLogEvents,
+  parseDailyLogEventRequest,
+  type DailyLogHumanEventType,
+  type DailyLogWorkflowEvent,
   type DailyLogWorkflowSnapshot,
+  type DailyLogWorkflowState,
+  type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 
 export type DailyLogRouteCtx = {
@@ -18,6 +24,8 @@ export type DailyLogRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -69,14 +77,173 @@ type DailyLogPhotoRow = {
 }
 
 /**
+ * The `context` carried inside the daily-log `WorkflowSnapshot`. The
+ * reducer's own snapshot is intentionally narrow (state/state_version/
+ * submitted_at/submitted_by); the editor screens still need the full
+ * entity, so the snapshot context surfaces the whole row. `next_events`
+ * is always computed from the registered reducer's `nextDailyLogEvents`,
+ * never hand-listed — that is the UI-bypass guard.
+ */
+type DailyLogWorkflowContext = {
+  id: string
+  project_id: string
+  occurred_on: string
+  foreman_user_id: string
+  status: 'draft' | 'submitted'
+  scope_progress: unknown
+  weather: unknown
+  notes: string | null
+  schedule_deviations: unknown
+  crew_summary: unknown
+  photo_keys: string[]
+  submitted_at: string | null
+  version: number
+  state_version: number
+  origin: string | null
+  created_at: string
+  updated_at: string
+}
+
+function rowToDailyLogSnapshot(
+  row: DailyLogRow,
+): WorkflowSnapshot<DailyLogWorkflowState, DailyLogHumanEventType, DailyLogWorkflowContext> {
+  const state = dailyLogStatusToWorkflowState(row.status)
+  return {
+    state,
+    state_version: row.state_version,
+    next_events: nextDailyLogEvents(state),
+    context: {
+      id: row.id,
+      project_id: row.project_id,
+      occurred_on: row.occurred_on,
+      foreman_user_id: row.foreman_user_id,
+      status: row.status,
+      scope_progress: row.scope_progress,
+      weather: row.weather,
+      notes: row.notes,
+      schedule_deviations: row.schedule_deviations,
+      crew_summary: row.crew_summary,
+      photo_keys: row.photo_keys,
+      submitted_at: row.submitted_at,
+      version: row.version,
+      state_version: row.state_version,
+      origin: row.origin,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    },
+  }
+}
+
+/**
+ * Shared in-tx SUBMIT dispatch for both the canonical `/events` route
+ * and the legacy `/submit` alias, so the two surfaces can never drift.
+ * Runs the registered daily_log reducer through the generic
+ * `dispatchWorkflowEvent` primitive: FOR UPDATE lock + post-lock
+ * state_version check + pure reduce + the single UPDATE + the
+ * always-appended workflow_event_log row + the `daily_log:submit:<id>`
+ * ledger row. Returns the discriminated dispatch result so the caller
+ * maps it to 200/404/409.
+ */
+function dispatchDailyLogSubmit(
+  client: PoolClient,
+  ctx: DailyLogRouteCtx,
+  id: string,
+  ownerFilter: string,
+  /**
+   * The workflow state_version the caller is acting on. `null` disables
+   * the optimistic check (the legacy /submit path, which gates on the
+   * content `expected_version` instead). We capture the resolved value so
+   * the primitive's post-lock compare is satisfied with the row's own
+   * state_version when the caller opts out.
+   */
+  expectedStateVersion: number | null,
+) {
+  // For the legacy null path, capture the locked row's state_version and
+  // feed it back as the "expected" version so the primitive's optimistic
+  // check is a no-op. We can't know it before the lock, so a mutable slot
+  // bridges loadSnapshot → expectedStateVersion.
+  let resolvedExpected = expectedStateVersion ?? -1
+  return dispatchWorkflowEvent<DailyLogRow, DailyLogWorkflowSnapshot, DailyLogWorkflowEvent>(client, {
+    definition: dailyLogWorkflow,
+    companyId: ctx.company.id,
+    entityType: 'daily_log',
+    entityId: id,
+    get expectedStateVersion() {
+      return resolvedExpected
+    },
+    actorUserId: ctx.currentUserId,
+    loadSnapshot: async (c) => {
+      const locked = await c.query<DailyLogRow>(
+        `select ${DAILY_LOG_COLUMNS}
+         from daily_logs
+         where company_id = $1
+           and id = $2
+           and ($3 = '' or foreman_user_id = $3)
+         for update`,
+        [ctx.company.id, id, ownerFilter],
+      )
+      const row = locked.rows[0]
+      if (!row) return null
+      if (expectedStateVersion === null) resolvedExpected = row.state_version
+      return {
+        row,
+        snapshot: {
+          state: dailyLogStatusToWorkflowState(row.status),
+          state_version: row.state_version,
+          submitted_at: row.submitted_at,
+          submitted_by: null,
+        },
+      }
+    },
+    buildEvent: () => ({
+      type: 'SUBMIT',
+      submitted_at: new Date().toISOString(),
+      submitted_by: ctx.currentUserId,
+    }),
+    persist: async (c, next) => {
+      const updateResult = await c.query<DailyLogRow>(
+        `update daily_logs
+           set status = $4,
+               state_version = $5,
+               submitted_at = $6::timestamptz,
+               version = version + 1,
+               updated_at = now()
+         where company_id = $1
+           and id = $2
+           and ($3 = '' or foreman_user_id = $3)
+           and status = 'draft'
+         returning ${DAILY_LOG_COLUMNS}`,
+        [ctx.company.id, id, ownerFilter, next.state, next.state_version, next.submitted_at],
+      )
+      const row = updateResult.rows[0]
+      if (!row) throw new HttpError(500, 'daily log submit update returned no row')
+      return row
+    },
+    sideEffects: async (c, _next, row) => {
+      await recordMutationLedger(c, {
+        companyId: ctx.company.id,
+        entityType: 'daily_log',
+        entityId: row.id,
+        action: 'submit',
+        row,
+        actorUserId: ctx.currentUserId,
+        idempotencyKey: `daily_log:submit:${row.id}`,
+      })
+    },
+  })
+}
+
+/**
  * Foreman daily logs (Sitemap.html § fm-log).
  *
  * - GET    /api/daily-logs?project_id&from&to&status
- * - GET    /api/daily-logs/:id
+ * - GET    /api/daily-logs/:id              raw row (list/photo consumers)
+ * - GET    /api/daily-logs/:id/snapshot     WorkflowSnapshot {state,state_version,context,next_events}
  * - POST   /api/daily-logs                  create draft (or upsert today's
  *                                           draft for current foreman)
  * - PATCH  /api/daily-logs/:id              update draft (version-checked)
- * - POST   /api/daily-logs/:id/submit       draft → submitted
+ * - POST   /api/daily-logs/:id/events       { event:'SUBMIT', state_version } → submitted
+ * - POST   /api/daily-logs/:id/submit       DEPRECATED alias → submitted
  *
  * Foreman role required for write paths; admin/office can read all.
  * Worker role can't see daily logs (the Worker tab in the design has no
@@ -162,6 +329,37 @@ export async function handleDailyLogRoutes(
       return true
     }
     ctx.sendJson(200, { dailyLog: result.rows[0] })
+    return true
+  }
+
+  // GET /api/daily-logs/:id/snapshot → canonical WorkflowSnapshot
+  // { state, state_version, context, next_events }. The editor screens
+  // read this; the raw-row GET above stays for list/photo-timeline
+  // consumers that want the bare row.
+  const snapshotMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/snapshot$/)
+  if (req.method === 'GET' && snapshotMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const id = snapshotMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<DailyLogRow>(
+        `select ${DAILY_LOG_COLUMNS}
+       from daily_logs
+       where company_id = $1 and id = $2
+         and ($3 = '' or foreman_user_id = $3)
+       limit 1`,
+        [ctx.company.id, id, ownerFilter],
+      ),
+    )
+    if (!result.rows[0]) {
+      ctx.sendJson(404, { error: 'daily log not found' })
+      return true
+    }
+    ctx.sendJson(200, rowToDailyLogSnapshot(result.rows[0]))
     return true
   }
 
@@ -302,9 +500,79 @@ export async function handleDailyLogRoutes(
     return true
   }
 
+  // POST /api/daily-logs/:id/events — canonical { event, state_version }
+  // surface. Dispatches the registered daily_log reducer through the
+  // generic workflow primitive (FOR UPDATE lock + state_version check +
+  // pure reduce + UPDATE + workflow_event_log + daily_log:submit ledger).
+  // The reducer's only human event is SUBMIT; parseDailyLogEventRequest
+  // rejects anything else (and coerces a numeric-string state_version for
+  // offline replay).
+  const eventsMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/events$/)
+  if (req.method === 'POST' && eventsMatch) {
+    if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    // LAYER 2: submit_daily_log — matrix base owner+foreman. The requireRole
+    // gate above also lets office through, so the overlay is where the
+    // office→estimator demotion lands: a plain office member passes requireRole
+    // but is denied here (estimator does not hold submit_daily_log). The
+    // reducer's only human event is SUBMIT, so gating the whole route is exact.
+    if (!ctx.requirePermission('submit_daily_log')) return true
+    const id = eventsMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const parsed = parseDailyLogEventRequest(body)
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const { state_version: stateVersion } = parsed.value
+
+    // Foreman can only submit their own draft. Admin/office unrestricted.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+
+    const result = await withMutationTx((client: PoolClient) =>
+      dispatchDailyLogSubmit(client, ctx, id, ownerFilter, stateVersion),
+    )
+
+    if (result.kind === 'not_found') {
+      // Collapse not-found / not-yours to the legacy 409 so a foreman
+      // probing another foreman's id cannot distinguish "missing" from
+      // "not yours" (matches the /submit and PATCH ownership behaviour).
+      ctx.sendJson(409, { error: 'daily log not found, already submitted, or not yours to submit' })
+      return true
+    }
+    if (result.kind === 'version_conflict') {
+      ctx.sendJson(409, {
+        error: 'state_version mismatch — reload and retry',
+        snapshot: rowToDailyLogSnapshot(result.row),
+      })
+      return true
+    }
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(409, {
+        error: result.message,
+        snapshot: rowToDailyLogSnapshot(result.row),
+      })
+      return true
+    }
+    ctx.sendJson(200, rowToDailyLogSnapshot(result.row))
+    return true
+  }
+
+  // POST /api/daily-logs/:id/submit — DEPRECATED legacy alias kept for one
+  // release so already-enqueued offline mutations (and old clients) still
+  // submit cleanly. It delegates to the same in-tx dispatch as /events so
+  // the two surfaces cannot drift. Legacy clients send the content
+  // `expected_version`; we translate it to the locked row's state_version
+  // inside the tx so a stale content version still 409s.
   const submitMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/submit$/)
   if (req.method === 'POST' && submitMatch) {
     if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    // LAYER 2: submit_daily_log — same overlay as the canonical /events route
+    // so the deprecated alias cannot drift (office denied; owner+foreman allow).
+    if (!ctx.requirePermission('submit_daily_log')) return true
     const id = submitMatch[1]!
     if (!isValidUuid(id)) {
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
@@ -323,97 +591,17 @@ export async function handleDailyLogRoutes(
     // Foreman can only submit their own draft. Admin/office unrestricted.
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
 
-    // Dispatch through the deterministic daily_log workflow:
-    //   - SELECT ... FOR UPDATE locks the row
-    //   - transitionDailyLogWorkflow validates draft → submitted
-    //   - one UPDATE flips status + bumps state_version + version
-    //   - recordWorkflowEvent appends to workflow_event_log in the same tx
-    //   - recordMutationLedger keeps the stable idempotency key the
-    //     pre-workflow handler used
-    // The 'illegal_transition' branch (already submitted) and
-    // 'not_found' branches both collapse to the legacy 409 response so
-    // HTTP behaviour is unchanged. No-row from the UPDATE only happens
-    // when the row vanished between SELECT and UPDATE (or the foreman
-    // ownership filter rejected it), which the pre-workflow handler
-    // also surfaced as 409.
-    const result = await withMutationTx(async (client: PoolClient) => {
-      const lockedResult = await client.query<DailyLogRow>(
-        `select ${DAILY_LOG_COLUMNS}
-         from daily_logs
-         where company_id = $1
-           and id = $2
-           and ($3 = '' or foreman_user_id = $3)
-         for update`,
-        [ctx.company.id, id, ownerFilter],
-      )
-      const current = lockedResult.rows[0]
-      if (!current) return { kind: 'not_found' as const }
-      if (current.status !== 'draft') {
-        return { kind: 'illegal_transition' as const }
-      }
+    // Legacy callers do not send a workflow state_version (they gate on
+    // the content `expected_version` checked above). Delegate to the same
+    // in-tx dispatch as /events with the post-lock state_version check
+    // disabled, so the only remaining gate is the draft→submitted reducer
+    // transition and the two surfaces cannot drift.
+    const result = await withMutationTx((client: PoolClient) =>
+      dispatchDailyLogSubmit(client, ctx, id, ownerFilter, null),
+    )
 
-      const submittedAt = new Date().toISOString()
-      const beforeStateVersion = current.state_version
-      let nextSnapshot: DailyLogWorkflowSnapshot
-      try {
-        nextSnapshot = transitionDailyLogWorkflow(
-          {
-            state: dailyLogStatusToWorkflowState(current.status),
-            state_version: current.state_version,
-            submitted_at: current.submitted_at,
-            submitted_by: null,
-          },
-          { type: 'SUBMIT', submitted_at: submittedAt, submitted_by: ctx.currentUserId },
-        )
-      } catch {
-        return { kind: 'illegal_transition' as const }
-      }
-
-      const updateResult = await client.query<DailyLogRow>(
-        `update daily_logs
-           set status = $4,
-               state_version = $5,
-               submitted_at = $6::timestamptz,
-               version = version + 1,
-               updated_at = now()
-         where company_id = $1
-           and id = $2
-           and ($3 = '' or foreman_user_id = $3)
-           and status = 'draft'
-         returning ${DAILY_LOG_COLUMNS}`,
-        [ctx.company.id, id, ownerFilter, nextSnapshot.state, nextSnapshot.state_version, submittedAt],
-      )
-      const row = updateResult.rows[0]
-      if (!row) return { kind: 'not_found' as const }
-
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: DAILY_LOG_WORKFLOW_NAME,
-        schemaVersion: DAILY_LOG_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'daily_log',
-        entityId: row.id,
-        stateVersion: beforeStateVersion,
-        eventType: 'SUBMIT',
-        eventPayload: {
-          type: 'SUBMIT',
-          submitted_at: submittedAt,
-          submitted_by: ctx.currentUserId,
-        },
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'daily_log',
-        entityId: row.id,
-        action: 'submit',
-        row: row,
-        actorUserId: ctx.currentUserId,
-        idempotencyKey: `daily_log:submit:${row.id}`,
-      })
-      return { kind: 'ok' as const, row }
-    })
-
+    // version_conflict can't happen with the check disabled; not_found /
+    // illegal_transition both collapse to the legacy 409.
     if (result.kind !== 'ok') {
       ctx.sendJson(409, { error: 'daily log not found, already submitted, or not yours to submit' })
       return true

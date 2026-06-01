@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import {
   LABOR_PAYROLL_ALL_STATES,
+  LABOR_PAYROLL_EVENT_TYPES,
   LABOR_PAYROLL_TERMINAL_STATES,
+  LaborPayrollEventRequestSchema,
+  isHumanLaborPayrollEvent,
   transitionLaborPayrollWorkflow,
   type LaborPayrollWorkflowEvent,
   type LaborPayrollWorkflowSnapshot,
@@ -116,6 +119,21 @@ describe('labor-payroll reducer — property invariants', () => {
           return snap
         }
         expect(walk()).toEqual(walk())
+      }),
+      { numRuns: 100 },
+    )
+  })
+
+  it('isHumanLaborPayrollEvent(t) iff the human-endpoint Zod enum accepts t', () => {
+    // The human/worker split must stay coherent: every event the human
+    // endpoint accepts is exactly the set of human events, and worker-only
+    // events (POST_SUCCEEDED / POST_FAILED — and any future AUTO_* event)
+    // are rejected at POST /events. This catches a future event leaking
+    // into the human path.
+    fc.assert(
+      fc.property(fc.constantFrom(...LABOR_PAYROLL_EVENT_TYPES), (eventType) => {
+        const parsed = LaborPayrollEventRequestSchema.safeParse({ event: eventType, state_version: 1 })
+        expect(parsed.success).toBe(isHumanLaborPayrollEvent(eventType))
       }),
       { numRuns: 100 },
     )

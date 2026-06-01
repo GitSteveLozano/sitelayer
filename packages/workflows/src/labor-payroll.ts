@@ -57,6 +57,13 @@ export const LABOR_PAYROLL_EVENT_TYPES = [
   'POST_FAILED',
   'RETRY_POST',
   'VOID',
+  // Worker-only auto-advance events (NOT acceptable at POST /events).
+  // They walk the same edges as APPROVE / POST_REQUESTED, but the worker
+  // auto-post tick is the actor instead of a human. Kept distinct from the
+  // human events so the event log + isHumanLaborPayrollEvent split can tell
+  // an operator action from an automated one (audit + UI badge).
+  'AUTO_APPROVE',
+  'AUTO_POST_REQUESTED',
 ] as const
 
 export type LaborPayrollWorkflowEvent =
@@ -66,6 +73,10 @@ export type LaborPayrollWorkflowEvent =
   | { type: 'POST_FAILED'; failed_at: string; error: string }
   | { type: 'RETRY_POST' }
   | { type: 'VOID' }
+  // Worker auto-post events. The worker reads the clock/policy and supplies
+  // approved_at / approved_by in the payload — the reducer stays pure.
+  | { type: 'AUTO_APPROVE'; approved_at: string; approved_by: string }
+  | { type: 'AUTO_POST_REQUESTED' }
 
 export interface LaborPayrollWorkflowSnapshot {
   state: LaborPayrollWorkflowState
@@ -76,6 +87,9 @@ export interface LaborPayrollWorkflowSnapshot {
   failed_at?: string | null
   error?: string | null
   qbo_timeactivity_ids?: string[] | null
+  /** True when an AUTO_APPROVE or AUTO_POST_REQUESTED advanced this run, so
+   * the trail/UI can label it "Auto-posted". Set by the auto events only. */
+  auto_posted?: boolean | null
 }
 
 function assertLaborPayrollTransition(
@@ -149,6 +163,37 @@ export function transitionLaborPayrollWorkflow(
       ...snapshot,
       state: 'approved',
       state_version: nextVersion,
+      error: null,
+      failed_at: null,
+    }
+  }
+  if (event.type === 'AUTO_APPROVE') {
+    // Worker auto-advance — same edge as APPROVE (generated → approved),
+    // but flags auto_posted so the trail/UI can label it. A stale auto-tick
+    // that races a human VOID is rejected here because the run already left
+    // `generated`.
+    assertLaborPayrollTransition(snapshot.state, ['generated'], event.type)
+    return {
+      ...snapshot,
+      state: 'approved',
+      state_version: nextVersion,
+      approved_at: event.approved_at,
+      approved_by: event.approved_by,
+      auto_posted: true,
+      error: null,
+      failed_at: null,
+    }
+  }
+  if (event.type === 'AUTO_POST_REQUESTED') {
+    // Worker auto-advance — same edge as POST_REQUESTED (approved → posting),
+    // enqueues the same post_qbo_time_activities outbox row. Only from
+    // `approved` (NOT `failed`): auto-post never re-pushes a failed run.
+    assertLaborPayrollTransition(snapshot.state, ['approved'], event.type)
+    return {
+      ...snapshot,
+      state: 'posting',
+      state_version: nextVersion,
+      auto_posted: true,
       error: null,
       failed_at: null,
     }

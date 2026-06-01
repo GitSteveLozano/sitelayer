@@ -116,7 +116,7 @@ export function transitionTimeReviewWorkflow(
     // and rejection_reason all be NULL when state='pending'; without
     // this clear the persisted UPDATE would violate the constraint.
     // The full audit trail of the prior approval/rejection lives in
-    // workflow_event_log keyed on (entity_id, state_version).
+    // workflow_event_log keyed on (entity_id, workflow_name, state_version).
     approved_at: null,
     rejected_at: null,
     rejection_reason: null,

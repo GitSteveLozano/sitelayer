@@ -54,6 +54,9 @@ const MobileEstimatesSent = lazy(() =>
 const MobileProjectDetail = lazy(() =>
   import('./mobile/project-detail.js').then((m) => ({ default: m.MobileProjectDetail })),
 )
+const MobilePostMortem = lazy(() =>
+  import('./mobile/project-detail/post-mortem.js').then((m) => ({ default: m.MobilePostMortem })),
+)
 const MobileProjectNew = lazy(() => import('./mobile/project-new.js').then((m) => ({ default: m.MobileProjectNew })))
 const MobileTakeoffList = lazy(() => import('./mobile/takeoff-list.js').then((m) => ({ default: m.MobileTakeoffList })))
 const TakeoffMobileScreen = lazy(() =>
@@ -122,6 +125,12 @@ const MobileRentalsPortal = lazy(() =>
 const RentalRequestsQueueScreen = lazy(() =>
   import('./rentals/rental-requests-queue.js').then((m) => ({ default: m.RentalRequestsQueueScreen })),
 )
+const MobileRentalBillingList = lazy(() =>
+  import('./mobile/rentals-billing-list.js').then((m) => ({ default: m.MobileRentalBillingList })),
+)
+const MobileRentalBillingDetail = lazy(() =>
+  import('./mobile/rentals-billing-detail.js').then((m) => ({ default: m.MobileRentalBillingDetail })),
+)
 const MobileQuickInvoice = lazy(() =>
   import('./mobile/invoice-quick.js').then((m) => ({ default: m.MobileQuickInvoice })),
 )
@@ -153,6 +162,15 @@ const TakeoffAutoscale = lazy(() =>
   import('./mobile/takeoff-autoscale.js').then((m) => ({ default: m.TakeoffAutoscale })),
 )
 const TakeoffIngest = lazy(() => import('./mobile/takeoff-ingest.js').then((m) => ({ default: m.TakeoffIngest })))
+const TakeoffScaleManual = lazy(() =>
+  import('./mobile/takeoff-scale-manual.js').then((m) => ({ default: m.TakeoffScaleManual })),
+)
+const TakeoffCrossLink = lazy(() =>
+  import('./mobile/takeoff-cross-link.js').then((m) => ({ default: m.TakeoffCrossLink })),
+)
+const TakeoffItemDetail = lazy(() =>
+  import('./mobile/takeoff-item-detail.js').then((m) => ({ default: m.TakeoffItemDetail })),
+)
 const MobileInvoiceSent = lazy(() => import('./mobile/invoice-sent.js').then((m) => ({ default: m.MobileInvoiceSent })))
 const WorkerClockinManual = lazy(() =>
   import('./mobile/worker-clockin.js').then((m) => ({ default: m.WorkerClockinManual })),
@@ -306,8 +324,11 @@ export function MobileShell({
               element={<ForemanBlockerDetail bootstrap={bootstrap} companySlug={companySlug} />}
             />
             <Route path="clockin" element={<WorkerClockinConfirm />} />
-            <Route path="clockin/manual" element={<WorkerClockinManual />} />
-            <Route path="clockout" element={<WorkerClockoutSuccess />} />
+            <Route
+              path="clockin/manual"
+              element={<WorkerClockinManual bootstrap={bootstrap} companySlug={companySlug} />}
+            />
+            <Route path="clockout" element={<WorkerClockoutSuccess bootstrap={bootstrap} />} />
             <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
             <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
@@ -356,6 +377,19 @@ export function MobileShell({
             />
             <Route path="projects/:projectId/takeoff-ai/ingest" element={<TakeoffIngest companySlug={companySlug} />} />
             <Route
+              path="projects/:projectId/takeoff-ai/scale-manual"
+              element={<TakeoffScaleManual companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/cross-link"
+              element={<TakeoffCrossLink companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-item/:code"
+              element={<TakeoffItemDetail companySlug={companySlug} />}
+            />
+            <Route path="projects/:projectId/post-mortem" element={<MobilePostMortem />} />
+            <Route
               path="projects/:projectId/*"
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
             />
@@ -383,6 +417,14 @@ export function MobileShell({
             <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
             <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
             <Route path="rentals/lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
+            {/* Headless rental_billing_run renderer — registered BEFORE the
+                rentals/* catchall below, otherwise the catchall swallows it
+                (CLAUDE.md routing rule). */}
+            <Route path="rentals/billing" element={<MobileRentalBillingList />} />
+            <Route
+              path="rentals/billing/:id"
+              element={<MobileRentalBillingDetail companySlug={companySlug} companyRole={companyRole} />}
+            />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
             <Route path="invoice-sent/:projectId" element={<MobileInvoiceSent bootstrap={bootstrap} />} />
@@ -398,8 +440,8 @@ export function MobileShell({
               path="settings/*"
               element={<MobileSettingsHome bootstrap={bootstrap} companyRole={companyRole} navigate={navigate} />}
             />
-            <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
-            <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
+            <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route path="map" element={<ForemanMap bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route path="map/*" element={<ForemanMap bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route

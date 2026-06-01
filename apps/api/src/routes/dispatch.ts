@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { AppTier } from '@sitelayer/config'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { Identity } from '../auth.js'
 import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
@@ -43,6 +44,7 @@ import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
+import { handleCaptureSessionRoutes } from './capture-sessions.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
 import { handleObstructionsRoutes } from './obstructions.js'
@@ -65,6 +67,10 @@ import { handleProjectBriefRoutes } from './project-briefs.js'
 import { handleWorkerRoutes } from './workers.js'
 import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
+import { handleAdminRoutes } from './admin.js'
+import { handleCompanyRoleRoutes } from './company-roles.js'
+import { makeScenarioApplyRunner } from '../admin-scenarios.js'
+import { seedCompanyDefaults } from '../onboarding.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
 import { handleGuardrailRoutes } from './guardrails.js'
@@ -98,6 +104,15 @@ export type DispatchContext = {
 
   // Cross-cutting helpers — all mirror the shapes used in routes/* today.
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /**
+   * LAYER 2 named-action overlay (the 9 PERMISSION_ACTIONS). Resolves the
+   * caller's effective permissions from their built-in base + custom-role
+   * grants. Returns true when the action is held (and, for a constrainable
+   * action with a magnitude supplied via opts, within cap); on false it has
+   * already sent the 403 and the handler should return true to stop the
+   * cascade. Not yet called by any route — see server.ts:requirePermission.
+   */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   sendRedirect: (location: string) => void
@@ -189,12 +204,39 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
 
   const routes: Array<() => Promise<boolean>> = [
+    // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin
+    // on the raw (pre-act-as) identity. Placed first; its namespace is distinct.
+    () =>
+      handleAdminRoutes(req, url, {
+        pool,
+        identity,
+        sendJson,
+        readBody,
+        tier: ctx.tier,
+        runScenarioApply: makeScenarioApplyRunner(pool, seedCompanyDefaults),
+      }),
+
+    // Custom-role management API (admin-gated CRUD for custom_roles +
+    // custom_role_grants; GET surfaces the read-only built-in matrix). The
+    // editable half of the RBAC-A overhaul — see permission-seam.ts for the
+    // LAYER 1/LAYER 2 enforcement that consumes these rows. Namespace
+    // (/api/companies/:id/roles, /memberships/:id/role) is distinct.
+    () =>
+      handleCompanyRoleRoutes(req, url, {
+        pool,
+        userId: currentUserId,
+        sendJson,
+        readBody,
+      }),
+
     // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
     () =>
       handleSystemRoutes(req, url, {
         pool,
         company,
         currentUserId,
+        actorUserId: identity.actorUserId ?? null,
+        authMode: identity.mode ?? 'self',
         sendJson,
         setHeader: ctx.setHeader,
         send304: ctx.send304,
@@ -252,6 +294,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
       }),
@@ -305,6 +348,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         storage: ctx.storage,
@@ -323,6 +367,24 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         requireRole: requireRoleStr,
         readBody,
         sendJson,
+      }),
+
+    // Capture sessions — correlation spine for product trace, feedback, and artifacts.
+    () =>
+      handleCaptureSessionRoutes(req, url, {
+        pool,
+        company,
+        identity,
+        tier: ctx.tier,
+        buildSha: getBuildSha(),
+        storage: ctx.storage,
+        maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+        artifactDownloadPresigned: ctx.blueprintDownloadPresigned,
+        requireRole,
+        readBody,
+        sendJson,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
       }),
 
     // Support / debug packets — bounded redacted client timeline + audit/queue join.
@@ -413,6 +475,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -425,6 +488,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -447,6 +511,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -593,6 +658,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+        storage: ctx.storage,
+        maxMovementPhotoBytes: Number(process.env.MAX_MOVEMENT_PHOTO_BYTES ?? 25 * 1024 * 1024),
+        movementPhotoDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
       }),
 
     // Branches, cross-hire, scaffold catalog + BOM bridge
@@ -733,6 +803,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -759,6 +830,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         // RoleSwitcher, not the raw demo-user identity.
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         storage: ctx.storage,
@@ -773,6 +845,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -799,6 +872,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
       }),
@@ -907,13 +981,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Inventory demand forecast — GET /api/inventory-items/:id/forecast
     () =>
       handleInventoryForecastRoutes(req, url, {
-        pool,
         company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
         sendJson,
-        checkVersion,
       }),
 
     // Web Push subscription registration (read VAPID key, upsert/delete subs)

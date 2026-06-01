@@ -1,9 +1,12 @@
 import type { ProjectRow } from '@/lib/api'
+import type { ProjectLifecycleState } from '@/lib/api/project-lifecycle'
 import { MButton, MI, MListInset, MListRow, MSectionH } from '../../../components/m/index.js'
 import { MAiStripe } from '../../../components/m/ai.js'
 import { BidAccuracyCard } from '../../projects/bid-accuracy-card.js'
 import { LifecycleBanner } from '../../../components/lifecycle/banner.js'
 import { CloseoutBanner } from '../../../components/closeout/banner.js'
+import { getActiveCompanySlug } from '../../../lib/api/client.js'
+import { useProjectLifecycle } from '../../../machines/project-lifecycle.js'
 import { formatDecimalHours, formatMoney } from '../format.js'
 
 export function Overview({
@@ -22,6 +25,18 @@ export function Overview({
   navigate: (path: string) => void
 }) {
   const summary = `${project.name}, ${formatMoney(bid)} ${project.division_code} job for ${project.customer_name}.`
+
+  // Single source for the pipeline state of the per-state CTA card below:
+  // the project_lifecycle workflow snapshot (NOT the legacy `status`
+  // regex). The LifecycleBanner above owns the advance-pipeline actions;
+  // this lifted instance feeds ProjectStatePanel's contextual copy so the
+  // two never diverge. Falls back to the row's lifecycle_state, then
+  // 'draft', while the snapshot loads.
+  const lifecycle = useProjectLifecycle(project.id, getActiveCompanySlug())
+  const lifecycleState: ProjectLifecycleState =
+    (lifecycle.snapshot?.state as ProjectLifecycleState | undefined) ??
+    (project.lifecycle_state as ProjectLifecycleState | undefined) ??
+    'draft'
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -44,7 +59,7 @@ export function Overview({
       <div style={{ padding: '0 16px 12px' }}>
         <CloseoutBanner projectId={project.id} />
       </div>
-      <ProjectStatePanel project={project} navigate={navigate} />
+      <ProjectStatePanel state={lifecycleState} projectId={project.id} navigate={navigate} />
       {/* Bid-accuracy keystone (mirrors the desktop overview hero per
           `/tmp/sitelayer_design_stuff/ai-keystone.jsx`). Self-hides
           when no comparable cohort exists yet. */}
@@ -143,68 +158,110 @@ export function Overview({
   )
 }
 
-function ProjectStatePanel({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {
-  const state = normalizeProjectState(project.status)
-  const config =
-    state === 'draft'
-      ? {
-          eyebrow: 'Drafting',
-          title: 'Start with takeoff, then build the estimate.',
-          body: 'Client and archetype are enough for now. Measurements and line items come next.',
-          primary: 'Start takeoff',
-          primaryPath: `/projects/${project.id}/takeoff`,
-          secondary: 'Open estimate',
-          secondaryPath: `/projects/${project.id}/estimate`,
-        }
-      : state === 'sent'
-        ? {
-            eyebrow: 'Awaiting client',
-            title: 'Estimate is out. Watch read status before nudging.',
-            body: 'Signed portal activity and estimate push history live in the estimate workflow.',
-            primary: 'Review send',
-            primaryPath: `/projects/${project.id}/estimate`,
-            secondary: 'Share link',
-            secondaryPath: `/projects/${project.id}/estimate`,
-          }
-        : state === 'accepted'
-          ? {
-              eyebrow: 'Accepted',
-              title: 'Assign foreman and lock the start date.',
-              body: 'Once scheduled, this appears in the foreman morning flow.',
-              primary: 'Schedule',
-              primaryPath: '/schedule',
-              secondary: 'Crew',
-              secondaryPath: '/crew',
-            }
-          : state === 'active'
-            ? {
-                eyebrow: 'In progress',
-                title: 'Track budget, daily log, crew, and materials.',
-                body: 'Foreman logs and worker evidence roll up here as the job moves.',
-                primary: 'Budget',
-                primaryPath: `/projects/${project.id}`,
-                secondary: 'Brief crew',
-                secondaryPath: `/brief/${project.id}`,
-              }
-            : state === 'done'
-              ? {
-                  eyebrow: 'Closing',
-                  title: 'Create final invoice and archive when paid.',
-                  body: 'Use logged scope, materials, and approved time as the closeout record.',
-                  primary: 'Invoice',
-                  primaryPath: '/invoice/new',
-                  secondary: 'Files',
-                  secondaryPath: `/projects/${project.id}/takeoff`,
-                }
-              : {
-                  eyebrow: 'Archived',
-                  title: 'Read-only job record.',
-                  body: 'Use this project for reports, bid accuracy, and historical comparisons.',
-                  primary: 'Files',
-                  primaryPath: `/projects/${project.id}/takeoff`,
-                  secondary: 'Projects',
-                  secondaryPath: '/projects',
-                }
+type HeroConfig = {
+  eyebrow: string
+  title: string
+  body: string
+  primary: string
+  primaryPath: string
+  secondary: string
+  secondaryPath: string
+}
+
+/**
+ * Per-state contextual CTA copy, keyed on the typed 8-state lifecycle
+ * union from @sitelayer/workflows. Declared as an exhaustive
+ * `Record<ProjectLifecycleState, …>` so adding a reducer state without
+ * copy is a COMPILE error — the structural guard against the old
+ * `normalizeProjectState` bucket-collapse (which silently dropped
+ * `estimating` and `declined` into `draft`). `:id` is interpolated by
+ * the panel from `projectId`.
+ */
+const STATE_HERO: Record<ProjectLifecycleState, (id: string) => HeroConfig> = {
+  draft: (id) => ({
+    eyebrow: 'Drafting',
+    title: 'Start with takeoff, then build the estimate.',
+    body: 'Client and archetype are enough for now. Measurements and line items come next.',
+    primary: 'Start takeoff',
+    primaryPath: `/projects/${id}/takeoff`,
+    secondary: 'Open estimate',
+    secondaryPath: `/projects/${id}/estimate`,
+  }),
+  estimating: (id) => ({
+    eyebrow: 'Estimating',
+    title: 'Building the takeoff and pricing.',
+    body: 'Finish the line items, then send the estimate to the customer.',
+    primary: 'Open estimate',
+    primaryPath: `/projects/${id}/estimate`,
+    secondary: 'Takeoff',
+    secondaryPath: `/projects/${id}/takeoff`,
+  }),
+  sent: (id) => ({
+    eyebrow: 'Awaiting client',
+    title: 'Estimate is out. Watch read status before nudging.',
+    body: 'Signed portal activity and estimate push history live in the estimate workflow.',
+    primary: 'Review send',
+    primaryPath: `/projects/${id}/estimate`,
+    secondary: 'Share link',
+    secondaryPath: `/projects/${id}/estimate`,
+  }),
+  accepted: (_id) => ({
+    eyebrow: 'Accepted',
+    title: 'Assign foreman and lock the start date.',
+    body: 'Once scheduled, this appears in the foreman morning flow.',
+    primary: 'Schedule',
+    primaryPath: '/schedule',
+    secondary: 'Crew',
+    secondaryPath: '/crew',
+  }),
+  declined: (id) => ({
+    eyebrow: 'Bid lost',
+    title: 'This bid was declined.',
+    body: 'Review the lost reason, or reopen it as a new bid. Archive when fully closed out.',
+    primary: 'View reason',
+    primaryPath: `/projects/${id}/lost`,
+    secondary: 'Files',
+    secondaryPath: `/projects/${id}/takeoff`,
+  }),
+  in_progress: (id) => ({
+    eyebrow: 'In progress',
+    title: 'Track budget, daily log, crew, and materials.',
+    body: 'Foreman logs and worker evidence roll up here as the job moves.',
+    primary: 'Budget',
+    primaryPath: `/projects/${id}`,
+    secondary: 'Brief crew',
+    secondaryPath: `/brief/${id}`,
+  }),
+  done: (id) => ({
+    eyebrow: 'Closing',
+    title: 'Create final invoice and archive when paid.',
+    body: 'Use logged scope, materials, and approved time as the closeout record.',
+    primary: 'Invoice',
+    primaryPath: '/invoice/new',
+    secondary: 'Files',
+    secondaryPath: `/projects/${id}/takeoff`,
+  }),
+  archived: (id) => ({
+    eyebrow: 'Archived',
+    title: 'Read-only job record.',
+    body: 'Use this project for reports, bid accuracy, and historical comparisons.',
+    primary: 'Files',
+    primaryPath: `/projects/${id}/takeoff`,
+    secondary: 'Projects',
+    secondaryPath: '/projects',
+  }),
+}
+
+export function ProjectStatePanel({
+  state,
+  projectId,
+  navigate,
+}: {
+  state: ProjectLifecycleState
+  projectId: string
+  navigate: (path: string) => void
+}) {
+  const config = STATE_HERO[state](projectId)
 
   return (
     <div style={{ padding: '0 16px 12px' }}>
@@ -223,14 +280,4 @@ function ProjectStatePanel({ project, navigate }: { project: ProjectRow; navigat
       </div>
     </div>
   )
-}
-
-function normalizeProjectState(status: string): 'draft' | 'sent' | 'accepted' | 'active' | 'done' | 'archived' {
-  const s = status.toLowerCase()
-  if (/archive/.test(s)) return 'archived'
-  if (/done|closed|closing|complete/.test(s)) return 'done'
-  if (/progress|active/.test(s)) return 'active'
-  if (/accepted|won|signed/.test(s)) return 'accepted'
-  if (/sent|await|proposal/.test(s)) return 'sent'
-  return 'draft'
 }

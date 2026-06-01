@@ -7,10 +7,13 @@ import {
   processGenerateLaborPayrollRun,
   selectLaborPayrollPush,
 } from '../labor-payroll-push.js'
+import { processLaborPayrollAutoPost } from '../labor-payroll-auto-post.js'
+import { setCompanyGuc } from '../runner-utils.js'
 
 export interface LaborPayrollRunner {
   drainPushes(companyId: string): Promise<Awaited<ReturnType<typeof processLaborPayrollPush>>>
   drainGenerateBridge(companyId: string): Promise<Awaited<ReturnType<typeof processGenerateLaborPayrollRun>>>
+  drainAutoPost(companyId: string): Promise<Awaited<ReturnType<typeof processLaborPayrollAutoPost>>>
 }
 
 export function createLaborPayrollRunner(deps: {
@@ -58,8 +61,26 @@ export function createLaborPayrollRunner(deps: {
     }
   }
 
+  async function drainLaborPayrollAutoPost(companyId: string) {
+    // Weekly AUTO post cadence ("THIS WEEK PAYROLL · AUTO"). Gated OFF per
+    // company by default (migration 116) and short-circuits to a no-op
+    // unless the company opted in AND the clock window is open. Dispatches
+    // the worker-only AUTO_APPROVE / AUTO_POST_REQUESTED events through the
+    // same pure reducer + enqueues the same post_qbo_time_activities outbox
+    // row the human path uses — so drainPushes handles the QBO call. The
+    // RLS GUC is bound per-row inside processLaborPayrollAutoPost's
+    // transactions (via setCompanyGuc) since SET LOCAL is tx-scoped.
+    const client = await pool.connect()
+    try {
+      return await processLaborPayrollAutoPost(client, companyId, { setCompanyGuc })
+    } finally {
+      client.release()
+    }
+  }
+
   return {
     drainPushes: drainLaborPayrollPushes,
     drainGenerateBridge: drainGenerateLaborPayrollRunBridge,
+    drainAutoPost: drainLaborPayrollAutoPost,
   }
 }

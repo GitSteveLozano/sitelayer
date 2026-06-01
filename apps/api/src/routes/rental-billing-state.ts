@@ -50,6 +50,11 @@ function buildReducerEvent(eventType: RentalBillingHumanEventType, actorUserId: 
   if (eventType === 'RETRY_POST') {
     return { type: 'RETRY_POST' }
   }
+  if (eventType === 'CANCEL_POST') {
+    // Operator escape from a wedged 'posting' run. Clock + actor are injected
+    // here (the reducer stays pure); lands the run in 'failed'.
+    return { type: 'CANCEL_POST', failed_at: nowIso, error: `Push canceled by ${actorUserId}` }
+  }
   return { type: 'VOID' }
 }
 
@@ -146,8 +151,9 @@ export async function handleRentalBillingStateRoutes(
         // re-running the reducer. The same pattern is repeated in every
         // workflow event route (time-review-runs, labor-payroll-runs,
         // estimate-pushes, project-lifecycle, crew-schedule-events). The
-        // workflow_event_log UNIQUE (entity_id, state_version) is a
-        // belt-and-braces backstop in case a future caller forgets it.
+        // workflow_event_log UNIQUE (entity_id, workflow_name, state_version)
+        // (migration 106) is a belt-and-braces backstop in case a future
+        // caller forgets it.
         if (current.state_version !== stateVersion) {
           return { kind: 'version_conflict' as const, run: current }
         }

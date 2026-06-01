@@ -5,38 +5,62 @@ import { registerWorkflow } from './registry.js'
 /**
  * Scaffold ops (BOM) approval workflow.
  *
- * Single-event workflow that lifts the implicit state machine in
- * `boms.status` (draft → approved) into a registered deterministic
- * workflow purely for the audit trail. The reducer enforces
- * draft → approved as the only allowed transition; supersession is
- * still managed via the `superseded_by` foreign key + a manual
- * status write (out of scope for this workflow).
+ * Lifts the implicit state machine in `boms.status` into a registered
+ * deterministic workflow with a full audit trail. The persistence layer
+ * (`docker/postgres/init/058_scaffold_catalog_and_bom.sql`) and the web
+ * client (`apps/web/src/lib/api/scaffold-ops.ts`) both model three states
+ * — `draft | approved | superseded` — so `superseded` is a REAL persisted
+ * state and is modeled here as a reducer state, not a side-channel
+ * status write. (There is deliberately no `rejected`/`pending` state: a
+ * BOM is never rejected — a revision supersedes it.)
  *
- * States: draft → approved.
+ * States: draft → approved → superseded (a draft can also be superseded
+ * directly when a newer BOM replaces it before approval).
  *
  * Events:
- *   APPROVE  { approved_at, approved_by }
+ *   APPROVE   { approved_at, approved_by }                    draft → approved
+ *   SUPERSEDE { superseded_at, superseded_by,                 draft|approved → superseded
+ *               superseded_by_bom_id? }
+ *
+ * `superseded` is the only terminal state — `approved` is non-terminal
+ * because a later revision can supersede it. The `superseded_by` FK link
+ * on the row is set in the same tx as the SUPERSEDE update; the reducer
+ * carries the link id on the event/snapshot for the audit log.
  *
  * Side effects: none.
  */
 
-export type ScaffoldOpsApprovalWorkflowState = 'draft' | 'approved'
+export type ScaffoldOpsApprovalWorkflowState = 'draft' | 'approved' | 'superseded'
 
 export const SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME = 'scaffold_ops_approval'
 export const SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION = 1
-export const SCAFFOLD_OPS_APPROVAL_ALL_STATES: readonly ScaffoldOpsApprovalWorkflowState[] = ['draft', 'approved']
-export const SCAFFOLD_OPS_APPROVAL_TERMINAL_STATES: readonly ScaffoldOpsApprovalWorkflowState[] = ['approved']
-export const SCAFFOLD_OPS_APPROVAL_EVENT_TYPES = ['APPROVE'] as const
+export const SCAFFOLD_OPS_APPROVAL_ALL_STATES: readonly ScaffoldOpsApprovalWorkflowState[] = [
+  'draft',
+  'approved',
+  'superseded',
+]
+export const SCAFFOLD_OPS_APPROVAL_TERMINAL_STATES: readonly ScaffoldOpsApprovalWorkflowState[] = ['superseded']
+export const SCAFFOLD_OPS_APPROVAL_EVENT_TYPES = ['APPROVE', 'SUPERSEDE'] as const
 
 export type ScaffoldOpsApprovalHumanEventType = (typeof SCAFFOLD_OPS_APPROVAL_EVENT_TYPES)[number]
 
-export type ScaffoldOpsApprovalWorkflowEvent = { type: 'APPROVE'; approved_at: string; approved_by: string }
+export type ScaffoldOpsApprovalWorkflowEvent =
+  | { type: 'APPROVE'; approved_at: string; approved_by: string }
+  | {
+      type: 'SUPERSEDE'
+      superseded_at: string
+      superseded_by: string
+      superseded_by_bom_id?: string | null
+    }
 
 export interface ScaffoldOpsApprovalWorkflowSnapshot {
   state: ScaffoldOpsApprovalWorkflowState
   state_version: number
   approved_at?: string | null
   approved_by?: string | null
+  superseded_at?: string | null
+  superseded_by?: string | null
+  superseded_by_bom_id?: string | null
 }
 
 function assertTransition(
@@ -63,8 +87,21 @@ export function transitionScaffoldOpsApprovalWorkflow(
       approved_by: event.approved_by,
     }
   }
-  const exhaustive: never = event.type
-  throw new Error(`unhandled scaffold_ops_approval event ${exhaustive}`)
+  if (event.type === 'SUPERSEDE') {
+    // A newer BOM replaces this one. Allowed from `draft` (the revision
+    // landed before approval) or `approved` (a post-approval revision).
+    assertTransition(snapshot.state, ['draft', 'approved'], event.type)
+    return {
+      ...snapshot,
+      state: 'superseded',
+      state_version: snapshot.state_version + 1,
+      superseded_at: event.superseded_at,
+      superseded_by: event.superseded_by,
+      superseded_by_bom_id: event.superseded_by_bom_id ?? null,
+    }
+  }
+  const exhaustive: never = event
+  throw new Error(`unhandled scaffold_ops_approval event ${JSON.stringify(exhaustive)}`)
 }
 
 export function nextScaffoldOpsApprovalEvents(
@@ -72,14 +109,19 @@ export function nextScaffoldOpsApprovalEvents(
 ): Array<WorkflowNextEvent<ScaffoldOpsApprovalHumanEventType>> {
   switch (state) {
     case 'draft':
-      return [{ type: 'APPROVE', label: 'Approve BOM' }]
+      return [
+        { type: 'APPROVE', label: 'Approve BOM' },
+        { type: 'SUPERSEDE', label: 'Supersede BOM' },
+      ]
     case 'approved':
+      return [{ type: 'SUPERSEDE', label: 'Supersede BOM' }]
+    case 'superseded':
       return []
   }
 }
 
 export function isHumanScaffoldOpsApprovalEvent(eventType: string): eventType is ScaffoldOpsApprovalHumanEventType {
-  return eventType === 'APPROVE'
+  return eventType === 'APPROVE' || eventType === 'SUPERSEDE'
 }
 
 export const scaffoldOpsApprovalWorkflow = registerWorkflow<
@@ -100,10 +142,21 @@ export const scaffoldOpsApprovalWorkflow = registerWorkflow<
   sideEffectTypes: [] as const,
 })
 
-export const ScaffoldOpsApprovalEventRequestSchema = z.object({
-  event: z.enum(SCAFFOLD_OPS_APPROVAL_EVENT_TYPES),
+const ApproveBodySchema = z.object({
+  event: z.literal('APPROVE'),
   state_version: z.number().int().positive(),
 })
+
+const SupersedeBodySchema = z.object({
+  event: z.literal('SUPERSEDE'),
+  state_version: z.number().int().positive(),
+  superseded_by_bom_id: z.string().min(1).nullish(),
+})
+
+export const ScaffoldOpsApprovalEventRequestSchema = z.discriminatedUnion('event', [
+  ApproveBodySchema,
+  SupersedeBodySchema,
+])
 
 export type ScaffoldOpsApprovalEventRequest = z.infer<typeof ScaffoldOpsApprovalEventRequestSchema>
 export type ScaffoldOpsApprovalEventParseResult =

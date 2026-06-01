@@ -45,7 +45,7 @@ export function LifecycleBanner({ projectId }: { projectId: string }) {
   const errorMessage = lifecycle.error
 
   return (
-    <Card>
+    <Card data-testid="lifecycle-banner">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Lifecycle</span>

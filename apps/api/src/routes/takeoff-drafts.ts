@@ -76,7 +76,14 @@ function countBlueprintPages(takeoffResult: unknown): number {
   const pages = (pdfMeta as { pages?: unknown }).pages
   return typeof pages === 'number' && Number.isFinite(pages) && pages > 0 ? Math.floor(pages) : 0
 }
-const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
+const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
+
+// Draft `kind` values the capture endpoint accepts. Orthogonal to `source`
+// (which pipeline produced the geometry): `kind` says how the operator should
+// review the draft. 'takeoff' = area/measurement auto-takeoff (or a manual
+// draft); 'count' = symbol auto-count. Default is 'takeoff' (mirrors the
+// migration 122 column default).
+const ALLOWED_DRAFT_KINDS = new Set(['takeoff', 'count'])
 const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
 
 /**
@@ -390,6 +397,7 @@ export async function handleTakeoffDraftRoutes(
         project_name: string
         name: string
         source: string
+        kind: string
         review_required: boolean
         quantities_count: number
         created_at: string
@@ -400,6 +408,7 @@ export async function handleTakeoffDraftRoutes(
             p.name as project_name,
             d.name,
             d.source,
+            d.kind,
             d.review_required,
             coalesce(jsonb_array_length(d.takeoff_result_json -> 'quantities'), 0) as quantities_count,
             d.created_at
@@ -492,6 +501,19 @@ export async function handleTakeoffDraftRoutes(
     }
     const name = String(body.name ?? '').trim() || defaultCaptureName(kind)
 
+    // Review-routing discriminator, orthogonal to the capture `kind` (pipeline)
+    // above. `draft_kind` controls which reviewer the AI queue routes to
+    // (count-review vs takeoff-review). Defaults to 'takeoff' so existing
+    // callers that don't send it keep the prior behaviour.
+    const draftKindRaw = String(body.draft_kind ?? '').trim()
+    if (draftKindRaw && !ALLOWED_DRAFT_KINDS.has(draftKindRaw)) {
+      ctx.sendJson(400, {
+        error: `draft_kind must be one of ${[...ALLOWED_DRAFT_KINDS].join(', ')}`,
+      })
+      return true
+    }
+    const draftKind = draftKindRaw || 'takeoff'
+
     // Verify project tenancy before kicking the pipeline so a foreign
     // projectId doesn't waste a Claude/Luma call on the way to a 404.
     const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
@@ -546,12 +568,21 @@ export async function handleTakeoffDraftRoutes(
     const created = await withMutationTx(async (client) => {
       const insertResult = await client.query(
         `insert into takeoff_drafts (
-            company_id, project_id, name, type, status,
+            company_id, project_id, name, type, kind, status,
             source, takeoff_result_json, review_required, pipeline_version
           )
-          values ($1, $2, $3, 'measurement', 'active', $4, $5::jsonb, $6, $7)
+          values ($1, $2, $3, 'measurement', $4, 'active', $5, $6::jsonb, $7, $8)
           returning ${RETURNING_COLUMNS}`,
-        [ctx.company.id, projectId, name, kind, JSON.stringify(takeoffResult), reviewRequired, pipelineVersion],
+        [
+          ctx.company.id,
+          projectId,
+          name,
+          draftKind,
+          kind,
+          JSON.stringify(takeoffResult),
+          reviewRequired,
+          pipelineVersion,
+        ],
       )
       const row = insertResult.rows[0]
       await recordMutationLedger(client, {
@@ -559,7 +590,7 @@ export async function handleTakeoffDraftRoutes(
         entityType: 'takeoff_draft',
         entityId: row.id,
         action: 'create',
-        row: { ...row, source: kind, pipeline_version: pipelineVersion },
+        row: { ...row, source: kind, kind: draftKind, pipeline_version: pipelineVersion },
         actorUserId: ctx.currentUserId ?? null,
       })
       // Cost attribution for blueprint vision: flat $0.25/page placeholder

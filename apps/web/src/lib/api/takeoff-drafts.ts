@@ -11,6 +11,13 @@ export interface TakeoffDraft {
   name: string
   /** Free-text discriminator. 'measurement' today; 'scaffolding' reserved for the future scaffolding-design tool. */
   type: string
+  /**
+   * Review-routing discriminator (migration 122), orthogonal to `source`
+   * (which capture pipeline produced the geometry). 'takeoff' = area/measurement
+   * auto-takeoff or a manual draft; 'count' = symbol auto-count. The AI queue
+   * routes "Review draft →" to the count-review vs takeoff-review screen on this.
+   */
+  kind?: 'takeoff' | 'count'
   status: 'active' | 'archived'
   version: number
   /** Phase C: pipeline that produced this draft. 'manual' for canvas-authored drafts. */
@@ -27,7 +34,14 @@ export interface TakeoffDraft {
 export type CaptureKind = 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
 
 export interface CaptureRequestBody {
+  /** Which capture pipeline to run (how the geometry is produced). */
   kind: CaptureKind
+  /**
+   * Review-routing discriminator persisted on the resulting draft (migration
+   * 122). Omit (or 'takeoff') for the auto-takeoff flow; 'count' tags the
+   * symbol auto-count flow so the AI queue routes its review to count-review.
+   */
+  draft_kind?: 'takeoff' | 'count'
   name?: string
   payload: Record<string, unknown>
 }
@@ -76,6 +90,14 @@ export interface CompanyTakeoffDraft {
   project_name: string
   name: string
   source: 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
+  /**
+   * Review-routing discriminator (migration 122). 'count' drafts route to the
+   * count-review screen; everything else (incl. legacy rows defaulted by the
+   * migration) routes to takeoff-review. Optional so an older API build that
+   * predates migration 122 still type-checks — the queue falls back to
+   * 'takeoff' routing when absent.
+   */
+  kind?: 'takeoff' | 'count'
   review_required: boolean
   quantities_count: number
   created_at: string

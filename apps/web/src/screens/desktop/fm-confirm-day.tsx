@@ -11,10 +11,10 @@
  * /api/schedules/:id/confirm with one labor entry per on-site worker.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { request } from '@/lib/api/client'
 import { useWorkers } from '@/lib/api/workers'
 import { useServiceItems, type BootstrapResponse } from '@/lib/api'
-import { useSchedules, type CrewScheduleRow } from '@/lib/api/schedules'
+import { useCreateSchedule, useSchedules, type CrewScheduleRow } from '@/lib/api/schedules'
+import { dispatchCrewScheduleEvent, fetchCrewScheduleSnapshot } from '@/lib/api/crew-schedules'
 import { DEyebrow, DH1 } from '@/components/d'
 import { MButton, MSelect } from '@/components/m'
 
@@ -60,6 +60,11 @@ export function FmConfirmDay({ bootstrap }: { bootstrap: BootstrapResponse | nul
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Gap 7 — create draft through the TanStack mutation (refreshes the
+  // schedule + bootstrap caches) and confirm through the headless
+  // /events endpoint (which enqueues the same materialize_labor_entries
+  // outbox row the legacy /confirm did — so both paths are equivalent).
+  const createSchedule = useCreateSchedule()
 
   // Seed: pre-select the workers on the day's schedule (or none), default 8 hrs
   // and the first service item.
@@ -105,14 +110,29 @@ export function FmConfirmDay({ bootstrap }: { bootstrap: BootstrapResponse | nul
       // Ensure a schedule row exists for this project + date to confirm against.
       let scheduleId = daySchedule?.id ?? null
       if (!scheduleId) {
-        const created = await request<{ id: string }>(`/api/schedules`, {
-          method: 'POST',
-          json: { project_id: projectId, scheduled_for: date, crew: entries.map((e) => ({ worker_id: e.worker_id })) },
+        const created = await createSchedule.mutateAsync({
+          project_id: projectId,
+          scheduled_for: date,
+          crew: entries.map((e) => ({ worker_id: e.worker_id })),
         })
         scheduleId = created.id
       }
-      await request(`/api/schedules/${encodeURIComponent(scheduleId)}/confirm`, { method: 'POST', json: { entries } })
-      setToast(`Confirmed ${entries.length} worker${entries.length === 1 ? '' : 's'} · ${totalHours} hrs.`)
+      // Headless confirm: read the current snapshot for its state_version,
+      // then dispatch CONFIRM through /events carrying the per-worker
+      // entries. The labor-entry materialization + project bump are a
+      // declared outbox side effect drained by the worker (Gap 1) — no
+      // more legacy /confirm call.
+      const snapshot = await fetchCrewScheduleSnapshot(scheduleId)
+      if (snapshot.state === 'confirmed') {
+        setToast('Schedule already confirmed.')
+      } else {
+        await dispatchCrewScheduleEvent(scheduleId, {
+          event: 'CONFIRM',
+          state_version: snapshot.state_version,
+          entries,
+        })
+        setToast(`Confirmed ${entries.length} worker${entries.length === 1 ? '' : 's'} · ${totalHours} hrs.`)
+      }
       void schedulesQuery.refetch()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

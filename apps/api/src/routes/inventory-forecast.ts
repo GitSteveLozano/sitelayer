@@ -3,6 +3,14 @@ import { withCompanyClient } from '../mutation-tx.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
 
 /**
+ * The forecast route only reads `company` + `sendJson`, so it takes a
+ * narrowed view of the shared rental-inventory ctx. This keeps it
+ * decoupled from the storage/photo-upload plumbing that the CRUD module's
+ * condition-photo endpoints require on the full `RentalInventoryRouteCtx`.
+ */
+export type InventoryForecastRouteCtx = Pick<RentalInventoryRouteCtx, 'company' | 'sendJson'>
+
+/**
  * Handle the inventory demand forecast surface.
  *
  * `GET /api/inventory-items/:id/forecast?weeks=6`
@@ -20,7 +28,7 @@ import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
 export async function handleInventoryForecastRoutes(
   req: http.IncomingMessage,
   url: URL,
-  ctx: RentalInventoryRouteCtx,
+  ctx: InventoryForecastRouteCtx,
 ): Promise<boolean> {
   const match = url.pathname.match(/^\/api\/inventory-items\/([^/]+)\/forecast$/)
   if (!(req.method === 'GET' && match)) return false

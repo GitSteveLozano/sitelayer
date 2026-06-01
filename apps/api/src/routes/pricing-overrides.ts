@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
+import type { PermissionAction } from '@sitelayer/domain'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 // Per-project and per-customer service-item rate overrides — the WRITE side of
@@ -19,6 +20,8 @@ export type PricingOverrideRouteCtx = {
   pool: Pool
   company: ActiveCompany
   requireRole: (allowed: readonly string[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
@@ -68,6 +71,11 @@ async function listOverrides(ctx: PricingOverrideRouteCtx, scope: Scope): Promis
 
 async function upsertOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promise<void> {
   if (!ctx.requireRole(['admin', 'office'])) return
+  // LAYER 2: edit_pricing_book — pricing overrides are part of the rate book.
+  // Matrix base owner+estimator (== admin+office), so this round-trips the
+  // requireRole gate above for built-in roles; the overlay is where a custom
+  // role (or a matrix change demoting a base off edit_pricing_book) narrows it.
+  if (!ctx.requirePermission('edit_pricing_book')) return
   const body = await ctx.readBody()
   const serviceItemCode = String(body.service_item_code ?? '').trim()
   if (!serviceItemCode) {
@@ -139,6 +147,8 @@ async function upsertOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
 
 async function deleteOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promise<void> {
   if (!ctx.requireRole(['admin', 'office'])) return
+  // LAYER 2: edit_pricing_book — removing an override edits the rate book too.
+  if (!ctx.requirePermission('edit_pricing_book')) return
   const body = await ctx.readBody()
   const serviceItemCode = String(body.service_item_code ?? '').trim()
   if (!serviceItemCode) {

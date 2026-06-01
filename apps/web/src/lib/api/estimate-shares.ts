@@ -56,6 +56,13 @@ export type CreateEstimateShareInput = {
   recipient_email: string
   recipient_name?: string
   expires_in_days?: number
+  /** Optional editable note composed in the SEND-TO-CLIENT composer (D10). */
+  message?: string
+  /**
+   * Whether the share carries a signable portal link + open tracking. Defaults
+   * server-side to true when omitted.
+   */
+  include_signed_link?: boolean
 }
 
 export function createEstimateShare(

@@ -5,6 +5,7 @@ import {
   NOTIFICATION_WORKFLOW_NAME,
   NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
   nextNotificationEvents,
+  notificationStateToLegacyStatus,
   parseNotificationEventRequest,
   transitionNotificationWorkflow,
   type NotificationChannel,
@@ -44,6 +45,14 @@ type NotificationRow = {
   payload: Record<string, unknown>
   read_at: string | null
   created_at: string
+  // Delivery-state fields, recipient-scoped, derived from the latest
+  // workflow_event_log snapshot for this row (null for pre-workflow rows
+  // with no event log). Lets the mobile inbox show a delivery badge
+  // without exposing the company-wide admin queue to non-admins.
+  state: NotificationWorkflowState | null
+  channel: NotificationChannel | null
+  failure_kind: NotificationFailureKind | null
+  failed_at: string | null
 }
 
 // Notifications page in a feed — keep a smaller default than the global
@@ -175,25 +184,10 @@ const QUEUE_FROM = `
 const VALID_QUEUE_STATES = new Set<string>(NOTIFICATION_ALL_STATES)
 
 // Collapse the reducer's eight states down to the legacy `status` vocabulary
-// the worker also writes (apps/worker/src/notifications.ts:workflowStateToLegacyStatus).
-// Kept in sync here because the human RETRY/VOID path writes the same column.
-function workflowStateToLegacyStatus(state: NotificationWorkflowState): string {
-  switch (state) {
-    case 'pending':
-    case 'hydrating':
-      return 'pending'
-    case 'sending':
-      return 'sending'
-    case 'sent':
-      return 'sent'
-    case 'failed_clerk_not_found':
-    case 'failed_clerk_unreachable':
-    case 'failed_provider':
-      return 'failed'
-    case 'voided':
-      return 'voided'
-  }
-}
+// the worker also writes. The collapse map is the single shared
+// `notificationStateToLegacyStatus` exported from `@sitelayer/workflows`
+// (next to the reducer) — the worker and this route both import it so the
+// two writers of `notifications.status` can never drift.
 
 // Recover the canonical eight-state snapshot for a row. Prefer the latest
 // workflow_event_log snapshot (authoritative); fall back to projecting the
@@ -336,7 +330,7 @@ export async function handleNotificationRoutes(
     if (stateFilter && VALID_QUEUE_STATES.has(stateFilter)) {
       params.push(stateFilter)
       const idx = params.length
-      const legacy = workflowStateToLegacyStatus(stateFilter as NotificationWorkflowState)
+      const legacy = notificationStateToLegacyStatus(stateFilter as NotificationWorkflowState)
       params.push(legacy)
       const legacyIdx = params.length
       stateClause = ` and (
@@ -415,7 +409,7 @@ export async function handleNotificationRoutes(
           }
         }
 
-        const nextStatus = workflowStateToLegacyStatus(next.state)
+        const nextStatus = notificationStateToLegacyStatus(next.state)
         // RETRY re-enters `pending` — the worker claim query is
         // `where status = 'pending' and next_attempt_at <= now()`
         // (apps/worker/src/notifications.ts), so reset next_attempt_at to
@@ -503,23 +497,43 @@ export async function handleNotificationRoutes(
       return true
     }
 
-    const filters: string[] = ['company_id = $1', 'recipient_clerk_user_id = $2']
+    const filters: string[] = ['n.company_id = $1', 'n.recipient_clerk_user_id = $2']
     const params: unknown[] = [ctx.company.id, ctx.currentUserId]
-    if (unreadOnly) filters.push("(payload->>'read_at') is null")
+    if (unreadOnly) filters.push("(n.payload->>'read_at') is null")
     if (kind) {
       params.push(kind)
-      filters.push(`kind = $${params.length}`)
+      filters.push(`n.kind = $${params.length}`)
     }
     params.push(pagination.value.limit)
     params.push(pagination.value.offset)
 
+    // Recipient-scoped feed enriched with the latest workflow_event_log
+    // snapshot so the mobile inbox can render a delivery badge
+    // (state/channel/failure_kind) without exposing the admin queue. Rows
+    // without an event log (pre-workflow) degrade to null delivery fields.
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query<NotificationRow>(
-        `select ${SELECT_PROJECTION}
-       from notifications
-       where ${filters.join(' and ')}
-       order by created_at desc
-       limit $${params.length - 1} offset $${params.length}`,
+        `select
+           n.id, n.company_id, n.recipient_clerk_user_id,
+           n.kind, n.subject, n.body_text, n.payload,
+           (n.payload->>'read_at') as read_at,
+           n.created_at,
+           wel.snapshot_after->>'state' as state,
+           wel.snapshot_after->>'channel' as channel,
+           wel.snapshot_after->>'failure_kind' as failure_kind,
+           wel.snapshot_after->>'failed_at' as failed_at
+         from notifications n
+         left join lateral (
+           select snapshot_after
+           from workflow_event_log
+           where entity_id = n.id
+             and workflow_name = '${NOTIFICATION_WORKFLOW_NAME}'
+           order by state_version desc
+           limit 1
+         ) wel on true
+         where ${filters.join(' and ')}
+         order by n.created_at desc
+         limit $${params.length - 1} offset $${params.length}`,
         params,
       ),
     )
@@ -553,7 +567,11 @@ export async function handleNotificationRoutes(
        where id = $1
          and company_id = $2
          and recipient_clerk_user_id = $3
-       returning ${SELECT_PROJECTION}`,
+       returning ${SELECT_PROJECTION},
+         null::text as state,
+         null::text as channel,
+         null::text as failure_kind,
+         null::text as failed_at`,
         [id, ctx.company.id, ctx.currentUserId],
       ),
     )

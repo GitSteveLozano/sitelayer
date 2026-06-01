@@ -64,6 +64,10 @@ export interface CreateScheduleRequest {
   project_id: string
   scheduled_for: string
   crew?: unknown[]
+  /** HH:MM wall-clock crew start. Server requires start+end together. */
+  start_time?: string | null
+  /** HH:MM wall-clock crew end; paired with start_time (both-or-neither). */
+  end_time?: string | null
 }
 
 export function createSchedule(input: CreateScheduleRequest): Promise<CrewScheduleRow> {

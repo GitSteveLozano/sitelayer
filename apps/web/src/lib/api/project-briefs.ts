@@ -16,6 +16,15 @@ export interface ProjectBriefStep {
   id?: string
   title: string
   duration_min?: number | null
+  /** Optional per-step time window (HH:MM, 24h) the crew sees on the brief. */
+  start_time?: string | null
+  end_time?: string | null
+  /**
+   * Optional per-step crew assignment, rendered as the "WHO · …" line on the
+   * brief/preview. A free-text label (e.g. "ALL", "Marcus · Tomás") rather than
+   * worker ids — the morning brief is a quick note, not a roster mutation.
+   */
+  crew?: string | null
   materials?: string | null
   notes?: string | null
 }

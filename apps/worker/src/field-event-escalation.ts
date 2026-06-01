@@ -51,16 +51,17 @@ export async function processFieldEventAutoEscalation(
   config: AutoEscalateConfig = DEFAULT_AUTO_ESCALATE_CONFIG,
 ): Promise<AutoEscalateSummary> {
   // Claim phase: pick rows that are open, severity='stopped', and aged
-  // past the threshold. `escalated_to_estimator_at IS NULL` confirms the
-  // workflow is still in 'open' — a row that's been escalated by a human
-  // already exited the open state and shouldn't be re-fired.
+  // past the threshold. `state = 'open'` is the persisted workflow state
+  // (migration 112) — cleaner and immune to the per-column stale-trail
+  // problem the old `resolved_at IS NULL AND escalated_to_estimator_at IS
+  // NULL` derivation had. A row that's been escalated/resolved/dismissed by
+  // a human already left 'open' and shouldn't be re-fired.
   const claimed = await client.query<OpenStoppedRow>(
     `select id, company_id, state_version
        from worker_issues
        where company_id = $1
-         and resolved_at is null
+         and state = 'open'
          and severity = 'stopped'
-         and escalated_to_estimator_at is null
          and created_at <= now() - ($2 || ' minutes')::interval
        order by created_at asc
        limit $3
@@ -93,11 +94,12 @@ export async function processFieldEventAutoEscalation(
       // that path is serialized after us.
       await client.query(
         `update worker_issues
-           set state_version = $2,
+           set state = $5,
+               state_version = $2,
                escalated_to_estimator_at = $3,
                escalation_reason = $4
          where id = $1`,
-        [row.id, next.state_version, now, 'auto_15min_stopped'],
+        [row.id, next.state_version, now, 'auto_15min_stopped', next.state],
       )
       // Append workflow_event_log for replay tooling.
       await client.query(

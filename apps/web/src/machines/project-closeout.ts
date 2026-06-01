@@ -130,14 +130,14 @@ export const projectCloseoutMachine = setup({
         input: ({ context, event }) => {
           // Narrow: the guard in idle ensures `snapshot` is non-null at
           // this point. The DISPATCH event carries the workflow event
-          // type. Optimistic concurrency on the closeout POST runs on
-          // the row's `version`, not `state_version`, so we forward
-          // `context.version` (the snapshot envelope mirrors both).
+          // type. The canonical /closeout/events route gates on
+          // `state_version` (not the row `version`), so we forward the
+          // snapshot's `state_version`.
           if (event.type !== 'DISPATCH') throw new Error('submitting entered without DISPATCH event')
           return {
             projectId: context.projectId,
             event: event.event,
-            expectedVersion: context.snapshot!.context.version,
+            expectedVersion: context.snapshot!.state_version,
           }
         },
         onDone: {

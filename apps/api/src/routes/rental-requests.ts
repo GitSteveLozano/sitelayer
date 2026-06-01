@@ -4,6 +4,8 @@ import { z } from 'zod'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import {
+  nextRentalRequestApprovalEvents,
+  parseRentalRequestApprovalEventRequest,
   RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
   RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
   transitionRentalRequestApprovalWorkflow,
@@ -12,7 +14,7 @@ import {
   type RentalRequestApprovalWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   recordMutationLedger,
@@ -149,11 +151,379 @@ function shapeRow(row: RentalRequestRow): RentalRequestRow {
   return { ...row, items: normalizeItems(row.items) }
 }
 
+function rowToSnapshot(row: RentalRequestRow): RentalRequestApprovalWorkflowSnapshot {
+  return {
+    state: (row.status as RentalRequestApprovalWorkflowState) ?? 'pending',
+    state_version: row.state_version ?? 1,
+    approved_at: row.approved_at ?? null,
+    approved_by: row.approved_by ?? null,
+    declined_at: row.declined_at ?? null,
+    declined_by: null,
+    decline_reason: row.decline_reason ?? null,
+  }
+}
+
+/**
+ * Canonical WorkflowSnapshot envelope { state, state_version, context,
+ * next_events }. `context` carries the full row (incl. `status` for SPA
+ * back-compat); `next_events` is always computed from the registered
+ * reducer so the UI can only render transitions the reducer allows.
+ */
+function snapshotResponse(row: RentalRequestRow): {
+  state: RentalRequestApprovalWorkflowState
+  state_version: number
+  context: RentalRequestRow
+  next_events: ReturnType<typeof nextRentalRequestApprovalEvents>
+} {
+  const state = (row.status as RentalRequestApprovalWorkflowState) ?? 'pending'
+  return {
+    state,
+    state_version: row.state_version ?? 1,
+    context: row,
+    next_events: nextRentalRequestApprovalEvents(state),
+  }
+}
+
+const RENTAL_REQUEST_SELECT_COLUMNS = `id, company_id, share_link_id, customer_id, items,
+               requested_start, requested_end,
+               contact_name, contact_email, contact_phone, notes,
+               status, state_version,
+               approved_at, approved_by, approved_by_user_id,
+               rejected_at, declined_at, decline_reason,
+               converted_rental_id, created_at, updated_at`
+
+/**
+ * Create one `rentals` row per convertible request line in the same tx.
+ * Shared by the legacy `/approve` route and the canonical `/events`
+ * APPROVE path so both produce identical rentals + ledger rows.
+ * Returns the created rows (may be empty if no line resolves to a
+ * description + non-negative daily rate).
+ */
+async function createRentalsForRequest(
+  client: PoolClient,
+  ctx: RentalRequestRouteCtx,
+  row: RentalRequestRow,
+  items: RentalRequestItem[],
+): Promise<RentalRow[]> {
+  const inventoryIds = items
+    .map((i) => i.inventory_item_id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  const catalog = inventoryIds.length
+    ? await client.query<{ id: string; description: string; default_rental_rate: string }>(
+        `
+            select id, description, default_rental_rate
+            from inventory_items
+            where company_id = $1 and id = any($2::uuid[])
+            `,
+        [ctx.company.id, inventoryIds],
+      )
+    : { rows: [] }
+  const catalogById = new Map(catalog.rows.map((r) => [r.id, r] as const))
+
+  const today = new Date().toISOString().slice(0, 10)
+  const createdRentals: RentalRow[] = []
+
+  for (const item of items) {
+    const catalogRow = item.inventory_item_id ? catalogById.get(item.inventory_item_id) : undefined
+    const description = (item.description ?? catalogRow?.description ?? '').toString().trim()
+    if (!description) continue
+    const dailyRate = Number(item.daily_rate ?? catalogRow?.default_rental_rate ?? 0)
+    if (!Number.isFinite(dailyRate) || dailyRate < 0) continue
+    const deliveredOn = (item.start ?? row.requested_start ?? today).toString()
+    const cadence = 7
+    const nextInvoiceAt = initialRentalNextInvoiceAt(deliveredOn, cadence)
+    const inserted = await client.query<RentalRow>(
+      `
+          insert into rentals (
+            company_id, project_id, customer_id, item_description, daily_rate,
+            delivered_on, returned_on, invoice_cadence_days, next_invoice_at, status, notes
+          )
+          values ($1, null, $2, $3, $4, $5::date, null, $6, $7, 'active', $8)
+          returning ${RENTAL_SELECT_COLUMNS}
+          `,
+      [ctx.company.id, row.customer_id, description, dailyRate, deliveredOn, cadence, nextInvoiceAt, row.notes],
+    )
+    const rentalRow = inserted.rows[0]
+    if (!rentalRow) throw new HttpError(500, 'rental insert returned no row')
+    await recordMutationLedger(client, {
+      companyId: ctx.company.id,
+      entityType: 'rental',
+      entityId: rentalRow.id,
+      action: 'create',
+      row: rentalRow,
+      syncPayload: {
+        action: 'create',
+        rental: rentalRow,
+        source: 'rental_request',
+        rental_request_id: row.id,
+      },
+      actorUserId: ctx.currentUserId,
+      idempotencyKey: `rental_request:approve:${row.id}:${rentalRow.id}`,
+    })
+    createdRentals.push(rentalRow)
+  }
+  return createdRentals
+}
+
 export async function handleRentalRequestRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: RentalRequestRouteCtx,
 ): Promise<boolean> {
+  // POST /api/rental-requests/:id/events — canonical versioned dispatch.
+  // Wired before the legacy /approve + /decline routes. Applies the
+  // rental_request_approval reducer with post-lock optimistic
+  // state_version concurrency (409 on stale version / illegal
+  // transition). On APPROVE it creates the same rentals + outbox row the
+  // legacy /approve route does. Mirrors apps/api/src/routes/rental-events.ts.
+  const eventsMatch = url.pathname.match(/^\/api\/rental-requests\/([^/]+)\/events$/)
+  if (req.method === 'POST' && eventsMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const requestId = eventsMatch[1]!
+    if (!isValidUuid(requestId)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const rawBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsed = parseRentalRequestApprovalEventRequest(rawBody)
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const { event: eventType, state_version: stateVersion, decline_reason: declineReason } = parsed.value
+
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const fetched = await client.query<RentalRequestRow>(
+        `
+        select ${RENTAL_REQUEST_SELECT_COLUMNS}
+        from rental_requests
+        where id = $1 and company_id = $2
+        for update
+        `,
+        [requestId, ctx.company.id],
+      )
+      const row = fetched.rows[0]
+      if (!row) return { kind: 'not_found' as const }
+      // Post-lock optimistic version check.
+      if ((row.state_version ?? 1) !== stateVersion) {
+        return { kind: 'version_conflict' as const, row: shapeRow(row) }
+      }
+
+      const currentSnapshot = rowToSnapshot(row)
+      const nowIso = new Date().toISOString()
+      const reducerEvent: RentalRequestApprovalWorkflowEvent =
+        eventType === 'APPROVE'
+          ? { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
+          : {
+              type: 'DECLINE',
+              declined_at: nowIso,
+              declined_by: ctx.currentUserId,
+              decline_reason: declineReason ?? null,
+            }
+      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
+      try {
+        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, reducerEvent)
+      } catch (err) {
+        return {
+          kind: 'illegal_transition' as const,
+          row: shapeRow(row),
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+
+      if (reducerEvent.type === 'APPROVE') {
+        const items = normalizeItems(row.items)
+        if (items.length === 0) return { kind: 'no_items' as const }
+        const createdRentals = await createRentalsForRequest(client, ctx, row, items)
+        if (createdRentals.length === 0) return { kind: 'no_items' as const }
+        const primaryRentalId = createdRentals[0]!.id
+        const updated = await client.query<RentalRequestRow>(
+          `
+          update rental_requests
+          set status = $5,
+              state_version = $6,
+              approved_at = $7,
+              approved_by = $3,
+              approved_by_user_id = $3,
+              converted_rental_id = $4,
+              updated_at = now()
+          where id = $1 and company_id = $2
+          returning ${RENTAL_REQUEST_SELECT_COLUMNS}
+          `,
+          [
+            requestId,
+            ctx.company.id,
+            ctx.currentUserId,
+            primaryRentalId,
+            nextSnapshot.state,
+            nextSnapshot.state_version,
+            nextSnapshot.approved_at ?? nowIso,
+          ],
+        )
+        const updatedRow = updated.rows[0]
+        if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
+        await recordWorkflowEvent(client, {
+          companyId: ctx.company.id,
+          workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+          schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+          entityType: 'rental_request',
+          entityId: requestId,
+          stateVersion: currentSnapshot.state_version,
+          eventType: 'APPROVE',
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
+          actorUserId: ctx.currentUserId,
+        })
+        const approveOutcome = workflowEventOutcome('APPROVE')
+        if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
+        await recordMutationOutbox(
+          ctx.company.id,
+          'rental_request',
+          requestId,
+          'create_rental_from_request',
+          { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
+          `rental_request:create_rental_from_request:${requestId}`,
+          'server',
+          ctx.currentUserId,
+          client,
+        )
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'rental_request',
+          entityId: requestId,
+          action: 'approve',
+          row: updatedRow,
+          syncPayload: {
+            action: 'approve',
+            rental_request_id: requestId,
+            rental_ids: createdRentals.map((r) => r.id),
+          },
+          outboxPayload: {
+            rental_request_id: requestId,
+            rental_ids: createdRentals.map((r) => r.id),
+          },
+          actorUserId: ctx.currentUserId,
+          idempotencyKey: `rental_request:approve:${requestId}`,
+        })
+        return {
+          kind: 'ok' as const,
+          row: shapeRow(updatedRow),
+          created: createdRentals,
+          eventType: 'APPROVE' as const,
+        }
+      }
+
+      // DECLINE
+      const reason = reducerEvent.decline_reason ?? null
+      const updated = await client.query<RentalRequestRow>(
+        `
+        update rental_requests
+        set status = $4,
+            state_version = $5,
+            declined_at = $6,
+            decline_reason = $3,
+            updated_at = now()
+        where id = $1 and company_id = $2
+        returning ${RENTAL_REQUEST_SELECT_COLUMNS}
+        `,
+        [
+          requestId,
+          ctx.company.id,
+          reason,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.declined_at ?? nowIso,
+        ],
+      )
+      const updatedRow = updated.rows[0]
+      if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'rental_request',
+        entityId: requestId,
+        stateVersion: currentSnapshot.state_version,
+        eventType: 'DECLINE',
+        eventPayload: reducerEvent,
+        snapshotAfter: nextSnapshot,
+        actorUserId: ctx.currentUserId,
+      })
+      const declineOutcome = workflowEventOutcome('DECLINE')
+      if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'rental_request',
+        entityId: requestId,
+        action: 'decline',
+        row: updatedRow,
+        syncPayload: { action: 'decline', rental_request_id: requestId, decline_reason: reason },
+        actorUserId: ctx.currentUserId,
+        idempotencyKey: `rental_request:decline:${requestId}`,
+      })
+      return {
+        kind: 'ok' as const,
+        row: shapeRow(updatedRow),
+        created: [] as RentalRow[],
+        eventType: 'DECLINE' as const,
+      }
+    })
+
+    if (result.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'rental request not found' })
+      return true
+    }
+    if (result.kind === 'no_items') {
+      ctx.sendJson(400, { error: 'no convertible line items on the request' })
+      return true
+    }
+    if (result.kind === 'version_conflict') {
+      ctx.sendJson(409, {
+        error: 'state_version mismatch — reload and retry',
+        snapshot: snapshotResponse(result.row),
+      })
+      return true
+    }
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(409, { error: result.message, snapshot: snapshotResponse(result.row) })
+      return true
+    }
+    ctx.sendJson(200, snapshotResponse(result.row))
+    return true
+  }
+
+  // GET /api/rental-requests/:id — workflow snapshot. Matched before the
+  // bare list route (which is path-equality guarded above this is the
+  // segment form). The list path GET /api/rental-requests has no trailing
+  // id segment so it is matched by the equality check below.
+  const detailMatch = url.pathname.match(/^\/api\/rental-requests\/([^/]+)$/)
+  if (req.method === 'GET' && detailMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const requestId = detailMatch[1]!
+    if (!isValidUuid(requestId)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const fetched = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalRequestRow>(
+        `
+        select ${RENTAL_REQUEST_SELECT_COLUMNS}
+        from rental_requests
+        where id = $1 and company_id = $2
+        limit 1
+        `,
+        [requestId, ctx.company.id],
+      ),
+    )
+    const row = fetched.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'rental request not found' })
+      return true
+    }
+    ctx.sendJson(200, snapshotResponse(shapeRow(row)))
+    return true
+  }
+
   // GET /api/rental-requests
   if (req.method === 'GET' && url.pathname === '/api/rental-requests') {
     if (!ctx.requireRole(['admin', 'office'])) return true

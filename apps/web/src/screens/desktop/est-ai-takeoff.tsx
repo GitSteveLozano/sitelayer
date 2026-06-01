@@ -126,7 +126,11 @@ export function EstAiTakeoffSetupPanel({
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
     // Anthropic spend). Carries the real draft id into the review lane.
     capture.mutate(
-      { kind: 'blueprint_vision', name: 'AI auto-takeoff', payload: { dryRun: true } },
+      // draft_kind='takeoff' tags the draft so the company AI queue routes its
+      // "Review draft →" back to this takeoff reviewer (migration 122). It is
+      // also the API default, but we send it explicitly to keep the two AI
+      // flows symmetric with est-ai-count.tsx.
+      { kind: 'blueprint_vision', draft_kind: 'takeoff', name: 'AI auto-takeoff', payload: { dryRun: true } },
       {
         onSuccess: (res) => onReviewDraft(res.draft.id),
       },
@@ -430,8 +434,6 @@ export function EstAiTakeoffReview() {
   // Live keep/reject tallies drive the accept affordance + KPI meta.
   const keptIds = rows.filter((r) => decisionFor(r) === 'kept').map((r) => r.id)
   const keptCount = keptIds.length
-  const rejectedCount = rows.filter((r) => decisionFor(r) === 'rejected').length
-  const pendingCount = rows.filter((r) => decisionFor(r) === 'pending').length
 
   const acceptDraft = () => {
     if (!draftId || keptCount === 0 || promote.isPending) return
@@ -535,24 +537,27 @@ export function EstAiTakeoffReview() {
           medium and low-confidence rows are flagged for a closer look. Nothing is committed until you accept the draft.
         </MAiStripe>
 
+        {/* AI confidence triage (design dsg__54: OK / REVIEW / FLAGGED), driven by
+            the per-row status. The live keep/pending/reject decision tally is
+            surfaced on the Accept affordance + per-row Keep/Reject controls. */}
         <DKpiStrip>
           <DKpi
-            label="Kept"
-            value={String(keptCount)}
-            meta={`${counts.ok} high-confidence`}
-            metaTone={keptCount > 0 ? 'good' : undefined}
+            label="OK"
+            value={String(counts.ok)}
+            meta="High-confidence"
+            metaTone={counts.ok > 0 ? 'good' : undefined}
           />
           <DKpi
-            label="Pending"
-            value={String(pendingCount)}
-            tone={pendingCount > 0 ? 'accent' : undefined}
-            meta={pendingCount > 0 ? 'Needs a decision' : 'All reviewed'}
+            label="Review"
+            value={String(counts.review)}
+            tone={counts.review > 0 ? 'accent' : undefined}
+            meta={counts.review > 0 ? 'Needs a closer look' : 'None flagged'}
           />
           <DKpi
-            label="Rejected"
-            value={String(rejectedCount)}
-            meta={rejectedCount > 0 ? 'Dropped from draft' : 'None'}
-            metaTone={rejectedCount > 0 ? 'bad' : undefined}
+            label="Flagged"
+            value={String(counts.flag)}
+            meta={counts.flag > 0 ? 'Low-confidence' : 'None'}
+            metaTone={counts.flag > 0 ? 'bad' : undefined}
           />
         </DKpiStrip>
 

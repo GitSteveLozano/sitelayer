@@ -1,9 +1,15 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import {
+  ESTIMATE_SHARE_WORKFLOW_NAME,
+  ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+  transitionEstimateShareWorkflow,
+  type EstimateShareWorkflowSnapshot,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken } from '../estimate-share-token.js'
 import { HttpError } from '../http-utils.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   PORTAL_ESTIMATES_PATH_PREFIX,
   SHARE_COLUMNS,
@@ -16,6 +22,32 @@ import {
   snapshotEstimate,
   type EstimateShareRow,
 } from '../estimate-share-helpers.js'
+
+/** Map a DB share row to the estimate_share workflow snapshot the reducer
+ * expects. The `status` column may be null on a row written before migration
+ * 115's backfill ran (no-op in tests / pre-cutover prod), so default it to the
+ * derived `sent`-ish baseline via shareStatus(). */
+function shareRowToSnapshot(row: EstimateShareRow): EstimateShareWorkflowSnapshot {
+  const derived = shareStatus(row)
+  const state = (row.status ?? (derived === 'pending' ? 'sent' : derived)) as EstimateShareWorkflowSnapshot['state']
+  return {
+    state,
+    state_version: row.state_version ?? 1,
+    recipient_email: row.recipient_email,
+    recipient_name: row.recipient_name,
+    message: row.message,
+    include_signed_link: row.include_signed_link,
+    sent_at: row.sent_at,
+    expires_at: row.expires_at,
+    viewed_at: row.viewed_at,
+    view_count: row.view_count,
+    accepted_at: row.accepted_at,
+    signer_name: row.signer_name,
+    declined_at: row.declined_at,
+    decline_reason: row.decline_reason,
+    revoked_at: row.revoked_at,
+  }
+}
 
 /**
  * Sales Loop (Loop 5) — estimator → client share + accept/decline.
@@ -79,6 +111,12 @@ export async function handleEstimateShareRoutes(
     const body = await ctx.readBody()
     const recipient_email = typeof body.recipient_email === 'string' ? body.recipient_email.trim() : ''
     const recipient_name = typeof body.recipient_name === 'string' ? body.recipient_name.trim() : ''
+    // Compose fields (D10 SEND-TO-CLIENT composer). message is the editable
+    // note; include_signed_link toggles the signable portal link + open
+    // tracking. Both are persisted on the share row (migration 115) and carried
+    // in the SEND workflow event so the send intent is part of the event log.
+    const message = typeof body.message === 'string' ? body.message.trim().slice(0, 4000) : null
+    const include_signed_link = body.include_signed_link === undefined ? true : Boolean(body.include_signed_link)
     const rawExpiry = body.expires_in_days
     let expires_in_days = 30
     if (rawExpiry !== undefined && rawExpiry !== null && rawExpiry !== '') {
@@ -105,13 +143,18 @@ export async function handleEstimateShareRoutes(
 
       const { token } = generateShareToken(ctx.shareSecret)
 
+      // The row is CREATED directly in the workflow's initial state `sent`
+      // (state_version 1) — the SEND compose step is the row-creation seed, not
+      // a reducer transition (see packages/workflows/src/estimate-share.ts).
       const insertResult = await client.query<EstimateShareRow>(
         `insert into estimate_share_links (
            company_id, project_id, estimate_snapshot, share_token,
-           recipient_email, recipient_name, sent_at, expires_at
+           recipient_email, recipient_name, sent_at, expires_at,
+           status, state_version, message, include_signed_link
          )
          values (
-           $1, $2, $3::jsonb, $4, $5, $6, now(), now() + ($7 || ' days')::interval
+           $1, $2, $3::jsonb, $4, $5, $6, now(), now() + ($7 || ' days')::interval,
+           'sent', 1, $8, $9
          )
          returning ${SHARE_COLUMNS}`,
         [
@@ -122,18 +165,59 @@ export async function handleEstimateShareRoutes(
           recipient_email,
           recipient_name || null,
           String(expires_in_days),
+          message,
+          include_signed_link,
         ],
       )
       const row = insertResult.rows[0]
       if (!row) throw new HttpError(500, 'estimate share link insert returned no row')
 
+      // Record the SEND in the workflow_event_log (state_version 0 → the seeded
+      // `sent`/v1 row) so the estimate_share workflow has the same append-only
+      // creation event every other workflow records outside the reducer.
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: ESTIMATE_SHARE_WORKFLOW_NAME,
+        schemaVersion: ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'estimate_share_link',
+        entityId: row.id,
+        stateVersion: 0,
+        eventType: 'SEND',
+        eventPayload: {
+          type: 'SEND',
+          recipient_email,
+          recipient_name: recipient_name || null,
+          message,
+          include_signed_link,
+          actor_user_id: ctx.currentUserId,
+          sent_at: row.sent_at,
+        },
+        snapshotAfter: shareRowToSnapshot(row),
+        actorUserId: ctx.currentUserId,
+      })
+
+      // Enqueue the `send_estimate_share` side-effect (the registered workflow
+      // side-effect type). Idempotency key per share row so a replayed SEND
+      // upserts the same outbox row. The worker runner that delivers the share
+      // link to the recipient is downstream (a notification channel), but the
+      // outbox row is the durable hand-off and the audit trail today.
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'estimate_share_link',
         entityId: row.id,
-        action: 'created',
+        action: 'send_estimate_share',
+        mutationType: 'send_estimate_share',
         row: { ...row, share_token: '[redacted]' },
-        idempotencyKey: `estimate_share_link:created:${row.id}`,
+        outboxPayload: {
+          estimate_share_link_id: row.id,
+          project_id: row.project_id,
+          recipient_email,
+          recipient_name: recipient_name || null,
+          message,
+          include_signed_link,
+          share_url_path: `${PORTAL_ESTIMATES_PATH_PREFIX}${row.share_token}`,
+        },
+        idempotencyKey: `estimate_share:send:${row.id}`,
         actorUserId: ctx.currentUserId,
       })
 
@@ -236,12 +320,14 @@ export async function handleEstimateShareRoutes(
         viewed_at: string | null
         view_count: number
         signer_name: string | null
+        revoked_at: string | null
+        status: string | null
       }>(
         `with latest as (
          select distinct on (project_id)
            id, project_id, recipient_email, recipient_name, sent_at,
            expires_at, accepted_at, declined_at, decline_reason,
-           viewed_at, view_count, signer_name
+           viewed_at, view_count, signer_name, revoked_at, status
          from estimate_share_links
          where company_id = $1
          order by project_id, sent_at desc
@@ -253,7 +339,8 @@ export async function handleEstimateShareRoutes(
               l.recipient_email, l.recipient_name,
               l.sent_at, l.expires_at,
               l.accepted_at, l.declined_at, l.decline_reason,
-              l.viewed_at, l.view_count, l.signer_name
+              l.viewed_at, l.view_count, l.signer_name,
+              l.revoked_at, l.status
        from latest l
        join projects p on p.id = l.project_id and p.company_id = $1
        order by l.sent_at desc
@@ -287,28 +374,93 @@ export async function handleEstimateShareRoutes(
     return true
   }
 
-  // POST /api/estimate-shares/:id/revoke — invalidate a share
+  // POST /api/estimate-shares/:id/revoke — invalidate a share, dispatched
+  // through the estimate_share reducer (REVOKE) so the transition is the pure
+  // registered one + recorded in the workflow_event_log like every other
+  // workflow. Also expires the link (expires_at = now()) so the portal 410s.
   const revokeMatch = url.pathname.match(/^\/api\/estimate-shares\/([^/]+)\/revoke$/)
   if (req.method === 'POST' && revokeMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = revokeMatch[1] ?? ''
-    const result = await withMutationTx(ctx.company.id, (c) =>
-      c.query<EstimateShareRow>(
-        `update estimate_share_links
-         set expires_at = now(), updated_at = now()
-       where company_id = $1 and id = $2
-       returning ${SHARE_COLUMNS}`,
+    const result = await withMutationTx(async (client) => {
+      const lockedResult = await client.query<EstimateShareRow>(
+        `select ${SHARE_COLUMNS}
+         from estimate_share_links
+         where company_id = $1 and id = $2
+         for update`,
         [ctx.company.id, id],
-      ),
-    )
-    const row = result.rows[0]
-    if (!row) {
+      )
+      const current = lockedResult.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+
+      const snapshot = shareRowToSnapshot(current)
+      const revokedAt = new Date().toISOString()
+      let next: EstimateShareWorkflowSnapshot
+      try {
+        next = transitionEstimateShareWorkflow(snapshot, {
+          type: 'REVOKE',
+          revoked_at: revokedAt,
+          revoked_by: ctx.currentUserId,
+        })
+      } catch (err) {
+        return {
+          kind: 'illegal_transition' as const,
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+
+      const updateResult = await client.query<EstimateShareRow>(
+        `update estimate_share_links
+           set status = $3,
+               state_version = $4,
+               revoked_at = $5,
+               expires_at = now(),
+               updated_at = now()
+         where company_id = $1 and id = $2
+         returning ${SHARE_COLUMNS}`,
+        [ctx.company.id, id, next.state, next.state_version, next.revoked_at ?? revokedAt],
+      )
+      const row = updateResult.rows[0]
+      if (!row) throw new HttpError(500, 'estimate share revoke update returned no row')
+
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: ESTIMATE_SHARE_WORKFLOW_NAME,
+        schemaVersion: ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'estimate_share_link',
+        entityId: row.id,
+        stateVersion: snapshot.state_version,
+        eventType: 'REVOKE',
+        eventPayload: { type: 'REVOKE', revoked_at: revokedAt, revoked_by: ctx.currentUserId },
+        snapshotAfter: next,
+        actorUserId: ctx.currentUserId,
+      })
+
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'estimate_share_link',
+        entityId: row.id,
+        action: 'revoked',
+        row: { id: row.id, project_id: row.project_id, revoked_at: row.revoked_at },
+        idempotencyKey: `estimate_share_link:revoked:${row.id}`,
+        actorUserId: ctx.currentUserId,
+      })
+
+      return { kind: 'ok' as const, row }
+    })
+
+    if (result.kind === 'not_found') {
       ctx.sendJson(404, { error: 'share not found' })
       return true
     }
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(409, { error: result.message })
+      return true
+    }
     ctx.sendJson(200, {
-      id: row.id,
-      expires_at: row.expires_at,
+      id: result.row.id,
+      expires_at: result.row.expires_at,
+      revoked_at: result.row.revoked_at,
       status: 'revoked',
     })
     return true

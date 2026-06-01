@@ -483,72 +483,55 @@ export function createChatWidgetMachine(
               // errors arrive through the STREAM_ERROR event below.
             },
             on: {
-              STREAM_DELTA: [
-                {
-                  // Terminal delta — `status: 'responded'` means the
-                  // response audit row landed. Flip the staged message
-                  // to 'responded', append the agent reply, clear the
-                  // awaiting pointer, and return to idle. Intermediate
-                  // `status: 'partial'` deltas (streaming-token mode,
-                  // not yet emitted by the server) would land in the
-                  // second branch below once the wire shape is
-                  // extended.
-                  guard: ({ event }) => event.type === 'STREAM_DELTA' && event.delta.status === 'responded',
-                  target: 'idle',
-                  actions: assign({
-                    messages: ({ context, event }) => {
-                      if (event.type !== 'STREAM_DELTA') return context.messages
-                      const delta = event.delta
-                      const body = typeof delta.body === 'string' ? delta.body : ''
-                      const respId = delta.response_audit_event_id ?? `r-${Date.now()}`
-                      const responseMsg: ChatWidgetMessage = {
-                        id: `r-${respId}`,
-                        role: 'agent',
-                        body,
-                        audit_event_id: respId,
-                      }
-                      return [
-                        ...context.messages.map((m) =>
-                          m.audit_event_id === delta.audit_event_id
-                            ? {
-                                ...m,
-                                status: 'responded' as const,
-                                response_body: body,
-                                response_audit_event_id: respId,
-                              }
-                            : m,
-                        ),
-                        responseMsg,
-                      ]
-                    },
-                    awaitingResponseFor: () => null,
-                    awaitingResponseSince: () => null,
-                    error: () => null,
-                  }),
-                },
-                {
-                  // Non-terminal delta (partial / progress). Currently
-                  // unused — the SSE server only emits 'responded' as
-                  // of this CL — but the branch exists so a future
-                  // server-side streaming-token rollout doesn't require
-                  // re-architecting the machine. Append-as-we-go would
-                  // mutate the staged message body_delta.
-                  guard: ({ event }) => event.type === 'STREAM_DELTA' && event.delta.status === 'partial',
-                  actions: assign({
-                    messages: ({ context, event }) => {
-                      if (event.type !== 'STREAM_DELTA') return context.messages
-                      const delta = event.delta
-                      const incremental = typeof delta.body_delta === 'string' ? delta.body_delta : ''
-                      if (!incremental) return context.messages
-                      return context.messages.map((m) =>
+              STREAM_DELTA: {
+                // Terminal delta — `status: 'responded'` means the
+                // response audit row landed. Flip the staged message
+                // to 'responded', append the agent reply, clear the
+                // awaiting pointer, and return to idle. This is the
+                // ONLY delta status the server emits today (every
+                // publish site in apps/api/src/routes/ai-chat.ts and
+                // chat-response-bus.ts sends `responded`). A non-terminal
+                // `partial`/streaming-token status is reserved on the
+                // wire type but not modeled here — the machine tracks the
+                // current contract, not a speculative one. A `partial`
+                // delta therefore falls through this guard and is a no-op,
+                // leaving the machine in `awaitingResponse`. If/when the
+                // server starts streaming tokens, re-introduce a
+                // body_delta-accumulation self-loop here and add the
+                // accumulation property test back.
+                guard: ({ event }) => event.type === 'STREAM_DELTA' && event.delta.status === 'responded',
+                target: 'idle',
+                actions: assign({
+                  messages: ({ context, event }) => {
+                    if (event.type !== 'STREAM_DELTA') return context.messages
+                    const delta = event.delta
+                    const body = typeof delta.body === 'string' ? delta.body : ''
+                    const respId = delta.response_audit_event_id ?? `r-${Date.now()}`
+                    const responseMsg: ChatWidgetMessage = {
+                      id: `r-${respId}`,
+                      role: 'agent',
+                      body,
+                      audit_event_id: respId,
+                    }
+                    return [
+                      ...context.messages.map((m) =>
                         m.audit_event_id === delta.audit_event_id
-                          ? { ...m, response_body: (m.response_body ?? '') + incremental }
+                          ? {
+                              ...m,
+                              status: 'responded' as const,
+                              response_body: body,
+                              response_audit_event_id: respId,
+                            }
                           : m,
-                      )
-                    },
-                  }),
-                },
-              ],
+                      ),
+                      responseMsg,
+                    ]
+                  },
+                  awaitingResponseFor: () => null,
+                  awaitingResponseSince: () => null,
+                  error: () => null,
+                }),
+              },
               STREAM_ERROR: {
                 target: 'idle',
                 actions: assign({

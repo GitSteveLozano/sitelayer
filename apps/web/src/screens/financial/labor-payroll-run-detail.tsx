@@ -72,7 +72,10 @@ export function LaborPayrollRunDetailScreen() {
             {qboRefs.length > 0 ? ` · QBO ${qboRefs.join(', ')}` : ''}
           </div>
         </div>
-        <Pill tone={TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <Pill tone={TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+          {ctx.auto_posted ? <Pill tone="default">Auto-posted</Pill> : null}
+        </div>
       </div>
 
       {outOfSync ? (

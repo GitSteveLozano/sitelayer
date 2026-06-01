@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleProjectRoutes, type ProjectRouteCtx } from './projects.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // ---------------------------------------------------------------------------
 // In-memory pg double for the GET /api/projects/:id/closeout snapshot
@@ -238,15 +239,46 @@ class FakePool {
       return { rows: project ? [project] : [], rowCount: project ? 1 : 0 }
     }
 
-    // ---- projects: update to completed (POST closeout) ----
+    // ---- projects: canonical /closeout/events UPDATE (writes the
+    //      post-mortem columns + state_version = $3). Must be matched
+    //      BEFORE the legacy closeout UPDATE below (which puts
+    //      state_version at $4 and has no post-mortem columns). ----
+    if (
+      /^update projects/i.test(sql) &&
+      /set\s+status\s*=\s*'completed'/i.test(sql) &&
+      /post_mortem_acknowledged_at\s*=\s*\$7/i.test(sql)
+    ) {
+      // params: [companyId, projectId, nextStateVersion, closedAt, closedBy,
+      //          summaryLockedAt, postMortemAt, postMortemBy]
+      const companyId = params[0] as string
+      const projectId = params[1] as string
+      const nextStateVersion = params[2] as number
+      const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
+      if (!project) return { rows: [], rowCount: 0 }
+      project.status = 'completed'
+      project.state_version = nextStateVersion
+      project.closed_at = (params[3] as string | null) ?? null
+      project.closed_by = (params[4] as string | null) ?? null
+      project.summary_locked_at = (params[5] as string | null) ?? null
+      project.post_mortem_acknowledged_at = (params[6] as string | null) ?? null
+      project.post_mortem_acknowledged_by = (params[7] as string | null) ?? null
+      project.version = (project.version as number) + 1
+      project.updated_at = new Date().toISOString()
+      return { rows: [project], rowCount: 1 }
+    }
+
+    // ---- projects: update to completed (legacy POST closeout shim) ----
     if (/^update projects/i.test(sql) && /set\s+status\s*=\s*'completed'/i.test(sql)) {
-      // params: [companyId, projectId, expectedVersion, nextStateVersion, closedAt, closedBy]
+      // Legacy shim writes reducer output directly:
+      // params: [companyId, projectId, expectedVersion, nextStateVersion,
+      //          closedAt, closedBy, summaryLockedAt]
       const companyId = params[0] as string
       const projectId = params[1] as string
       const expectedVersion = params[2] as number | null
       const nextStateVersion = params[3] as number
-      const closedAt = params[4] as string
-      const closedBy = params[5] as string
+      const closedAt = params[4] as string | null
+      const closedBy = params[5] as string | null
+      const summaryLockedAt = params[6] as string | null
       const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
       if (!project) return { rows: [], rowCount: 0 }
       if (expectedVersion != null && project.version !== expectedVersion) {
@@ -254,9 +286,9 @@ class FakePool {
       }
       project.status = 'completed'
       project.state_version = nextStateVersion
-      project.closed_at = project.closed_at ?? closedAt
-      project.closed_by = project.closed_by ?? closedBy
-      project.summary_locked_at = project.summary_locked_at ?? closedAt
+      project.closed_at = closedAt
+      project.closed_by = closedBy
+      project.summary_locked_at = summaryLockedAt
       project.version = (project.version as number) + 1
       project.updated_at = new Date().toISOString()
       return { rows: [project], rowCount: 1 }
@@ -347,6 +379,7 @@ function makeCtx(
       company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' as const },
       currentUserId: 'u-1',
       requireRole: () => true,
+      requirePermission: makeTestRequirePermission('admin', responses),
       readBody: async () => body,
       sendJson: (status: number, response: unknown) => {
         responses.push({ status, body: response })
@@ -375,6 +408,11 @@ function seedProject(pool: FakePool, overrides: Partial<Row> = {}) {
     closed_at: null,
     closed_by: null,
     summary_locked_at: null,
+    post_mortem_acknowledged_at: null,
+    post_mortem_acknowledged_by: null,
+    // Closeout is lifecycle-gated (Gap 4): in_progress is the canonical
+    // eligible state, so the default seed can close out.
+    lifecycle_state: 'in_progress',
     workflow_engine: 'postgres',
     workflow_run_id: null,
     version: 1,
@@ -439,7 +477,8 @@ describe('handleProjectRoutes — GET /api/projects/:id/closeout', () => {
     }
     expect(snapshot.state).toBe('completed')
     expect(snapshot.state_version).toBe(2)
-    expect(snapshot.next_events).toEqual([])
+    // completed is no longer terminal — it offers the post-mortem ack.
+    expect(snapshot.next_events).toEqual([{ type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' }])
     expect(snapshot.context.closed_at).toBe('2026-05-01T00:00:00.000Z')
   })
 
@@ -486,9 +525,138 @@ describe('handleProjectRoutes — GET /api/projects/:id/closeout', () => {
     }
     expect(afterSnap.state).toBe('completed')
     expect(afterSnap.state_version).toBe(2)
-    expect(afterSnap.next_events).toEqual([])
+    // completed offers ACKNOWLEDGE_POST_MORTEM now (post-mortem terminal).
+    expect(afterSnap.next_events).toEqual([{ type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' }])
     expect(afterSnap.context.closed_at).toBeTruthy()
     expect(afterSnap.context.closed_by).toBe('u-1')
+  })
+})
+
+describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canonical)', () => {
+  it('CLOSEOUT with the correct state_version returns a WorkflowSnapshot{state:"completed"}', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    const snap = responses[0]?.body as {
+      state: string
+      state_version: number
+      next_events: Array<{ type: string }>
+      context: { closed_at: string | null; closed_by: string | null; summary_locked_at: string | null }
+    }
+    expect(snap.state).toBe('completed')
+    expect(snap.state_version).toBe(2)
+    expect(snap.next_events).toEqual([{ type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' }])
+    expect(snap.context.closed_at).toBeTruthy()
+    expect(snap.context.closed_by).toBe('u-1')
+    // Reducer owns summary_locked_at — it is set at the closeout moment.
+    expect(snap.context.summary_locked_at).toBe(snap.context.closed_at)
+    expect(pool.workflowEvents).toHaveLength(1)
+    expect(pool.workflowEvents[0]?.event_type).toBe('CLOSEOUT')
+    expect(pool.workflowEvents[0]?.state_version).toBe(1)
+  })
+
+  it('CLOSEOUT with a stale state_version returns 409 with the fresh snapshot', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { state_version: 3 })
+    const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status).toBe(409)
+    const body = responses[0]?.body as { error: string; snapshot: { state_version: number } }
+    expect(body.snapshot.state_version).toBe(3)
+    expect(pool.workflowEvents).toHaveLength(0)
+  })
+
+  it('CLOSEOUT on an already-completed project returns 409 (no longer idempotent-200)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, {
+      status: 'completed',
+      state_version: 2,
+      closed_at: '2026-05-01T00:00:00.000Z',
+      closed_by: 'u-1',
+      summary_locked_at: '2026-05-01T00:00:00.000Z',
+    })
+    const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 2 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect(pool.workflowEvents).toHaveLength(0)
+  })
+
+  it('rejects CLOSEOUT with 409 when the lifecycle_state is not closeout-eligible (Gap 4)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { lifecycle_state: 'draft' })
+    const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status).toBe(409)
+    const body = responses[0]?.body as { error: string }
+    expect(body.error).toMatch(/lifecycle/i)
+    expect(pool.workflowEvents).toHaveLength(0)
+  })
+
+  it('GET on a draft-lifecycle project returns the CLOSEOUT next-event with a disabled_reason (Gap 4)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { lifecycle_state: 'draft' })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout`), ctx)
+    const snap = responses[0]?.body as {
+      state: string
+      next_events: Array<{ type: string; disabled_reason?: string }>
+    }
+    expect(snap.state).toBe('active')
+    const closeoutEvent = snap.next_events.find((e) => e.type === 'CLOSEOUT')
+    expect(closeoutEvent?.disabled_reason).toMatch(/lifecycle/i)
+  })
+
+  it('ACKNOWLEDGE_POST_MORTEM on a completed project advances to post_mortem terminal (Gap 2)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, {
+      status: 'completed',
+      state_version: 2,
+      closed_at: '2026-05-01T00:00:00.000Z',
+      closed_by: 'u-1',
+      summary_locked_at: '2026-05-01T00:00:00.000Z',
+    })
+    const { ctx, responses } = makeCtx(pool, { event: 'ACKNOWLEDGE_POST_MORTEM', state_version: 2 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    const snap = responses[0]?.body as {
+      state: string
+      state_version: number
+      next_events: Array<unknown>
+      context: { post_mortem_acknowledged_at: string | null; post_mortem_acknowledged_by: string | null }
+    }
+    expect(snap.state).toBe('post_mortem')
+    expect(snap.state_version).toBe(3)
+    expect(snap.next_events).toEqual([])
+    expect(snap.context.post_mortem_acknowledged_at).toBeTruthy()
+    expect(snap.context.post_mortem_acknowledged_by).toBe('u-1')
+    expect(pool.workflowEvents[0]?.event_type).toBe('ACKNOWLEDGE_POST_MORTEM')
+  })
+
+  it('rejects ACKNOWLEDGE_POST_MORTEM from an active project with 409 (illegal transition)', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses } = makeCtx(pool, { event: 'ACKNOWLEDGE_POST_MORTEM', state_version: 1 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect(pool.workflowEvents).toHaveLength(0)
+  })
+
+  it('rejects an unknown event with 400', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses } = makeCtx(pool, { event: 'NOPE', state_version: 1 })
+
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
+    expect(responses[0]?.status).toBe(400)
   })
 })
 

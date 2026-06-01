@@ -30,65 +30,265 @@
  */
 
 import { Pool } from 'pg'
-import {
-  applyEventLog,
-  getWorkflow,
-  type WorkflowEventLogEntry,
-  // Importing workflow modules ensures their registerWorkflow() side
-  // effects run so getWorkflow() can find them.
-  rentalBillingWorkflow as _rentalBillingWorkflow,
-  estimatePushWorkflow as _estimatePushWorkflow,
-  crewScheduleWorkflow as _crewScheduleWorkflow,
-  rentalWorkflow as _rentalWorkflow,
-  projectCloseoutWorkflow as _projectCloseoutWorkflow,
-} from '@sitelayer/workflows'
+import { applyEventLog, getWorkflow, listWorkflows, type WorkflowEventLogEntry } from '@sitelayer/workflows'
+// Side-effect import: pulling the whole package runs every workflow
+// module's top-level registerWorkflow(), so getWorkflow() / listWorkflows()
+// see ALL registered reducers — not just the handful named below. This is
+// what lets the ops replay tool reach every workflow, and what makes the
+// registry⊇ENTITY_TABLE conformance check (printConformanceWarnings) able
+// to detect a workflow that ships without a replay mapping.
+import '@sitelayer/workflows'
 
-void _rentalBillingWorkflow
-void _estimatePushWorkflow
-void _crewScheduleWorkflow
-void _rentalWorkflow
-void _projectCloseoutWorkflow
+/**
+ * Per-workflow entity-table mapping for the live-row comparison.
+ *
+ * `column` (snapshot field name → reducer output key) is compared against
+ * `dbColumn` (the actual persisted column). Most workflows persist
+ * 1:1, but several alias the column (e.g. labor_payroll_runs stores the
+ * reducer's `approved_by` as `approved_by_user_id`, and project_lifecycle
+ * stores everything under `lifecycle_*` on the shared `projects` table).
+ * The replay diff reads `finalSnapshot[column]` and the live row value
+ * SELECTed `as <column>` from `dbColumn`, so the comparison stays keyed on
+ * the snapshot field regardless of the storage column name.
+ *
+ * `state`/`state_version` are the two universal fields: `state` maps to the
+ * reducer's `state` (the persisted status/state column), `state_version`
+ * to the row's version counter. Both may be aliased (project_lifecycle).
+ */
+interface ColumnMap {
+  /** Reducer snapshot field name (key in finalSnapshot). */
+  column: string
+  /** Persisted DB column (SELECTed `as column`). Defaults to `column`. */
+  dbColumn?: string
+}
 
-const ENTITY_TABLE: Record<string, { table: string; columns: string[] }> = {
+interface EntityMapping {
+  table: string
+  /** Persisted status/state column (compared against finalSnapshot.state). */
+  stateColumn: string
+  /** Persisted version column (compared against finalSnapshot.state_version). */
+  stateVersionColumn: string
+  /** Additional transition columns mirroring the reducer's snapshot fields. */
+  columns: ColumnMap[]
+}
+
+const ENTITY_TABLE: Record<string, EntityMapping> = {
   rental_billing_run: {
     table: 'rental_billing_runs',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
     columns: [
-      'status',
-      'state_version',
-      'approved_at',
-      'approved_by',
-      'posted_at',
-      'failed_at',
-      'error',
-      'qbo_invoice_id',
+      { column: 'approved_at' },
+      { column: 'approved_by' },
+      { column: 'posted_at' },
+      { column: 'failed_at' },
+      { column: 'error' },
+      { column: 'qbo_invoice_id' },
     ],
   },
   estimate_push: {
     table: 'estimate_pushes',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
     columns: [
-      'status',
-      'state_version',
-      'reviewed_at',
-      'reviewed_by',
-      'approved_at',
-      'approved_by',
-      'posted_at',
-      'failed_at',
-      'error',
-      'qbo_estimate_id',
+      { column: 'reviewed_at' },
+      { column: 'reviewed_by' },
+      { column: 'approved_at' },
+      { column: 'approved_by' },
+      { column: 'posted_at' },
+      { column: 'failed_at' },
+      { column: 'error' },
+      { column: 'qbo_estimate_id' },
     ],
   },
   crew_schedule: {
     table: 'crew_schedules',
-    columns: ['status', 'state_version', 'confirmed_at', 'confirmed_by'],
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [{ column: 'confirmed_at' }, { column: 'confirmed_by' }],
   },
   project_closeout: {
     table: 'projects',
-    columns: ['status', 'state_version', 'closed_at', 'closed_by'],
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [{ column: 'closed_at' }, { column: 'closed_by' }],
+  },
+  labor_payroll_run: {
+    table: 'labor_payroll_runs',
+    stateColumn: 'state',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'approved_at' },
+      { column: 'approved_by', dbColumn: 'approved_by_user_id' },
+      { column: 'posted_at' },
+      { column: 'failed_at' },
+      { column: 'error', dbColumn: 'error_message' },
+    ],
+  },
+  project_lifecycle: {
+    // Same table as project_closeout, distinct lifecycle_* column set.
+    // Migration 106 (workflow-scoped unique event-log key) lets both write
+    // event-log rows against the same projects.id.
+    table: 'projects',
+    stateColumn: 'lifecycle_state',
+    stateVersionColumn: 'lifecycle_state_version',
+    columns: [
+      { column: 'sent_at', dbColumn: 'lifecycle_sent_at' },
+      { column: 'accepted_at', dbColumn: 'lifecycle_accepted_at' },
+      { column: 'declined_at', dbColumn: 'lifecycle_declined_at' },
+      { column: 'decline_reason', dbColumn: 'lifecycle_decline_reason' },
+      { column: 'started_at', dbColumn: 'lifecycle_started_at' },
+      { column: 'completed_at', dbColumn: 'lifecycle_completed_at' },
+      { column: 'archived_at', dbColumn: 'lifecycle_archived_at' },
+    ],
+  },
+  field_event: {
+    table: 'worker_issues',
+    stateColumn: 'state',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'resolved_at' },
+      { column: 'resolved_by_user_id', dbColumn: 'resolved_by_clerk_user_id' },
+      { column: 'resolved_action' },
+      { column: 'resolution_message' },
+      { column: 'escalated_to_estimator_at' },
+      { column: 'escalation_reason' },
+      { column: 'dismissed_at' },
+      { column: 'dismissed_by_user_id', dbColumn: 'dismissed_by_clerk_user_id' },
+      { column: 'reopened_at' },
+    ],
+  },
+  rental: {
+    table: 'rentals',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [{ column: 'returned_at' }, { column: 'returned_by' }, { column: 'closed_at' }, { column: 'closed_by' }],
+  },
+  daily_log: {
+    table: 'daily_logs',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [{ column: 'submitted_at' }],
+  },
+  notification: {
+    table: 'notifications',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [{ column: 'error' }],
+  },
+  shipment: {
+    table: 'shipments',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'shipped_at' },
+      { column: 'delivered_at' },
+      { column: 'confirmed_by' },
+      { column: 'driver' },
+      { column: 'ticket_number' },
+    ],
+  },
+  damage_charge_settlement: {
+    table: 'damage_charges',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'invoiced_at' },
+      { column: 'invoiced_by' },
+      { column: 'waived_at' },
+      { column: 'waived_by' },
+      { column: 'waive_reason' },
+    ],
+  },
+  rental_request_approval: {
+    table: 'rental_requests',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'approved_at' },
+      { column: 'approved_by' },
+      { column: 'declined_at' },
+      { column: 'declined_by' },
+      { column: 'decline_reason' },
+    ],
+  },
+  qbo_sync_run: {
+    table: 'qbo_sync_runs',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'started_at' },
+      { column: 'succeeded_at' },
+      { column: 'failed_at' },
+      { column: 'retried_at' },
+      { column: 'error' },
+    ],
+  },
+  scaffold_ops_approval: {
+    table: 'boms',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'approved_at' },
+      { column: 'approved_by' },
+      { column: 'superseded_at' },
+      { column: 'superseded_by', dbColumn: 'superseded_by_user' },
+      { column: 'superseded_by_bom_id', dbColumn: 'superseded_by' },
+    ],
+  },
+  change_order: {
+    table: 'change_orders',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'sent_at' },
+      { column: 'accepted_at' },
+      { column: 'rejected_at' },
+      { column: 'voided_at' },
+      { column: 'reject_reason' },
+      { column: 'approved_by' },
+    ],
+  },
+  time_review_run: {
+    table: 'time_review_runs',
+    stateColumn: 'state',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'reviewer_user_id' },
+      { column: 'approved_at' },
+      { column: 'rejected_at' },
+      { column: 'rejection_reason' },
+      { column: 'reopened_at' },
+    ],
   },
 }
 
+/**
+ * Advisory registry⊇ENTITY_TABLE conformance check. Prints a warning to
+ * stderr (does NOT change the exit code) when a registered workflow has no
+ * replay mapping here, so a workflow added without a mapping is visible
+ * instead of being silently un-swept. Kept advisory because some workflows
+ * (e.g. ones still being wired) legitimately have no live entity table yet.
+ */
+function printConformanceWarnings(): void {
+  const registered = new Set(listWorkflows().map((d) => d.name))
+  const mapped = new Set(Object.keys(ENTITY_TABLE))
+  const unmapped = [...registered].filter((n) => !mapped.has(n)).sort()
+  const orphaned = [...mapped].filter((n) => !registered.has(n)).sort()
+  if (unmapped.length > 0) {
+    console.error(
+      `[warn] ${unmapped.length} registered workflow(s) have no replay ENTITY_TABLE mapping (un-swept): ${unmapped.join(', ')}`,
+    )
+  }
+  if (orphaned.length > 0) {
+    console.error(
+      `[warn] ${orphaned.length} ENTITY_TABLE entr(ies) reference an unregistered workflow: ${orphaned.join(', ')}`,
+    )
+  }
+}
+
 async function main(): Promise<void> {
+  printConformanceWarnings()
   const [, , workflowName, entityId] = process.argv
   if (!workflowName || !entityId) {
     console.error('usage: replay-workflow.ts <workflow-name> <entity-id>')
@@ -188,9 +388,16 @@ async function main(): Promise<void> {
       process.exit(2)
     }
 
-    // Compare to live row.
+    // Compare to live row. SELECT each persisted column `as` its snapshot
+    // field name so the diff stays keyed on the reducer's field regardless
+    // of the storage column name (e.g. lifecycle_state as state).
+    const selectExprs = [
+      `${entityMeta.stateColumn} as state`,
+      `${entityMeta.stateVersionColumn} as state_version`,
+      ...entityMeta.columns.map((c) => `${c.dbColumn ?? c.column} as ${c.column}`),
+    ]
     const liveResult = await pool.query<Record<string, unknown>>(
-      `select ${entityMeta.columns.join(', ')} from ${entityMeta.table}
+      `select ${selectExprs.join(', ')} from ${entityMeta.table}
        where id = $1 limit 1`,
       [entityId],
     )
@@ -206,12 +413,13 @@ async function main(): Promise<void> {
       process.exit(2)
     }
 
+    const compareKeys = ['state', 'state_version', ...entityMeta.columns.map((c) => c.column)]
     const divergences: Array<{ column: string; replay: unknown; live: unknown }> = []
-    for (const col of entityMeta.columns) {
-      const replayValue = col === 'status' ? final.state : final[col]
-      const liveValue = live[col]
+    for (const key of compareKeys) {
+      const replayValue = final[key]
+      const liveValue = live[key]
       if (!shallowEqual(replayValue, liveValue)) {
-        divergences.push({ column: col, replay: replayValue, live: liveValue })
+        divergences.push({ column: key, replay: replayValue, live: liveValue })
       }
     }
 

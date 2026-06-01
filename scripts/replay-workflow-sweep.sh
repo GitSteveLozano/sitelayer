@@ -48,12 +48,29 @@ psql_query() {
 
 # Workflows known to the registry. The replay script enforces registry
 # membership; this list controls which tables we sweep.
+# Each entry: <workflow_name>|<select returning non-terminal entity ids>.
+# Terminal filters mirror each reducer's *_TERMINAL_STATES so a row that
+# can still receive events is the only thing we replay (terminal rows are
+# replay-stable by construction). `deleted_at is null` is only added for
+# tables that actually have the column (verified against docker/postgres/init).
 WORKFLOWS=(
   "rental_billing_run|select id from rental_billing_runs where deleted_at is null and status not in ('posted', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
   "estimate_push|select id from estimate_pushes where deleted_at is null and status not in ('posted', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
   "crew_schedule|select id from crew_schedules where deleted_at is null order by updated_at desc limit $SWEEP_LIMIT"
   "rental|select id from rentals where deleted_at is null and status <> 'closed' order by updated_at desc limit $SWEEP_LIMIT"
   "project_closeout|select id from projects where deleted_at is null and status <> 'completed' order by updated_at desc limit $SWEEP_LIMIT"
+  "labor_payroll_run|select id from labor_payroll_runs where deleted_at is null and state not in ('posted', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
+  "project_lifecycle|select id from projects where deleted_at is null and lifecycle_state <> 'archived' order by updated_at desc limit $SWEEP_LIMIT"
+  "field_event|select id from worker_issues order by created_at desc limit $SWEEP_LIMIT"
+  "daily_log|select id from daily_logs where status <> 'submitted' order by updated_at desc limit $SWEEP_LIMIT"
+  "notification|select id from notifications where status not in ('sent', 'voided', 'failed_clerk_not_found', 'failed_clerk_unreachable', 'failed_provider') order by updated_at desc limit $SWEEP_LIMIT"
+  "shipment|select id from shipments where deleted_at is null and status not in ('closed', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
+  "damage_charge_settlement|select id from damage_charges where deleted_at is null and status not in ('invoiced', 'waived') order by updated_at desc limit $SWEEP_LIMIT"
+  "rental_request_approval|select id from rental_requests where status not in ('approved', 'declined') order by updated_at desc limit $SWEEP_LIMIT"
+  "qbo_sync_run|select id from qbo_sync_runs where deleted_at is null and status not in ('succeeded', 'failed') order by updated_at desc limit $SWEEP_LIMIT"
+  "scaffold_ops_approval|select id from boms where deleted_at is null and status not in ('approved', 'superseded') order by updated_at desc limit $SWEEP_LIMIT"
+  "change_order|select id from change_orders where deleted_at is null and status not in ('accepted', 'rejected', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
+  "time_review_run|select id from time_review_runs where state not in ('approved', 'rejected') order by updated_at desc limit $SWEEP_LIMIT"
 )
 
 total_ok=0

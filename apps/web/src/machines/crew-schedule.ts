@@ -37,7 +37,10 @@ type Context = {
   outOfSync: boolean
 }
 
-type Event = { type: 'LOAD' } | { type: 'DISPATCH'; event: CrewScheduleHumanEvent } | { type: 'DISMISS_ERROR' }
+type Event =
+  | { type: 'LOAD' }
+  | { type: 'DISPATCH'; event: CrewScheduleHumanEvent; reason?: string }
+  | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { scheduleId: string; companySlug: string }
 type DispatchInput = {
@@ -45,6 +48,8 @@ type DispatchInput = {
   companySlug: string
   event: CrewScheduleHumanEvent
   stateVersion: number
+  /** DECLINE only — the worker's decline reason. */
+  reason?: string
 }
 
 type DispatchOutput =
@@ -66,6 +71,7 @@ export const crewScheduleMachine = setup({
         const next = await dispatchCrewScheduleEvent(input.scheduleId, {
           event: input.event,
           state_version: input.stateVersion,
+          ...(input.reason !== undefined ? { reason: input.reason } : {}),
         })
         return { kind: 'ok', snapshot: next }
       } catch (caught) {
@@ -140,6 +146,7 @@ export const crewScheduleMachine = setup({
             companySlug: context.companySlug,
             event: event.event,
             stateVersion: context.snapshot!.state_version,
+            ...(event.reason !== undefined ? { reason: event.reason } : {}),
           }
         },
         onDone: {
@@ -177,7 +184,7 @@ export type CrewScheduleHookResult = {
   isLoading: boolean
   isSubmitting: boolean
   refresh: () => void
-  dispatch: (event: CrewScheduleHumanEvent) => void
+  dispatch: (event: CrewScheduleHumanEvent, reason?: string) => void
   dismissError: () => void
 }
 
@@ -190,7 +197,11 @@ export function useCrewSchedule(scheduleId: string, companySlug: string): CrewSc
   }, [scheduleId, companySlug, send])
 
   const refresh = useCallback(() => send({ type: 'LOAD' }), [send])
-  const dispatch = useCallback((event: CrewScheduleHumanEvent) => send({ type: 'DISPATCH', event }), [send])
+  const dispatch = useCallback(
+    (event: CrewScheduleHumanEvent, reason?: string) =>
+      send(reason !== undefined ? { type: 'DISPATCH', event, reason } : { type: 'DISPATCH', event }),
+    [send],
+  )
   const dismissError = useCallback(() => send({ type: 'DISMISS_ERROR' }), [send])
 
   return {

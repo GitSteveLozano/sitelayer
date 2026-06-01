@@ -10,6 +10,8 @@ import {
   calculateTakeoffQuantity,
   clampBoardCoordinate,
   compareBidVsScope,
+  repriceForTargetMargin,
+  MAX_TARGET_MARGIN,
   DEFAULT_BONUS_RULE,
   normalizePolygonGeometry,
   normalizeLinealGeometry,
@@ -164,6 +166,35 @@ describe('domain functions', () => {
         cost: 500,
       })
       expect(result.margin).toBeCloseTo(0.5, 4)
+    })
+  })
+
+  describe('repriceForTargetMargin', () => {
+    it('prices the bid so the resulting margin equals the target', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 600, targetMarginPct: 0.4 })
+      // bid = 600 / (1 - 0.4) = 1000; margin = (1000 - 600)/1000 = 0.4
+      expect(bidTotal).toBe(1000)
+      expect(marginPct).toBeCloseTo(0.4, 4)
+      const verify = calculateMargin({ revenue: bidTotal, cost: 600 })
+      expect(verify.margin).toBeCloseTo(0.4, 4)
+    })
+
+    it('returns a zero bid when there is no cost basis', () => {
+      expect(repriceForTargetMargin({ cost: 0, targetMarginPct: 0.3 }).bidTotal).toBe(0)
+      expect(repriceForTargetMargin({ cost: -5, targetMarginPct: 0.3 }).bidTotal).toBe(0)
+    })
+
+    it('clamps an over-100% margin to the safe maximum (no divide-by-zero)', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 100, targetMarginPct: 1.5 })
+      expect(marginPct).toBeCloseTo(MAX_TARGET_MARGIN, 4)
+      expect(Number.isFinite(bidTotal)).toBe(true)
+      expect(bidTotal).toBeGreaterThan(100)
+    })
+
+    it('clamps a negative margin to 0 (sell at cost, never below)', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 250, targetMarginPct: -0.2 })
+      expect(marginPct).toBe(0)
+      expect(bidTotal).toBe(250)
     })
   })
 

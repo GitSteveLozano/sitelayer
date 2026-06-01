@@ -15,6 +15,7 @@ import {
   type InventoryItem,
   type InventoryLocation,
 } from '@/lib/api'
+import { uploadMovementPhoto } from '@/lib/api/rentals'
 import {
   MBody,
   MButton,
@@ -27,6 +28,7 @@ import {
   MListRow,
   MSectionH,
   MSelect,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
@@ -34,19 +36,12 @@ import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 type Mode = 'deliver' | 'return'
 type ConditionStatus = 'ok' | 'flag' | 'na'
 
-const CONDITION_CHECKS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'frame', label: 'Frame intact' },
-  { id: 'parts', label: 'Parts accounted for' },
-  { id: 'clean', label: 'Clean enough for next job' },
-  { id: 'damage', label: 'Damage noted' },
-]
-
-// Condition grade tiles. Same `ConditionStatus` values as before — only the
-// presentation (brutalist grade grid) changes.
+// Single GOOD / WEAR / DAMAGE grade row (msg__73). One grade per return,
+// not a per-attribute matrix.
 const GRADES: ReadonlyArray<{ status: ConditionStatus; label: string; desc: string }> = [
   { status: 'ok', label: 'GOOD', desc: 'CLEAN · READY' },
-  { status: 'flag', label: 'FAIR', desc: 'NORMAL WEAR' },
-  { status: 'na', label: 'DAMAGED', desc: 'REPAIR NEEDED' },
+  { status: 'flag', label: 'WEAR', desc: 'NORMAL' },
+  { status: 'na', label: 'DAMAGE', desc: 'REPAIR NEEDED' },
 ]
 
 // Static faux-QR pattern for the scanner target. Computed once at module load
@@ -70,7 +65,11 @@ export function MobileRentalScan({
   const [projectId, setProjectId] = useState('')
   const [workerId, setWorkerId] = useState('')
   const [quantity, setQuantity] = useState('1')
-  const [condition, setCondition] = useState<Record<string, ConditionStatus>>({})
+  const [condition, setCondition] = useState<ConditionStatus | null>(null)
+  const [note, setNote] = useState('')
+  // Real condition photos (migration 125): captured as File objects, then
+  // uploaded to the movement after it's created.
+  const [photos, setPhotos] = useState<readonly File[]>([])
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -127,8 +126,9 @@ export function MobileRentalScan({
         assetCode: assetCode.trim(),
         source: 'mobile-shell',
         condition: mode === 'return' ? condition : undefined,
+        photo_count: mode === 'return' && photos.length ? photos.length : undefined,
       })
-      await apiPost(
+      const movement = await apiPost<{ id: string }>(
         '/api/inventory/movements',
         {
           inventory_item_id: item.id,
@@ -142,10 +142,17 @@ export function MobileRentalScan({
           scanned_at: new Date().toISOString(),
           lat: coords?.lat ?? null,
           lng: coords?.lng ?? null,
-          notes: mode === 'return' ? summarizeCondition(condition) : null,
+          notes: mode === 'return' ? mergeReturnNotes(condition, note) : null,
         },
         companySlug,
       )
+      // Upload real condition photos to the new movement (return mode only).
+      // Best-effort: a failed photo never rolls back the movement.
+      if (mode === 'return' && movement?.id && photos.length > 0) {
+        for (const file of photos) {
+          await uploadMovementPhoto(movement.id, file)
+        }
+      }
       navigate('/rentals')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -158,6 +165,7 @@ export function MobileRentalScan({
     <div className="m-dark">
       <MTopBar
         back
+        backVariant="close"
         title={mode === 'return' ? 'RETURN' : 'SCAN TAG'}
         sub={mode === 'return' ? 'CHECK IN TO YARD' : 'DISPATCH TO JOB'}
         onBack={() => navigate('/rentals')}
@@ -344,7 +352,16 @@ export function MobileRentalScan({
           />
         </div>
 
-        {mode === 'return' ? <ConditionPanel value={condition} onChange={setCondition} /> : null}
+        {mode === 'return' ? (
+          <ConditionPanel
+            grade={condition}
+            onGrade={setCondition}
+            photos={photos}
+            onPhotos={setPhotos}
+            note={note}
+            onNote={setNote}
+          />
+        ) : null}
 
         <MSectionH>{mode === 'return' ? 'Out now' : 'Available now'}</MSectionH>
         {items === null ? (
@@ -400,80 +417,139 @@ export function MobileRentalScan({
 }
 
 function ConditionPanel({
-  value,
-  onChange,
+  grade,
+  onGrade,
+  photos,
+  onPhotos,
+  note,
+  onNote,
 }: {
-  value: Record<string, ConditionStatus>
-  onChange: (next: Record<string, ConditionStatus>) => void
+  grade: ConditionStatus | null
+  onGrade: (next: ConditionStatus) => void
+  photos: readonly File[]
+  onPhotos: (next: readonly File[]) => void
+  note: string
+  onNote: (next: string) => void
 }) {
+  // Three optional photo tiles. Each captures a real image File (camera on
+  // mobile via capture="environment") that's uploaded to the movement after
+  // it's created (migration 125 — POST /api/inventory/movements/:id/photos).
+  const setPhotoAt = (slot: number, file: File | null) => {
+    const next = [...photos]
+    if (file) {
+      next[slot] = file
+    } else {
+      next.splice(slot, 1)
+    }
+    onPhotos(next.filter(Boolean))
+  }
+
   return (
     <>
+      {/* CONDITION — single GOOD / WEAR / DAMAGE grade row (msg__73). */}
       <MSectionH>Condition</MSectionH>
-      <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {CONDITION_CHECKS.map((check) => (
-          <div key={check.id}>
-            <div
+      <div style={{ padding: '0 16px' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            border: '2px solid var(--m-line)',
+          }}
+        >
+          {GRADES.map((g, i) => {
+            const on = grade === g.status
+            return (
+              <button
+                key={g.status}
+                type="button"
+                onClick={() => onGrade(g.status)}
+                style={{
+                  padding: '16px 0',
+                  background: on ? 'var(--m-accent)' : 'transparent',
+                  color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                  border: 'none',
+                  borderRight: i < GRADES.length - 1 ? '2px solid var(--m-line)' : 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 15 }}>{g.label}</div>
+                <div
+                  style={{
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 9,
+                    marginTop: 4,
+                    fontWeight: 600,
+                    opacity: 0.75,
+                  }}
+                >
+                  {g.desc}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* PHOTOS · OPTIONAL — three dashed capture tiles (msg__73). Each opens
+          the camera (capture="environment") / file picker and holds a real
+          File until the movement upload. */}
+      <MSectionH>Photos · optional</MSectionH>
+      <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        {[0, 1, 2].map((slot) => {
+          const filled = Boolean(photos[slot])
+          return (
+            <label
+              key={slot}
+              aria-label={filled ? `Photo ${slot + 1} captured` : `Add photo ${slot + 1}`}
               style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                color: 'var(--m-ink-3)',
-                marginBottom: 6,
+                aspectRatio: '1',
+                border: filled ? '2px solid var(--m-accent)' : '2px dashed var(--m-line)',
+                background: filled ? 'var(--m-card-soft)' : 'transparent',
+                color: filled ? 'var(--m-accent)' : 'var(--m-ink-3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
               }}
             >
-              {check.label.toUpperCase()}
-            </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                border: '2px solid var(--m-line)',
-              }}
-            >
-              {GRADES.map((grade, i) => {
-                const on = value[check.id] === grade.status
-                return (
-                  <button
-                    key={grade.status}
-                    type="button"
-                    onClick={() => onChange({ ...value, [check.id]: grade.status })}
-                    style={{
-                      padding: '14px 0',
-                      background: on ? 'var(--m-accent)' : 'transparent',
-                      color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                      border: 'none',
-                      borderRight: i < GRADES.length - 1 ? '2px solid var(--m-line)' : 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 14 }}>
-                      {grade.label}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: 'var(--m-num)',
-                        fontSize: 9,
-                        marginTop: 4,
-                        fontWeight: 600,
-                        opacity: 0.7,
-                      }}
-                    >
-                      {grade.desc}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+              {filled ? <MI.Check size={22} /> : <MI.Plus size={22} />}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0] ?? null
+                  setPhotoAt(slot, file)
+                  e.currentTarget.value = ''
+                }}
+              />
+            </label>
+          )
+        })}
+      </div>
+
+      {/* NOTE — free-text condition note (msg__73). */}
+      <MSectionH>Note</MSectionH>
+      <div style={{ padding: '0 16px' }}>
+        <MTextarea
+          rows={3}
+          placeholder="e.g. Top rail bent slightly. Still usable."
+          value={note}
+          onChange={(e) => onNote(e.currentTarget.value)}
+          style={{ width: '100%' }}
+        />
       </div>
     </>
   )
 }
 
-function summarizeCondition(condition: Record<string, ConditionStatus>): string | null {
-  const entries = Object.entries(condition)
-  if (entries.length === 0) return null
-  return entries.map(([key, value]) => `${key}:${value}`).join(', ')
+/** Merge the single condition grade + the free-text note into the movement
+ * note string. Returns null when there's nothing to record. */
+function mergeReturnNotes(grade: ConditionStatus | null, note: string): string | null {
+  const parts: string[] = []
+  if (grade) parts.push(`condition:${grade}`)
+  const trimmed = note.trim()
+  if (trimmed) parts.push(trimmed)
+  return parts.length ? parts.join(' · ') : null
 }

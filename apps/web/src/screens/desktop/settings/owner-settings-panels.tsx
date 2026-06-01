@@ -262,7 +262,7 @@ export function CompanySection() {
 
   return (
     <div className="d-stack">
-      <SettingsCard eyebrow="Company profile">
+      <SettingsCard eyebrow="Workspace">
         <FieldGrid>
           <Field
             label="Company name"
@@ -271,7 +271,25 @@ export function CompanySection() {
             readOnly
             hint="Set at company creation."
           />
-          <Field label="URL slug" value={company?.slug ?? ''} hint="Used in links + the customer portal." readOnly />
+          {/* Trade / Crew size / Region complete the design's attribute set. There
+              is no backend column for these yet, so they read-only from the profile
+              where it overlaps (license is unrelated) and otherwise show placeholders. */}
+          <Field label="Trade" value="" placeholder="Stucco / EIFS" readOnly hint="Primary trade." />
+          <Field label="Crew size" value="" placeholder="18 · multi-crew" readOnly hint="Active crew headcount." />
+          <Field label="Region" value="" placeholder="Calgary, AB" readOnly hint="Primary operating region." />
+          <Field
+            label="Business #"
+            value={server?.license_no ?? ''}
+            placeholder="BN 8042 11920"
+            readOnly
+            hint="License / business registration."
+          />
+          <Field
+            label="Workspace URL"
+            value={company?.slug ?? ''}
+            hint="Used in links + the customer portal."
+            readOnly
+          />
         </FieldGrid>
       </SettingsCard>
 
@@ -762,12 +780,15 @@ export function IntegrationsSection() {
 }
 
 // ---- NOTIFICATIONS -------------------------------------------------------
-// Wired to GET/PUT /api/notification-preferences. The backend models four
-// fixed events, each with ONE delivery channel (push | sms | email | off) —
-// NOT a per-event × per-channel matrix. We render one channel selector per
-// event plus the SMS / email contact fields the PUT requires when a channel
-// is set to sms / email. The Stop-work row stays a locked "always on" display
-// row (there is no backend pref for it yet — it's hard-routed server-side).
+// Wired to GET/PUT /api/notification-preferences. The design is a per-event ×
+// PUSH/SMS/EMAIL checkbox matrix with a locked "Stop work" row. The backend
+// models four fixed events, each with ONE delivery channel (push | sms | email |
+// off) — NOT independent per-channel toggles. We render the design's three-column
+// PUSH/SMS/EMAIL matrix, but each row behaves as a single-select (the active box is
+// the event's one backend channel; clicking the active box turns it off). The
+// SMS / email contact fields the PUT requires when a channel is set to sms / email
+// stay below, and the Stop-work row is a locked "always on" display row (there is
+// no backend pref for it — it's hard-routed server-side).
 type NotifPrefKey =
   | 'channel_assignment_change'
   | 'channel_time_review_ready'
@@ -789,12 +810,56 @@ const NOTIF_EVENTS: Array<{ key: NotifPrefKey; label: string; hint: string }> = 
   { key: 'channel_clock_anomaly', label: 'Clock anomaly', hint: 'Missed clock-out, overlap, or off-site punch.' },
 ]
 
-const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }> = [
+// The three matrix columns. (The backend's fourth "off" state is represented by
+// no box checked in a row.)
+const MATRIX_CHANNELS: Array<{ value: Exclude<NotificationChannel, 'off'>; label: string }> = [
   { value: 'push', label: 'Push' },
   { value: 'sms', label: 'SMS' },
   { value: 'email', label: 'Email' },
-  { value: 'off', label: 'Off' },
 ]
+
+// Yellow-fill square checkbox cell matching the brutalist matrix in the design.
+function NotifCheckbox({
+  checked,
+  locked,
+  onToggle,
+  label,
+}: {
+  checked: boolean
+  locked?: boolean | undefined
+  onToggle?: (() => void) | undefined
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={locked}
+      onClick={onToggle}
+      style={{
+        width: 22,
+        height: 22,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: '2px solid var(--m-ink)',
+        borderRadius: 0,
+        cursor: locked ? 'not-allowed' : 'pointer',
+        background: checked ? 'var(--m-accent)' : 'transparent',
+        color: 'var(--m-ink)',
+        fontSize: 13,
+        fontWeight: 800,
+        lineHeight: 1,
+        padding: 0,
+        opacity: locked ? 0.85 : 1,
+      }}
+    >
+      {checked ? '✓' : ''}
+    </button>
+  )
+}
 
 type NotifDraft = {
   channel_assignment_change: NotificationChannel
@@ -827,9 +892,12 @@ export function NotificationsSection() {
     })
   }, [server])
 
-  const setChannel = (key: NotifPrefKey, value: NotificationChannel) => {
+  // Matrix cell toggle: the backend stores ONE channel per event, so the three
+  // PUSH/SMS/EMAIL boxes behave as a single-select — checking a box sets that
+  // channel; clicking the already-active box turns the event off.
+  const toggleChannel = (key: NotifPrefKey, value: Exclude<NotificationChannel, 'off'>) => {
     setSaved(false)
-    setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
+    setDraft((prev) => (prev ? { ...prev, [key]: prev[key] === value ? 'off' : value } : prev))
   }
 
   const usesSms = draft ? NOTIF_EVENTS.some((e) => draft[e.key] === 'sms') : false
@@ -874,38 +942,6 @@ export function NotificationsSection() {
     }
   }
 
-  type EventRow = { key: NotifPrefKey; label: string; hint: string }
-  const columns: Array<DColumn<EventRow>> = [
-    {
-      key: 'event',
-      header: 'Event',
-      render: (r) => (
-        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
-          <span className="d-table-cell-strong">{r.label}</span>
-          <span style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{r.hint}</span>
-        </span>
-      ),
-    },
-    {
-      key: 'channel',
-      header: 'Delivery',
-      render: (r) => (
-        <MSelect
-          value={draft ? draft[r.key] : 'push'}
-          disabled={!draft}
-          onChange={(e) => setChannel(r.key, e.target.value as NotificationChannel)}
-          aria-label={`${r.label} delivery channel`}
-        >
-          {CHANNEL_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </MSelect>
-      ),
-    },
-  ]
-
   if (prefsQuery.isPending) {
     return (
       <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
@@ -926,18 +962,101 @@ export function NotificationsSection() {
       <div className="d-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <MPill tone="blue">Delivery</MPill>
         <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Pick how each event reaches you. Choose one channel per event — push, SMS, email, or off. SMS and email need a
-          contact below.
+          Pick how each event reaches you — push, SMS, or email. SMS and email need a contact below. (Each event
+          delivers on one channel today; tap the lit box to turn it off.)
         </div>
       </div>
 
-      <DataTable<EventRow>
-        title="Notification events"
-        columns={columns}
-        rows={NOTIF_EVENTS}
-        rowKey={(r) => r.key}
-        empty="No notification events configured."
-      />
+      {/* PER-EVENT × PUSH/SMS/EMAIL checkbox matrix matching the design. */}
+      <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+        {/* Column header row. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) repeat(3, 72px)',
+            gap: 12,
+            alignItems: 'center',
+            padding: '12px 18px',
+            borderBottom: '2px solid var(--m-ink)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-3)',
+          }}
+        >
+          <span>Event</span>
+          {MATRIX_CHANNELS.map((c) => (
+            <span key={c.value} style={{ textAlign: 'center' }}>
+              {c.label}
+            </span>
+          ))}
+        </div>
+
+        {NOTIF_EVENTS.map((ev) => (
+          <div
+            key={ev.key}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0,1fr) repeat(3, 72px)',
+              gap: 12,
+              alignItems: 'center',
+              padding: '14px 18px',
+              borderBottom: '1px solid var(--m-line, rgba(0,0,0,0.08))',
+            }}
+          >
+            <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+              <span className="d-table-cell-strong">{ev.label}</span>
+              <span style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{ev.hint}</span>
+            </span>
+            {MATRIX_CHANNELS.map((c) => (
+              <span key={c.value} style={{ textAlign: 'center' }}>
+                <NotifCheckbox
+                  checked={(draft ? draft[ev.key] : 'off') === c.value}
+                  onToggle={draft ? () => toggleChannel(ev.key, c.value) : undefined}
+                  locked={!draft}
+                  label={`${ev.label} — ${c.label}`}
+                />
+              </span>
+            ))}
+          </div>
+        ))}
+
+        {/* Stop-work — locked, always on every channel. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) repeat(3, 72px)',
+            gap: 12,
+            alignItems: 'center',
+            padding: '14px 18px',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <span className="d-table-cell-strong">Stop work</span>
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'var(--m-paper, #fff)',
+                background: 'var(--m-red, #c7331e)',
+                padding: '3px 8px',
+              }}
+            >
+              Locked · all on
+            </span>
+          </span>
+          {MATRIX_CHANNELS.map((c) => (
+            <span key={c.value} style={{ textAlign: 'center' }}>
+              <NotifCheckbox checked locked label={`Stop work — ${c.label} (locked on)`} />
+            </span>
+          ))}
+        </div>
+      </div>
 
       <SettingsCard eyebrow="Contact details">
         <FieldGrid>
@@ -1010,15 +1129,6 @@ export function NotificationsSection() {
           </MButton>
         </div>
       </SettingsCard>
-
-      <div className="d-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        <MPill tone="amber">Always on</MPill>
-        <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Stop-work orders always send on every channel and can’t be turned off.
-          {/* Stop-work has no per-user pref in notification_preferences; it's
-              hard-routed server-side, so it's shown as a fixed always-on row. */}
-        </div>
-      </div>
     </div>
   )
 }
@@ -1059,43 +1169,25 @@ export function ProfileSection() {
 }
 
 // ---- HELP ----------------------------------------------------------------
-// Contact tiles + a quick-guides table. Pure presentational links today.
-type Guide = { id: string; title: string; minutes: string }
+// Three contact tiles (Chat Support — yellow primary / Book a Call / Email Us)
+// over a quick-guides list, matching dsg__30. Pure presentational links today.
+type Guide = { id: string; title: string }
 const GUIDES: Guide[] = [
-  { id: 'first-estimate', title: 'Build your first estimate', minutes: '4 min' },
-  { id: 'crew-schedule', title: 'Schedule a crew for the week', minutes: '3 min' },
-  { id: 'log-time', title: 'Log + approve crew time', minutes: '5 min' },
-  { id: 'qbo-connect', title: 'Connect QuickBooks Online', minutes: '6 min' },
-  { id: 'rental-billing', title: 'Run a rental billing cycle', minutes: '7 min' },
+  { id: 'setup', title: 'Setup guide' },
+  { id: 'takeoff-basics', title: 'Takeoff basics' },
+  { id: 'connect-qbo', title: 'Connecting QBO' },
+  { id: 'margin-red', title: 'Why my margin is red' },
+  { id: 'loaded-labor', title: 'Loaded labor explained' },
 ]
 
-const CONTACTS: Array<{ id: string; label: string; value: string; href: string }> = [
-  { id: 'email', label: 'Email support', value: 'support@sitelayer.app', href: 'mailto:support@sitelayer.app' },
-  { id: 'phone', label: 'Call the team', value: '(833) 555-0100', href: 'tel:+18335550100' },
-  { id: 'status', label: 'System status', value: 'status.sitelayer.app', href: 'https://status.sitelayer.app' },
+type Contact = { id: string; title: string; sub: string; href: string; primary?: boolean }
+const CONTACTS: Contact[] = [
+  { id: 'chat', title: 'Chat Support', sub: 'Avg 4 min · 6am–6pm MT', href: '#', primary: true },
+  { id: 'call', title: 'Book a Call', sub: '30-min walkthrough', href: '#' },
+  { id: 'email', title: 'Email Us', sub: 'help@sitelayer.co', href: 'mailto:help@sitelayer.co' },
 ]
 
 export function HelpSection() {
-  const guideColumns: Array<DColumn<Guide>> = [
-    { key: 'title', header: 'Guide', render: (r) => <span className="d-table-cell-strong">{r.title}</span> },
-    { key: 'minutes', header: 'Length', render: (r) => r.minutes },
-    {
-      key: 'open',
-      header: '',
-      render: () => (
-        <MButton
-          size="sm"
-          variant="quiet"
-          onClick={() => {
-            // TODO(wire): open the guide (docs site / in-app walkthrough).
-          }}
-        >
-          Open →
-        </MButton>
-      ),
-    },
-  ]
-
   return (
     <div className="d-stack">
       <div
@@ -1110,31 +1202,66 @@ export function HelpSection() {
             key={c.id}
             href={c.href}
             className="d-card"
-            style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+            style={{
+              textDecoration: 'none',
+              color: 'inherit',
+              display: 'block',
+              padding: 22,
+              // Chat Support is the yellow primary tile in the design.
+              background: c.primary ? 'var(--m-accent)' : undefined,
+              border: c.primary ? '2px solid var(--m-ink)' : undefined,
+            }}
           >
+            <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--m-ink)' }}>
+              {c.title}
+            </div>
             <div
               style={{
                 fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
-                color: 'var(--m-ink-3)',
+                fontSize: 12,
+                fontWeight: 600,
+                color: c.primary ? 'var(--m-ink)' : 'var(--m-ink-3)',
+                marginTop: 8,
               }}
             >
-              {c.label}
+              {c.sub}
             </div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--m-ink)', marginTop: 8 }}>{c.value}</div>
           </a>
         ))}
       </div>
-      <DataTable<Guide>
-        title="Quick guides"
-        columns={guideColumns}
-        rows={GUIDES}
-        rowKey={(r) => r.id}
-        empty="No guides available."
-      />
+
+      {/* Quick guides — a bordered list of forward-chevron rows. */}
+      <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div
+          style={{
+            padding: '14px 18px',
+            borderBottom: '2px solid var(--m-ink)',
+            fontWeight: 700,
+            fontSize: 15,
+            color: 'var(--m-ink)',
+          }}
+        >
+          Quick guides
+        </div>
+        {GUIDES.map((g, i) => (
+          <a
+            key={g.id}
+            href="#"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '16px 18px',
+              textDecoration: 'none',
+              color: 'inherit',
+              borderBottom: i < GUIDES.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
+            }}
+          >
+            <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{g.title}</span>
+            <span style={{ fontSize: 16, color: 'var(--m-ink-3)' }}>→</span>
+          </a>
+        ))}
+      </div>
     </div>
   )
 }

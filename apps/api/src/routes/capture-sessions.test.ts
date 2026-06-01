@@ -1,0 +1,1146 @@
+import { describe, expect, it } from 'vitest'
+import type http from 'node:http'
+import { Readable } from 'node:stream'
+import type { Pool } from 'pg'
+import type pino from 'pino'
+import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { Identity } from '../auth.js'
+import { attachMutationTx } from '../mutation-tx.js'
+import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../storage.js'
+import { handleCaptureSessionRoutes, type CaptureSessionRouteCtx } from './capture-sessions.js'
+
+const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+const OTHER_COMPANY_ID = '22222222-2222-4222-8222-222222222222'
+const SESSION_ID = '00000000-0000-4000-8000-000000000123'
+const MISSING_SESSION_ID = '00000000-0000-4000-8000-000000000999'
+
+type JsonRecord = Record<string, unknown>
+
+type SessionRow = {
+  id: string
+  company_id: string
+  actor_user_id: string | null
+  mode: string
+  status: string
+  route_path: string | null
+  device_kind: string | null
+  platform: string | null
+  viewport: string | null
+  app_build_sha: string | null
+  consent_version: string
+  consent_actor_kind: string | null
+  consent_actor_ref: string | null
+  consent_authority: string | null
+  consent_scope: JsonRecord
+  consented_at: string | null
+  redaction_version: string
+  metadata: JsonRecord
+  started_at: string
+  last_seen_at: string
+  stopped_at: string | null
+  discarded_at: string | null
+  retention_expires_at: string | null
+}
+
+type EventRow = {
+  id: string
+  company_id: string
+  capture_session_id: string
+  seq: number
+  client_event_id: string | null
+  event_type: string
+  event_class: string
+  route_path: string | null
+  request_id: string | null
+  payload: JsonRecord
+  occurred_at: string | null
+}
+
+type ArtifactRow = {
+  id: string
+  company_id: string
+  capture_session_id: string
+  kind: string
+  uri: string | null
+  storage_key: string | null
+  content_type: string | null
+  byte_size: number | null
+  content_hash: string | null
+  duration_ms: number | null
+  pii_level: string
+  access_policy: string
+  redaction_version: string
+  metadata: JsonRecord
+  retention_expires_at: string | null
+  deleted_at: string | null
+}
+
+class MemoryStorage implements BlueprintStorage {
+  backend = 'local-fs' as const
+  bucket = null
+  files = new Map<string, Buffer>()
+  mimes = new Map<string, string>()
+
+  async put(key: string, contents: Buffer, contentType?: string) {
+    this.files.set(key, contents)
+    if (contentType) this.mimes.set(key, contentType)
+  }
+
+  async putStream(key: string, body: Readable, options?: PutStreamOptions) {
+    const chunks: Buffer[] = []
+    for await (const chunk of body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array))
+    this.files.set(key, Buffer.concat(chunks))
+    if (options?.contentType) this.mimes.set(key, options.contentType)
+  }
+
+  async get(key: string) {
+    const buf = this.files.get(key)
+    if (!buf) throw new Error(`missing ${key}`)
+    return buf
+  }
+
+  async copy(sourceKey: string, destKey: string) {
+    const buf = await this.get(sourceKey)
+    this.files.set(destKey, buf)
+  }
+
+  async deleteObject(key: string) {
+    this.files.delete(key)
+    this.mimes.delete(key)
+  }
+
+  async getDownloadUrl(_key: string, _options?: DownloadUrlOptions) {
+    return null
+  }
+}
+
+class FakeCapturePool {
+  sessions: SessionRow[] = []
+  events: EventRow[] = []
+  artifacts: ArtifactRow[] = []
+  supportPackets: JsonRecord[] = []
+  workItems: JsonRecord[] = []
+  handoffEvents: JsonRecord[] = []
+  private eventCounter = 0
+  private artifactCounter = 0
+  private supportCounter = 0
+  private workItemCounter = 0
+  private handoffCounter = 0
+
+  attach() {
+    attachMutationTx({
+      pool: this as unknown as Pool,
+      logger: { warn: () => undefined } as unknown as pino.Logger,
+    })
+  }
+
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.dispatch(sql, params),
+      release: () => undefined,
+    }
+  }
+
+  async query(sql: string, params: unknown[] = []) {
+    return this.dispatch(sql, params)
+  }
+
+  private async dispatch(sqlRaw: string, params: unknown[] = []) {
+    const normalized = sqlRaw.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (
+      normalized.startsWith('begin') ||
+      normalized.startsWith('begin read only') ||
+      normalized.startsWith('commit') ||
+      normalized.startsWith('rollback') ||
+      normalized.startsWith('select set_config')
+    ) {
+      return { rows: [], rowCount: 0 }
+    }
+
+    if (normalized.startsWith('insert into capture_sessions')) {
+      const id = params[0] as string
+      const companyId = params[1] as string
+      const existing = this.sessions.find((row) => row.id === id)
+      if (existing && existing.company_id !== companyId) return { rows: [], rowCount: 0 }
+      if (existing) {
+        existing.last_seen_at = '2026-05-31T12:00:01.000Z'
+        existing.route_path = (params[4] as string | null) ?? existing.route_path
+        existing.device_kind = (params[5] as string | null) ?? existing.device_kind
+        existing.platform = (params[6] as string | null) ?? existing.platform
+        existing.viewport = (params[7] as string | null) ?? existing.viewport
+        existing.app_build_sha = (params[8] as string | null) ?? existing.app_build_sha
+        existing.consent_version = ((params[9] as string | null) || existing.consent_version) ?? ''
+        existing.consent_actor_kind = (params[10] as string | null) ?? existing.consent_actor_kind
+        existing.consent_actor_ref = (params[11] as string | null) ?? existing.consent_actor_ref
+        existing.consent_authority = (params[12] as string | null) ?? existing.consent_authority
+        existing.consent_scope = { ...existing.consent_scope, ...(JSON.parse(params[13] as string) as JsonRecord) }
+        existing.consented_at = (params[14] as string | null) ?? existing.consented_at
+        existing.metadata = { ...existing.metadata, ...(JSON.parse(params[15] as string) as JsonRecord) }
+        return { rows: [existing], rowCount: 1 }
+      }
+      const row: SessionRow = {
+        id,
+        company_id: companyId,
+        actor_user_id: params[2] as string,
+        mode: params[3] as string,
+        status: 'open',
+        route_path: (params[4] as string | null) ?? null,
+        device_kind: (params[5] as string | null) ?? null,
+        platform: (params[6] as string | null) ?? null,
+        viewport: (params[7] as string | null) ?? null,
+        app_build_sha: (params[8] as string | null) ?? null,
+        consent_version: (params[9] as string | null) ?? '',
+        consent_actor_kind: (params[10] as string | null) ?? null,
+        consent_actor_ref: (params[11] as string | null) ?? null,
+        consent_authority: (params[12] as string | null) ?? null,
+        consent_scope: JSON.parse(params[13] as string) as JsonRecord,
+        consented_at: (params[14] as string | null) ?? null,
+        redaction_version: 'capture-session-v1',
+        metadata: JSON.parse(params[15] as string) as JsonRecord,
+        started_at: '2026-05-31T12:00:00.000Z',
+        last_seen_at: '2026-05-31T12:00:00.000Z',
+        stopped_at: null,
+        discarded_at: null,
+        retention_expires_at: params[16] as string,
+      }
+      this.sessions.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('update capture_sessions') && normalized.includes('returning *')) {
+      const [id, companyId, status, routePath, metadataRaw] = params as [
+        string,
+        string,
+        string | null,
+        string | null,
+        string,
+      ]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      if (!row) return { rows: [], rowCount: 0 }
+      if (status) row.status = status
+      if (routePath) row.route_path = routePath
+      row.metadata = { ...row.metadata, ...(JSON.parse(metadataRaw) as JsonRecord) }
+      row.last_seen_at = '2026-05-31T12:00:02.000Z'
+      if (status === 'stopped') row.stopped_at = '2026-05-31T12:00:02.000Z'
+      if (status === 'discarded') row.discarded_at = '2026-05-31T12:00:02.000Z'
+      return { rows: [row], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('select * from capture_sessions')) {
+      const [companyId, id] = params as [string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+
+    if (normalized.startsWith('select id::text') && normalized.includes('from capture_sessions')) {
+      const [companyId, id] = params as [string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      return { rows: row ? [{ ...row, id: row.id }] : [], rowCount: row ? 1 : 0 }
+    }
+
+    if (normalized.startsWith('select id') && normalized.includes('from capture_sessions')) {
+      const [id, companyId] = params as [string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      return {
+        rows: row ? [{ id: row.id, status: row.status, retention_expires_at: row.retention_expires_at }] : [],
+        rowCount: row ? 1 : 0,
+      }
+    }
+
+    if (normalized.includes('from capture_sessions s')) {
+      const [id, companyId] = params as [string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      if (!row) return { rows: [], rowCount: 0 }
+      const eventCount = this.events.filter((e) => e.company_id === companyId && e.capture_session_id === id).length
+      const artifactCount = this.artifacts.filter(
+        (a) => a.company_id === companyId && a.capture_session_id === id && a.deleted_at === null,
+      ).length
+      return {
+        rows: [{ session: row, event_count: String(eventCount), artifact_count: String(artifactCount) }],
+        rowCount: 1,
+      }
+    }
+
+    if (normalized.includes('from capture_session_events') && normalized.includes('count(*)::text')) {
+      const [companyId, id] = params as [string, string]
+      const count = this.events.filter((e) => e.company_id === companyId && e.capture_session_id === id).length
+      return { rows: [{ count: String(count) }], rowCount: 1 }
+    }
+
+    if (normalized.includes('from capture_artifacts') && normalized.includes('private_artifact_count')) {
+      const [companyId, id] = params as [string, string]
+      const rows = this.artifacts.filter(
+        (a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at,
+      )
+      return {
+        rows: [
+          {
+            artifact_count: String(rows.length),
+            private_artifact_count: String(
+              rows.filter((a) => a.pii_level === 'private' || a.pii_level === 'restricted').length,
+            ),
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+
+    if (normalized.includes('from capture_session_events')) {
+      const [companyId, id] = params as [string, string]
+      const rows = this.events.filter((e) => e.company_id === companyId && e.capture_session_id === id)
+      return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.startsWith('select storage_key') && normalized.includes('from capture_artifacts')) {
+      const [id, companyId] = params as [string, string]
+      const rows = this.artifacts
+        .filter((a) => a.capture_session_id === id && a.company_id === companyId && !a.deleted_at && a.storage_key)
+        .map((a) => ({ storage_key: a.storage_key }))
+      return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.includes('from capture_artifacts') && normalized.includes('and id = $3::uuid')) {
+      const [companyId, id, artifactId] = params as [string, string, string]
+      const row = this.artifacts.find(
+        (a) => a.company_id === companyId && a.capture_session_id === id && a.id === artifactId && !a.deleted_at,
+      )
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+
+    if (normalized.includes('from capture_artifacts')) {
+      const [companyId, id] = params as [string, string]
+      const rows = this.artifacts
+        .filter((a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at)
+        .map(({ storage_key: _storageKey, uri: _uri, deleted_at: _deletedAt, ...row }) => row)
+      return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.startsWith('insert into capture_session_events')) {
+      const clientEventId = (params[3] as string | null) ?? null
+      if (
+        clientEventId &&
+        this.events.some(
+          (row) =>
+            row.company_id === params[0] &&
+            row.capture_session_id === params[1] &&
+            row.client_event_id === clientEventId,
+        )
+      ) {
+        return { rows: [], rowCount: 0 }
+      }
+      this.eventCounter += 1
+      const row: EventRow = {
+        id: `event-${this.eventCounter}`,
+        company_id: params[0] as string,
+        capture_session_id: params[1] as string,
+        seq: params[2] as number,
+        client_event_id: clientEventId,
+        event_type: params[4] as string,
+        event_class: params[5] as string,
+        route_path: (params[6] as string | null) ?? null,
+        request_id: (params[10] as string | null) ?? null,
+        payload: JSON.parse(params[11] as string) as JsonRecord,
+        occurred_at: (params[12] as string | null) ?? null,
+      }
+      this.events.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('insert into capture_artifacts')) {
+      this.artifactCounter += 1
+      const row: ArtifactRow = {
+        id: `00000000-0000-4000-8000-${String(this.artifactCounter).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        capture_session_id: params[1] as string,
+        kind: params[2] as string,
+        storage_key: (params[3] as string | null) ?? null,
+        uri: (params[4] as string | null) ?? null,
+        content_type: (params[5] as string | null) ?? null,
+        byte_size: (params[6] as number | null) ?? null,
+        content_hash: (params[7] as string | null) ?? null,
+        duration_ms: (params[8] as number | null) ?? null,
+        pii_level: params[9] as string,
+        access_policy: params[10] as string,
+        metadata: JSON.parse(params[11] as string) as JsonRecord,
+        retention_expires_at: (params[12] as string | null) ?? null,
+        redaction_version: params[13] as string,
+        deleted_at: null,
+      }
+      this.artifacts.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('update capture_sessions set last_seen_at')) {
+      const [id, companyId] = params as [string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      if (row) row.last_seen_at = '2026-05-31T12:00:03.000Z'
+      return { rows: [], rowCount: row ? 1 : 0 }
+    }
+
+    if (normalized.startsWith('update capture_sessions set status = case')) {
+      const [id, companyId, metadataRaw] = params as [string, string, string]
+      const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
+      if (!row) return { rows: [], rowCount: 0 }
+      if (row.status === 'open') {
+        row.status = 'stopped'
+        row.stopped_at = '2026-05-31T12:00:04.000Z'
+      }
+      row.last_seen_at = '2026-05-31T12:00:04.000Z'
+      row.metadata = { ...row.metadata, ...(JSON.parse(metadataRaw) as JsonRecord) }
+      return { rows: [], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('update capture_artifacts set deleted_at')) {
+      const [id, companyId] = params as [string, string]
+      let count = 0
+      for (const artifact of this.artifacts) {
+        if (artifact.capture_session_id === id && artifact.company_id === companyId && artifact.deleted_at === null) {
+          artifact.deleted_at = '2026-05-31T12:00:02.000Z'
+          count += 1
+        }
+      }
+      return { rows: [], rowCount: count }
+    }
+
+    if (normalized.includes('from audit_events')) {
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalized.includes('from mutation_outbox') && normalized.includes('count(*)::text')) {
+      return { rows: [{ count: '0' }], rowCount: 1 }
+    }
+    if (normalized.includes('from sync_events') && normalized.includes('count(*)::text')) {
+      return { rows: [{ count: '0' }], rowCount: 1 }
+    }
+    if (normalized.includes('from mutation_outbox')) {
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalized.includes('from sync_events')) {
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalized.startsWith('insert into support_debug_packets')) {
+      this.supportCounter += 1
+      const row = {
+        id: `00000000-0000-4000-8000-${String(this.supportCounter).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        actor_user_id: params[1] as string,
+        request_id: (params[2] as string | null) ?? null,
+        route: (params[3] as string | null) ?? null,
+        capture_session_id: (params[4] as string | null) ?? null,
+        build_sha: (params[5] as string | null) ?? null,
+        problem: (params[6] as string | null) ?? null,
+        client: JSON.parse(params[7] as string) as JsonRecord,
+        server_context: JSON.parse(params[8] as string) as JsonRecord,
+        expires_at: (params[9] as string | null) ?? null,
+        redaction_version: params[10] as string,
+        created_at: '2026-05-31T12:00:05.000Z',
+      }
+      this.supportPackets.push(row)
+      return { rows: [{ id: row.id, created_at: row.created_at, expires_at: row.expires_at }], rowCount: 1 }
+    }
+    if (normalized.startsWith('insert into context_work_items')) {
+      this.workItemCounter += 1
+      const row = {
+        id: `00000000-0000-4000-9000-${String(this.workItemCounter).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        support_packet_id: params[1] as string,
+        title: params[2] as string,
+        summary: (params[3] as string | null) ?? null,
+        status: params[4] as string,
+        lane: params[5] as string,
+        severity: (params[6] as string | null) ?? null,
+        route: (params[7] as string | null) ?? null,
+        capture_session_id: (params[8] as string | null) ?? null,
+        entity_type: (params[9] as string | null) ?? null,
+        entity_id: (params[10] as string | null) ?? null,
+        assignee_user_id: (params[11] as string | null) ?? null,
+        created_by_user_id: (params[12] as string | null) ?? null,
+        metadata: JSON.parse(params[13] as string) as JsonRecord,
+        reversibility_window_seconds: params[14] as number,
+        created_at: '2026-05-31T12:00:06.000Z',
+        updated_at: '2026-05-31T12:00:06.000Z',
+        resolved_at: null,
+        reversed_at: null,
+        expires_at: '2026-06-01T12:00:06.000Z',
+      }
+      this.workItems.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+    if (normalized.startsWith('insert into context_handoff_events')) {
+      const idempotencyKey = (params[9] as string | null) ?? null
+      const existing = idempotencyKey
+        ? this.handoffEvents.find((e) => e.company_id === params[0] && e.idempotency_key === idempotencyKey)
+        : null
+      if (existing) return { rows: [], rowCount: 0 }
+      this.handoffCounter += 1
+      const row = {
+        id: `00000000-0000-4000-a000-${String(this.handoffCounter).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        work_item_id: params[1] as string,
+        event_type: params[2] as string,
+        actor_kind: params[3] as string,
+        actor_user_id: (params[4] as string | null) ?? null,
+        actor_ref: (params[5] as string | null) ?? null,
+        source_system: params[6] as string,
+        payload: JSON.parse(params[7] as string) as JsonRecord,
+        metadata: JSON.parse(params[8] as string) as JsonRecord,
+        idempotency_key: idempotencyKey,
+        causation_event_id: (params[10] as string | null) ?? null,
+        correlation_id: (params[11] as string | null) ?? null,
+        request_id: (params[12] as string | null) ?? null,
+        capture_session_id: (params[13] as string | null) ?? null,
+        sentry_trace: (params[14] as string | null) ?? null,
+        sentry_baggage: (params[15] as string | null) ?? null,
+        build_sha: (params[16] as string | null) ?? null,
+        redaction_version: params[17] as string,
+        occurred_at: '2026-05-31T12:00:07.000Z',
+        recorded_at: '2026-05-31T12:00:07.000Z',
+      }
+      this.handoffEvents.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+    if (normalized.includes('from context_work_items w') && normalized.includes('left join support_debug_packets')) {
+      const [companyId, workItemId] = params as [string, string]
+      const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
+      if (!item) return { rows: [], rowCount: 0 }
+      const packet = this.supportPackets.find((p) => p.company_id === companyId && p.id === item.support_packet_id)
+      return {
+        rows: [
+          {
+            ...item,
+            support_packet: packet
+              ? {
+                  id: packet.id,
+                  route: packet.route,
+                  problem: packet.problem,
+                  request_id: packet.request_id,
+                  capture_session_id: packet.capture_session_id,
+                  build_sha: packet.build_sha,
+                  created_at: packet.created_at,
+                  expires_at: packet.expires_at,
+                  redaction_version: packet.redaction_version,
+                }
+              : null,
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+    if (normalized.includes('from context_work_items') && normalized.includes("metadata ->> 'source'")) {
+      const [companyId, captureSessionId] = params as [string, string]
+      const row = this.workItems.find(
+        (w) =>
+          w.company_id === companyId &&
+          w.capture_session_id === captureSessionId &&
+          (w.metadata as JsonRecord).source === 'capture_session_finalize',
+      )
+      return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
+    }
+    if (normalized.includes('from context_handoff_events') && normalized.includes('count(*)::text')) {
+      const [companyId, workItemId] = params as [string, string]
+      const count = this.handoffEvents.filter((e) => e.company_id === companyId && e.work_item_id === workItemId).length
+      return { rows: [{ count: String(count) }], rowCount: 1 }
+    }
+    if (normalized.includes('from context_handoff_events')) {
+      const [companyId, workItemId] = params as [string, string]
+      const rows = this.handoffEvents.filter((e) => e.company_id === companyId && e.work_item_id === workItemId)
+      return { rows, rowCount: rows.length }
+    }
+
+    throw new Error(`unexpected SQL: ${normalized.slice(0, 260)}`)
+  }
+}
+
+function req(method: string, body?: Buffer, headers: Record<string, string> = {}): http.IncomingMessage {
+  return Object.assign(Readable.from(body ? [body] : []), { method, headers }) as http.IncomingMessage
+}
+
+function url(path: string): URL {
+  return new URL(`http://localhost${path}`)
+}
+
+function makeCtx(
+  pool: FakeCapturePool,
+  body: Record<string, unknown>,
+  role: CompanyRole = 'admin',
+  storage = new MemoryStorage(),
+): {
+  ctx: CaptureSessionRouteCtx
+  responses: Array<{ status: number; body: unknown }>
+  storage: MemoryStorage
+} {
+  pool.attach()
+  const responses: Array<{ status: number; body: unknown }> = []
+  const company: ActiveCompany = { id: COMPANY_ID, slug: 'co', name: 'Co', created_at: '', role }
+  const identity: Identity = { userId: 'user-1', source: 'default' }
+  return {
+    responses,
+    ctx: {
+      pool: pool as unknown as Pool,
+      company,
+      identity,
+      tier: 'local',
+      buildSha: 'build-test',
+      storage,
+      maxArtifactBytes: 1024 * 1024,
+      artifactDownloadPresigned: false,
+      requireRole: (allowed) => {
+        const ok = allowed.includes(role)
+        if (!ok) responses.push({ status: 403, body: { error: 'forbidden' } })
+        return ok
+      },
+      readBody: async () => body,
+      sendJson: (status, responseBody) => responses.push({ status, body: responseBody }),
+      sendFileContent: (mimeType, fileName, content) =>
+        responses.push({ status: 200, body: { mimeType, fileName, content } }),
+      sendFileRedirect: (location) => responses.push({ status: 302, body: { location } }),
+    },
+    storage,
+  }
+}
+
+async function callRoute(
+  pool: FakeCapturePool,
+  method: string,
+  path: string,
+  body: Record<string, unknown> = {},
+  role: CompanyRole = 'admin',
+) {
+  const { ctx, responses } = makeCtx(pool, body, role)
+  const handled = await handleCaptureSessionRoutes(req(method), url(path), ctx)
+  return { handled, responses }
+}
+
+function multipart(
+  parts: Array<{ name: string; value?: string; filename?: string; contentType?: string; body?: Buffer }>,
+) {
+  const boundary = '----capture-session-route-test'
+  const chunks: Buffer[] = []
+  for (const part of parts) {
+    chunks.push(Buffer.from(`--${boundary}\r\n`))
+    if (part.body) {
+      chunks.push(
+        Buffer.from(
+          `content-disposition: form-data; name="${part.name}"; filename="${part.filename ?? 'file.bin'}"\r\ncontent-type: ${part.contentType ?? 'application/octet-stream'}\r\n\r\n`,
+        ),
+      )
+      chunks.push(part.body)
+      chunks.push(Buffer.from('\r\n'))
+    } else {
+      chunks.push(Buffer.from(`content-disposition: form-data; name="${part.name}"\r\n\r\n${part.value ?? ''}\r\n`))
+    }
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`))
+  return { boundary, body: Buffer.concat(chunks) }
+}
+
+async function callMultipartRoute(
+  pool: FakeCapturePool,
+  path: string,
+  parts: Parameters<typeof multipart>[0],
+  role: CompanyRole = 'admin',
+) {
+  const storage = new MemoryStorage()
+  const { ctx, responses } = makeCtx(pool, {}, role, storage)
+  const { boundary, body } = multipart(parts)
+  const request = req('POST', body, { 'content-type': `multipart/form-data; boundary=${boundary}` })
+  const handled = await handleCaptureSessionRoutes(request, url(path), ctx)
+  return { handled, responses, storage }
+}
+
+describe('capture session routes', () => {
+  it('requires consent for recorded capture modes', async () => {
+    const pool = new FakeCapturePool()
+
+    const created = await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+    })
+
+    expect(created.responses[0]).toEqual({
+      status: 400,
+      body: { error: 'consent_version is required for recorded capture sessions' },
+    })
+    expect(pool.sessions).toHaveLength(0)
+  })
+
+  it('rejects invalid capture modes and statuses instead of coercing them', async () => {
+    const pool = new FakeCapturePool()
+
+    const invalidMode = await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'video-without-consent',
+    })
+    expect(invalidMode.responses[0]).toEqual({ status: 400, body: { error: 'invalid capture session mode' } })
+
+    await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    const invalidStatus = await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, {
+      status: 'done-ish',
+    })
+    expect(invalidStatus.responses[0]).toEqual({ status: 400, body: { error: 'invalid capture session status' } })
+    expect(pool.sessions[0]?.status).toBe('open')
+  })
+
+  it('creates a session, appends events/artifacts, and reports counts', async () => {
+    const pool = new FakeCapturePool()
+
+    const created = await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      route_path: '/desktop/takeoff',
+      device_kind: 'tablet',
+      platform: 'ios',
+      consent_version: 'pilot-v1',
+      metadata: { source: 'test' },
+    })
+
+    expect(created.handled).toBe(true)
+    expect(created.responses[0]).toMatchObject({ status: 200 })
+    expect(pool.sessions[0]).toMatchObject({
+      id: SESSION_ID,
+      mode: 'feedback',
+      status: 'open',
+      route_path: '/desktop/takeoff',
+      app_build_sha: 'build-test',
+      consent_version: 'pilot-v1',
+      consent_actor_kind: 'user',
+      consent_actor_ref: 'user-1',
+      consent_authority: 'authenticated_company_user',
+    })
+    expect(pool.sessions[0]?.consent_scope).toMatchObject({
+      mode: 'feedback',
+      route_path: '/desktop/takeoff',
+    })
+    expect(pool.sessions[0]?.consented_at).toBeTruthy()
+
+    const events = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/events`, {
+      events: [
+        {
+          client_event_id: 'ev-1',
+          seq: 1,
+          event_type: 'nav.route',
+          event_class: 'navigation',
+          route_path: '/desktop/takeoff',
+          payload: { state: 'scale_verify' },
+        },
+        {
+          client_event_id: 'ev-1',
+          seq: 2,
+          event_type: 'nav.route',
+        },
+        {
+          client_event_id: 'ev-2',
+          seq: Number.NaN,
+          event_type: 'canvas.drag',
+          occurred_at: 'not-a-real-timestamp',
+        },
+        {
+          seq: 3,
+          payload: { ignored: true },
+        },
+      ],
+    })
+    expect(events.responses[0]).toEqual({ status: 202, body: { accepted: 2 } })
+    expect(pool.events).toHaveLength(2)
+    expect(pool.events[0]).toMatchObject({
+      capture_session_id: SESSION_ID,
+      client_event_id: 'ev-1',
+      event_type: 'nav.route',
+      route_path: '/desktop/takeoff',
+      payload: { state: 'scale_verify' },
+    })
+    expect(pool.events[1]).toMatchObject({
+      client_event_id: 'ev-2',
+      seq: 2,
+      event_type: 'canvas.drag',
+      occurred_at: null,
+    })
+
+    const artifacts = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [
+        {
+          kind: 'transcript',
+          metadata: { ignored: true },
+        },
+        {
+          kind: 'transcript',
+          uri: 's3://capture/transcript.txt',
+          content_type: 'text/plain',
+          byte_size: 40.8,
+          content_hash: 'sha256:abc',
+          duration_ms: Number.NaN,
+          pii_level: 'private',
+          retention_expires_at: 'not-a-real-timestamp',
+          metadata: { source: 'mic' },
+        },
+      ],
+    })
+    expect(artifacts.responses[0]).toEqual({ status: 202, body: { accepted: 1 } })
+    expect(pool.artifacts[0]).toMatchObject({
+      capture_session_id: SESSION_ID,
+      kind: 'transcript',
+      uri: 's3://capture/transcript.txt',
+      byte_size: 40,
+      duration_ms: null,
+      pii_level: 'private',
+      access_policy: 'support_only',
+      redaction_version: 'capture-session-v1',
+      retention_expires_at: pool.sessions[0]?.retention_expires_at,
+    })
+
+    const uploadPayload = Buffer.from('recorded microphone bytes')
+    const uploaded = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'duration_ms', value: '1250' },
+      { name: 'pii_level', value: 'private' },
+      { name: 'metadata', value: JSON.stringify({ source: 'mic' }) },
+      { name: 'file', filename: 'audio.webm', contentType: 'audio/webm', body: uploadPayload },
+    ])
+    expect(uploaded.responses[0]).toMatchObject({
+      status: 201,
+      body: {
+        artifact: {
+          id: '00000000-0000-4000-8000-000000000002',
+          kind: 'audio',
+          content_type: 'audio/webm',
+          byte_size: uploadPayload.length,
+          redaction_version: 'capture-session-v1',
+        },
+      },
+    })
+    expect(pool.artifacts[1]).toMatchObject({
+      capture_session_id: SESSION_ID,
+      kind: 'audio',
+      uri: null,
+      content_type: 'audio/webm',
+      byte_size: uploadPayload.length,
+      duration_ms: 1250,
+      pii_level: 'private',
+      retention_expires_at: pool.sessions[0]?.retention_expires_at,
+      metadata: { source: 'mic', file_name: 'audio.webm', upload_source: 'capture_artifact_upload' },
+    })
+    const uploadedKey = pool.artifacts[1]?.storage_key ?? ''
+    expect(uploadedKey).toMatch(
+      /^11111111-1111-4111-8111-111111111111\/capture-sessions\/00000000-0000-4000-8000-000000000123\/[0-9a-f-]+-audio\.webm$/,
+    )
+    await expect(uploaded.storage.get(uploadedKey)).resolves.toEqual(uploadPayload)
+
+    const downloadCtx = makeCtx(pool, {}, 'admin', uploaded.storage)
+    const downloaded = await handleCaptureSessionRoutes(
+      req('GET'),
+      url(`/api/capture-sessions/${SESSION_ID}/artifacts/${pool.artifacts[1]!.id}/file`),
+      downloadCtx.ctx,
+    )
+    expect(downloaded).toBe(true)
+    expect(downloadCtx.responses[0]).toMatchObject({
+      status: 200,
+      body: { mimeType: 'audio/webm', fileName: 'audio.webm' },
+    })
+    expect((downloadCtx.responses[0]?.body as { content: Buffer }).content).toEqual(uploadPayload)
+
+    const fetched = await callRoute(pool, 'GET', `/api/capture-sessions/${SESSION_ID}`)
+    expect(fetched.responses[0]).toMatchObject({
+      status: 200,
+      body: {
+        event_count: 2,
+        artifact_count: 2,
+      },
+    })
+  })
+
+  it('marks stopped and discarded sessions terminal without clearing the row', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/transcript.txt' }],
+    })
+    expect(pool.artifacts[0]?.deleted_at).toBeNull()
+
+    const stopped = await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, {
+      status: 'stopped',
+      route_path: '/desktop/done',
+    })
+    expect(stopped.responses[0]).toMatchObject({
+      status: 200,
+      body: { capture_session: { status: 'stopped', route_path: '/desktop/done' } },
+    })
+    expect(pool.sessions[0]?.stopped_at).toBeTruthy()
+
+    const discarded = await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, {
+      status: 'discarded',
+    })
+    expect(discarded.responses[0]).toMatchObject({
+      status: 200,
+      body: { capture_session: { status: 'discarded' } },
+    })
+    expect(pool.sessions[0]?.discarded_at).toBeTruthy()
+    expect(pool.artifacts[0]?.deleted_at).toBeTruthy()
+
+    const fetched = await callRoute(pool, 'GET', `/api/capture-sessions/${SESSION_ID}`)
+    expect(fetched.responses[0]).toMatchObject({
+      status: 200,
+      body: { artifact_count: 0 },
+    })
+  })
+
+  it('deletes stored artifact objects when a session is discarded', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      consent_version: 'pilot-v1',
+    })
+    const payload = Buffer.from('discard me')
+    const uploaded = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'file', filename: 'audio.webm', contentType: 'audio/webm', body: payload },
+    ])
+    const key = pool.artifacts[0]?.storage_key ?? ''
+    await expect(uploaded.storage.get(key)).resolves.toEqual(payload)
+
+    const discardCtx = makeCtx(pool, { status: 'discarded' }, 'admin', uploaded.storage)
+    await handleCaptureSessionRoutes(req('PATCH'), url(`/api/capture-sessions/${SESSION_ID}`), discardCtx.ctx)
+
+    expect(discardCtx.responses[0]).toMatchObject({
+      status: 200,
+      body: { capture_session: { status: 'discarded' }, deleted_artifact_objects: 1, artifact_object_delete_errors: 0 },
+    })
+    expect(pool.artifacts[0]?.deleted_at).toBeTruthy()
+    await expect(uploaded.storage.get(key)).rejects.toThrow(`missing ${key}`)
+  })
+
+  it('blocks new events and artifacts once a session is discarded', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'discarded' })
+
+    const events = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/events`, {
+      events: [{ event_type: 'nav.route' }],
+    })
+    expect(events.responses[0]).toEqual({ status: 409, body: { error: 'capture session is discarded' } })
+
+    const artifacts = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/discarded.txt' }],
+    })
+    expect(artifacts.responses[0]).toEqual({ status: 409, body: { error: 'capture session is discarded' } })
+  })
+
+  it('supports redacted as a terminal artifact-tombstoning status', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/transcript.txt' }],
+    })
+
+    const redacted = await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, {
+      status: 'redacted',
+    })
+    expect(redacted.responses[0]).toMatchObject({
+      status: 200,
+      body: { capture_session: { status: 'redacted' } },
+    })
+    expect(pool.artifacts[0]?.deleted_at).toBeTruthy()
+
+    const events = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/events`, {
+      events: [{ event_type: 'nav.route' }],
+    })
+    expect(events.responses[0]).toEqual({ status: 409, body: { error: 'capture session is redacted' } })
+  })
+
+  it('finalizes a stopped capture session into one support packet and work item', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      route_path: '/desktop/takeoff',
+      consent_version: 'pilot-v1',
+    })
+    await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/events`, {
+      events: [{ client_event_id: 'ev-1', event_type: 'ui.click', event_class: 'dead_control' }],
+    })
+    await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/transcript.txt', pii_level: 'private' }],
+    })
+    await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'stopped' })
+
+    const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+      title: 'Verify scale button failed',
+      summary: 'The recorded user could not verify scale.',
+      lane: 'agent',
+      severity: 'high',
+    })
+
+    expect(finalized.responses[0]).toMatchObject({
+      status: 201,
+      body: {
+        work_item: {
+          title: 'Verify scale button failed',
+          lane: 'agent',
+          severity: 'high',
+          capture_session_id: SESSION_ID,
+        },
+        support_packet: { id: pool.supportPackets[0]?.id },
+        event: {
+          event_type: 'work_item.created',
+          capture_session_id: SESSION_ID,
+        },
+      },
+    })
+    expect(pool.supportPackets).toHaveLength(1)
+    expect(pool.workItems).toHaveLength(1)
+    expect(pool.handoffEvents).toHaveLength(1)
+    expect(pool.workItems[0]?.metadata).toMatchObject({
+      source: 'capture_session_finalize',
+      capture_session_id: '[redacted]',
+      event_count: 2,
+      artifact_count: 1,
+      private_artifact_count: 1,
+    })
+    expect(pool.supportPackets[0]?.server_context).toMatchObject({
+      capture_session_id: SESSION_ID,
+      capture_session: {
+        summary: { id: SESSION_ID, mode: 'feedback' },
+        artifacts: [{ kind: 'transcript', redaction_version: 'capture-session-v1' }],
+      },
+    })
+    expect((pool.supportPackets[0]?.server_context as JsonRecord).capture_session).toMatchObject({
+      recent_events: expect.arrayContaining([
+        expect.objectContaining({ event_type: 'ui.click' }),
+        expect.objectContaining({ event_type: 'session.stopped' }),
+      ]),
+    })
+
+    const replay = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {})
+    expect(replay.responses[0]).toMatchObject({
+      status: 200,
+      body: {
+        idempotent_replay: true,
+        work_item: { id: pool.workItems[0]?.id },
+      },
+    })
+    const lateArtifact = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/late.txt' }],
+    })
+    expect(lateArtifact.responses[0]).toEqual({
+      status: 409,
+      body: { error: 'capture session has already been finalized' },
+    })
+    const lateUpload = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'file', filename: 'late.webm', contentType: 'audio/webm', body: Buffer.from('late audio') },
+    ])
+    expect(lateUpload.responses[0]).toEqual({
+      status: 409,
+      body: { error: 'capture session has already been finalized' },
+    })
+    expect(pool.supportPackets).toHaveLength(1)
+    expect(pool.workItems).toHaveLength(1)
+    expect(pool.artifacts).toHaveLength(1)
+    expect(pool.events.map((event) => event.event_type)).toEqual(['ui.click', 'session.stopped', 'session.finalized'])
+  })
+
+  it('can promote trusted authenticated feedback captures to agent routing behind an env flag', async () => {
+    const previous = process.env.CAPTURE_AUTH_AUTO_DISPATCH
+    process.env.CAPTURE_AUTH_AUTO_DISPATCH = '1'
+    try {
+      const pool = new FakeCapturePool()
+      await callRoute(pool, 'POST', '/api/capture-sessions', {
+        capture_session_id: SESSION_ID,
+        mode: 'feedback',
+        route_path: '/desktop/takeoff',
+        consent_version: 'pilot-v1',
+      })
+      await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'stopped' })
+
+      const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+        title: 'Captured internal feedback',
+        summary: 'Trusted internal user recorded a workflow issue.',
+      })
+
+      expect(finalized.responses[0]).toMatchObject({
+        status: 201,
+        body: {
+          work_item: {
+            title: 'Captured internal feedback',
+            lane: 'both',
+            capture_session_id: SESSION_ID,
+          },
+        },
+      })
+      expect(pool.workItems[0]?.metadata).toMatchObject({
+        capture_auto_dispatch: true,
+        capture_routing_policy: 'trusted_authenticated_capture',
+        requested_lane: 'triage',
+      })
+      expect(pool.handoffEvents[0]?.payload).toMatchObject({
+        capture_auto_dispatch: true,
+      })
+    } finally {
+      if (previous === undefined) delete process.env.CAPTURE_AUTH_AUTO_DISPATCH
+      else process.env.CAPTURE_AUTH_AUTO_DISPATCH = previous
+    }
+  })
+
+  it('refuses to finalize discarded sessions', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'discarded' })
+
+    const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {})
+
+    expect(finalized.responses[0]).toEqual({ status: 409, body: { error: 'capture session is discarded' } })
+    expect(pool.supportPackets).toHaveLength(0)
+    expect(pool.workItems).toHaveLength(0)
+  })
+
+  it('does not hide missing capture-session joins behind accepted zero', async () => {
+    const pool = new FakeCapturePool()
+
+    const events = await callRoute(pool, 'POST', `/api/capture-sessions/${MISSING_SESSION_ID}/events`, {
+      events: [{ event_type: 'nav.route' }],
+    })
+    expect(events.responses[0]).toEqual({ status: 404, body: { error: 'capture session not found' } })
+
+    const artifacts = await callRoute(pool, 'POST', `/api/capture-sessions/${MISSING_SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/missing.txt' }],
+    })
+    expect(artifacts.responses[0]).toEqual({ status: 404, body: { error: 'capture session not found' } })
+  })
+
+  it('rejects cross-company id reuse and non-reader roles', async () => {
+    const pool = new FakeCapturePool()
+    pool.sessions.push({
+      id: SESSION_ID,
+      company_id: OTHER_COMPANY_ID,
+      actor_user_id: 'other',
+      mode: 'feedback',
+      status: 'open',
+      route_path: null,
+      device_kind: null,
+      platform: null,
+      viewport: null,
+      app_build_sha: null,
+      consent_version: '',
+      consent_actor_kind: null,
+      consent_actor_ref: null,
+      consent_authority: null,
+      consent_scope: {},
+      consented_at: null,
+      redaction_version: 'capture-session-v1',
+      metadata: {},
+      started_at: '2026-05-31T12:00:00.000Z',
+      last_seen_at: '2026-05-31T12:00:00.000Z',
+      stopped_at: null,
+      discarded_at: null,
+      retention_expires_at: null,
+    })
+
+    const conflict = await callRoute(pool, 'POST', '/api/capture-sessions', { capture_session_id: SESSION_ID })
+    expect(conflict.responses[0]).toEqual({
+      status: 409,
+      body: { error: 'capture_session_id belongs to another company' },
+    })
+
+    const memberRead = await callRoute(pool, 'GET', `/api/capture-sessions/${SESSION_ID}`, {}, 'member')
+    expect(memberRead.responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+  })
+})

@@ -31,7 +31,7 @@ export type RentalRouteCtx = {
  *   1. Read the locked rental row.
  *   2. Run the pure reducer against the persisted snapshot.
  *   3. UPDATE rentals with the reducer output, including state_version.
- *   4. Append a workflow_event_log row keyed on (entity_id, state_version).
+ *   4. Append a workflow_event_log row keyed on (entity_id, workflow_name, state_version).
  *
  * This is the Phase 2 wiring (CLAUDE.md "rental" workflow). Replaces the
  * direct `status='returned'` / `status='closed'` writes that previously

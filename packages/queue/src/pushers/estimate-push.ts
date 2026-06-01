@@ -1,3 +1,10 @@
+import {
+  ESTIMATE_PUSH_WORKFLOW_NAME,
+  ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
+  estimatePushRowToSnapshot,
+  transitionEstimatePushWorkflow,
+  type EstimatePushWorkflowEvent,
+} from '@sitelayer/workflows'
 import { appendWorkflowEvent, markOutboxRowFailedFresh, type QueueClient, type TraceContext } from '../index.js'
 
 // ---------------------------------------------------------------------------
@@ -79,89 +86,73 @@ async function applyEstimatePushWorkerEvent(
     return current
   }
   const beforeVersion = current.state_version
-  const nextVersion = beforeVersion + 1
-  if (outcome.kind === 'succeeded') {
-    const postedAt = new Date().toISOString()
-    const updated = await client.query<EstimatePushStateRow>(
-      `update estimate_pushes
-         set status = 'posted',
-             state_version = $3,
-             posted_at = $4,
-             qbo_estimate_id = $5,
-             error = null,
-             failed_at = null,
-             version = version + 1,
-             updated_at = now()
-       where company_id = $1 and id = $2
-       returning id, status, state_version, qbo_estimate_id,
-                 reviewed_at, reviewed_by, approved_at, approved_by,
-                 posted_at, failed_at, error`,
-      [companyId, pushId, nextVersion, postedAt, outcome.qbo_estimate_id],
-    )
-    const row = updated.rows[0] ?? null
-    if (row) {
-      await appendWorkflowEvent(client, {
-        companyId,
-        workflowName: 'estimate_push',
-        schemaVersion: 1,
-        entityType: 'estimate_push',
-        entityId: pushId,
-        stateVersion: beforeVersion,
-        eventType: 'POST_SUCCEEDED',
-        eventPayload: { type: 'POST_SUCCEEDED', posted_at: postedAt, qbo_estimate_id: outcome.qbo_estimate_id },
-        snapshotAfter: rowToWorkflowSnapshot(row),
-        ...(trace ? { trace } : {}),
-      })
-    }
-    return row
-  }
-  const failedAt = new Date().toISOString()
-  const errorMessage = outcome.error.slice(0, 1000)
+
+  // Route the worker-emitted transition through the SAME pure reducer the
+  // human event route uses (transitionEstimatePushWorkflow), instead of
+  // hand-writing the posting→posted / posting→failed SQL + state_version
+  // bump. The clock value and QBO id / error string are event PAYLOAD —
+  // the reducer reads them off the event and never calls Date.now(). The
+  // SQL below is now one generic "write this snapshot" UPDATE.
+  const event: EstimatePushWorkflowEvent =
+    outcome.kind === 'succeeded'
+      ? { type: 'POST_SUCCEEDED', posted_at: new Date().toISOString(), qbo_estimate_id: outcome.qbo_estimate_id }
+      : { type: 'POST_FAILED', failed_at: new Date().toISOString(), error: outcome.error.slice(0, 1000) }
+
+  // assertEstimatePushTransition throws if `current` isn't in 'posting';
+  // the status guard above already prevents that, so a throw here is a
+  // real bug signal that propagates to the per-row catch in
+  // processEstimatePush (which records POST_FAILED + requeues).
+  const nextSnapshot = transitionEstimatePushWorkflow(estimatePushRowToSnapshot(current), event)
+
   const updated = await client.query<EstimatePushStateRow>(
     `update estimate_pushes
-       set status = 'failed',
-           state_version = $3,
-           failed_at = $4,
-           error = $5,
+       set status = $3,
+           state_version = $4,
+           reviewed_at = $5,
+           reviewed_by = $6,
+           approved_at = $7,
+           approved_by = $8,
+           posted_at = $9,
+           failed_at = $10,
+           error = $11,
+           qbo_estimate_id = $12,
            version = version + 1,
            updated_at = now()
      where company_id = $1 and id = $2
      returning id, status, state_version, qbo_estimate_id,
                reviewed_at, reviewed_by, approved_at, approved_by,
                posted_at, failed_at, error`,
-    [companyId, pushId, nextVersion, failedAt, errorMessage],
+    [
+      companyId,
+      pushId,
+      nextSnapshot.state,
+      nextSnapshot.state_version,
+      nextSnapshot.reviewed_at ?? null,
+      nextSnapshot.reviewed_by ?? null,
+      nextSnapshot.approved_at ?? null,
+      nextSnapshot.approved_by ?? null,
+      nextSnapshot.posted_at ?? null,
+      nextSnapshot.failed_at ?? null,
+      nextSnapshot.error ?? null,
+      nextSnapshot.qbo_estimate_id ?? null,
+    ],
   )
   const row = updated.rows[0] ?? null
   if (row) {
     await appendWorkflowEvent(client, {
       companyId,
-      workflowName: 'estimate_push',
-      schemaVersion: 1,
+      workflowName: ESTIMATE_PUSH_WORKFLOW_NAME,
+      schemaVersion: ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
       entityType: 'estimate_push',
       entityId: pushId,
       stateVersion: beforeVersion,
-      eventType: 'POST_FAILED',
-      eventPayload: { type: 'POST_FAILED', failed_at: failedAt, error: errorMessage },
-      snapshotAfter: rowToWorkflowSnapshot(row),
+      eventType: event.type,
+      eventPayload: event as unknown as Record<string, unknown>,
+      snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
       ...(trace ? { trace } : {}),
     })
   }
   return row
-}
-
-function rowToWorkflowSnapshot(row: EstimatePushStateRow): Record<string, unknown> {
-  return {
-    state: row.status,
-    state_version: row.state_version,
-    reviewed_at: row.reviewed_at,
-    reviewed_by: row.reviewed_by,
-    approved_at: row.approved_at,
-    approved_by: row.approved_by,
-    posted_at: row.posted_at,
-    failed_at: row.failed_at,
-    error: row.error,
-    qbo_estimate_id: row.qbo_estimate_id,
-  }
 }
 
 async function recordEstimatePushSyncEvent(
@@ -227,7 +218,7 @@ export async function processEstimatePush(
         limit $2
         for update skip locked
       )
-      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id
+      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id, capture_session_id
       `,
       [companyId, limit],
     )
@@ -252,6 +243,7 @@ export async function processEstimatePush(
       sentry_trace: row.sentry_trace,
       sentry_baggage: row.sentry_baggage,
       request_id: row.request_id,
+      capture_session_id: row.capture_session_id ?? null,
     }
     await client.query('begin')
     try {

@@ -521,4 +521,42 @@ describe('pollChatResponse', () => {
     )
     expect(fetchOnce).toHaveBeenCalledTimes(1)
   })
+
+  // Gap 4 (model-shrink): the `partial` streaming-delta branch was dead
+  // code (the server only ever emits `responded`). It was deleted. These
+  // tests lock that decision: awaitingResponse accepts the terminal
+  // `responded` / STREAM_ERROR / STREAM_TIMEOUT and treats a `partial`
+  // delta as a no-op (stays awaiting, no message mutation).
+  describe('streaming partial delta is a no-op (dead branch removed)', () => {
+    it('a partial delta does not change state or messages', async () => {
+      const packet = makePacket()
+      const { subscriber, subscriptions } = makeManualSubscriber()
+      const { actor } = startActor(makeStageOk('audit-p1'), subscriber)
+      actor.send({ type: 'CONTEXT_UPDATED', packet })
+      actor.send({ type: 'OPEN' })
+      actor.send({ type: 'SET_DRAFT', value: 'hi' })
+      actor.send({ type: 'SEND' })
+      await settle()
+      expectValue(actor, { open: 'awaitingResponse' })
+
+      const before = actor.getSnapshot().context.messages
+      const partial: ChatResponseDelta = {
+        audit_event_id: 'audit-p1',
+        status: 'partial',
+        body_delta: 'streaming token',
+      }
+      subscriptions[0]!.handlers.onDelta(partial)
+      await settle()
+
+      // Still awaiting — partial is not modeled, so it cannot advance the
+      // machine — and the staged message is unchanged.
+      expectValue(actor, { open: 'awaitingResponse' })
+      expect(actor.getSnapshot().context.messages).toEqual(before)
+
+      // A subsequent terminal delta still resolves normally.
+      subscriptions[0]!.handlers.onDelta({ audit_event_id: 'audit-p1', status: 'responded', body: 'done' })
+      await settle()
+      expectValue(actor, { open: 'idle' })
+    })
+  })
 })

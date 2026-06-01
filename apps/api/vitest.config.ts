@@ -11,6 +11,7 @@ export default defineConfig({
       ),
       '@sitelayer/logger': fileURLToPath(new URL('../../packages/logger/src/index.ts', import.meta.url)),
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
+      '@sitelayer/scenario': fileURLToPath(new URL('../../packages/scenario/src/index.ts', import.meta.url)),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
     },
   },

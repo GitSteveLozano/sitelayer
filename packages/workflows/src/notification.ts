@@ -306,6 +306,41 @@ export function isHumanNotificationEvent(eventType: string): eventType is Notifi
   return eventType === 'RETRY' || eventType === 'VOID'
 }
 
+/**
+ * Collapse the reducer's eight canonical states down to the legacy
+ * five-value `notifications.status` vocabulary
+ * (`pending | sending | sent | failed | voided`).
+ *
+ * The canonical state vocabulary lives on `workflow_event_log` and is
+ * replayable; `notifications.status` is a derived cache kept for legacy
+ * per-recipient reads. This is the SINGLE source for the collapse so the
+ * worker (which writes the column as it drives a row through the
+ * pipeline) and the API route (which writes it on the human RETRY/VOID
+ * path) can never drift. Exhaustive `switch` over `NotificationWorkflowState`
+ * so adding a new reducer state forces a compile error here.
+ *
+ * The `failed_*` triplet collapses to a single `failed` — the lost
+ * `failure_kind` is recoverable from the event log; the legacy column is
+ * intentionally lossy.
+ */
+export function notificationStateToLegacyStatus(state: NotificationWorkflowState): string {
+  switch (state) {
+    case 'pending':
+    case 'hydrating':
+      return 'pending'
+    case 'sending':
+      return 'sending'
+    case 'sent':
+      return 'sent'
+    case 'failed_clerk_not_found':
+    case 'failed_clerk_unreachable':
+    case 'failed_provider':
+      return 'failed'
+    case 'voided':
+      return 'voided'
+  }
+}
+
 export const notificationWorkflow = registerWorkflow<
   NotificationWorkflowState,
   NotificationWorkflowEvent,

@@ -93,10 +93,24 @@ export function MobileBroadcast() {
 
   return (
     <>
-      <MTopBar back title="Broadcast" onBack={() => navigate(-1)} />
+      <MTopBar back backVariant="close" title="BROADCAST" onBack={() => navigate(-1)} />
       <MBody pad>
-        <div style={{ ...MONO, fontSize: 12, fontWeight: 600, lineHeight: 1.5, color: 'var(--m-ink-3)' }}>
-          ONE-WAY MEGAPHONE · REPLIES OFF. EMERGENCIES · WEATHER · POLICY.
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 28,
+            letterSpacing: '-0.02em',
+            lineHeight: 1.05,
+            color: 'var(--m-ink)',
+          }}
+        >
+          Send to everyone.
+        </div>
+        <div
+          style={{ ...MONO, marginTop: 12, fontSize: 12, fontWeight: 600, lineHeight: 1.5, color: 'var(--m-ink-3)' }}
+        >
+          EMERGENCIES · WEATHER · POLICY UPDATES. THIS IS A ONE-WAY MEGAPHONE — REPLIES OFF.
         </div>
 
         {/* Audience selector — 2×2 grid of square tiles with head-counts,

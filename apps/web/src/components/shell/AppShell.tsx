@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { BottomTabBar } from '@/components/nav/BottomTabBar'
 import { OperatorContextChatWidget } from '@/components/chat/OperatorContextChatWidget'
 import { DesktopSideRail } from '@/components/nav/DesktopSideRail'
+import { ImpersonationBanner } from './ImpersonationBanner'
 import { InstallPromptBanner } from './InstallPromptBanner'
 import { OfflineBanner } from './OfflineBanner'
 import { PushDeniedBanner } from './PushDeniedBanner'
@@ -24,6 +25,7 @@ export function AppShell() {
       <DesktopSideRail />
       <main className="flex-1 min-w-0 flex flex-col">
         <div className="flex-1 min-h-0 overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+72px)] lg:pb-0">
+          <ImpersonationBanner />
           <OfflineBanner />
           <UpdateBanner />
           <InstallPromptBanner />

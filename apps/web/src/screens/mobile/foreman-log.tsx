@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import {
+  DailyLogSubmittedBanner,
   MBody,
   MButton,
   MI,
@@ -49,7 +50,7 @@ import {
 } from '../../lib/api/index.js'
 import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
 import { assembleDailyLogDefaults, isEmptyDailyLogDraft } from '../../lib/daily-log-assembly.js'
-import { formatDecimalHours, todayIso } from './format.js'
+import { endOfWeek, formatDecimalHours, startOfWeek, todayIso } from './format.js'
 
 export function ForemanLog({ bootstrap }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
@@ -126,6 +127,18 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
 
   const isSubmitted = log.status === 'submitted'
   const today = log.occurred_on
+
+  // Weekly strip data — the foreman's logs for the current week on this
+  // project, used by the submitted confirmation surface (design msg__41).
+  // Only fetched once the log is submitted so the draft path pays nothing.
+  const weekLogs = useDailyLogs(
+    { from: startOfWeek(today), to: endOfWeek(today), projectId: log.project_id },
+    { enabled: isSubmitted },
+  )
+  const weekEntries = useMemo(
+    () => (weekLogs.data?.dailyLogs ?? []).map((d) => ({ occurred_on: d.occurred_on, status: d.status })),
+    [weekLogs.data],
+  )
 
   // Today's labor on this project — used both for the Hours stat and
   // for the auto-assembly crew_summary fallback.
@@ -207,8 +220,28 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
     onDone()
   }
 
+  // Explicit "Save draft" — flushes the pending notes patch immediately
+  // (the 1.2s auto-save is a backstop) and shows a brief saved confirmation,
+  // matching the design's two-button draft footer (msg__40).
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const onSaveDraft = async () => {
+    await patch
+      .mutateAsync({ notes, expected_version: versionRef.current })
+      .then(() => {
+        dirtyRef.current = false
+        setSavedAt(Date.now())
+      })
+      .catch(() => {})
+  }
+
   return (
     <>
+      {isSubmitted ? (
+        <div style={{ padding: '0 16px 12px' }}>
+          <DailyLogSubmittedBanner submittedAt={log.submitted_at} weekLogs={weekEntries} />
+        </div>
+      ) : null}
+
       <MStatStrip>
         <MStat label="PHOTOS" value={String(photoCount)} />
         <MStat label="HOURS" value={formatDecimalHours(totalHours, 1)} />
@@ -263,9 +296,20 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
       <PhotoTimeline log={log} briefs={briefs.data?.briefs ?? []} />
 
       <div style={{ padding: 16 }}>
-        <MButton variant="primary" onClick={onSubmit} disabled={isSubmitted || submit.isPending}>
-          {isSubmitted ? 'Submitted' : submit.isPending ? 'Submitting…' : 'Submit to PM'}
-        </MButton>
+        {!isSubmitted ? (
+          <div className="m-btn-row">
+            <MButton variant="ghost" onClick={onSaveDraft} disabled={patch.isPending} style={{ flex: 1 }}>
+              {patch.isPending ? 'Saving…' : savedAt ? 'Saved ✓' : 'Save draft'}
+            </MButton>
+            <MButton variant="primary" onClick={onSubmit} disabled={submit.isPending} style={{ flex: 2 }}>
+              {submit.isPending ? 'Submitting…' : 'Submit to PM'}
+            </MButton>
+          </div>
+        ) : (
+          <MButton variant="primary" disabled>
+            Submitted
+          </MButton>
+        )}
       </div>
     </>
   )

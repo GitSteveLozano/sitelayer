@@ -104,4 +104,177 @@ describe('replayOfflineQueue — Web Locks cross-tab guard', () => {
     expect(result.replayed).toBe(1)
     expect(removeMock).toHaveBeenCalledWith('mut-1')
   })
+
+  it('replays authenticated capture artifact uploads from the offline queue', async () => {
+    ;(navigator as unknown as { locks: unknown }).locks = {
+      request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {
+        return cb({ name: _name })
+      },
+    }
+    const blob = new Blob(['voice'], { type: 'audio/webm' })
+    const row = {
+      id: 'mut-capture-upload',
+      kind: 'capture_artifact_upload' as const,
+      enqueued_at: Date.now(),
+      attempt_count: 0,
+      payload: {
+        target: { type: 'authenticated' },
+        captureSessionId: '00000000-0000-4000-8000-000000000123',
+        kind: 'audio',
+        file: blob,
+        fileName: 'audio.webm',
+        duration_ms: 1400,
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: { source: 'record_feedback' },
+      },
+    }
+    const removeMock = vi.fn(async () => undefined)
+    const uploadCaptureArtifact = vi.fn(async () => ({ artifact: { id: 'a1' } }))
+    vi.doMock('./queue', () => ({
+      listOfflineMutations: vi.fn(async () => [row]),
+      removeOfflineMutation: removeMock,
+      updateOfflineMutation: vi.fn(async () => undefined),
+    }))
+    vi.doMock('@/lib/api/capture-sessions', () => ({
+      createCaptureSession: vi.fn(),
+      finalizeCaptureSession: vi.fn(async () => ({ work_item: { id: 'w1' } })),
+      uploadCaptureArtifact,
+    }))
+    vi.doMock('@/portal/api', () => ({
+      finalizePortalEstimateCaptureSession: vi.fn(),
+      finalizePortalRentalCaptureSession: vi.fn(),
+      startPortalEstimateCaptureSession: vi.fn(),
+      startPortalRentalCaptureSession: vi.fn(),
+      uploadPortalEstimateCaptureArtifact: vi.fn(),
+      uploadPortalRentalCaptureArtifact: vi.fn(),
+    }))
+
+    const { replayOfflineQueue } = await import('./replay')
+    const result = await replayOfflineQueue()
+
+    expect(result.replayed).toBe(1)
+    expect(uploadCaptureArtifact).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000123',
+      expect.objectContaining({
+        kind: 'audio',
+        file: blob,
+        fileName: 'audio.webm',
+        duration_ms: 1400,
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: { source: 'record_feedback' },
+      }),
+    )
+    expect(removeMock).toHaveBeenCalledWith('mut-capture-upload')
+  })
+
+  it('replays queued portal capture session starts before later artifacts', async () => {
+    ;(navigator as unknown as { locks: unknown }).locks = {
+      request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {
+        return cb({ name: _name })
+      },
+    }
+    const row = {
+      id: 'mut-capture-start',
+      kind: 'capture_session_start' as const,
+      enqueued_at: Date.now(),
+      attempt_count: 0,
+      payload: {
+        target: { type: 'portal', portal_surface: 'estimate_portal', share_token: 'share-token' },
+        input: {
+          capture_session_id: '00000000-0000-4000-8000-000000000123',
+          mode: 'feedback',
+          consent_version: 'portal-feedback-v1',
+          route_path: '/portal/estimate',
+        },
+      },
+    }
+    const removeMock = vi.fn(async () => undefined)
+    const startPortalEstimateCaptureSession = vi.fn(async () => ({ capture_session: { id: 'session-1' } }))
+    vi.doMock('./queue', () => ({
+      listOfflineMutations: vi.fn(async () => [row]),
+      removeOfflineMutation: removeMock,
+      updateOfflineMutation: vi.fn(async () => undefined),
+    }))
+    vi.doMock('@/lib/api/capture-sessions', () => ({
+      createCaptureSession: vi.fn(),
+      finalizeCaptureSession: vi.fn(),
+      uploadCaptureArtifact: vi.fn(),
+    }))
+    vi.doMock('@/portal/api', () => ({
+      finalizePortalEstimateCaptureSession: vi.fn(),
+      finalizePortalRentalCaptureSession: vi.fn(),
+      startPortalEstimateCaptureSession,
+      startPortalRentalCaptureSession: vi.fn(),
+      uploadPortalEstimateCaptureArtifact: vi.fn(),
+      uploadPortalRentalCaptureArtifact: vi.fn(),
+    }))
+
+    const { replayOfflineQueue } = await import('./replay')
+    const result = await replayOfflineQueue()
+
+    expect(result.replayed).toBe(1)
+    expect(startPortalEstimateCaptureSession).toHaveBeenCalledWith('share-token', {
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      mode: 'feedback',
+      consent_version: 'portal-feedback-v1',
+      route_path: '/portal/estimate',
+    })
+    expect(removeMock).toHaveBeenCalledWith('mut-capture-start')
+  })
+
+  it('replays portal capture finalization using the queued target', async () => {
+    ;(navigator as unknown as { locks: unknown }).locks = {
+      request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {
+        return cb({ name: _name })
+      },
+    }
+    const row = {
+      id: 'mut-capture-finalize',
+      kind: 'capture_session_finalize' as const,
+      enqueued_at: Date.now(),
+      attempt_count: 0,
+      payload: {
+        target: { type: 'portal', portal_surface: 'rental_portal', share_token: 'rental-token' },
+        captureSessionId: '00000000-0000-4000-8000-000000000123',
+        input: { category: 'record_feedback', title: 'Queued feedback', offline_replay: true },
+      },
+    }
+    const removeMock = vi.fn(async () => undefined)
+    const finalizePortalRentalCaptureSession = vi.fn(async () => ({ work_item: { id: 'w1' } }))
+    vi.doMock('./queue', () => ({
+      listOfflineMutations: vi.fn(async () => [row]),
+      removeOfflineMutation: removeMock,
+      updateOfflineMutation: vi.fn(async () => undefined),
+    }))
+    vi.doMock('@/lib/api/capture-sessions', () => ({
+      createCaptureSession: vi.fn(),
+      finalizeCaptureSession: vi.fn(),
+      uploadCaptureArtifact: vi.fn(),
+    }))
+    vi.doMock('@/portal/api', () => ({
+      finalizePortalEstimateCaptureSession: vi.fn(),
+      finalizePortalRentalCaptureSession,
+      startPortalEstimateCaptureSession: vi.fn(),
+      startPortalRentalCaptureSession: vi.fn(),
+      uploadPortalEstimateCaptureArtifact: vi.fn(),
+      uploadPortalRentalCaptureArtifact: vi.fn(),
+    }))
+
+    const { replayOfflineQueue } = await import('./replay')
+    const result = await replayOfflineQueue()
+
+    expect(result.replayed).toBe(1)
+    expect(finalizePortalRentalCaptureSession).toHaveBeenCalledWith(
+      'rental-token',
+      '00000000-0000-4000-8000-000000000123',
+      {
+        category: 'record_feedback',
+        title: 'Queued feedback',
+        offline_replay: true,
+      },
+    )
+    expect(removeMock).toHaveBeenCalledWith('mut-capture-finalize')
+  })
 })

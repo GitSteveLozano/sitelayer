@@ -6,7 +6,15 @@ import { createLogger, getRequestContext, runWithRequestContext, type RequestCon
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
+import { companyRoleToBuiltin, type BuiltinRole, type PermissionAction, type PermissionGrant } from '@sitelayer/domain'
+import {
+  normalizeGrantConstraints,
+  permissionDecision,
+  resolveCompanyRoleAuthority,
+  type CustomRoleAuthority,
+} from './permission-seam.js'
 import { handleCompanyRoutes } from './routes/companies.js'
+import { handleInviteRoutes } from './routes/invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { dispatch } from './routes/dispatch.js'
@@ -14,6 +22,12 @@ import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
+import {
+  createClerkSignInTokenMinter,
+  handleDemoRoutes,
+  resolveDemoSignInTokenTtlSeconds,
+  type SignInTokenMinter,
+} from './routes/demo.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -152,6 +166,23 @@ if (appConfig.tier === 'prod' && !process.env.ESTIMATE_SHARE_SECRET?.trim()) {
   logger.warn('[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET')
 }
 const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
+// Demo-tier magic-link config. Only meaningful when APP_TIER=demo (the route
+// module hard-gates on tier). The shared access code + the Clerk sign-in-token
+// minter are resolved here so the handler stays pure. The minter reuses
+// CLERK_SECRET_KEY (the same Clerk TEST instance secret already used by the
+// worker's welcome-email runner). When the secret is missing the minter is a
+// no-op that returns null, surfacing as a clear "not configured" error.
+const demoAccessCode = process.env.DEMO_ACCESS_CODE?.trim() || null
+const demoAppOrigin = process.env.DEMO_APP_ORIGIN?.trim() || portalBaseUrl
+const demoTicketTtlSeconds = resolveDemoSignInTokenTtlSeconds(process.env)
+const demoSignInTokenMinter: SignInTokenMinter = (() => {
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY?.trim()
+  if (appConfig.tier === 'demo' && clerkSecretKey) {
+    return createClerkSignInTokenMinter({ secretKey: clerkSecretKey, expiresInSeconds: demoTicketTtlSeconds })
+  }
+  // Not configured (or not the demo tier): never mints, always "unseeded".
+  return async () => null
+})()
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
@@ -311,10 +342,71 @@ type CompanyRow = {
   created_at: string
 }
 
+/**
+ * Company resolution + the caller's resolved named-action authority.
+ *
+ * The custom-roles overhaul (docs/RBAC_OVERHAUL_ANALYSIS.md,
+ * packages/domain/src/permissions.ts) is two-layer:
+ *
+ *  - LAYER 1 (the long tail, ~260 `requireRole` sites): `active.role` already
+ *    carries the EFFECTIVE company role — for a member with a custom role that
+ *    is `builtinToCompanyRole(custom_role.inherit_from)`; for a plain member it
+ *    round-trips to exactly `normalizeCompanyRole(raw)` (zero behaviour change).
+ *    The existing `requireRole` closure reads `active.role` and gates the long
+ *    tail with no per-site edit.
+ *
+ *  - LAYER 2 (the 9 named actions): `effectiveBuiltin` + `grants` feed
+ *    `requirePermission`/`resolveEffectivePermissions` at the specific action
+ *    routes, where the matrix is authoritative (e.g. office demotes to
+ *    estimator, auth_materials is Owner-only by default) and custom grants +
+ *    the $-cap apply. Not yet called from any route (next phase).
+ */
+type ResolvedCompany = {
+  active: ActiveCompany
+  effectiveBuiltin: BuiltinRole
+  grants: PermissionGrant[]
+}
+
+type CustomRoleRow = { inherit_from: string }
+type CustomRoleGrantRow = { action: string; constraints: Record<string, unknown> | null }
+
+/**
+ * Load a custom role's base + additive grants. Returns null when the linked
+ * role is missing or soft-deleted (member falls back to its raw company role).
+ * Both reads are company-scoped; the bare pool leaves the RLS GUC unset so the
+ * `app_current_company_id() IS NULL` branch of the tenant policy is permissive.
+ */
+async function loadCustomRole(companyId: string, customRoleId: string): Promise<CustomRoleAuthority | null> {
+  const roleResult = await pool.query<CustomRoleRow>(
+    `select inherit_from from custom_roles
+      where id = $1 and company_id = $2 and deleted_at is null
+      limit 1`,
+    [customRoleId, companyId],
+  )
+  const inheritFrom = roleResult.rows[0]?.inherit_from
+  // inherit_from is CHECK-constrained to the five built-in bases in migration
+  // 136, so this cast is sound for any live row.
+  if (!inheritFrom) return null
+  const effectiveBuiltin = inheritFrom as BuiltinRole
+
+  const grantResult = await pool.query<CustomRoleGrantRow>(
+    `select action, constraints from custom_role_grants
+      where custom_role_id = $1 and company_id = $2`,
+    [customRoleId, companyId],
+  )
+  const grants: PermissionGrant[] = grantResult.rows.map((row) => ({
+    action: row.action as PermissionAction,
+    // resolveEffectivePermissions ignores grants whose action isn't a real
+    // PERMISSION_ACTION, so an unknown action row is inert (not a throw).
+    constraints: normalizeGrantConstraints(row.constraints),
+  }))
+  return { effectiveBuiltin, grants }
+}
+
 async function getCompany(
   req?: http.IncomingMessage,
   opts: { membershipBypassRole?: CompanyRole } = {},
-): Promise<ActiveCompany | null> {
+): Promise<ResolvedCompany | null> {
   const headerSlug = req?.headers['x-sitelayer-company-slug']
   const headerId = req?.headers['x-sitelayer-company-id']
   const requestedSlug = Array.isArray(headerSlug) ? headerSlug[0] : headerSlug
@@ -341,30 +433,50 @@ async function getCompany(
   if (!companyRow) return null
 
   if (opts.membershipBypassRole) {
+    const role = opts.membershipBypassRole
     return {
-      id: companyRow.id,
-      slug: companyRow.slug,
-      name: companyRow.name,
-      created_at: companyRow.created_at,
-      role: opts.membershipBypassRole,
+      active: {
+        id: companyRow.id,
+        slug: companyRow.slug,
+        name: companyRow.name,
+        created_at: companyRow.created_at,
+        role,
+      },
+      effectiveBuiltin: companyRoleToBuiltin(role),
+      grants: [],
     }
   }
 
   // Verify membership and surface the role so handlers can enforce RBAC
-  // without re-querying. See `requireRole()`.
+  // without re-querying. Also read custom_role_id (migration 136): when set,
+  // the member's effective authority comes from the custom role's base +
+  // grants instead of the raw company role. See `requireRole()` /
+  // `requirePermission()` and the ResolvedCompany doc above.
   const userId = getCurrentUserId(req)
-  const membership = await pool.query<{ role: string }>(
-    'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+  const membership = await pool.query<{ role: string; custom_role_id: string | null }>(
+    'select role, custom_role_id from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
     [companyRow.id, userId],
   )
   if (!membership.rows.length) return null
 
+  const rawRole = normalizeCompanyRole(membership.rows[0]?.role)
+  const customRoleId = membership.rows[0]?.custom_role_id ?? null
+
+  // A custom_role_id that points at a missing/soft-deleted role resolves to
+  // null here, so the member transparently falls back to its raw company role.
+  const custom = customRoleId ? await loadCustomRole(companyRow.id, customRoleId) : null
+  const { effectiveRole, effectiveBuiltin, grants } = resolveCompanyRoleAuthority(rawRole, custom)
+
   return {
-    id: companyRow.id,
-    slug: companyRow.slug,
-    name: companyRow.name,
-    created_at: companyRow.created_at,
-    role: normalizeCompanyRole(membership.rows[0]?.role),
+    active: {
+      id: companyRow.id,
+      slug: companyRow.slug,
+      name: companyRow.name,
+      created_at: companyRow.created_at,
+      role: effectiveRole,
+    },
+    effectiveBuiltin,
+    grants,
   }
 }
 
@@ -385,6 +497,45 @@ function requireRole(
   if (allowed.includes(company.role)) return true
   sendJson(res, 403, { error: 'forbidden: role not permitted', role: company.role, allowed }, req)
   return false
+}
+
+/**
+ * LAYER 2 of the RBAC overhaul — enforce one of the 9 named permission actions
+ * (PERMISSION_ACTIONS) against the caller's EFFECTIVE authority. Returns `true`
+ * when the action is held (and, for a constrainable action with a magnitude
+ * supplied, within cap); returns `false` after sending a 403, in which case the
+ * caller should `return`.
+ *
+ * The matrix (resolveEffectivePermissions(effectiveBuiltin, grants)) is
+ * authoritative here — this is where Foreman loses edit_pricing_book,
+ * auth_materials is Owner-only by default, office demotes to estimator, and
+ * custom-role grants + the auth_materials $-cap apply. NOT yet called from any
+ * route; wired once below at the dispatch boundary for the next phase.
+ *
+ * `opts.amountCents` / `opts.otHours` carry the per-request magnitude for a
+ * constrainable action (auth_materials → max_amount_cents [enforced];
+ * approve_time → max_ot_hours_per_week [stored but INERT in v1]). When the
+ * action is constrainable and a magnitude is supplied, an over-cap caller is
+ * 403'd with the cap surfaced.
+ */
+function requirePermission(
+  res: http.ServerResponse,
+  effectiveBuiltin: BuiltinRole,
+  grants: readonly PermissionGrant[],
+  action: PermissionAction,
+  opts: { amountCents?: number; otHours?: number } = {},
+  req?: http.IncomingMessage,
+): boolean {
+  const verdict = permissionDecision(effectiveBuiltin, grants, action, opts)
+  if (verdict.outcome === 'denied') {
+    sendJson(res, 403, { error: 'forbidden: permission not granted', action, role: effectiveBuiltin }, req)
+    return false
+  }
+  if (verdict.outcome === 'over_cap') {
+    sendJson(res, 403, { error: 'forbidden: over permission cap', action, cap: verdict.cap }, req)
+    return false
+  }
+  return true
 }
 
 function getHeaderValue(req: http.IncomingMessage | undefined, key: string): string | null {
@@ -534,12 +685,22 @@ const server = http.createServer(async (req, res) => {
     typeof req.headers['x-sitelayer-company-slug'] === 'string' ? req.headers['x-sitelayer-company-slug'] : undefined
   const userIdHeader =
     typeof req.headers['x-sitelayer-user-id'] === 'string' ? req.headers['x-sitelayer-user-id'] : undefined
+  const captureSessionHeader =
+    typeof req.headers['x-sitelayer-capture-session-id'] === 'string'
+      ? req.headers['x-sitelayer-capture-session-id'].trim()
+      : ''
+  const captureSessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    captureSessionHeader,
+  )
+    ? captureSessionHeader
+    : undefined
   const requestContext: RequestContext = {
     requestId,
     route: initialRoute,
     method,
     ...(companySlugHeader ? { companySlug: companySlugHeader } : {}),
     ...(userIdHeader ? { userId: userIdHeader } : {}),
+    ...(captureSessionId ? { captureSessionId } : {}),
   }
   res.on('finish', () => {
     observeRequest(method, requestContext.route ?? initialRoute, res.statusCode || 0, Date.now() - requestStartedAt)
@@ -562,6 +723,7 @@ const server = http.createServer(async (req, res) => {
         scope.setTag('route', initialRoute)
         scope.setTag('method', method)
         if (companySlugHeader) scope.setTag('company_slug', companySlugHeader)
+        if (captureSessionId) scope.setTag('capture_session_id', captureSessionId)
         if (userIdHeader) scope.setUser({ id: userIdHeader })
         return Sentry.startSpan(
           {
@@ -613,6 +775,10 @@ const server = http.createServer(async (req, res) => {
               const portalEstimateHandled = await handlePublicEstimateShareRoutes(req, url, {
                 pool,
                 shareSecret: estimateShareSecret,
+                storage,
+                maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+                tier: appConfig.tier,
+                buildSha,
                 resolveClientIp: () => {
                   const xff = req.headers['x-forwarded-for']
                   if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
@@ -628,6 +794,10 @@ const server = http.createServer(async (req, res) => {
                 pool,
                 sendJson: (status, body) => sendJson(res, status, body, req),
                 readBody: () => readBody(req),
+                storage,
+                maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+                tier: appConfig.tier,
+                buildSha,
               })
               if (portalRentalHandled) return
 
@@ -636,6 +806,22 @@ const server = http.createServer(async (req, res) => {
                 sendJson: (status, body) => sendJson(res, status, body, req),
               })
               if (publicPortalHandled) return
+
+              // Demo-tier magic-link sign-in. Structurally inert (returns
+              // false → keeps walking → 404) unless APP_TIER=demo. Handled
+              // pre-auth because the caller is signed-out and is asking for a
+              // Clerk sign-in ticket. See routes/demo.ts.
+              const demoHandled = await handleDemoRoutes(req, url, {
+                tier: appConfig.tier,
+                accessCode: demoAccessCode,
+                appOrigin: demoAppOrigin,
+                ticketTtlSeconds: demoTicketTtlSeconds,
+                mintSignInToken: demoSignInTokenMinter,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
+                setNoIndexHeader: () => res.setHeader('x-robots-tag', 'noindex, nofollow'),
+              })
+              if (demoHandled) return
 
               const PUBLIC_PATHS = new Set([
                 '/api/integrations/qbo/callback',
@@ -664,6 +850,15 @@ const server = http.createServer(async (req, res) => {
                 throw err
               }
               requestContext.actorUserId = identity.userId
+              // Impersonation: a Clerk actor-token session carries the real admin
+              // in identity.actorUserId. Stamp it on the request context so
+              // recordAudit() auto-tags impersonated_by on every audited mutation
+              // this session makes — no per-route change needed.
+              if (identity.actorUserId) {
+                requestContext.impersonatedBy = identity.actorUserId
+                scope.setTag('impersonated_by', identity.actorUserId)
+                scope.setTag('auth_mode', identity.mode ?? 'impersonate')
+              }
               scope.setUser({ id: identity.userId })
               scope.setTag('auth_source', identity.source)
 
@@ -698,9 +893,42 @@ const server = http.createServer(async (req, res) => {
                 return
               }
 
-              let company =
+              // Teammate invite + accept. Mounted AFTER resolveIdentity but
+              // BEFORE getCompany() so create/list/revoke self-resolve the
+              // company from the :id path param (no active-company header
+              // needed) and accept works for a user who isn't a member of the
+              // target company yet. The public GET /api/invites/:token view is
+              // reachable by signed-out callers. See routes/invites.ts.
+              if (
+                await handleInviteRoutes(req, url, {
+                  pool,
+                  userId: getCurrentUserId(req),
+                  identitySource: identity.source,
+                  // Anonymous = the default identity with no act-as override.
+                  // In dev act-as the source is still 'default' but
+                  // getCurrentUserId returns a concrete dev id, so compare the
+                  // two: equal → no override → genuinely anonymous.
+                  isAnonymous: identity.source === 'default' && getCurrentUserId(req) === identity.userId,
+                  tier: appConfig.tier,
+                  sendJson: (status, body) => sendJson(res, status, body, req),
+                  readBody: () => readBody(req),
+                })
+              ) {
+                return
+              }
+
+              // `company` is a ResolvedCompany: the ActiveCompany (with the
+              // EFFECTIVE long-tail role) plus the named-action authority
+              // (effectiveBuiltin + grants) for the LAYER 2 overlay. The
+              // work-request-callback path has no membership row, so it carries
+              // the admin base with no grants (same authority as its
+              // hard-coded admin role).
+              let company: ResolvedCompany | null =
                 workRequestCallbackWorkItemId !== null
-                  ? await resolveWorkRequestCallbackCompany(pool, workRequestCallbackWorkItemId)
+                  ? await (async () => {
+                      const active = await resolveWorkRequestCallbackCompany(pool, workRequestCallbackWorkItemId)
+                      return active ? { active, effectiveBuiltin: companyRoleToBuiltin(active.role), grants: [] } : null
+                    })()
                   : await getCompany(req)
               // First-user self-onboard. The Clerk webhook that mirrors
               // org membership into `company_memberships` isn't wired
@@ -749,8 +977,8 @@ const server = http.createServer(async (req, res) => {
               // context. mutation-tx.ts reads this to `SET LOCAL app.company_id`
               // on every withMutationTx() and withCompanyClient() tx, which the
               // RLS policies created by migration 066 use to scope rows.
-              requestContext.companyId = company.id
-              scope.setTag('company_id', company.id)
+              requestContext.companyId = company.active.id
+              scope.setTag('company_id', company.active.id)
 
               // HTTP-layer idempotency. Resolve the Idempotency-Key header (if
               // present) and either short-circuit with the cached response or
@@ -767,7 +995,7 @@ const server = http.createServer(async (req, res) => {
                     return
                   }
                   idempotencyKey = validated.key
-                  const cached = idempotencyCache.get(company.id, idempotencyKey)
+                  const cached = idempotencyCache.get(company.active.id, idempotencyKey)
                   if (cached) {
                     res.setHeader('idempotent-replay', 'true')
                     sendJson(res, cached.status, cached.body, req)
@@ -778,7 +1006,7 @@ const server = http.createServer(async (req, res) => {
               const dispatchSendJson = (status: number, body: unknown): void => {
                 if (idempotencyKey) {
                   const captured: IdempotencyCachedResponse = { status, body }
-                  idempotencyCache.set(company.id, idempotencyKey, captured)
+                  idempotencyCache.set(company.active.id, idempotencyKey, captured)
                 }
                 sendJson(res, status, body, req)
               }
@@ -788,16 +1016,24 @@ const server = http.createServer(async (req, res) => {
               // preserved. See routes/dispatch.ts for the registry; route
               // modules in routes/* still own their own SQL, role gates, and
               // ledger writes — dispatch.ts only walks the list.
+              const resolvedCompany = company
               const handled = await dispatch({
                 req,
                 res,
                 url,
                 pool,
-                company,
+                company: resolvedCompany.active,
                 identity,
                 tier: appConfig.tier,
                 requestId,
-                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                requireRole: (allowed) =>
+                  requireRole(res, resolvedCompany.active, allowed as readonly CompanyRole[], req),
+                // LAYER 2 named-action overlay. Closes over the request's
+                // resolved effective base + custom-role grants. Not yet called
+                // by any route — wired here next to requireRole so the next
+                // phase can gate the 9 action routes. See requirePermission().
+                requirePermission: (action, opts) =>
+                  requirePermission(res, resolvedCompany.effectiveBuiltin, resolvedCompany.grants, action, opts, req),
                 readBody: () => readBody(req),
                 sendJson: dispatchSendJson,
                 sendRedirect: (location) => sendRedirect(res, location),

@@ -22,17 +22,16 @@ import { useState } from 'react'
 import { DDrawer, DModal } from '@/components/d'
 import { MBanner, MButton, MInput, MSelect, MTextarea } from '@/components/m'
 import { useCreateSchedule } from '@/lib/api/schedules'
-import {
-  useChangeOrderEvent,
-  useCreateChangeOrder,
-  useProjectChangeOrders,
-  type ChangeOrder,
-} from '@/lib/api/change-orders'
+import { useCreateChangeOrder, useProjectChangeOrders } from '@/lib/api/change-orders'
+import { useChangeOrder } from '@/machines/change-order'
+import { CHANGE_ORDER_ALL_STATES } from '@sitelayer/workflows'
 import { ApiError, useCreateEstimatePush } from '@/lib/api'
 import { useBillingMilestones, useCreateBillingMilestones, type BillingMilestone } from '@/lib/api/billing-milestones'
 import { useProjectLaborVariance } from '@/lib/api/labor-variance'
 import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
-import { formatMoney } from '../mobile/format.js'
+import { getActiveCompanySlug } from '@/lib/api/client'
+import { useProjectCloseoutMachine } from '@/machines/project-closeout'
+import { formatMoney, shortDate } from '../mobile/format.js'
 
 interface OverlayProps {
   open: boolean
@@ -100,8 +99,10 @@ export function RecoveryDrawer({
       }
     })
 
+  const recoveryTitle = `● RECOVERY PLAN · LABOR ${marginPct != null ? `${marginPct >= 0 ? '+' : ''}${marginPct}%` : 'OVER'}`
+
   return (
-    <DDrawer open={open} onClose={onClose} tone="bad" title="● RECOVERY PLAN · LABOR OVER">
+    <DDrawer open={open} onClose={onClose} tone="bad" title={recoveryTitle}>
       {variance.isPending && open ? (
         <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 })}>Analyzing margin…</div>
       ) : variance.isError ? (
@@ -120,7 +121,7 @@ export function RecoveryDrawer({
       ) : (
         <>
           <div style={display({ fontWeight: 800, fontSize: 24, lineHeight: 1, letterSpacing: '-0.02em' })}>
-            {actions.length} ranked action{actions.length === 1 ? '' : 's'}.
+            AI ranked {actions.length} action{actions.length === 1 ? '' : 's'}.
           </div>
           <div style={mono({ fontSize: 11, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600 })}>
             {daysLeft} DAYS LEFT · MARGIN {marginPct != null ? `${marginPct}%` : '—'} · RECOVERABLE
@@ -175,31 +176,30 @@ export function RecoveryDrawer({
   )
 }
 
-const CHANGE_ORDER_STATES = ['DRAFT', 'SENT', 'ACCEPTED', 'REJECTED'] as const
-
-/** F1b · Change-order value delta + DRAFT/SENT/ACCEPTED/REJECTED state strip,
+/** F1b · Change-order value delta + DRAFT/SENT/ACCEPTED/REJECTED/VOIDED state strip,
  * bound to the project's real change orders (latest CO + author-new composer). */
 export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & { projectId: string }) {
   const query = useProjectChangeOrders(projectId, { enabled: open && Boolean(projectId) })
   const createMutation = useCreateChangeOrder(projectId)
-  const eventMutation = useChangeOrderEvent(projectId)
 
   const cos = query.data?.change_orders ?? []
   const latest = cos[0] ?? null
   const deltaNum = latest ? Number(latest.value_delta) : 0
   const scheduleImpact = latest && latest.schedule_impact_days != null ? Number(latest.schedule_impact_days) : null
 
+  // Route the latest CO's workflow events through the headless machine so the
+  // drawer renders action buttons from the reducer's next_events (never a
+  // hand-authored per-status ladder) and gets the 409/outOfSync handling for
+  // free. The composer (create-draft) stays a resource POST below.
+  const co = useChangeOrder(latest?.id ?? '')
+  const liveStatus = co.snapshot?.state ?? latest?.status ?? null
+
   const [composing, setComposing] = useState(false)
   const [description, setDescription] = useState('')
   const [valueDelta, setValueDelta] = useState('')
   const [scheduleDays, setScheduleDays] = useState('')
 
-  const errorMessage =
-    createMutation.error instanceof Error
-      ? createMutation.error.message
-      : eventMutation.error instanceof Error
-        ? eventMutation.error.message
-        : null
+  const errorMessage = createMutation.error instanceof Error ? createMutation.error.message : (co.error ?? null)
 
   function resetComposer() {
     setComposing(false)
@@ -224,13 +224,13 @@ export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & {
     )
   }
 
-  function dispatch(co: ChangeOrder, event: 'SEND' | 'ACCEPT' | 'REJECT' | 'VOID') {
+  function dispatchCoEvent(event: 'SEND' | 'ACCEPT' | 'REJECT' | 'VOID') {
     let reason: string | undefined
     if (event === 'REJECT') {
       const entered = window.prompt('Rejection reason (optional):') ?? ''
       reason = entered.trim() === '' ? undefined : entered.trim()
     }
-    eventMutation.mutate({ id: co.id, event, stateVersion: co.state_version, ...(reason ? { reason } : {}) })
+    co.dispatch({ event, ...(reason ? { reason } : {}) })
   }
 
   const showComposer = composing || cos.length === 0
@@ -339,11 +339,11 @@ export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & {
 
           {/* state machine strip — the CO's real current state is highlighted */}
           <div style={{ display: 'flex', border: '2px solid var(--m-ink)', marginTop: 20 }}>
-            {CHANGE_ORDER_STATES.map((s, i, arr) => {
-              const current = s === latest.status.toUpperCase()
+            {CHANGE_ORDER_ALL_STATES.map((state, i, arr) => {
+              const current = state === liveStatus
               return (
                 <div
-                  key={s}
+                  key={state}
                   style={mono({
                     flex: 1,
                     padding: '8px 0',
@@ -355,48 +355,42 @@ export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & {
                     fontWeight: 800,
                   })}
                 >
-                  {s}
+                  {state.toUpperCase()}
                 </div>
               )
             })}
           </div>
 
-          {/* actions driven by the CO's real state */}
+          {co.outOfSync ? (
+            <div style={{ marginTop: 14 }}>
+              <MBanner
+                tone="warn"
+                title="This change order changed on the server"
+                body="It was reloaded to the latest state — review before acting again."
+              />
+            </div>
+          ) : null}
+
+          {/* actions driven by the reducer's next_events — no hand-authored
+              per-status ladder. The first action reads as the primary CTA. */}
           <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
-            {latest.status === 'draft' ? (
-              <MButton
-                variant="primary"
-                style={{ flex: 1 }}
-                onClick={() => dispatch(latest, 'SEND')}
-                disabled={eventMutation.isPending}
-              >
-                Send to client
-              </MButton>
-            ) : null}
-            {latest.status === 'sent' ? (
-              <>
+            {(co.snapshot?.next_events ?? []).length > 0 ? (
+              (co.snapshot?.next_events ?? []).map((ev, i) => (
                 <MButton
-                  variant="primary"
-                  style={{ flex: 1 }}
-                  onClick={() => dispatch(latest, 'ACCEPT')}
-                  disabled={eventMutation.isPending}
+                  key={ev.type}
+                  variant={i === 0 ? 'primary' : 'ghost'}
+                  style={i === 0 ? { flex: 1 } : undefined}
+                  onClick={() => dispatchCoEvent(ev.type)}
+                  disabled={co.isSubmitting || co.isLoading}
                 >
-                  Mark accepted
+                  {ev.label}
                 </MButton>
-                <MButton variant="ghost" onClick={() => dispatch(latest, 'REJECT')} disabled={eventMutation.isPending}>
-                  Reject
-                </MButton>
-              </>
-            ) : null}
-            {latest.status === 'draft' || latest.status === 'sent' ? (
-              <MButton variant="ghost" onClick={() => dispatch(latest, 'VOID')} disabled={eventMutation.isPending}>
-                Void
-              </MButton>
+              ))
             ) : (
               <div
                 style={mono({ flex: 1, fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, alignSelf: 'center' })}
               >
-                No further actions · {latest.status.toUpperCase()}
+                No further actions · {(liveStatus ?? latest.status).toUpperCase()}
               </div>
             )}
           </div>
@@ -417,12 +411,35 @@ export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & {
 export function PostMortemDrawer({ open, onClose, projectId }: OverlayProps & { projectId: string }) {
   const closeout = useProjectCloseoutSummary(open ? projectId : undefined)
   const variance = useProjectLaborVariance(open ? projectId : undefined)
+  // Mount the closeout workflow view-model so the drawer can record the
+  // human post-mortem acknowledgement (completed → post_mortem) and show
+  // the acknowledged date once it's terminal. The analytics body below
+  // stays a sibling read-model; the workflow fact is the only state here.
+  const workflow = useProjectCloseoutMachine(projectId, getActiveCompanySlug())
+  const wfSnapshot = workflow.snapshot
+  const ackEvent = wfSnapshot?.next_events.find((ev) => ev.type === 'ACKNOWLEDGE_POST_MORTEM')
 
   const rawMargin = closeout.data?.margin_pct ?? null
   // margin_pct may arrive as a fraction (0.34) or a percent (34) — normalize.
-  const marginPct = rawMargin == null ? null : Math.round(Math.abs(rawMargin) <= 1 ? rawMargin * 100 : rawMargin)
+  // This is the DELIVERED margin: (bid − total_actual) / bid.
+  const deliveredMarginPct =
+    rawMargin == null ? null : Math.round(Math.abs(rawMargin) <= 1 ? rawMargin * 100 : rawMargin)
+  const marginPct = deliveredMarginPct
   const bid = closeout.data?.bid ?? null
-  const totalActual = closeout.data?.total_actual ?? null
+  const estimateTotal = closeout.data?.estimate_total ?? null
+  // Planned (BID) margin from the estimate against the contract value:
+  // (bid − estimate_total) / bid. Lets the summary line compare bid-vs-delivered.
+  const bidMarginPct =
+    bid != null && bid > 0 && estimateTotal != null ? Math.round(((bid - estimateTotal) / bid) * 100) : null
+  // Verdict tag: delivered vs the bid plan (design's 'DEAD ON' / OVER / UNDER).
+  const marginVerdict =
+    bidMarginPct == null || deliveredMarginPct == null
+      ? null
+      : deliveredMarginPct === bidMarginPct
+        ? 'DEAD ON'
+        : deliveredMarginPct > bidMarginPct
+          ? `+${deliveredMarginPct - bidMarginPct}PTS`
+          : `${deliveredMarginPct - bidMarginPct}PTS`
 
   // Per-division labor variance (real rows grouped by division).
   const byDivision = new Map<string, { est: number; act: number }>()
@@ -467,8 +484,9 @@ export function PostMortemDrawer({ open, onClose, projectId }: OverlayProps & { 
             {marginPct != null ? `${marginPct}%` : '—'}
           </div>
           <div style={mono({ fontSize: 11, color: 'var(--m-ink-2)', marginTop: 8, fontWeight: 600 })}>
-            {bid != null ? `BID ${formatMoney(bid)}` : 'BID —'} ·{' '}
-            {totalActual != null ? `ACTUAL ${formatMoney(totalActual)}` : 'ACTUAL —'}
+            {bidMarginPct != null ? `BID ${bidMarginPct}%` : 'BID —'} ·{' '}
+            {deliveredMarginPct != null ? `DELIVERED ${deliveredMarginPct}%` : 'DELIVERED —'}
+            {marginVerdict ? ` · ${marginVerdict}` : ''}
           </div>
 
           {lines.length > 0 ? (
@@ -513,6 +531,36 @@ export function PostMortemDrawer({ open, onClose, projectId }: OverlayProps & { 
               </div>
             </div>
           ) : null}
+
+          {/* Post-mortem acknowledgement — the one durable workflow fact
+              this drawer owns. `completed` offers ACKNOWLEDGE_POST_MORTEM
+              (closes the record); `post_mortem` shows the acknowledged
+              date. 409s land in the machine's outOfSync banner. */}
+          {wfSnapshot ? (
+            <div style={{ marginTop: 20, borderTop: '1px solid var(--m-line-2)', paddingTop: 16 }}>
+              {workflow.outOfSync ? (
+                <div style={mono({ fontSize: 11, color: 'var(--m-amber)', fontWeight: 600, marginBottom: 10 })}>
+                  Workflow state moved — reloaded. Review before acknowledging again.
+                </div>
+              ) : null}
+              {wfSnapshot.state === 'post_mortem' ? (
+                <div style={mono({ fontSize: 11, color: 'var(--m-ink-2)', fontWeight: 600 })}>
+                  ● POST-MORTEM ACKNOWLEDGED
+                  {wfSnapshot.context.post_mortem_acknowledged_at
+                    ? ` · ${shortDate(wfSnapshot.context.post_mortem_acknowledged_at)}`
+                    : ''}
+                </div>
+              ) : ackEvent ? (
+                <MButton
+                  variant="primary"
+                  disabled={workflow.isSubmitting}
+                  onClick={() => workflow.dispatch('ACKNOWLEDGE_POST_MORTEM')}
+                >
+                  {workflow.isSubmitting ? 'Closing record…' : 'Acknowledge & close record'}
+                </MButton>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
     </DDrawer>
@@ -545,7 +593,9 @@ export function InvoiceModal({
   onClose,
   projectId,
   projectName,
-  customerName,
+  // customerName is part of the modal's call surface but the design header is
+  // "INVOICE #n · PROJECT" only — no customer line — so it is intentionally
+  // not rendered here.
   contractValue,
 }: InvoiceModalProps) {
   const milestonesQuery = useBillingMilestones(open ? projectId : null)
@@ -597,9 +647,18 @@ export function InvoiceModal({
     )
   }
 
-  const titleText = `INVOICE · ${(projectName ?? 'PROJECT').toUpperCase()}${
-    customerName ? ` · ${customerName.toUpperCase()}` : ''
-  }`
+  // Design header: "INVOICE #113 · HILLCREST PH 4" — invoice number + project.
+  // There is no human invoice sequence in the schema, so derive a short stable
+  // marker from the active milestone's estimate_push_id once it has actually
+  // been pushed (e.g. "#3F2A"); otherwise omit the number and fall back to the
+  // plain "INVOICE · {PROJECT}" form. Customer is dropped to match the design.
+  const invoiceNo = active?.estimate_push_id
+    ? `#${active.estimate_push_id
+        .replace(/[^0-9a-f]/gi, '')
+        .slice(-4)
+        .toUpperCase()}`
+    : null
+  const titleText = `INVOICE${invoiceNo ? ` ${invoiceNo}` : ''} · ${(projectName ?? 'PROJECT').toUpperCase()}`
 
   return (
     <DModal
@@ -689,20 +748,92 @@ export function InvoiceModal({
 // Send + PDF-preview modals (04_app.js · DSendModal / DPdfPreviewModal)
 // ============================================================
 
-/** C1b · Send the bid to the client, with recipient + message + tracked link. */
-export function SendModal({ open, onClose }: OverlayProps) {
+/** Derive 1-2 letter initials from a name (e.g. "John Marchetti" → "JM"). */
+function clientInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '—'
+  const first = parts[0] ?? ''
+  if (parts.length === 1) return first.slice(0, 2).toUpperCase()
+  const last = parts[parts.length - 1] ?? ''
+  return ((first[0] ?? '') + (last[0] ?? '')).toUpperCase()
+}
+
+/**
+ * C1b · Send the bid to the client, with recipient + message + tracked link.
+ *
+ * Wired (U01/D10): the composer collects a recipient email + name, an editable
+ * message, and the INCLUDE SIGNED LINK · TRACK OPEN toggle, then `onSend`
+ * creates an estimate SHARE (POST /api/projects/:id/estimate/share) — a private
+ * signable portal link — NOT the QBO estimate-push. On success the parent
+ * surfaces the generated `shareUrl`. Recipient + sell total are seeded from the
+ * live project summary; the message pre-fills from the bid note and is editable.
+ */
+export function SendModal({
+  open,
+  onClose,
+  clientName = 'Client',
+  clientEmail,
+  sellTotal,
+  lineCount,
+  projectLabel,
+  sending = false,
+  error = null,
+  shareUrl = null,
+  onSend,
+}: OverlayProps & {
+  clientName?: string | undefined
+  clientEmail?: string | null | undefined
+  sellTotal?: number | undefined
+  lineCount?: number | undefined
+  projectLabel?: string | undefined
+  sending?: boolean | undefined
+  error?: string | null | undefined
+  /** Populated once the share has been created — the private portal link. */
+  shareUrl?: string | null | undefined
+  onSend?: ((payload: { recipientEmail: string; message: string; includeSignedLink: boolean }) => void) | undefined
+}) {
+  const defaultMessage = `${clientName.split(' ')[0] || clientName} — bid attached${
+    projectLabel ? ` for ${projectLabel}` : ''
+  }.${sellTotal != null ? ` ${formatMoney(sellTotal)},` : ''}${
+    lineCount != null ? ` ${lineCount} line item${lineCount === 1 ? '' : 's'}.` : ''
+  } Happy to walk through.`
+  const [message, setMessage] = useState(defaultMessage)
+  const [includeSignedLink, setIncludeSignedLink] = useState(true)
+  const [recipientEmail, setRecipientEmail] = useState(clientEmail ?? '')
+  // Re-seed the editable fields whenever the modal (re)opens against a
+  // different project/total/recipient so it never shows stale composed copy.
+  const [seededFor, setSeededFor] = useState<string | null>(null)
+  const seedKey = `${open}:${defaultMessage}:${clientEmail ?? ''}`
+  if (open && seededFor !== seedKey) {
+    setSeededFor(seedKey)
+    setMessage(defaultMessage)
+    setRecipientEmail(clientEmail ?? '')
+  }
+
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim())
+  const firstName = clientName.split(' ')[0] || clientName
+  const sendLabel = sending ? 'Sending…' : `SEND · NOTIFY ${firstName.toUpperCase()}`
+
   return (
     <DModal
       open={open}
       onClose={onClose}
       width={520}
-      title={<FloatHead>SEND BID · $146,090</FloatHead>}
+      title={<FloatHead>SEND BID{sellTotal != null ? ` · ${formatMoney(sellTotal)}` : ''}</FloatHead>}
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <MButton variant="ghost" onClick={onClose}>
-            CANCEL
+          <MButton variant="ghost" onClick={onClose} disabled={sending}>
+            {shareUrl ? 'DONE' : 'CANCEL'}
           </MButton>
-          <MButton variant="primary">SEND · NOTIFY JOHN</MButton>
+          {shareUrl ? null : (
+            <MButton
+              variant="primary"
+              disabled={sending || !onSend || !emailValid}
+              onClick={() => onSend?.({ recipientEmail: recipientEmail.trim(), message, includeSignedLink })}
+            >
+              {sendLabel}
+            </MButton>
+          )}
         </div>
       }
     >
@@ -729,59 +860,124 @@ export function SendModal({ open, onClose }: OverlayProps) {
             justifyContent: 'center',
             fontWeight: 800,
             fontSize: 13,
+            flexShrink: 0,
           })}
         >
-          JM
+          {clientInitials(clientName)}
         </div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>John Marchetti</div>
-          <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 2, fontWeight: 600 })}>
-            john@hillcresthomes.co
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{clientName}</div>
+          <MInput
+            type="email"
+            inputMode="email"
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.currentTarget.value)}
+            placeholder="client@email.com"
+            aria-label="Recipient email"
+            disabled={sending || Boolean(shareUrl)}
+            style={{ marginTop: 6, width: '100%' }}
+          />
+        </div>
+      </div>
+
+      {shareUrl ? (
+        <>
+          <div style={{ ...sectionLabel, marginTop: 18, color: 'var(--m-green)' }}>✓ SHARE LINK CREATED</div>
+          <div
+            style={mono({
+              marginTop: 8,
+              padding: '12px 14px',
+              border: '2px solid var(--m-ink)',
+              background: 'var(--m-card-soft)',
+              fontSize: 11,
+              fontWeight: 600,
+              wordBreak: 'break-all',
+              color: 'var(--m-ink-2)',
+            })}
+          >
+            {shareUrl}
           </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...sectionLabel, marginTop: 18 }}>MESSAGE</div>
+          <MTextarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={3}
+            style={{ marginTop: 8, minHeight: 80, lineHeight: 1.5 }}
+          />
 
-      <div style={{ ...sectionLabel, marginTop: 18 }}>MESSAGE</div>
-      <div
-        style={{
-          marginTop: 8,
-          padding: 14,
-          border: '2px solid var(--m-ink)',
-          background: 'var(--m-card-soft)',
-          minHeight: 80,
-          fontSize: 14,
-          lineHeight: 1.5,
-        }}
-      >
-        John — bid attached for Phase 4. $146K, 7 line items. Happy to walk through.
-      </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={includeSignedLink}
+              onChange={(e) => setIncludeSignedLink(e.target.checked)}
+              aria-label="Include signed link and track open"
+              style={{
+                width: 18,
+                height: 18,
+                accentColor: 'var(--m-accent)',
+                border: '2px solid var(--m-ink)',
+                margin: 0,
+              }}
+            />
+            <span style={mono({ fontSize: 11, fontWeight: 600 })}>INCLUDE SIGNED LINK · TRACK OPEN</span>
+          </label>
+        </>
+      )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
-        <div style={{ width: 18, height: 18, background: 'var(--m-accent)', border: '2px solid var(--m-ink)' }} />
-        <span style={mono({ fontSize: 11, fontWeight: 600 })}>INCLUDE SIGNED LINK · TRACK OPEN</span>
-      </div>
+      {error ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600, marginTop: 12 })}>{error}</div>
+      ) : null}
     </DModal>
   )
 }
 
-const PDF_CONTENT_MODES: Array<{ label: string; on?: boolean }> = [
-  { label: 'PLAN ONLY' },
-  { label: 'WITH TAKEOFF', on: true },
-  { label: 'CURRENT VIEW' },
-]
+const PDF_CONTENT_MODES = [
+  { key: 'plan', label: 'PLAN ONLY' },
+  { key: 'takeoff', label: 'WITH TAKEOFF' },
+  { key: 'current', label: 'CURRENT VIEW' },
+] as const
+type PdfContentMode = (typeof PDF_CONTENT_MODES)[number]['key']
 
-/** C1a · PDF preview modal — content-mode rail + sheet list + page preview. */
-export function PdfPreviewModal({ open, onClose }: OverlayProps) {
+/**
+ * C1a · PDF preview modal — content-mode rail + sheet list + page preview.
+ *
+ * Wired (D10): the content-mode rail is now a real selection (WITH TAKEOFF
+ * default), DOWNLOAD opens the estimate PDF (estimatePdfUrl) in a new tab, and
+ * SEND TO CLIENT defers to the parent's send flow. Project label + sheet count
+ * come from the caller so the head/sheet rail reflect the real project.
+ */
+export function PdfPreviewModal({
+  open,
+  onClose,
+  projectLabel,
+  sheetCount,
+  onDownload,
+  onSendToClient,
+}: OverlayProps & {
+  projectLabel?: string | undefined
+  sheetCount?: number | undefined
+  onDownload?: ((mode: PdfContentMode) => void) | undefined
+  onSendToClient?: (() => void) | undefined
+}) {
+  const [mode, setMode] = useState<PdfContentMode>('takeoff')
+  const headLabel = projectLabel ? projectLabel.toUpperCase() : 'QUANTITIES'
   return (
     <DModal
       open={open}
       onClose={onClose}
       width={880}
-      title={<FloatHead>PDF PREVIEW · HILLCREST PH 4 · QUANTITIES</FloatHead>}
+      title={<FloatHead>{`PDF PREVIEW · ${headLabel} · QUANTITIES`}</FloatHead>}
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <MButton variant="ghost">DOWNLOAD</MButton>
-          <MButton variant="primary">SEND TO CLIENT</MButton>
+          <MButton variant="ghost" onClick={() => onDownload?.(mode)} disabled={!onDownload}>
+            DOWNLOAD
+          </MButton>
+          <MButton variant="primary" onClick={() => onSendToClient?.()} disabled={!onSendToClient}>
+            SEND TO CLIENT
+          </MButton>
         </div>
       }
     >
@@ -791,15 +987,17 @@ export function PdfPreviewModal({ open, onClose }: OverlayProps) {
           <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {PDF_CONTENT_MODES.map((t) => (
               <MButton
-                key={t.label}
-                variant={t.on ? 'primary' : 'ghost'}
+                key={t.key}
+                variant={t.key === mode ? 'primary' : 'ghost'}
+                onClick={() => setMode(t.key)}
+                aria-pressed={t.key === mode}
                 style={{ width: '100%', height: 40, fontSize: 12, justifyContent: 'flex-start' }}
               >
                 {t.label}
               </MButton>
             ))}
           </div>
-          <div style={{ ...sectionLabel, color: 'var(--m-ink-3)', marginTop: 24 }}>SHEETS · 22</div>
+          <div style={{ ...sectionLabel, color: 'var(--m-ink-3)', marginTop: 24 }}>SHEETS · {sheetCount ?? 22}</div>
           <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600, lineHeight: 1.6 })}>
             ALL INCLUDED
             <br />
@@ -820,7 +1018,7 @@ export function PdfPreviewModal({ open, onClose }: OverlayProps) {
             }}
           >
             <div style={{ width: 240, height: 320, background: '#fff', border: '2px solid var(--m-ink)', padding: 16 }}>
-              <div style={mono({ fontSize: 8, fontWeight: 700, color: 'var(--m-ink)' })}>HILLCREST PH 4 · TAKEOFF</div>
+              <div style={mono({ fontSize: 8, fontWeight: 700, color: 'var(--m-ink)' })}>{headLabel} · TAKEOFF</div>
               <div style={display({ fontWeight: 800, fontSize: 14, marginTop: 4, color: 'var(--m-ink)' })}>
                 QUANTITIES
               </div>
@@ -965,6 +1163,13 @@ export interface AssignmentProjectOption {
   name: string
 }
 
+/** Minimal worker shape the crew multi-select needs — bootstrap `workers`
+ * rows satisfy this structurally (id + name). */
+export interface AssignmentCrewOption {
+  id: string
+  name: string
+}
+
 /** YYYY-MM-DD for today (local), the default `scheduled_for`. */
 function assignmentDefaultDate(): string {
   const d = new Date()
@@ -972,26 +1177,80 @@ function assignmentDefaultDate(): string {
   return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10)
 }
 
+const ASSIGN_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const
+
+/** "MAY 7" / "MAY 7–9" range label for a start (+optional end) YYYY-MM-DD. */
+function assignmentDatesLabel(startIso: string, endIso?: string): string {
+  if (!startIso) return ''
+  const s = new Date(`${startIso}T00:00:00`)
+  if (Number.isNaN(s.getTime())) return ''
+  const startLabel = `${ASSIGN_MONTHS[s.getMonth()]} ${s.getDate()}`
+  if (!endIso || endIso === startIso) return startLabel
+  const e = new Date(`${endIso}T00:00:00`)
+  if (Number.isNaN(e.getTime()) || e.getTime() < s.getTime()) return startLabel
+  // Same month → "MAY 7–9"; cross-month → "MAY 30 – JUN 2".
+  if (e.getMonth() === s.getMonth()) return `${startLabel}–${e.getDate()}`
+  return `${startLabel} – ${ASSIGN_MONTHS[e.getMonth()]} ${e.getDate()}`
+}
+
+/** Working-day (Mon–Fri) YYYY-MM-DD strings inclusive in [start, end]. */
+function assignmentWorkingDays(startIso: string, endIso: string): string[] {
+  const out: string[] = []
+  const s = new Date(`${startIso}T00:00:00`)
+  const e = new Date(`${endIso}T00:00:00`)
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e.getTime() < s.getTime()) {
+    return startIso ? [startIso] : []
+  }
+  const cur = new Date(s)
+  // Cap the span to avoid an accidental runaway range.
+  for (let i = 0; i < 28 && cur.getTime() <= e.getTime(); i += 1) {
+    const dow = cur.getDay() // 0=Sun … 6=Sat
+    if (dow >= 1 && dow <= 5) {
+      const off = cur.getTimezoneOffset()
+      out.push(new Date(cur.getTime() - off * 60_000).toISOString().slice(0, 10))
+    }
+    cur.setDate(cur.getDate() + 1)
+  }
+  return out.length > 0 ? out : [startIso]
+}
+
+/** True when any working day in the (inclusive) range is a Wednesday — the
+ * presentational rain-forecast flag the schedule grid surfaces. */
+function assignmentHasRainDay(days: string[]): boolean {
+  return days.some((iso) => {
+    const d = new Date(`${iso}T00:00:00`)
+    return !Number.isNaN(d.getTime()) && d.getDay() === 3 // Wednesday
+  })
+}
+
 /**
  * C3 · New-assignment composer — a real schedule-create form. Picks a
- * project + a working date and an optional crew note/size, then POSTs
- * /api/schedules (via `useCreateSchedule`) to drop a draft crew assignment
- * onto the week. Mirrors the schedule-create pattern in fm-confirm-day.tsx
- * (ensure a schedule row exists for project + date). The crew note is
- * carried as a single descriptive crew entry so the size shows on the grid.
+ * project, a working date range, a multi-select crew (named workers) and an
+ * optional scope, then POSTs /api/schedules (via `useCreateSchedule`) for
+ * each working day in the range to drop draft crew assignments onto the week.
+ * Mirrors the schedule-create pattern in fm-confirm-day.tsx (ensure a
+ * schedule row exists for project + date). The selected crew is carried as
+ * the `crew` jsonb array so the count + names show on the grid.
  */
 export function NewAssignmentModal({
   open,
   onClose,
   projects = [],
+  crew: crewRoster = [],
   onSaved,
-}: OverlayProps & { projects?: AssignmentProjectOption[]; onSaved?: () => void }) {
+}: OverlayProps & {
+  projects?: AssignmentProjectOption[]
+  crew?: AssignmentCrewOption[]
+  onSaved?: () => void
+}) {
   const createSchedule = useCreateSchedule()
 
   const [projectId, setProjectId] = useState('')
   const [scheduledFor, setScheduledFor] = useState(assignmentDefaultDate)
-  const [crewNote, setCrewNote] = useState('')
-  const [crewSize, setCrewSize] = useState('')
+  const [scheduledTo, setScheduledTo] = useState('')
+  const [scope, setScope] = useState('')
+  const [selectedCrew, setSelectedCrew] = useState<string[]>([])
+  const [addingCrew, setAddingCrew] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
@@ -1001,8 +1260,10 @@ export function NewAssignmentModal({
   }
 
   function reset() {
-    setCrewNote('')
-    setCrewSize('')
+    setScope('')
+    setSelectedCrew([])
+    setScheduledTo('')
+    setAddingCrew(false)
     setError(null)
     setSaved(false)
   }
@@ -1011,6 +1272,20 @@ export function NewAssignmentModal({
     reset()
     onClose()
   }
+
+  function toggleCrew(id: string) {
+    setSelectedCrew((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  // Working-day range + the dates label / rain flag derived from the picker.
+  const workingDays = scheduledFor && open ? assignmentWorkingDays(scheduledFor, scheduledTo || scheduledFor) : []
+  const datesLabel = assignmentDatesLabel(scheduledFor, scheduledTo || undefined)
+  const rainFlagged = assignmentHasRainDay(workingDays)
+  const rainDay = workingDays.find((iso) => {
+    const d = new Date(`${iso}T00:00:00`)
+    return !Number.isNaN(d.getTime()) && d.getDay() === 3
+  })
+  const rainLabel = rainDay ? assignmentDatesLabel(rainDay) : ''
 
   function save() {
     if (createSchedule.isPending) return
@@ -1022,28 +1297,46 @@ export function NewAssignmentModal({
       setError('Pick a date for the assignment.')
       return
     }
+    if (scheduledTo && scheduledTo < scheduledFor) {
+      setError('The end date is before the start date.')
+      return
+    }
     setError(null)
-    // Build a crew jsonb array: one descriptive entry per the typed crew
-    // size (default 1), tagged with the optional note so the grid's crew
-    // count reflects the booking. The API stores `crew` opaquely.
-    const size = Math.max(1, Math.min(99, Math.round(Number(crewSize) || 1)))
-    const note = crewNote.trim()
-    const crew = Array.from({ length: size }, (_, i) => ({
-      slot: i + 1,
-      ...(note ? { note } : {}),
-    }))
-    createSchedule.mutate(
-      { project_id: projectId, scheduled_for: scheduledFor, crew },
-      {
-        onSuccess: () => {
-          setSaved(true)
-          onSaved?.()
-          // Brief success flash, then close + reset.
-          window.setTimeout(close, 600)
+    // Build the crew jsonb array from the selected named workers (the API
+    // stores `crew` opaquely). When none are picked we book a single
+    // unnamed slot so the grid still reflects the booking.
+    const named = crewRoster.filter((w) => selectedCrew.includes(w.id))
+    const scopeText = scope.trim()
+    const crew =
+      named.length > 0
+        ? named.map((w) => ({ worker_id: w.id, name: w.name, ...(scopeText ? { scope: scopeText } : {}) }))
+        : [{ slot: 1, ...(scopeText ? { scope: scopeText } : {}) }]
+
+    const days = workingDays.length > 0 ? workingDays : [scheduledFor]
+    let pending = days.length
+    let failed = false
+    for (const day of days) {
+      createSchedule.mutate(
+        { project_id: projectId, scheduled_for: day, crew },
+        {
+          onSuccess: () => {
+            pending -= 1
+            if (pending === 0 && !failed) {
+              setSaved(true)
+              onSaved?.()
+              // Brief success flash, then close + reset.
+              window.setTimeout(close, 600)
+            }
+          },
+          onError: (e) => {
+            if (!failed) {
+              failed = true
+              setError(e instanceof Error ? e.message : 'Could not create the assignment.')
+            }
+          },
         },
-        onError: (e) => setError(e instanceof Error ? e.message : 'Could not create the assignment.'),
-      },
-    )
+      )
+    }
   }
 
   const noProjects = projects.length === 0
@@ -1058,12 +1351,13 @@ export function NewAssignmentModal({
     fontWeight: 700,
     color: 'var(--m-ink)',
   }
+  const unselectedCrew = crewRoster.filter((w) => !selectedCrew.includes(w.id))
 
   return (
     <DModal
       open={open}
       onClose={close}
-      title={<FloatHead>NEW ASSIGNMENT</FloatHead>}
+      title={<FloatHead>{datesLabel ? `NEW ASSIGNMENT · ${datesLabel}` : 'NEW ASSIGNMENT'}</FloatHead>}
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <MButton variant="ghost" onClick={close} disabled={createSchedule.isPending}>
@@ -1104,37 +1398,111 @@ export function NewAssignmentModal({
           </MSelect>
         </div>
         <div>
-          <div style={sectionLabel}>DATE</div>
-          <input
-            type="date"
-            value={scheduledFor}
-            onChange={(e) => setScheduledFor(e.currentTarget.value)}
-            style={inputStyle}
-          />
+          <div style={sectionLabel}>DATES</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="date"
+              aria-label="Assignment start date"
+              value={scheduledFor}
+              onChange={(e) => setScheduledFor(e.currentTarget.value)}
+              style={inputStyle}
+            />
+            <span style={mono({ fontSize: 13, fontWeight: 800, color: 'var(--m-ink-3)', marginTop: 8 })}>–</span>
+            <input
+              type="date"
+              aria-label="Assignment end date (optional)"
+              value={scheduledTo}
+              min={scheduledFor}
+              onChange={(e) => setScheduledTo(e.currentTarget.value)}
+              style={inputStyle}
+            />
+          </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 14, marginTop: 16 }}>
-        <div>
-          <div style={sectionLabel}>CREW NOTE · OPTIONAL</div>
-          <MInput
-            value={crewNote}
-            onChange={(e) => setCrewNote(e.currentTarget.value)}
-            placeholder="e.g. EPS East — anchor + plate"
-            style={{ marginTop: 8, width: '100%' }}
-          />
-        </div>
-        <div>
-          <div style={sectionLabel}>CREW SIZE</div>
-          <MInput
-            value={crewSize}
-            onChange={(e) => setCrewSize(e.currentTarget.value)}
-            inputMode="numeric"
-            placeholder="3"
-            style={{ marginTop: 8, width: '100%' }}
-          />
+      <div style={{ marginTop: 16 }}>
+        <div style={sectionLabel}>CREW · MULTI-SELECT</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+          {crewRoster
+            .filter((w) => selectedCrew.includes(w.id))
+            .map((w) => (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => toggleCrew(w.id)}
+                title="Remove from crew"
+                style={mono({
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  padding: '8px 12px',
+                  border: '2px solid var(--m-ink)',
+                  background: 'var(--m-ink)',
+                  color: 'var(--m-card)',
+                  cursor: 'pointer',
+                })}
+              >
+                {w.name}
+              </button>
+            ))}
+          {addingCrew && unselectedCrew.length > 0 ? (
+            <MSelect
+              aria-label="Add crew member"
+              value=""
+              onChange={(e) => {
+                const id = e.currentTarget.value
+                if (id) toggleCrew(id)
+                setAddingCrew(false)
+              }}
+              style={{ minWidth: 160 }}
+            >
+              <option value="">Pick a worker…</option>
+              {unselectedCrew.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}
+                </option>
+              ))}
+            </MSelect>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddingCrew(true)}
+              disabled={unselectedCrew.length === 0}
+              style={mono({
+                fontSize: 11,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                padding: '8px 12px',
+                border: '2px solid var(--m-ink)',
+                background: 'var(--m-card)',
+                color: 'var(--m-ink)',
+                cursor: unselectedCrew.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: unselectedCrew.length === 0 ? 0.4 : 1,
+              })}
+            >
+              + ADD
+            </button>
+          )}
         </div>
       </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={sectionLabel}>SCOPE</div>
+        <MInput
+          value={scope}
+          onChange={(e) => setScope(e.currentTarget.value)}
+          placeholder="e.g. EPS East — anchor + plate"
+          style={{ marginTop: 8, width: '100%' }}
+        />
+      </div>
+
+      {rainFlagged ? (
+        <div style={{ marginTop: 16 }}>
+          <MBanner tone="error" title={`● WED ${rainLabel} RAIN FORECAST — CONSIDER SHIFTING`} />
+        </div>
+      ) : null}
 
       <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 14, fontWeight: 600, lineHeight: 1.5 })}>
         Books a draft assignment on the week. The foreman confirms crew + hours from the field.

@@ -22,7 +22,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type BootstrapResponse } from '@/lib/api'
 import { API_URL } from '../../lib/api/client.js'
 import { MBanner, MBody, MButton, MButtonStack, MI, MSectionH, MTextarea, MTopBar } from '../../components/m/index.js'
-import { useFieldEvent, type FieldEventResolutionAction } from '../../machines/field-event.js'
+import {
+  useFieldEvent,
+  type FieldEventResolutionAction,
+  type FieldEventSnapshotContext,
+} from '../../machines/field-event.js'
 import { timeOfDay } from './format.js'
 
 type IssueRow = {
@@ -134,8 +138,17 @@ export function ForemanBlockerDetail({
   const projectId = ctx?.project_id ?? fallback?.project_id ?? null
   const workerId = ctx?.worker_id ?? fallback?.worker_id ?? null
   const createdAt = ctx?.created_at ?? fallback?.created_at ?? null
+  // Severity is now a typed column on the snapshot context. The
+  // severityFromMessage fallback only kicks in for the legacy direct-fetch
+  // path (which has no severity column on its DTO) when the workflow
+  // snapshot hasn't loaded.
   const severity = ctx?.severity ?? severityFromMessage(message)
-  const resolved = Boolean(ctx?.resolved_at ?? fallback?.resolved_at)
+  // The persisted workflow state (server-computed) is the single source of
+  // truth — never re-derived from columns here.
+  const state = fe.snapshot?.state ?? (fallback?.resolved_at ? 'resolved' : 'open')
+  // The set of events the server says are legal from this state. Buttons are
+  // gated on this so the UI can never offer an event the server would 409.
+  const actions = new Set((fe.snapshot?.next_events ?? []).map((e) => e.type))
 
   const worker = bootstrap?.workers.find((x) => x.id === workerId)
   const project = bootstrap?.projects.find((x) => x.id === projectId)
@@ -144,6 +157,7 @@ export function ForemanBlockerDetail({
   const [reply, setReply] = useState('')
   const [escalateMode, setEscalateMode] = useState(false)
   const [escalateReason, setEscalateReason] = useState('')
+  const [dismissMode, setDismissMode] = useState(false)
 
   const lat = numberOrNull(fallback?.lat)
   const lng = numberOrNull(fallback?.lng)
@@ -160,11 +174,25 @@ export function ForemanBlockerDetail({
     fe.dispatch({ event: 'ESCALATE', reason: escalateReason.trim() || cleanedMessage })
   }
 
-  // Auto-navigate back when the snapshot lands in a terminal state after
-  // a successful submit.
+  const handleDismiss = () => {
+    fe.dispatch({ event: 'DISMISS' })
+  }
+
+  const handleReopen = () => {
+    // REOPEN lands back on `open` and stays on the detail so the foreman can
+    // re-decide; clear any in-flight sub-mode so the resolve form is fresh.
+    setDismissMode(false)
+    setEscalateMode(false)
+    fe.dispatch({ event: 'REOPEN' })
+  }
+
+  // Auto-navigate back when the snapshot lands in a terminal-ish state after
+  // a successful submit. REOPEN (which lands on `open`) intentionally stays
+  // on the detail so the foreman can re-decide.
   useEffect(() => {
     if (!fe.snapshot) return
-    if (fe.snapshot.state === 'resolved' || fe.snapshot.state === 'escalated') {
+    const s = fe.snapshot.state
+    if (s === 'resolved' || s === 'escalated' || s === 'dismissed') {
       const t = window.setTimeout(() => navigate('/field'), 600)
       return () => window.clearTimeout(t)
     }
@@ -172,6 +200,7 @@ export function ForemanBlockerDetail({
   }, [fe.snapshot, navigate])
 
   const sevTone = severity === 'stopped' ? 'red' : severity === 'slowing' ? 'amber' : 'blue'
+  const isMaterials = ctx?.kind === 'materials_out'
 
   // Surface a clear gate when neither path produced a row — the route
   // genuinely doesn't exist or we're on a stale id.
@@ -210,16 +239,21 @@ export function ForemanBlockerDetail({
             className="m-topbar-eyebrow"
             style={{
               fontWeight: 800,
-              color: resolved
-                ? 'var(--m-green)'
-                : sevTone === 'red'
-                  ? 'var(--m-red)'
-                  : sevTone === 'amber'
+              color:
+                state === 'resolved'
+                  ? 'var(--m-green)'
+                  : state === 'escalated'
                     ? 'var(--m-amber)'
-                    : 'var(--m-ink-3)',
+                    : state === 'dismissed'
+                      ? 'var(--m-ink-3)'
+                      : sevTone === 'red'
+                        ? 'var(--m-red)'
+                        : sevTone === 'amber'
+                          ? 'var(--m-amber)'
+                          : 'var(--m-ink-3)',
             }}
           >
-            ● {resolved ? 'RESOLVED' : (severity ?? 'open').toUpperCase()} ·{' '}
+            ● {state === 'open' ? (severity ?? 'open').toUpperCase() : state.toUpperCase()} ·{' '}
             {worker?.name?.toUpperCase() ?? 'UNKNOWN WORKER'}
             {createdAt ? ` · ${timeOfDay(createdAt).toUpperCase()}` : ''}
           </div>
@@ -285,11 +319,29 @@ export function ForemanBlockerDetail({
           ) : null}
         </div>
 
-        {!resolved ? (
+        {state === 'open' ? (
           <>
-            {!escalateMode ? (
+            {/* Material-fulfillment hero — for an out-of-materials blocker the
+             *  foreman wants the quantity/material front-and-centre before the
+             *  generic picker. We surface the worker's own free text (which is
+             *  where the material + qty live today; there's no structured
+             *  column yet) plus an inert yard-stock slot that no-ops until an
+             *  inventory feed is wired. Lifecycle is unchanged — this is pure
+             *  content presentation, not a new transition. */}
+            {isMaterials ? (
               <>
-                <MSectionH>Resolve · pick one</MSectionH>
+                <MaterialHero
+                  fallbackLabel={cleanedMessage}
+                  materialLabel={ctx?.material_label ?? null}
+                  quantity={ctx?.material_quantity ?? null}
+                  unit={ctx?.material_unit ?? null}
+                />
+                <YardStockCard materialLabel={ctx?.material_label ?? cleanedMessage} />
+              </>
+            ) : null}
+            {!escalateMode && !dismissMode ? (
+              <>
+                <MSectionH>{isMaterials ? 'How to fulfill · pick one' : 'Resolve · pick one'}</MSectionH>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {RESOLUTION_OPTIONS.map((opt) => {
                     const active = action === opt.id
@@ -341,9 +393,16 @@ export function ForemanBlockerDetail({
                     >
                       {fe.isSubmitting ? 'Resolving…' : 'Resolve'}
                     </MButton>
-                    <MButton variant="ghost" onClick={() => setEscalateMode(true)}>
-                      Escalate to estimator
-                    </MButton>
+                    {actions.has('ESCALATE') ? (
+                      <MButton variant="ghost" onClick={() => setEscalateMode(true)}>
+                        Escalate to estimator
+                      </MButton>
+                    ) : null}
+                    {actions.has('DISMISS') ? (
+                      <MButton variant="ghost" onClick={() => setDismissMode(true)}>
+                        Dismiss
+                      </MButton>
+                    ) : null}
                   </MButtonStack>
                   <div
                     className="m-topbar-eyebrow"
@@ -353,7 +412,7 @@ export function ForemanBlockerDetail({
                   </div>
                 </div>
               </>
-            ) : (
+            ) : escalateMode ? (
               <>
                 <MSectionH>Why escalate?</MSectionH>
                 <MTextarea
@@ -373,19 +432,189 @@ export function ForemanBlockerDetail({
                   </MButtonStack>
                 </div>
               </>
+            ) : (
+              <>
+                <MSectionH>Dismiss this event?</MSectionH>
+                <div style={{ color: 'var(--m-ink-3)', fontSize: 14, lineHeight: 1.5, padding: '4px 0 4px' }}>
+                  No reply is sent to the worker and the estimator isn't looped in. The event stays as the audit trail
+                  and can be reopened later.
+                </div>
+                <div style={{ marginTop: 16 }}>
+                  <MButtonStack>
+                    <MButton variant="primary" onClick={handleDismiss} disabled={fe.isSubmitting || !fe.snapshot}>
+                      {fe.isSubmitting ? 'Dismissing…' : 'Dismiss event'}
+                    </MButton>
+                    <MButton variant="ghost" onClick={() => setDismissMode(false)}>
+                      Back
+                    </MButton>
+                  </MButtonStack>
+                </div>
+              </>
             )}
           </>
         ) : (
-          <div
-            className="m-topbar-eyebrow"
-            style={{ padding: '16px', color: 'var(--m-green)', textAlign: 'center', fontWeight: 800 }}
-          >
-            ● RESOLVED {fe.snapshot?.context.resolved_at ? shortAgo(fe.snapshot.context.resolved_at).toUpperCase() : ''}
-          </div>
+          <FieldEventClosedStrip
+            state={state}
+            ctx={ctx ?? null}
+            canReopen={actions.has('REOPEN')}
+            isSubmitting={fe.isSubmitting}
+            onReopen={handleReopen}
+          />
         )}
       </MBody>
     </>
   )
+}
+
+/**
+ * Closed-state strip for resolved / escalated / dismissed. Mirrors the old
+ * resolved confirmation but is now state-aware and drives a Reopen button off
+ * the server-computed next_events (REOPEN is legal from every closed state).
+ */
+function FieldEventClosedStrip({
+  state,
+  ctx,
+  canReopen,
+  isSubmitting,
+  onReopen,
+}: {
+  state: 'resolved' | 'escalated' | 'dismissed'
+  ctx: FieldEventSnapshotContext | null
+  canReopen: boolean
+  isSubmitting: boolean
+  onReopen: () => void
+}) {
+  const tone = state === 'resolved' ? 'var(--m-green)' : state === 'escalated' ? 'var(--m-amber)' : 'var(--m-ink-3)'
+  const label = state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'
+  const when =
+    state === 'resolved' ? ctx?.resolved_at : state === 'escalated' ? ctx?.escalated_to_estimator_at : ctx?.dismissed_at
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="m-topbar-eyebrow" style={{ padding: '16px', color: tone, textAlign: 'center', fontWeight: 800 }}>
+        ● {label} {when ? shortAgo(when).toUpperCase() : ''}
+      </div>
+      {state === 'escalated' && ctx?.escalation_reason ? (
+        <div style={{ padding: '0 16px 8px', color: 'var(--m-ink-3)', fontSize: 14, lineHeight: 1.5 }}>
+          “{ctx.escalation_reason}”
+        </div>
+      ) : null}
+      {canReopen ? (
+        <div style={{ marginTop: 8 }}>
+          <MButtonStack>
+            <MButton variant="ghost" onClick={onReopen} disabled={isSubmitting}>
+              {isSubmitting ? 'Reopening…' : 'Reopen'}
+            </MButton>
+          </MButtonStack>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Split a free-text material request into a leading quantity + unit and the
+ * remaining spec, so we can render the design's big-number quantity hero
+ * ("12 SHEETS" over "EPS INSULATION · 1.5" · 4'x8'") instead of one undifferentiated
+ * string. There's no structured material column yet, so this is a best-effort
+ * parse of the worker's own words — when no leading quantity is present we fall
+ * back to showing the whole label as the headline.
+ */
+/** Render a typed numeric quantity for the hero. `String` already drops a
+ *  spurious `.0` (12 → "12") while keeping real fractions (12.5 → "12.5"). */
+function formatQuantity(n: number): string {
+  return String(n)
+}
+
+function parseMaterialNeed(label: string): { amount: string | null; unit: string | null; spec: string } {
+  const trimmed = label.trim()
+  // Leading "<number> <word>" → quantity + unit (e.g. "12 sheets", "620 fasteners").
+  const m = trimmed.match(/^(\d[\d.,]*)\s+([A-Za-z]+)\b[\s·,-]*(.*)$/)
+  if (m) {
+    return { amount: m[1] ?? null, unit: (m[2] ?? '').toUpperCase(), spec: (m[3] ?? '').trim() }
+  }
+  return { amount: null, unit: null, spec: trimmed }
+}
+
+/**
+ * Material-fulfillment hero — surfaces the worker's material/quantity request
+ * prominently for a materials_out blocker, mirroring the design's quantity hero
+ * (big amount + unit, with the material spec beneath).
+ *
+ * Prefers the typed structured columns captured at create (migration 126:
+ * material_quantity / material_unit / material_label). Falls back to parsing
+ * the worker's free-text message for legacy rows (and rows where the worker
+ * skipped the structured fields), so the design affordance renders regardless
+ * of which path produced the row.
+ */
+function MaterialHero({
+  fallbackLabel,
+  materialLabel,
+  quantity,
+  unit,
+}: {
+  fallbackLabel: string
+  materialLabel: string | null
+  quantity: number | null
+  unit: string | null
+}) {
+  // Typed columns win when present; otherwise best-effort parse the prose.
+  const parsed = parseMaterialNeed(fallbackLabel)
+  const amount = quantity !== null ? formatQuantity(quantity) : parsed.amount
+  const heroUnit = unit ? unit.toUpperCase() : parsed.unit
+  const spec = materialLabel ?? parsed.spec
+  if (!amount && !spec) return null
+  return (
+    <div className="m-card" style={{ marginTop: 12, background: 'var(--m-accent)', color: 'var(--m-accent-ink)' }}>
+      <div className="m-topbar-eyebrow" style={{ fontWeight: 800 }}>
+        NEEDS
+      </div>
+      {amount ? (
+        <>
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 48, lineHeight: 1 }}>
+              {amount}
+            </span>
+            {heroUnit ? (
+              <span style={{ fontFamily: 'var(--m-num)', fontWeight: 700, fontSize: 18, letterSpacing: '0.04em' }}>
+                {heroUnit}
+              </span>
+            ) : null}
+          </div>
+          {spec ? (
+            <div
+              className="m-topbar-eyebrow"
+              style={{ marginTop: 8, fontWeight: 700, letterSpacing: '0.06em', opacity: 0.85 }}
+            >
+              {spec.toUpperCase()}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 24,
+            lineHeight: 1.1,
+            marginTop: 6,
+          }}
+        >
+          {spec}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Yard-stock availability slot. Inert until an inventory read-model is wired —
+ * it renders nothing when there's no match. Gives the design's "4 on hand"
+ * affordance a typed home without inventing a feed here.
+ */
+function YardStockCard({ materialLabel }: { materialLabel: string }) {
+  // No inventory feed wired yet: no-op. Kept as the typed extension point.
+  void materialLabel
+  return null
 }
 
 /**

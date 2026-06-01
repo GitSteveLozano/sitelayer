@@ -30,6 +30,14 @@ function manualChunks(id: string): string | undefined {
   // so it's exempt from the lazy *app*-chunk budget and stays off the PWA
   // precache (see the workbox config below).
   if (normalized.includes('/@embedpdf/')) return 'vendor-pdf'
+  // rrweb (@rrweb/record + rrweb-snapshot) is heavy third-party recording
+  // code pulled in only by the feedback-capture dock. Keep it in its own
+  // lazy `vendor-rrweb` chunk — like vendor-three/vendor-pdf it's vendor
+  // code, so it's exempt from the lazy *app*-chunk budget and only downloads
+  // when the (lazily-mounted) dock loads, never on the eager critical path.
+  if (normalized.includes('/@rrweb/') || normalized.includes('/rrweb-snapshot/') || normalized.includes('/rrweb/')) {
+    return 'vendor-rrweb'
+  }
   if (normalized.includes('/lucide-react/')) return 'vendor-icons'
   return undefined
 }
@@ -178,6 +186,9 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@sitelayer/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
+      '@sitelayer/formula-evaluator': fileURLToPath(
+        new URL('../../packages/formula-evaluator/src/index.ts', import.meta.url),
+      ),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
     },
   },

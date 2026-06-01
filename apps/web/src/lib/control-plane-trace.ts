@@ -12,6 +12,7 @@ const REDACTION = {
   reason: 'sitelayer_client_trace_tap',
 } as const
 import { beaconTraceEvent } from './product-trace-beacon'
+import { getActiveCaptureSession } from './capture-session'
 
 const EVENT_SCHEMA_VERSION = 'operator_event_taxonomy.v1'
 
@@ -71,6 +72,7 @@ export function emitControlPlaneTrace(
   }
 
   try {
+    const captureSession = getActiveCaptureSession()
     void Promise.resolve(
       bridge.emit({
         trace_id: activeTrace.trace_id,
@@ -83,6 +85,9 @@ export function emitControlPlaneTrace(
           event_domain: 'controlled_app',
           event_class: traceEventClass(eventType),
           route_path: readRoutePath(),
+          capture_session_id: captureSession?.id,
+          capture_session_mode: captureSession?.mode,
+          capture_session_started_at: captureSession?.started_at,
           user_state: buildUserStateSnapshot(payload),
           redaction_status: REDACTION.status,
           ...payload,

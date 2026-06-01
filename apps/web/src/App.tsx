@@ -1,8 +1,15 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
+import { getActiveCompanySlug } from '@/lib/api'
+// Lazy: the feedback-capture dock pulls in the rrweb recorder (vendor-rrweb),
+// so a static import would drag that heavy machinery onto the eager critical
+// path. It mounts only on the capture surfaces below, after first paint.
+const AuthenticatedFeedbackDock = lazy(() =>
+  import('@/components/capture/AuthenticatedFeedbackDock').then((m) => ({ default: m.AuthenticatedFeedbackDock })),
+)
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import { RoleSwitcher } from '@/components/dev/RoleSwitcher'
 import {
@@ -52,6 +59,9 @@ const FinancialRoute = lazy(() => import('@/routes/financial'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
 const PhotoRoute = lazy(() => import('@/routes/photo'))
 const LiveCrewRoute = lazy(() => import('@/routes/live-crew'))
+// Cross-tenant superadmin console (P3). API-gated (requirePlatformAdmin); its
+// own lazy chunk so it never weighs on the field bundle.
+const AdminRoute = lazy(() => import('@/routes/admin'))
 const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
 const LocationPrimeRoute = lazy(() => import('@/routes/permissions-location'))
 const NotificationsPrimeRoute = lazy(() => import('@/routes/permissions-notifications'))
@@ -79,6 +89,9 @@ const ProjectBomsScreen = lazy(() =>
 )
 const ChangeOrdersScreen = lazy(() =>
   import('@/screens/mobile/change-orders').then((m) => ({ default: m.MobileChangeOrders })),
+)
+const ChangeOrderDetailScreen = lazy(() =>
+  import('@/screens/mobile/change-order-detail').then((m) => ({ default: m.MobileChangeOrderDetail })),
 )
 const ProjectLostScreen = lazy(() =>
   import('@/screens/mobile/project-lost').then((m) => ({ default: m.MobileProjectLost })),
@@ -109,12 +122,20 @@ const PortalEstimateView = lazy(() => import('@/portal/EstimateView').then((m) =
 const PortalEstimateAcceptedView = lazy(() =>
   import('@/portal/EstimateAcceptedView').then((m) => ({ default: m.EstimateAcceptedView })),
 )
+const PortalRentalsProvider = lazy(() =>
+  import('@/portal/RentalsPortalProvider').then((m) => ({ default: m.RentalsPortalProvider })),
+)
 const PortalRentalsView = lazy(() => import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })))
 const PortalRentalsCart = lazy(() => import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })))
 const PortalRentalsConfirm = lazy(() => import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })))
 const TakeoffPreviewDemo = lazy(() =>
   import('@/screens/projects/takeoff-preview-demo').then((m) => ({ default: m.TakeoffPreviewDemo })),
 )
+// Demo-tier landing + Clerk magic-link role picker (C3). Public (signed-out)
+// route. The screen self-gates on the running tier via /api/features and
+// renders a bare 404 anywhere but the demo deployment, so it's structurally
+// inert off the demo tier.
+const DemoLandingRoute = lazy(() => import('@/screens/demo/demo-landing').then((m) => ({ default: m.DemoLanding })))
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -143,6 +164,12 @@ const WorkerFirstRunScreen = lazy(() =>
 )
 const EstimatorInviteScreen = lazy(() =>
   import('@/screens/mobile/estimator-invite').then((m) => ({ default: m.EstimatorInviteScreen })),
+)
+const AcceptInviteScreen = lazy(() =>
+  import('@/screens/invite/AcceptInvite').then((m) => ({ default: m.AcceptInvite })),
+)
+const InviteTeammateScreen = lazy(() =>
+  import('@/screens/mobile/invite-teammate').then((m) => ({ default: m.InviteTeammateScreen })),
 )
 const EstimatorFirstRunScreen = lazy(() =>
   import('@/screens/mobile/estimator-first-run').then((m) => ({ default: m.EstimatorFirstRunScreen })),
@@ -248,10 +275,28 @@ export default function App() {
                   install prompt either. */}
               <Route path="/portal/estimates/:shareToken" element={<PortalEstimateView />} />
               <Route path="/portal/estimates/:shareToken/accepted" element={<PortalEstimateAcceptedView />} />
-              <Route path="/portal/rentals/:shareToken" element={<PortalRentalsView />} />
-              <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
-              <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
+              {/* All three rentals-portal screens share ONE lifted
+                  `rentalsPortal` machine via RentalsPortalProvider so the
+                  cart/contact/reserve state is a single statechart, not a
+                  localStorage split-brain. */}
+              <Route path="/portal/rentals/:shareToken" element={<PortalRentalsProvider />}>
+                <Route index element={<PortalRentalsView />} />
+                <Route path="cart" element={<PortalRentalsCart />} />
+                <Route path="confirm" element={<PortalRentalsConfirm />} />
+              </Route>
               <Route path="/demo/takeoff-preview-3d" element={<TakeoffPreviewDemo />} />
+              {/* Demo-tier landing + magic-link role picker. Public, above the
+                  Clerk-gated app shell so signed-out visitors can reach it.
+                  Self-gates on tier (404 off the demo deployment). */}
+              <Route path="/demo" element={<DemoLandingRoute />} />
+
+              {/* Public teammate-invite accept page. Above the Clerk-gated
+                  shell so a signed-out invitee can render the invite summary
+                  and drive sign-in; the page self-gates the accept action on a
+                  signed-in identity (Clerk in prod, act-as in dev). Distinct
+                  path from the in-shell /invite/{worker,foreman,estimator,
+                  teammate} accept-persona screens. */}
+              <Route path="/invite/accept/:token" element={<AcceptInviteScreen />} />
 
               {/* Authenticated app -- Clerk-gated. */}
               <Route
@@ -279,10 +324,18 @@ function AppShellRoutes() {
       {/* Project deep routes that need the full viewport. */}
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-      <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      <Route
+        path="/projects/:id/takeoff-canvas"
+        element={
+          <CaptureFeedbackRoute>
+            <TakeoffCanvasScreen />
+          </CaptureFeedbackRoute>
+        }
+      />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
+      <Route path="/projects/:projectId/change-orders/:coId" element={<ChangeOrderDetailScreen />} />
       <Route path="/projects/:projectId/lost" element={<ProjectLostScreen />} />
       <Route path="/projects/:projectId/recovery" element={<RecoveryPlanScreen />} />
       <Route path="/clients" element={<ClientsListScreen />} />
@@ -307,6 +360,7 @@ function AppShellRoutes() {
       <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
       <Route path="/photo" element={<PhotoRoute />} />
       <Route path="/live-crew" element={<LiveCrewRoute />} />
+      <Route path="/admin/*" element={<AdminRoute />} />
 
       {/* Onboarding + permission primes -- full-screen takeovers. */}
       <Route path="/onboarding" element={<OnboardingRoute />} />
@@ -321,6 +375,9 @@ function AppShellRoutes() {
       <Route path="/invite/worker" element={<WorkerInviteScreen />} />
       <Route path="/invite/foreman" element={<ForemanInviteScreen />} />
       <Route path="/invite/estimator" element={<EstimatorInviteScreen />} />
+      {/* Owner SEND-invite takeover (design msg__94 / report M01) — the
+          send surface, distinct from the accept-side /invite/* screens. */}
+      <Route path="/invite/teammate" element={<InviteTeammateScreen />} />
       <Route path="/foreman/first-run" element={<ForemanFirstRunScreen />} />
       <Route path="/worker/first-run" element={<WorkerFirstRunScreen />} />
       <Route path="/estimator/first-run" element={<EstimatorFirstRunScreen />} />
@@ -348,4 +405,15 @@ function AppShellRoutes() {
 function WelcomeRoute() {
   const navigate = useNavigate()
   return <DesktopOnboardingRoute onComplete={() => navigate('/desktop')} />
+}
+
+function CaptureFeedbackRoute({ children }: { children: ReactNode }) {
+  return (
+    <>
+      {children}
+      <Suspense fallback={null}>
+        <AuthenticatedFeedbackDock companySlug={getActiveCompanySlug()} />
+      </Suspense>
+    </>
+  )
 }

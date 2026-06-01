@@ -10,12 +10,13 @@
  * debounced SAVE → PATCH. The returned scope_vs_bid refreshes totals; a
  * 409 reloads the snapshot and shows a conflict banner.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
+import { useCustomers } from '@/lib/api/customers'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
-import type { EstimateLine } from '../../lib/api/estimate.js'
-import { createEstimatePush } from '../../lib/api/estimate-pushes.js'
+import { repriceEstimateMargin, type EstimateLine } from '../../lib/api/estimate.js'
+import { createEstimateShare } from '../../lib/api/estimate-shares.js'
 import {
   MBanner,
   MBody,
@@ -23,11 +24,10 @@ import {
   MButtonStack,
   MI,
   MInput,
-  MKpi,
-  MKpiRow,
   MPill,
   MListInset,
   MSectionH,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
@@ -42,11 +42,30 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const [error, setError] = useState<string | null>(null)
   const [creatingPush, setCreatingPush] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Share link created by the send sheet (the private signable portal link).
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  // Margin control (the design's slider + −/+ stepper). Drives a live sell-total
+  // preview off the internal cost basis. On release the chosen margin is
+  // committed via SET_MARGIN, which reprices the project bid off the cost basis.
+  const [marginOverride, setMarginOverride] = useState<number | null>(null)
+  const [marginSaving, setMarginSaving] = useState(false)
+  // Send-to-client confirmation sheet (the design's full-screen SEND TO CLIENT
+  // sheet). The send no longer fires immediately on tap — it opens this sheet.
+  const [showSendSheet, setShowSendSheet] = useState(false)
+  const [sendNote, setSendNote] = useState('')
+  const [sendEmail, setSendEmail] = useState('')
 
   // Editable line list + totals. The machine owns the scope-vs-bid
   // snapshot (whose lines carry `id`), staged edits, and save/conflict UI
   // state. The summary above stays the source for KPIs / AI stripe.
   const builder = useEstimateBuilder(projectId, getActiveCompanySlug())
+
+  // Client identity for the SELL TOTAL · TO <name> qualifier + the send sheet.
+  const customersQuery = useCustomers()
+  const client = useMemo(() => {
+    const all = customersQuery.data?.customers ?? []
+    return all.find((c) => c.id === summary?.project.customer_id) ?? null
+  }, [customersQuery.data?.customers, summary?.project.customer_id])
 
   // Debounced auto-save (700ms) — mirrors the desktop estimate-builder.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -59,14 +78,28 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
     }
   }, [builder])
 
-  const handleSendToClient = async () => {
+  // Step 1: open the confirmation sheet (client card + attachment + note).
+  const handleSendToClient = () => {
+    if (!projectId) return
+    setCreateError(null)
+    setShareUrl(null)
+    setShowSendSheet(true)
+  }
+
+  // Step 2: from inside the sheet, create an estimate SHARE — a private
+  // signable portal link the client opens to view/accept the bid (the
+  // send-to-client loop, distinct from the QBO estimate-push).
+  const confirmSend = async (recipientEmail: string) => {
     if (!projectId) return
     setCreatingPush(true)
     setCreateError(null)
     try {
-      const result = await createEstimatePush(projectId)
-      const pushId = result.kind === 'created' ? result.pushId : result.openId
-      navigate(`/projects/${projectId}/estimate-push/${pushId}`)
+      const trimmedNote = sendNote.trim()
+      const result = await createEstimateShare(projectId, {
+        recipient_email: recipientEmail,
+        ...(trimmedNote ? { message: trimmedNote } : {}),
+      })
+      setShareUrl(result.share_url)
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -117,43 +150,161 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   // back to the summary lines for the scope tree / empty-state guard.
   const editableLines = builder.lines
   const summaryLines = summary.estimateLines
-  // Live total: prefer the machine snapshot (updates as edits save) and
-  // fall back to the summary metric before the snapshot loads.
+  // Live priced total: prefer the machine snapshot (updates as edits save)
+  // and fall back to the summary metric before the snapshot loads.
   const liveTotal = builder.snapshot?.scope_total ?? m.estimateTotal
-  const marginPct = `${(m.margin.margin * 100).toFixed(0)}%`
-  const marginTone: 'green' | 'amber' | 'red' =
-    m.margin.margin > 0.18 ? 'green' : m.margin.margin > 0.1 ? 'amber' : 'red'
+
+  // Internal cost basis (the design's "YOUR COST · INTERNAL" hero). totalCost
+  // already folds materials + labor + subs (+ any burden) on the server.
+  const costBasis = m.totalCost
+
+  // Margin: the actual computed margin from the priced estimate, or the
+  // operator's slider override. Clamped to the design's 0–50% track.
+  const computedMargin = Number.isFinite(m.margin.margin) ? m.margin.margin : 0
+  const marginValue = marginOverride ?? computedMargin
+  const marginClamped = Math.min(0.5, Math.max(0, marginValue))
+  const marginPct = `${Math.round(marginClamped * 100)}%`
+  const marginTone: 'green' | 'amber' | 'red' = marginClamped > 0.18 ? 'green' : marginClamped > 0.1 ? 'amber' : 'red'
+
+  // Sell total. When the operator hasn't touched the slider we show the real
+  // priced total; once they move it, preview sell = cost / (1 − margin),
+  // rounded up to the nearest $10 (matching the design's "ROUNDED UP" line).
+  const rawSell = marginOverride === null ? liveTotal : marginClamped < 1 ? costBasis / (1 - marginClamped) : liveTotal
+  const sellTotal = Math.ceil(rawSell / 10) * 10
+  const roundingDelta = sellTotal - rawSell
+  const profit = sellTotal - costBasis
+  const clientLabel = client?.name ?? summary.project.customer_name ?? ''
+  const clientFirstName = clientLabel.trim().split(/\s+/)[0] ?? ''
+
+  // Commit the chosen margin: reprice the project bid off the cost basis
+  // (SET_MARGIN). Fired on slider release / after a stepper tap, not on every
+  // drag tick. No-op without a cost basis (nothing to mark up).
+  const commitMargin = async (nextMargin: number) => {
+    if (!projectId || costBasis <= 0) return
+    setMarginSaving(true)
+    try {
+      const result = await repriceEstimateMargin(projectId, Math.min(0.95, Math.max(0, nextMargin)))
+      setMarginOverride(result.target_margin_pct)
+      builder.refresh()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMarginSaving(false)
+    }
+  }
+
+  const stepMargin = (delta: number) => {
+    const base = marginOverride ?? computedMargin
+    const next = Math.min(0.5, Math.max(0, Math.round((base + delta) * 100) / 100))
+    setMarginOverride(next)
+    void commitMargin(next)
+  }
 
   return (
     <>
       <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
-        {/* Price hero: MARGIN big-number + accent SELL TOTAL big-number. */}
-        <MKpiRow cols={2}>
-          <MKpi label="Margin" value={marginPct} meta={formatMoney(m.margin.profit)} metaTone={marginTone} />
+        {/* YOUR COST · INTERNAL — internal cost-basis hero above margin. */}
+        <div style={{ padding: '20px 16px 16px', borderBottom: '2px solid var(--m-ink)' }}>
           <div
-            className="m-kpi"
-            style={{ background: 'var(--m-accent)', color: 'var(--m-accent-ink)', marginLeft: -2 }}
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
           >
-            <div className="m-kpi-eyebrow" style={{ color: 'var(--m-accent-ink)', opacity: 0.7 }}>
-              Sell total
-            </div>
-            <div
-              className="num"
-              style={{
-                fontFamily: 'var(--m-font-display)',
-                fontSize: 38,
-                fontWeight: 800,
-                letterSpacing: '-0.035em',
-                marginTop: 6,
-                lineHeight: 0.85,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {formatMoney(liveTotal)}
-            </div>
+            Your cost · internal
           </div>
-        </MKpiRow>
+          <div
+            className="num"
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 44,
+              lineHeight: 0.9,
+              letterSpacing: '-0.035em',
+              marginTop: 8,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {formatMoney(costBasis)}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              marginTop: 8,
+            }}
+          >
+            Materials + labor + rentals + burden
+          </div>
+        </div>
+
+        {/* MARGIN — interactive 0–50% slider + −/+ stepper. Dragging previews
+            the % live; on release it reprices the project bid (SET_MARGIN). */}
+        <MarginControl
+          marginPct={marginPct}
+          value={marginClamped}
+          tone={marginTone}
+          saving={marginSaving}
+          onSlide={(v) => setMarginOverride(v)}
+          onCommit={(v) => void commitMargin(v)}
+          onStep={stepMargin}
+        />
+
+        {/* SELL TOTAL · TO <client> — accent block + profit/cost/rounding line. */}
+        <div style={{ background: 'var(--m-accent)', color: 'var(--m-accent-ink)', padding: '18px 16px' }}>
+          {/* Dark inverted chip — the design's black "SELL TOTAL · TO JOHN" label on yellow. */}
+          <span
+            style={{
+              display: 'inline-block',
+              background: 'var(--m-ink)',
+              color: 'var(--m-accent)',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              padding: '4px 8px',
+            }}
+          >
+            {clientLabel ? `Sell total · to ${clientFirstName || clientLabel}` : 'Sell total'}
+          </span>
+          <div
+            className="num"
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 46,
+              lineHeight: 0.85,
+              letterSpacing: '-0.035em',
+              marginTop: 10,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {formatMoney(sellTotal)}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              marginTop: 10,
+            }}
+          >
+            Profit {formatMoney(profit)} · Cost {formatMoney(costBasis)}
+            {roundingDelta >= 1 ? ` · Rounded up ${formatMoney(roundingDelta)}` : ''}
+          </div>
+        </div>
 
         <div style={{ padding: '0 16px', marginTop: 12 }}>
           <MAiStripe
@@ -221,7 +372,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <span style={{ fontSize: 14, fontWeight: 600 }}>Sell total</span>
             <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
-              {formatMoney(liveTotal)}
+              {formatMoney(sellTotal)}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
@@ -234,7 +385,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           </div>
         </div>
 
-        {createError ? (
+        {createError && !showSendSheet ? (
           <div style={{ padding: '0 16px', color: 'var(--m-red)', fontSize: 13 }}>{createError}</div>
         ) : null}
         <div style={{ padding: 16 }}>
@@ -244,11 +395,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
               onClick={handleSendToClient}
               disabled={creatingPush || builder.hasDirtyEdits || builder.isSaving || editableLines.length === 0}
             >
-              {creatingPush
-                ? 'Drafting…'
-                : builder.hasDirtyEdits || builder.isSaving
-                  ? 'Saving edits…'
-                  : 'Send to client'}
+              {builder.hasDirtyEdits || builder.isSaving ? 'Saving edits…' : 'Send to client'}
             </MButton>
             <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}`)}>
               Back to project
@@ -256,7 +403,377 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           </MButtonStack>
         </div>
       </MBody>
+
+      {showSendSheet ? (
+        <SendToClientSheet
+          clientName={clientLabel || 'Client'}
+          clientFirstName={clientFirstName || clientLabel || 'client'}
+          clientCompany={client?.source ?? null}
+          fileName={`${slugifyFile(summary.project.name)}.pdf`}
+          lineCount={editableLines.length}
+          note={sendNote}
+          onNoteChange={setSendNote}
+          email={sendEmail}
+          onEmailChange={setSendEmail}
+          sending={creatingPush}
+          error={createError}
+          shareUrl={shareUrl}
+          onSend={() => void confirmSend(sendEmail.trim())}
+          onClose={() => {
+            if (!creatingPush) setShowSendSheet(false)
+          }}
+        />
+      ) : null}
     </>
+  )
+}
+
+// "Hillcrest Mews Phase 4" → "hillcrest-mews-phase-4". Used to derive the
+// deliverable filename shown in the send sheet (the design's HILLCREST-PH4-TO).
+function slugifyFile(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || 'estimate'
+}
+
+/**
+ * MARGIN control — the design's big-% readout, −/+ stepper pair, and a 0–50%
+ * slider track. Dragging previews the sell total upstream (onSlide); on release
+ * (onCommit) the chosen margin reprices the project bid off the cost basis
+ * (SET_MARGIN). The stepper commits per tap.
+ */
+function MarginControl({
+  marginPct,
+  value,
+  tone,
+  saving = false,
+  onSlide,
+  onCommit,
+  onStep,
+}: {
+  marginPct: string
+  value: number
+  tone: 'green' | 'amber' | 'red'
+  saving?: boolean
+  onSlide: (v: number) => void
+  onCommit: (v: number) => void
+  onStep: (delta: number) => void
+}) {
+  return (
+    <div style={{ padding: '18px 16px', borderBottom: '2px solid var(--m-ink)' }}>
+      <div
+        style={{
+          fontFamily: 'var(--m-num)',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+        }}
+      >
+        Margin{saving ? ' · saving…' : ''}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 8 }}>
+        <div
+          className="num"
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 44,
+            lineHeight: 0.9,
+            letterSpacing: '-0.035em',
+            color: tone === 'red' ? 'var(--m-red)' : 'var(--m-ink)',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {marginPct}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <MButton variant="ghost" size="sm" onClick={() => onStep(-0.01)} aria-label="decrease margin">
+            −
+          </MButton>
+          <MButton variant="primary" size="sm" onClick={() => onStep(0.01)} aria-label="increase margin">
+            +
+          </MButton>
+        </div>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={50}
+        step={1}
+        value={Math.round(value * 100)}
+        aria-label="margin percent"
+        disabled={saving}
+        onChange={(e) => onSlide(Number(e.target.value) / 100)}
+        onMouseUp={(e) => onCommit(Number(e.currentTarget.value) / 100)}
+        onTouchEnd={(e) => onCommit(Number(e.currentTarget.value) / 100)}
+        onKeyUp={(e) => onCommit(Number(e.currentTarget.value) / 100)}
+        style={{ width: '100%', marginTop: 14, accentColor: 'var(--m-accent)' }}
+      />
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontFamily: 'var(--m-num)',
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: '0.04em',
+          color: 'var(--m-ink-3)',
+          marginTop: 4,
+        }}
+      >
+        <span>0%</span>
+        <span>20%</span>
+        <span>50%</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * SEND TO CLIENT sheet — the design's full-screen confirmation: client
+ * identity card, a recipient email, an attaching row (filename + size +
+ * line-item count), an optional note, the private-share-link explainer, and a
+ * SEND · NOTIFY <name> commit. On send it creates an estimate SHARE (a private
+ * signable portal link); on success the generated link is surfaced here.
+ */
+function SendToClientSheet({
+  clientName,
+  clientFirstName,
+  clientCompany,
+  fileName,
+  lineCount,
+  note,
+  onNoteChange,
+  email,
+  onEmailChange,
+  sending,
+  error,
+  shareUrl,
+  onSend,
+  onClose,
+}: {
+  clientName: string
+  clientFirstName: string
+  clientCompany: string | null
+  fileName: string
+  lineCount: number
+  note: string
+  onNoteChange: (v: string) => void
+  email: string
+  onEmailChange: (v: string) => void
+  sending: boolean
+  error: string | null
+  shareUrl: string | null
+  onSend: () => void
+  onClose: () => void
+}) {
+  const initials = clientName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('')
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  return (
+    <div
+      role="dialog"
+      aria-label="Send to client"
+      style={{ position: 'fixed', inset: 0, background: 'var(--m-sand)', zIndex: 60, overflowY: 'auto' }}
+    >
+      <MTopBar
+        title="Send to client"
+        eyebrow="SHARE"
+        actionLabel="Close"
+        actionIcon={<MI.X size={20} />}
+        onAction={onClose}
+      />
+      <MBody>
+        {/* Client identity card */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            padding: '16px',
+            borderBottom: '2px solid var(--m-ink)',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 52,
+              height: 52,
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'var(--m-ink)',
+              color: 'var(--m-sand)',
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 18,
+            }}
+          >
+            {initials || '—'}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div className="m-quiet-sm" style={{ fontFamily: 'var(--m-num)', letterSpacing: '0.06em' }}>
+              CLIENT
+            </div>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 18, lineHeight: 1.1 }}>
+              {clientName}
+            </div>
+            {clientCompany ? (
+              <div
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                  marginTop: 2,
+                }}
+              >
+                {clientCompany}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Recipient email — required to mint the share link. */}
+        <MSectionH>Send to email</MSectionH>
+        <div style={{ padding: '0 16px 4px' }}>
+          <MInput
+            type="email"
+            inputMode="email"
+            placeholder="client@email.com"
+            value={email}
+            onChange={(e) => onEmailChange(e.target.value)}
+            aria-label="recipient email"
+            disabled={sending || Boolean(shareUrl)}
+          />
+        </div>
+
+        {/* Attaching row — the deliverable PDF + size + line-item count */}
+        <MSectionH>Attaching</MSectionH>
+        <div style={{ padding: '0 16px 4px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              border: '2px solid var(--m-ink)',
+              padding: '12px 14px',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 40,
+                height: 40,
+                border: '1.5px solid var(--m-ink)',
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+              }}
+            >
+              PDF
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div
+                style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14, wordBreak: 'break-word' }}
+              >
+                {fileName.toUpperCase()}
+              </div>
+              <div className="m-quiet-sm" style={{ fontFamily: 'var(--m-num)', letterSpacing: '0.04em' }}>
+                {lineCount} LINE {lineCount === 1 ? 'ITEM' : 'ITEMS'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Optional note */}
+        <MSectionH>Note (optional)</MSectionH>
+        <div style={{ padding: '0 16px 4px' }}>
+          <MTextarea
+            rows={3}
+            placeholder={`${clientFirstName} — takeoff finished. ${lineCount} line ${
+              lineCount === 1 ? 'item' : 'items'
+            }, all sheets verified. Estimate to follow.`}
+            value={note}
+            onChange={(e) => onNoteChange(e.target.value)}
+            aria-label="note to client"
+          />
+        </div>
+
+        <div
+          style={{
+            padding: '8px 16px 0',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.03em',
+            color: 'var(--m-ink-3)',
+            lineHeight: 1.5,
+          }}
+        >
+          → GENERATES A PRIVATE SHARE LINK. AUTO-ATTACHES THE DELIVERABLE TO {clientFirstName.toUpperCase()}&apos;S
+          PROFILE.
+        </div>
+
+        {shareUrl ? (
+          <>
+            <MSectionH>Share link created ✓</MSectionH>
+            <div style={{ padding: '0 16px 4px' }}>
+              <div
+                style={{
+                  border: '2px solid var(--m-ink)',
+                  padding: '12px 14px',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  wordBreak: 'break-all',
+                  color: 'var(--m-ink-2)',
+                }}
+              >
+                {shareUrl}
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {error ? <div style={{ padding: '8px 16px 0', color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+
+        <div style={{ padding: 16 }}>
+          <MButtonStack>
+            {shareUrl ? (
+              <MButton variant="primary" onClick={onClose}>
+                Done
+              </MButton>
+            ) : (
+              <>
+                <MButton variant="primary" onClick={onSend} disabled={sending || !emailValid}>
+                  {sending ? 'Sending…' : `Send · notify ${clientFirstName}`}
+                </MButton>
+                <MButton variant="ghost" onClick={onClose} disabled={sending}>
+                  Cancel
+                </MButton>
+              </>
+            )}
+          </MButtonStack>
+        </div>
+      </MBody>
+    </div>
   )
 }
 

@@ -14,6 +14,7 @@
 
 import { Sentry } from '@/instrument'
 import { isClerkConfigured } from '@/lib/auth'
+import { applyCaptureSessionHeader } from '@/lib/capture-session'
 
 export const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3001') as string
 
@@ -243,6 +244,7 @@ export async function buildAuthHeaders(opts: { companySlug?: string; requestId?:
   // W3C trace context — forwarded on every request so the API +
   // worker + workflow_event_log all share the SPA's trace id.
   applyTraceHeaders(headers)
+  applyCaptureSessionHeader(headers)
   try {
     const token = await tokenProvider()
     if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -289,6 +291,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   // the trace context is independent of authentication and the API's
   // root span continues whatever the SPA started.
   applyTraceHeaders(headers)
+  applyCaptureSessionHeader(headers)
 
   if (!options.skipAuth) {
     const slug = options.companySlug ?? getActiveCompanySlug()
@@ -394,6 +397,7 @@ export async function requestBlob(path: string, options: Omit<RequestOptions, 'j
   const requestId = headers.get('x-request-id')
 
   applyTraceHeaders(headers)
+  applyCaptureSessionHeader(headers)
 
   if (!options.skipAuth) {
     const slug = options.companySlug ?? getActiveCompanySlug()

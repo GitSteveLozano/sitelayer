@@ -29,6 +29,8 @@ const page = {
   calibration_x2: null,
   calibration_y2: null,
   calibration_set_at: null,
+  scale_verified_at: null,
+  scale_verified_by: null,
   measurement_count: 0,
 } satisfies BlueprintPage
 

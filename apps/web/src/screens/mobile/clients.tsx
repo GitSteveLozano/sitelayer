@@ -17,6 +17,7 @@
  * Σ of project bid totals, win rate is the won/closed ratio.
  */
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useCustomers, type Customer } from '@/lib/api/customers'
 import { useProjects, type ProjectListRow } from '@/lib/api/projects'
@@ -285,6 +286,8 @@ function ClientRow({
 // =====================================================================
 // CLIENT PROFILE
 // =====================================================================
+type ProfileTab = 'projects' | 'takeoffs' | 'contact'
+
 export function MobileClientProfile() {
   const navigate = useNavigate()
   const { clientId } = useParams<{ clientId: string }>()
@@ -303,6 +306,17 @@ export function MobileClientProfile() {
 
   const stats = useMemo(() => statsFor(clientProjects), [clientProjects])
   const winRate = stats.decided > 0 ? Math.round((stats.wins / stats.decided) * 100) : null
+
+  // "SINCE <year>" — earliest relationship marker. Prefer the oldest project's
+  // created_at; fall back to the customer record's own created_at.
+  const sinceYear = useMemo(() => {
+    const dates = clientProjects.map((p) => p.created_at).filter(Boolean)
+    if (customer?.created_at) dates.push(customer.created_at)
+    const years = dates.map((d) => new Date(d).getFullYear()).filter((y) => Number.isFinite(y) && y > 1970)
+    return years.length > 0 ? Math.min(...years) : null
+  }, [clientProjects, customer?.created_at])
+
+  const [tab, setTab] = useState<ProfileTab>('projects')
 
   if (customersQuery.isLoading) {
     return (
@@ -330,9 +344,21 @@ export function MobileClientProfile() {
     )
   }
 
+  // Relationship subtitle: company-ish label (source) + "SINCE <year>".
+  const companyLabel = customer.source?.toUpperCase() || 'CLIENT'
+  const subtitle = sinceYear ? `${companyLabel} · SINCE ${sinceYear}` : companyLabel
+
   return (
     <>
-      <MTopBar eyebrow="CLIENT" title={customer.name} back onBack={() => navigate('/clients')} />
+      <MTopBar
+        eyebrow="CLIENT"
+        title={customer.name}
+        back
+        onBack={() => navigate('/clients')}
+        actionLabel="More"
+        actionIcon={<MoreDots />}
+        onAction={() => undefined}
+      />
       <MBody>
         {/* Identity block — square monogram + name + mono micro-label */}
         <div
@@ -359,37 +385,151 @@ export function MobileClientProfile() {
                 letterSpacing: '0.04em',
               }}
             >
-              {customer.source?.toUpperCase() || 'CLIENT'}
-              {customer.external_id ? ` · ${customer.external_id}` : ''}
+              {subtitle}
             </div>
           </div>
         </div>
 
         {/* 3-stat big-number header */}
         <MStatStrip>
+          <MStat label="PROJECTS" value={stats.projectCount} />
           <MStat label="LIFETIME $" value={formatMoney(stats.lifetimeValue)} />
           <MStat label="WIN RATE" value={winRate === null ? '—' : `${winRate}%`} />
-          <MStat label="PROJECTS" value={stats.projectCount} />
         </MStatStrip>
 
-        {/* Project history */}
-        <div className="m-section-bar">
-          <span>Project history</span>
-          <span style={{ color: 'var(--m-ink)', fontWeight: 700 }}>{clientProjects.length} TOTAL</span>
-        </div>
-        {clientProjects.length === 0 ? (
-          <div style={{ padding: '32px 24px', textAlign: 'center', color: 'var(--m-ink-3)', fontSize: 13 }}>
-            No projects for this client yet.
+        {/* Tab strip — PROJECTS / TAKEOFFS / CONTACT (design's segment row). */}
+        <ProfileTabStrip tab={tab} onTab={setTab} projectCount={clientProjects.length} />
+
+        {tab === 'projects' ? (
+          clientProjects.length === 0 ? (
+            <div style={{ padding: '32px 24px', textAlign: 'center', color: 'var(--m-ink-3)', fontSize: 13 }}>
+              No projects for this client yet.
+            </div>
+          ) : (
+            <MListPlain>
+              {clientProjects.map((p) => (
+                <ProjectHistoryRow key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
+              ))}
+            </MListPlain>
+          )
+        ) : null}
+
+        {tab === 'takeoffs' ? (
+          clientProjects.length === 0 ? (
+            <div style={{ padding: '32px 24px', textAlign: 'center', color: 'var(--m-ink-3)', fontSize: 13 }}>
+              No takeoffs for this client yet.
+            </div>
+          ) : (
+            <MListPlain>
+              {clientProjects.map((p) => (
+                <MListRow
+                  key={p.id}
+                  onTap={() => navigate(`/projects/${p.id}/takeoff`)}
+                  chev
+                  headline={p.name}
+                  supporting={<span style={{ fontFamily: 'var(--m-num)' }}>VIEW TAKEOFF</span>}
+                />
+              ))}
+            </MListPlain>
+          )
+        ) : null}
+
+        {tab === 'contact' ? (
+          <div style={{ padding: '4px 0 8px' }}>
+            <ContactRow label="Name" value={customer.name} />
+            {customer.source ? <ContactRow label="Type" value={customer.source} /> : null}
+            {customer.external_id ? <ContactRow label="External ID" value={customer.external_id} /> : null}
+            {sinceYear ? <ContactRow label="Client since" value={String(sinceYear)} /> : null}
           </div>
-        ) : (
-          <MListPlain>
-            {clientProjects.map((p) => (
-              <ProjectHistoryRow key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
-            ))}
-          </MListPlain>
-        )}
+        ) : null}
       </MBody>
     </>
+  )
+}
+
+// Three-dot overflow glyph for the top-bar action slot (the design's "...").
+function MoreDots() {
+  return (
+    <span aria-hidden style={{ fontWeight: 800, fontSize: 20, lineHeight: 1, letterSpacing: '0.05em' }}>
+      …
+    </span>
+  )
+}
+
+// PROJECTS / TAKEOFFS / CONTACT segmented tab strip. PROJECTS + TAKEOFFS carry
+// counts; the active tab fills accent (the design's yellow segment).
+function ProfileTabStrip({
+  tab,
+  onTab,
+  projectCount,
+}: {
+  tab: ProfileTab
+  onTab: (t: ProfileTab) => void
+  projectCount: number
+}) {
+  const tabs: Array<{ key: ProfileTab; label: string; count?: number }> = [
+    { key: 'projects', label: 'PROJECTS', count: projectCount },
+    { key: 'takeoffs', label: 'TAKEOFFS', count: projectCount },
+    { key: 'contact', label: 'CONTACT' },
+  ]
+  return (
+    <div style={{ display: 'flex', borderBottom: '2px solid var(--m-ink)' }}>
+      {tabs.map((t, i) => {
+        const active = t.key === tab
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onTab(t.key)}
+            style={{
+              flex: 1,
+              padding: '12px 6px',
+              border: 'none',
+              borderRight: i < tabs.length - 1 ? '2px solid var(--m-ink)' : 'none',
+              background: active ? 'var(--m-accent)' : 'transparent',
+              color: active ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.05em',
+              cursor: 'pointer',
+            }}
+          >
+            {t.label}
+            {typeof t.count === 'number' ? ` · ${t.count}` : ''}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function ContactRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '14px 16px',
+        borderTop: '1px solid var(--m-line-2)',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--m-num)',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 600, textAlign: 'right', minWidth: 0 }}>{value}</span>
+    </div>
   )
 }
 

@@ -68,6 +68,7 @@ describe('createContextWorkDispatchRunner', () => {
   const originalFetch = globalThis.fetch
   const originalUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL
   const originalToken = process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
+  const originalAutoDispatch = process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH
 
   afterEach(() => {
     globalThis.fetch = originalFetch
@@ -75,6 +76,8 @@ describe('createContextWorkDispatchRunner', () => {
     else process.env.MESH_WORK_REQUEST_DISPATCH_URL = originalUrl
     if (originalToken === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
     else process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = originalToken
+    if (originalAutoDispatch === undefined) delete process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH
+    else process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH = originalAutoDispatch
   })
 
   it('posts claimed dispatch rows to Mesh, appends an ack, and marks outbox applied', async () => {
@@ -86,8 +89,10 @@ describe('createContextWorkDispatchRunner', () => {
       {
         id: 'outbox-1',
         payload: {
+          payload_version: 'sitelayer.context_work_dispatch.v1',
           work_item_id: '00000000-0000-4000-8000-000000000001',
           support_packet_id: '00000000-0000-4000-8000-000000000002',
+          capture_session_id: '00000000-0000-4000-8000-000000000003',
           title: 'Investigate estimate push',
           route: '/projects/p/estimate-push/x',
           work_request_brief: {
@@ -119,6 +124,7 @@ describe('createContextWorkDispatchRunner', () => {
     expect(url).toBe('https://mesh.example.test/api/orchestrate/tasks')
     expect(init.headers).toMatchObject({ authorization: 'Bearer mesh-secret' })
     expect(JSON.parse(String(init.body))).toMatchObject({
+      payload_version: 'sitelayer.context_work_dispatch.v1',
       subject: '[Sitelayer] Investigate estimate push',
       created_by: 'sitelayer-worker',
       source: 'sitelayer-context-handoff',
@@ -135,22 +141,28 @@ describe('createContextWorkDispatchRunner', () => {
         company_id: 'company-1',
         work_item_id: '00000000-0000-4000-8000-000000000001',
         support_packet_id: '00000000-0000-4000-8000-000000000002',
+        capture_session_id: '00000000-0000-4000-8000-000000000003',
         route: '/projects/p/estimate-push/x',
         callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         callback_url:
           'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        callback_token_type: 'scoped_bearer',
         work_request_brief_schema: 'sitelayer.work_request_brief.v1',
+        context_handoff_payload_version: 'sitelayer.context_work_dispatch.v1',
         readonly: true,
       },
       execution_context: {
+        payload_version: 'sitelayer.context_work_dispatch.v1',
         project_hint: 'sitelayer',
         source_system: 'sitelayer',
         work_item_id: '00000000-0000-4000-8000-000000000001',
         support_packet_id: '00000000-0000-4000-8000-000000000002',
+        capture_session_id: '00000000-0000-4000-8000-000000000003',
         route: '/projects/p/estimate-push/x',
         callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         callback_url:
           'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        callback_token_type: 'scoped_bearer',
         dispatch_mode: 'steerer',
         claim_mode: 'steerer',
         work_request_brief: {
@@ -158,11 +170,13 @@ describe('createContextWorkDispatchRunner', () => {
         },
         agent_brief_markdown: 'Safe handoff brief for the receiving agent.',
         context_handoff: {
+          payload_version: 'sitelayer.context_work_dispatch.v1',
           version: 'context-handoff-v1',
           source_system: 'sitelayer',
           company_id: 'company-1',
           work_item_id: '00000000-0000-4000-8000-000000000001',
           support_packet_id: '00000000-0000-4000-8000-000000000002',
+          capture_session_id: '00000000-0000-4000-8000-000000000003',
           work_request_brief: {
             schema: 'sitelayer.work_request_brief.v1',
           },
@@ -180,6 +194,7 @@ describe('createContextWorkDispatchRunner', () => {
     expect(JSON.parse(String(init.body)).description).toContain(
       'Treat this as read-only triage unless a separate implementation task',
     )
+    expect(JSON.parse(String(init.body)).description).toContain('Capture session: 00000000-0000-4000-8000-000000000003')
     expect(JSON.parse(String(init.body)).description).toContain('Safe handoff brief for the receiving agent.')
     // Default (non-agent) lane must NOT carry the sitelayer_implementation routing keys:
     // those are reserved for lane=agent so triage work continues to land in operator_assistant.
@@ -197,6 +212,7 @@ describe('createContextWorkDispatchRunner', () => {
       status: 202,
       mesh_task_id: '123',
     })
+    expect(ackCall?.params[5]).toBe('00000000-0000-4000-8000-000000000003')
     expect(
       calls.some((call) => call.sql.startsWith("update mutation_outbox\n             set status = 'applied'")),
     ).toBe(true)
@@ -272,6 +288,97 @@ describe('createContextWorkDispatchRunner', () => {
     expect(body.description).not.toContain('Treat this as read-only triage')
   })
 
+  it('routes lane=both dispatches as implementation-capable work', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ task_id: 654 }), { status: 202 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const { pool, calls } = makePool([
+      {
+        id: 'outbox-both',
+        payload: {
+          work_item_id: '00000000-0000-4000-8000-0000000000ab',
+          support_packet_id: '00000000-0000-4000-8000-0000000000bc',
+          capture_session_id: '00000000-0000-4000-8000-0000000000cd',
+          title: 'Recorded pilot feedback needs implementation',
+          summary: 'The internal pilot recording produced a ready capture analysis item.',
+          route: '/desktop/takeoff',
+          lane: 'both',
+          callback: {
+            path: '/api/work-requests/00000000-0000-4000-8000-0000000000ab/agent-callback',
+            token: 'scoped-callback',
+            token_type: 'scoped_bearer',
+            expires_at: '2026-05-22T12:00:00.000Z',
+          },
+        },
+      },
+    ])
+    const runner = createContextWorkDispatchRunner({ pool })
+
+    await runner('company-1')
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as {
+      task_type: string
+      tags: string
+      properties: Record<string, unknown>
+      execution_context: Record<string, unknown>
+      description: string
+    }
+    expect(body.task_type).toBe('implementation')
+    expect(body.tags).toContain('sitelayer:lane:both')
+    expect(body.properties).toMatchObject({
+      steerer_workflow_id: 'sitelayer_implementation_fan',
+      counsel_class: 'sitelayer_implementation',
+      lane: 'both',
+      readonly: false,
+      capture_session_id: '00000000-0000-4000-8000-0000000000cd',
+    })
+    expect(body.execution_context).toMatchObject({
+      steerer_workflow_id: 'sitelayer_implementation_fan',
+      counsel_class: 'sitelayer_implementation',
+      capture_session_id: '00000000-0000-4000-8000-0000000000cd',
+    })
+    expect(body.description).toContain('Lane: both (implementation)')
+    expect(body.description).not.toContain('Treat this as read-only triage')
+    const updateCall = calls.find((call) => call.sql.startsWith('update context_work_items'))
+    expect(updateCall?.params[2]).toBe('both')
+  })
+
+  it('can create Mesh tasks without auto-dispatching them when the smoke safety env is disabled', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+    process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH = '0'
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ task_id: 987 }), { status: 202 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const { pool } = makePool([
+      {
+        id: 'outbox-safe-smoke',
+        payload: {
+          work_item_id: '00000000-0000-4000-8000-0000000000ef',
+          support_packet_id: '00000000-0000-4000-8000-0000000000f0',
+          capture_session_id: '00000000-0000-4000-8000-0000000000f1',
+          title: 'Safe real Mesh smoke',
+          summary: 'Create the Control Plane task row without dispatching an agent.',
+          route: '/desktop/takeoff',
+          lane: 'both',
+          callback: {
+            path: '/api/work-requests/00000000-0000-4000-8000-0000000000ef/agent-callback',
+            token: 'scoped-callback',
+            token_type: 'scoped_bearer',
+            expires_at: '2026-05-22T12:00:00.000Z',
+          },
+        },
+      },
+    ])
+    const runner = createContextWorkDispatchRunner({ pool })
+
+    await runner('company-1')
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as { auto_dispatch: boolean; properties: Record<string, unknown> }
+    expect(body.auto_dispatch).toBe(false)
+    expect(body.properties.capture_session_id).toBe('00000000-0000-4000-8000-0000000000f1')
+  })
+
   it('falls back to ["*"] for affected_packages when route/entity gives no signal', async () => {
     process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ task_id: 789 }), { status: 202 }))
@@ -338,6 +445,7 @@ describe('createContextWorkDispatchRunner', () => {
           id: 'outbox-1',
           payload: {
             work_item_id: '00000000-0000-4000-8000-000000000001',
+            capture_session_id: '00000000-0000-4000-8000-000000000003',
             title: 'Already reversed',
           },
         },
@@ -357,6 +465,7 @@ describe('createContextWorkDispatchRunner', () => {
       reason: 'terminal_work_item',
       status: 'reversed',
     })
+    expect(cancelEventCall?.params[5]).toBe('00000000-0000-4000-8000-000000000003')
     expect(calls.some((call) => call.sql.startsWith('update context_work_items'))).toBe(false)
     expect(
       calls.some((call) => call.sql.startsWith("update mutation_outbox\n             set status = 'applied'")),

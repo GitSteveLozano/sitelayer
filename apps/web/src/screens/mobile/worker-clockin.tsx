@@ -22,10 +22,12 @@
  * pulsing dot over a construction-site grid. Real implementations can layer a
  * static map tile from a provider; for now an SVG sketch is enough.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { apiPost, type BootstrapResponse } from '@/lib/api'
 import { MBanner, MBody, MButton, MButtonStack, MStat, MStatStrip, MTopBar } from '../../components/m/index.js'
+import { useGeofence, haversineDistanceMeters } from '../../lib/geofence.js'
 import { timeOfDay } from './format.js'
 
 /** Detect the OS-level reduced-motion preference; SMIL animations can't
@@ -104,62 +106,231 @@ export function WorkerClockinConfirm() {
   )
 }
 
+/** Why the worker is punching by hand instead of riding the geofence.
+ *  Rides along as a `notes` tag on the manual clock-in so the foreman can
+ *  see the provenance of the punch. */
+type ManualReason = 'early' | 'no_gps' | 'outside' | 'other'
+
+const MANUAL_REASONS: ReadonlyArray<{ key: ManualReason; label: string }> = [
+  { key: 'early', label: 'Early' },
+  { key: 'no_gps', label: 'No GPS' },
+  { key: 'outside', label: 'Outside' },
+  { key: 'other', label: 'Other' },
+]
+
 /**
- * Manual clock-in confirmation — `wk-clockin` geofence-MISS fallback
- * (`V2WorkerClockInManual`). The worker reached here by punching in by
- * hand (no fence configured, geofence switched off, or a denied / poor
- * GPS read), so we can't claim "on site". The framing matches the auto
- * success screen — eyebrow + big headline + map + stat strip + gloved
- * primary — but the mode is MANUAL, the map shows the off-fence state,
- * and a banner is honest that the punch wasn't location-verified.
- *
- * The punch itself already landed server-side in `wk-today`'s
- * `handlePunch('in')` before navigation; this screen is the confirmation
- * surface, not the writer. There is no auto-dismiss timer here — a
- * manual punch warrants a deliberate "got it" rather than a countdown.
+ * Manual clock-in ENTRY form — `wk-clockin` geofence-MISS fallback
+ * (`V2WorkerClockInManual`, msg46). The worker reaches here from the
+ * off-clock card's "Clock in manually" button when the geofence didn't
+ * (or can't) auto-punch them. Unlike the auto-success surface, this is a
+ * PRE-punch form: an "AUTO CLOCK-IN MISSED" explainer, a "WHERE ARE YOU?"
+ * site picker (bootstrap projects sorted by live GPS distance), and a
+ * "WHY MANUAL?" reason grid. The CLOCK IN button writes the punch with an
+ * explicit `project_id` + reason note (source stays 'manual'), then lands
+ * on the auto-confirm surface.
  */
-export function WorkerClockinManual() {
+export function WorkerClockinManual({
+  bootstrap,
+  companySlug,
+}: {
+  bootstrap: BootstrapResponse | null
+  companySlug: string
+}) {
   const navigate = useNavigate()
-  const punchedAt = useState(new Date().toISOString())[0]
+  const geo = useGeofence({ enabled: true })
+  const [projectId, setProjectId] = useState<string | null>(null)
+  const [reason, setReason] = useState<ManualReason | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  // Candidate sites: active projects first, sorted by live distance when a
+  // GPS reading is available. Distance is best-effort — without a fix or a
+  // site fence we still list the site so a hand-punch is always possible.
+  const sites = useMemo(() => {
+    const projects = bootstrap?.projects ?? []
+    const here = geo.position
+    const withDistance = projects.map((p) => {
+      const lat = p.site_lat != null ? Number(p.site_lat) : NaN
+      const lng = p.site_lng != null ? Number(p.site_lng) : NaN
+      const meters =
+        here && Number.isFinite(lat) && Number.isFinite(lng)
+          ? haversineDistanceMeters({ lat: here.lat, lng: here.lng }, { lat, lng })
+          : null
+      return {
+        id: p.id,
+        name: p.name,
+        scope: p.division_code || null,
+        active: /progress|active/i.test(p.status),
+        meters,
+      }
+    })
+    return withDistance.sort((a, b) => {
+      if (a.meters != null && b.meters != null) return a.meters - b.meters
+      if (a.meters != null) return -1
+      if (b.meters != null) return 1
+      if (a.active !== b.active) return a.active ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+  }, [bootstrap?.projects, geo.position])
+
+  // Default the selection to the nearest / first site so the primary
+  // button can read "CLOCK IN · <site>" without a forced extra tap.
+  useEffect(() => {
+    if (projectId === null && sites.length > 0) setProjectId(sites[0]!.id)
+  }, [projectId, sites])
+
+  const selected = sites.find((s) => s.id === projectId) ?? null
+
+  const onClockIn = async () => {
+    if (!projectId || busy) return
+    setBusy(true)
+    try {
+      const body: Record<string, unknown> = { project_id: projectId, source: 'manual' }
+      if (geo.position) {
+        body.lat = geo.position.lat
+        body.lng = geo.position.lng
+        if (Number.isFinite(geo.position.accuracyMeters)) body.accuracy_m = geo.position.accuracyMeters
+      }
+      if (reason) body.notes = `manual clock-in · ${reason}`
+      const res = await apiPost<{ clockEvent?: unknown }>('/api/clock/in', body, companySlug)
+      if (res.clockEvent) navigate('/clockin')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <>
-      <MTopBar back title="Clocked in" onBack={() => navigate('/today')} />
+      <MTopBar back title="Manual clock-in" onBack={() => navigate('/today')} />
       <MBody>
-        <div style={{ padding: '24px 20px 0' }}>
-          <div style={{ ...ms.eyebrow, color: 'var(--m-ink-3)' }}>Manual punch</div>
-          <div style={ms.bignum}>
-            Clocked
-            <br />
-            in.
-          </div>
-        </div>
-
-        <GeofenceMap offFence />
-
-        <MStatStrip>
-          <MStat label="Punched" value={timeOfDay(punchedAt)} />
-          <MStat label="Mode" value="MANUAL" />
-          <MStat label="Fence" value="OFF" />
-        </MStatStrip>
-
-        <div style={{ padding: '14px 20px 0' }}>
+        <div style={{ padding: '16px 20px 0' }}>
           <MBanner
-            tone="warn"
-            title="Location not auto-verified"
-            body="You punched in by hand — we couldn't confirm you're inside the site geofence. Your foreman sees this as a manual punch."
+            tone="attention"
+            title="Auto clock-in missed"
+            body="GPS still warming up or you're outside the fence. Your foreman reviews this entry."
           />
         </div>
 
+        <div style={{ padding: '20px 20px 8px' }}>
+          <div style={ms.sectionLabel}>Where are you?</div>
+        </div>
+        <div style={{ borderTop: '2px solid var(--m-line)' }}>
+          {sites.length === 0 ? (
+            <div className="m-quiet-sm" style={{ padding: '16px 20px' }}>
+              No sites available to clock in to.
+            </div>
+          ) : (
+            sites.map((s) => {
+              const active = s.id === projectId
+              const miles = s.meters != null ? `${(s.meters / 1609.34).toFixed(1)} MI` : null
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setProjectId(s.id)}
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '16px 20px',
+                    border: 'none',
+                    borderBottom: '2px solid var(--m-line)',
+                    background: active ? 'var(--m-accent)' : 'transparent',
+                    color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    font: 'inherit',
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 16,
+                      height: 16,
+                      flexShrink: 0,
+                      border: `2px solid ${active ? 'var(--m-accent-ink)' : 'var(--m-line)'}`,
+                      background: active ? 'var(--m-accent-ink)' : 'transparent',
+                    }}
+                  />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span
+                      style={{
+                        fontFamily: 'var(--m-font-display)',
+                        fontWeight: 700,
+                        fontSize: 16,
+                        textTransform: 'uppercase',
+                        letterSpacing: '-0.01em',
+                        display: 'block',
+                      }}
+                    >
+                      {s.name}
+                    </span>
+                    {s.scope ? (
+                      <span style={ms.siteSub}>{s.scope}</span>
+                    ) : s.active ? (
+                      <span style={ms.siteSub}>Active</span>
+                    ) : null}
+                  </span>
+                  {miles ? (
+                    <span
+                      className="num"
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      {miles}
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })
+          )}
+        </div>
+
+        <div style={{ padding: '20px 20px 8px' }}>
+          <div style={ms.sectionLabel}>Why manual?</div>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 10,
+            padding: '0 20px',
+          }}
+        >
+          {MANUAL_REASONS.map((r) => {
+            const active = reason === r.key
+            return (
+              <button
+                key={r.key}
+                type="button"
+                onClick={() => setReason(active ? null : r.key)}
+                className="m-topbar-eyebrow"
+                style={{
+                  padding: '12px 14px',
+                  border: '2px solid var(--m-line)',
+                  background: active ? 'var(--m-accent)' : 'transparent',
+                  color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  fontSize: 12,
+                }}
+              >
+                {r.label}
+              </button>
+            )
+          })}
+        </div>
+
         <div style={{ padding: '20px' }}>
-          <MButtonStack>
-            <MButton variant="primary" data-size="worker" onClick={() => navigate('/scope')}>
-              See today's scope
-            </MButton>
-            <MButton variant="ghost" onClick={() => navigate('/today')}>
-              Wrong project? Tap to fix
-            </MButton>
-          </MButtonStack>
+          <MButton variant="primary" data-size="worker" onClick={onClockIn} disabled={busy || !projectId}>
+            {busy ? 'Clocking in…' : selected ? `Clock in · ${selected.name}` : 'Clock in'}
+          </MButton>
         </div>
       </MBody>
     </>
@@ -193,6 +364,24 @@ const ms: Record<string, CSSProperties> = {
     textAlign: 'center',
     color: 'var(--m-ink-4)',
     marginTop: 12,
+  },
+  sectionLabel: {
+    fontFamily: 'var(--m-num)',
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    color: 'var(--m-ink-3)',
+  },
+  siteSub: {
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    color: 'var(--m-ink-3)',
+    display: 'block',
+    marginTop: 3,
   },
 }
 

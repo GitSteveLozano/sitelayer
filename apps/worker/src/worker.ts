@@ -11,9 +11,11 @@ import { createRentalInvoiceRunner } from './runners/rental-invoice.js'
 import { createNotificationRunner } from './runners/notification.js'
 import { createRentalBillingPushRunner } from './runners/rental-billing-push.js'
 import { createEstimatePushRunner } from './runners/estimate-push.js'
+import { createQboPullRunner } from './runners/qbo-pull.js'
 import { createLockLaborRunner } from './runners/lock-labor.js'
 import { createLaborPayrollRunner } from './runners/labor-payroll.js'
 import { createFieldEventsRunner } from './runners/field-events.js'
+import { createCrewScheduleConfirmRunner } from './runners/crew-schedule-confirm.js'
 import { createTakeoffToBidRunner } from './runners/takeoff-to-bid.js'
 import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
@@ -21,6 +23,8 @@ import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
 import { createWelcomeEmailRunner } from './runners/welcome-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
+import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
+import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
@@ -85,9 +89,11 @@ const notificationRunner = createNotificationRunner({ pool, logger })
 const rentalInvoiceRunner = createRentalInvoiceRunner({ pool, logger })
 const rentalBillingPushRunner = createRentalBillingPushRunner({ pool, logger, qboCircuit })
 const estimatePushRunner = createEstimatePushRunner({ pool, logger, qboCircuit })
+const qboPullRunner = createQboPullRunner({ pool, logger, qboCircuit })
 const lockLaborRunner = createLockLaborRunner({ pool })
 const laborPayrollRunner = createLaborPayrollRunner({ pool, logger, qboCircuit })
 const fieldEventsRunner = createFieldEventsRunner({ pool, logger })
+const crewScheduleConfirmRunner = createCrewScheduleConfirmRunner({ pool, logger })
 const takeoffToBidRunner = createTakeoffToBidRunner({ pool })
 const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
@@ -104,9 +110,19 @@ startMeshTraceForwarder({ pool, logger: { info: (m: string) => logger.info(m) } 
 // unbounded mutation_outbox / sync_events growth). The GC runner needs
 // a storage client; we await the dynamic-import build at boot so the
 // SDK lazy-load happens once, not on every heartbeat.
+const objectGcStorage = await createBlueprintStorageGcClient()
 const blueprintStorageGc = createBlueprintStorageGcRunner({
   pool,
-  storage: await createBlueprintStorageGcClient(),
+  storage: objectGcStorage,
+})
+const captureArtifactRetentionGc = createCaptureArtifactRetentionGcRunner({
+  pool,
+  storage: objectGcStorage,
+})
+const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
+  pool,
+  storage: objectGcStorage,
+  logger,
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
@@ -252,6 +268,27 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     { processed: 0, posted: 0, failed: 0, skipped: 0 },
   )
 
+  const qboPullSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'qbo_pull',
+    () =>
+      qboPullRunner(companyId).catch((error) => {
+        if (error instanceof CircuitOpenError) {
+          logger.info({ key: error.key }, '[worker] qbo pull skipped — circuit open')
+          return { processed: 0, pulled: 0, failed: 0, skipped: 0 }
+        }
+        logger.error({ err: error }, '[worker] qbo pull drain failed')
+        captureWithEntityContext(error, {
+          scope: 'qbo_pull',
+          entity_type: 'integration_connection',
+          company_id: companyId,
+        })
+        return { processed: 0, pulled: 0, failed: 0, skipped: 0 }
+      }),
+    { processed: 0, pulled: 0, failed: 0, skipped: 0 },
+  )
+
   const lockLaborSummary = await runIfLaneActive(
     pool,
     logger,
@@ -283,6 +320,27 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         logger.error({ err: error }, '[worker] generate_labor_payroll_run drain failed')
         captureWithEntityContext(error, {
           scope: 'generate_labor_payroll_run',
+          entity_type: 'labor_payroll_run',
+          company_id: companyId,
+          workflow_name: 'labor_payroll_run',
+        })
+      }),
+    undefined,
+  )
+
+  // Weekly AUTO post cadence — runs BEFORE drainPushes on the same lane so a
+  // just-auto-approved run's POST_REQUESTED outbox row is claimed in the same
+  // heartbeat. No-op unless a company opted in (policy gated OFF by default,
+  // migration 116) AND the configured clock window is open.
+  await runIfLaneActive(
+    pool,
+    logger,
+    'labor_payroll_push',
+    () =>
+      laborPayrollRunner.drainAutoPost(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] labor payroll auto-post drain failed')
+        captureWithEntityContext(error, {
+          scope: 'labor_payroll_auto_post',
           entity_type: 'labor_payroll_run',
           company_id: companyId,
           workflow_name: 'labor_payroll_run',
@@ -325,6 +383,24 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       await fieldEventsRunner.runAutoEscalation(companyId)
     },
     undefined,
+  )
+
+  await runIfLaneActive(
+    pool,
+    logger,
+    'crew_schedule_confirm',
+    () =>
+      crewScheduleConfirmRunner.drain(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] crew-schedule confirm drain failed')
+        captureWithEntityContext(error, {
+          scope: 'crew_schedule_confirm',
+          entity_type: 'crew_schedule',
+          company_id: companyId,
+          workflow_name: 'crew_schedule',
+        })
+        return { processed: 0, materialized: 0, notified: 0, skipped: 0, failed: 0 }
+      }),
+    { processed: 0, materialized: 0, notified: 0, skipped: 0, failed: 0 },
   )
 
   const takeoffToBidSummary = await runIfLaneActive(
@@ -429,6 +505,38 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
       }),
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
+  )
+  const captureArtifactRetentionGcSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'capture_artifact_retention_gc',
+    () =>
+      captureArtifactRetentionGc.maybeSweep(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] capture_artifact_retention_gc sweep failed')
+        captureWithEntityContext(error, {
+          scope: 'capture_artifact_retention_gc',
+          entity_type: 'capture_artifact',
+          company_id: companyId,
+        })
+        return { ran: true, deleted: 0, failed: 1 }
+      }),
+    { ran: false, deleted: 0, failed: 0 },
+  )
+  const captureArtifactAnalysisSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'capture_artifact_analysis',
+    () =>
+      captureArtifactAnalysis.maybeAnalyze(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] capture_artifact_analysis failed')
+        captureWithEntityContext(error, {
+          scope: 'capture_artifact_analysis',
+          entity_type: 'capture_artifact',
+          company_id: companyId,
+        })
+        return { ran: true, analyzed: 0, skipped: 0, failed: 1 }
+      }),
+    { ran: false, analyzed: 0, skipped: 0, failed: 0 },
   )
 
   const contextWorkDispatchSummary = await runIfLaneActive(
@@ -563,6 +671,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     estimate_push_posted: estimatePushSummary.posted,
     estimate_push_failed: estimatePushSummary.failed,
     estimate_push_skipped: estimatePushSummary.skipped,
+    qbo_pull_processed: qboPullSummary.processed,
+    qbo_pull_pulled: qboPullSummary.pulled,
+    qbo_pull_failed: qboPullSummary.failed,
+    qbo_pull_skipped: qboPullSummary.skipped,
     lock_labor_entries_processed: lockLaborSummary.processed,
     lock_labor_entries_locked: lockLaborSummary.locked,
     lock_labor_entries_unlocked: lockLaborSummary.unlocked,
@@ -582,6 +694,13 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     welcome_email_failed: welcomeEmailSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
+    capture_artifact_retention_gc_ran: captureArtifactRetentionGcSummary.ran,
+    capture_artifact_retention_gc_deleted: captureArtifactRetentionGcSummary.deleted,
+    capture_artifact_retention_gc_failed: captureArtifactRetentionGcSummary.failed,
+    capture_artifact_analysis_ran: captureArtifactAnalysisSummary.ran,
+    capture_artifact_analysis_analyzed: captureArtifactAnalysisSummary.analyzed,
+    capture_artifact_analysis_skipped: captureArtifactAnalysisSummary.skipped,
+    capture_artifact_analysis_failed: captureArtifactAnalysisSummary.failed,
     context_work_dispatch_processed: contextWorkDispatchSummary.processed,
     context_work_dispatch_failed: contextWorkDispatchSummary.failed,
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
@@ -621,6 +740,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
+    qboPullSummary.processed > 0 ||
     lockLaborSummary.processed > 0 ||
     takeoffToBidSummary.processed > 0 ||
     voiceToLogSummary.processed > 0 ||
@@ -628,6 +748,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     companyCamSummary.processed > 0 ||
     welcomeEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
+    captureArtifactRetentionGcSummary.deleted > 0 ||
+    captureArtifactAnalysisSummary.analyzed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
     workRequestStaleSummary.ran ||
     queuePruneSummary.ran ||

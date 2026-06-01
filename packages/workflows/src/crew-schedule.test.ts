@@ -37,15 +37,93 @@ describe('transitionCrewScheduleWorkflow — happy path', () => {
       ),
     ).toThrow(/not allowed/)
   })
+
+  it('CREATE stamps created_by and advances the genesis seed (0 → draft@1)', () => {
+    const seeded = transitionCrewScheduleWorkflow(
+      { state: 'draft', state_version: 0 },
+      { type: 'CREATE', created_by: 'office-user' },
+    )
+    expect(seeded).toEqual({ state: 'draft', state_version: 1, created_by: 'office-user' })
+  })
+
+  it('rejects CREATE from any non-genesis snapshot', () => {
+    // The seed is draft@0; draft@1 (a row that already exists) and any
+    // confirmed/declined snapshot are not legal CREATE origins.
+    expect(() =>
+      transitionCrewScheduleWorkflow({ state: 'draft', state_version: 1 }, { type: 'CREATE', created_by: 'x' }),
+    ).toThrow(/genesis snapshot/)
+    expect(() =>
+      transitionCrewScheduleWorkflow({ state: 'draft', state_version: 2 }, { type: 'CREATE', created_by: 'x' }),
+    ).toThrow(/genesis snapshot/)
+    expect(() => transitionCrewScheduleWorkflow({ state: 'confirmed', state_version: 2 }, { type: 'CREATE' })).toThrow(
+      /genesis snapshot/,
+    )
+  })
+
+  it('draft → declined via DECLINE (stamps decline audit fields)', () => {
+    const declined = transitionCrewScheduleWorkflow(
+      { state: 'draft', state_version: 1 },
+      { type: 'DECLINE', declined_at: '2026-04-29T15:00:00.000Z', declined_by: 'worker-1', reason: 'sick' },
+    )
+    expect(declined).toEqual({
+      state: 'declined',
+      state_version: 2,
+      declined_at: '2026-04-29T15:00:00.000Z',
+      declined_by: 'worker-1',
+      decline_reason: 'sick',
+    })
+  })
+
+  it('declined → draft via REASSIGN (clears decline audit fields)', () => {
+    const reassigned = transitionCrewScheduleWorkflow(
+      {
+        state: 'declined',
+        state_version: 2,
+        declined_at: '2026-04-29T15:00:00.000Z',
+        declined_by: 'worker-1',
+        decline_reason: 'sick',
+      },
+      { type: 'REASSIGN' },
+    )
+    expect(reassigned).toEqual({
+      state: 'draft',
+      state_version: 3,
+      declined_at: null,
+      declined_by: null,
+      decline_reason: null,
+    })
+  })
+
+  it('rejects DECLINE from confirmed', () => {
+    expect(() =>
+      transitionCrewScheduleWorkflow(
+        { state: 'confirmed', state_version: 2 },
+        { type: 'DECLINE', declined_at: 'x', declined_by: 'y', reason: 'z' },
+      ),
+    ).toThrow(/not allowed/)
+  })
 })
 
 describe('crew-schedule reducer — property invariants', () => {
   const STATE_GEN: fc.Arbitrary<CrewScheduleWorkflowState> = fc.constantFrom(...CREW_SCHEDULE_ALL_STATES)
-  const EVENT_GEN: fc.Arbitrary<CrewScheduleWorkflowEvent> = fc.record({
-    type: fc.constant('CONFIRM' as const),
-    confirmed_at: fc.constant('2026-04-29T15:00:00.000Z'),
-    confirmed_by: fc.string({ minLength: 1, maxLength: 32 }),
-  })
+  // The state-advancing human events. CREATE is excluded: although it now
+  // advances (genesis 0 → draft@1), it is only ever legal on the {draft,
+  // state_version:0} genesis seed, so it can't be generated against the
+  // arbitrary (state, version≥1) snapshots the invariants below sample.
+  const EVENT_GEN: fc.Arbitrary<CrewScheduleWorkflowEvent> = fc.oneof(
+    fc.record({
+      type: fc.constant('CONFIRM' as const),
+      confirmed_at: fc.constant('2026-04-29T15:00:00.000Z'),
+      confirmed_by: fc.string({ minLength: 1, maxLength: 32 }),
+    }),
+    fc.record({
+      type: fc.constant('DECLINE' as const),
+      declined_at: fc.constant('2026-04-29T15:00:00.000Z'),
+      declined_by: fc.string({ minLength: 1, maxLength: 32 }),
+      reason: fc.string({ minLength: 1, maxLength: 64 }),
+    }),
+    fc.record({ type: fc.constant('REASSIGN' as const) }),
+  )
 
   it('state_version increments by 1 on every accepted transition', () => {
     fc.assert(
@@ -87,10 +165,13 @@ describe('crew-schedule reducer — property invariants', () => {
       const events = nextCrewScheduleEvents(state)
       for (const next of events) {
         const snap: CrewScheduleWorkflowSnapshot = { state, state_version: 1 }
-        const event: CrewScheduleWorkflowEvent = {
-          type: next.type,
-          confirmed_at: '2026-04-29T15:00:00.000Z',
-          confirmed_by: 't',
+        let event: CrewScheduleWorkflowEvent
+        if (next.type === 'CONFIRM') {
+          event = { type: 'CONFIRM', confirmed_at: '2026-04-29T15:00:00.000Z', confirmed_by: 't' }
+        } else if (next.type === 'DECLINE') {
+          event = { type: 'DECLINE', declined_at: '2026-04-29T15:00:00.000Z', declined_by: 't', reason: 'r' }
+        } else {
+          event = { type: 'REASSIGN' }
         }
         expect(() => transitionCrewScheduleWorkflow(snap, event)).not.toThrow()
       }
@@ -101,17 +182,24 @@ describe('crew-schedule reducer — property invariants', () => {
     expect(nextCrewScheduleEvents('confirmed')).toEqual([])
   })
 
-  it('draft state offers CONFIRM', () => {
-    expect(nextCrewScheduleEvents('draft').map((e) => e.type)).toEqual(['CONFIRM'])
+  it('draft state offers CONFIRM + DECLINE', () => {
+    expect(nextCrewScheduleEvents('draft').map((e) => e.type)).toEqual(['CONFIRM', 'DECLINE'])
+  })
+
+  it('declined state offers REASSIGN', () => {
+    expect(nextCrewScheduleEvents('declined').map((e) => e.type)).toEqual(['REASSIGN'])
   })
 })
 
 describe('isHumanCrewScheduleEvent', () => {
-  it('accepts CONFIRM', () => {
+  it('accepts CONFIRM / DECLINE / REASSIGN', () => {
     expect(isHumanCrewScheduleEvent('CONFIRM')).toBe(true)
+    expect(isHumanCrewScheduleEvent('DECLINE')).toBe(true)
+    expect(isHumanCrewScheduleEvent('REASSIGN')).toBe(true)
   })
-  it('rejects garbage', () => {
+  it('rejects garbage and the seed-only CREATE', () => {
     expect(isHumanCrewScheduleEvent('CANCEL')).toBe(false)
+    expect(isHumanCrewScheduleEvent('CREATE')).toBe(false)
     expect(isHumanCrewScheduleEvent('')).toBe(false)
   })
 })
@@ -140,6 +228,6 @@ describe('crewScheduleWorkflow registry registration', () => {
     expect(crewScheduleWorkflow.schemaVersion).toBe(1)
     expect(crewScheduleWorkflow.initialState).toBe('draft')
     expect(crewScheduleWorkflow.terminalStates).toEqual(['confirmed'])
-    expect(crewScheduleWorkflow.sideEffectTypes).toEqual([])
+    expect(crewScheduleWorkflow.sideEffectTypes).toEqual(['materialize_labor_entries', 'notify_foreman_decline'])
   })
 })

@@ -118,10 +118,23 @@ export function useQboMappings(params: QboMappingListParams = {}) {
   })
 }
 
+/**
+ * POST /api/integrations/qbo/sync starts a new qbo_sync_run (creating the
+ * row in `pending` and dispatching START_SYNC → `syncing`) and returns
+ * the run id alongside the refreshed connection + snapshot. The monitor
+ * uses `qbo_sync_run_id` to read the authoritative run state via
+ * GET /api/integrations/qbo/sync-runs/:id.
+ */
+export interface QboSyncTriggerResponse {
+  connection?: QboConnection | null
+  snapshot?: Record<string, unknown>
+  qbo_sync_run_id?: string
+}
+
 export function useTriggerQboSync() {
   const qc = useQueryClient()
-  return useMutation<unknown, Error, void>({
-    mutationFn: () => request('/api/integrations/qbo/sync', { method: 'POST' }),
+  return useMutation<QboSyncTriggerResponse, Error, void>({
+    mutationFn: () => request<QboSyncTriggerResponse>('/api/integrations/qbo/sync', { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
   })
 }

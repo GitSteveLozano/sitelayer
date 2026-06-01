@@ -30,7 +30,7 @@ describe('transitionProjectCloseoutWorkflow', () => {
     })
   })
 
-  it('rejects CLOSEOUT from completed (terminal)', () => {
+  it('rejects CLOSEOUT from completed (no longer the initial→terminal hop)', () => {
     expect(() =>
       transitionProjectCloseoutWorkflow(
         { state: 'completed', state_version: 2 },
@@ -38,18 +38,88 @@ describe('transitionProjectCloseoutWorkflow', () => {
       ),
     ).toThrow(/not allowed/)
   })
+
+  it('CLOSEOUT locks the summary at closed_at and preserves an existing lock', () => {
+    const fresh = transitionProjectCloseoutWorkflow(
+      { state: 'active', state_version: 1 },
+      { type: 'CLOSEOUT', closed_at: '2026-04-29T15:00:00.000Z', closed_by: 'office-user' },
+    )
+    expect(fresh.summary_locked_at).toBe('2026-04-29T15:00:00.000Z')
+
+    const preserved = transitionProjectCloseoutWorkflow(
+      { state: 'active', state_version: 1, summary_locked_at: '2026-01-01T00:00:00.000Z' },
+      { type: 'CLOSEOUT', closed_at: '2026-04-29T15:00:00.000Z', closed_by: 'office-user' },
+    )
+    expect(preserved.summary_locked_at).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('completed → post_mortem via ACKNOWLEDGE_POST_MORTEM', () => {
+    const completed: ProjectCloseoutWorkflowSnapshot = {
+      state: 'completed',
+      state_version: 2,
+      closed_at: '2026-04-29T15:00:00.000Z',
+      closed_by: 'office-user',
+    }
+    const postMortem = transitionProjectCloseoutWorkflow(completed, {
+      type: 'ACKNOWLEDGE_POST_MORTEM',
+      acknowledged_at: '2026-05-02T10:00:00.000Z',
+      acknowledged_by: 'owner-user',
+    })
+    expect(postMortem).toMatchObject({
+      state: 'post_mortem',
+      state_version: 3,
+      post_mortem_acknowledged_at: '2026-05-02T10:00:00.000Z',
+      post_mortem_acknowledged_by: 'owner-user',
+    })
+  })
+
+  it('rejects ACKNOWLEDGE_POST_MORTEM from active', () => {
+    expect(() =>
+      transitionProjectCloseoutWorkflow(
+        { state: 'active', state_version: 1 },
+        {
+          type: 'ACKNOWLEDGE_POST_MORTEM',
+          acknowledged_at: '2026-05-02T10:00:00.000Z',
+          acknowledged_by: 'owner-user',
+        },
+      ),
+    ).toThrow(/not allowed/)
+  })
+
+  it('post_mortem is terminal — rejects both events', () => {
+    const terminal: ProjectCloseoutWorkflowSnapshot = { state: 'post_mortem', state_version: 3 }
+    expect(() =>
+      transitionProjectCloseoutWorkflow(terminal, {
+        type: 'CLOSEOUT',
+        closed_at: '2026-04-29T15:00:00.000Z',
+        closed_by: 'x',
+      }),
+    ).toThrow(/not allowed/)
+    expect(() =>
+      transitionProjectCloseoutWorkflow(terminal, {
+        type: 'ACKNOWLEDGE_POST_MORTEM',
+        acknowledged_at: '2026-05-02T10:00:00.000Z',
+        acknowledged_by: 'owner-user',
+      }),
+    ).toThrow(/not allowed/)
+  })
 })
 
 describe('projectStatusToCloseoutState', () => {
-  it('maps "completed" to "completed"', () => {
+  it('maps "completed" with no post-mortem ack to "completed"', () => {
     expect(projectStatusToCloseoutState('completed')).toBe('completed')
+    expect(projectStatusToCloseoutState('completed', null)).toBe('completed')
   })
-  it('maps everything else to "active"', () => {
+  it('maps "completed" with a post-mortem ack timestamp to "post_mortem"', () => {
+    expect(projectStatusToCloseoutState('completed', '2026-05-02T10:00:00.000Z')).toBe('post_mortem')
+  })
+  it('maps everything else to "active" regardless of ack', () => {
     expect(projectStatusToCloseoutState('lead')).toBe('active')
     expect(projectStatusToCloseoutState('active')).toBe('active')
     expect(projectStatusToCloseoutState('on_hold')).toBe('active')
     expect(projectStatusToCloseoutState('')).toBe('active')
     expect(projectStatusToCloseoutState('garbage')).toBe('active')
+    expect(projectStatusToCloseoutState('lead', '2026-05-02T10:00:00.000Z')).toBe('active')
   })
 })
 
@@ -100,24 +170,30 @@ describe('project-closeout reducer — property invariants', () => {
     for (const state of PROJECT_CLOSEOUT_ALL_STATES) {
       const events = nextProjectCloseoutEvents(state)
       for (const next of events) {
-        const event: ProjectCloseoutWorkflowEvent = {
-          type: next.type,
-          closed_at: '2026-04-29T15:00:00.000Z',
-          closed_by: 't',
-        }
+        const event: ProjectCloseoutWorkflowEvent =
+          next.type === 'CLOSEOUT'
+            ? { type: 'CLOSEOUT', closed_at: '2026-04-29T15:00:00.000Z', closed_by: 't' }
+            : { type: 'ACKNOWLEDGE_POST_MORTEM', acknowledged_at: '2026-05-02T10:00:00.000Z', acknowledged_by: 't' }
         expect(() => transitionProjectCloseoutWorkflow({ state, state_version: 1 }, event)).not.toThrow()
       }
     }
   })
 
-  it('terminal states have no next events', () => {
-    expect(nextProjectCloseoutEvents('completed')).toEqual([])
+  it('terminal state (post_mortem) has no next events', () => {
+    expect(nextProjectCloseoutEvents('post_mortem')).toEqual([])
+  })
+
+  it('completed offers ACKNOWLEDGE_POST_MORTEM', () => {
+    expect(nextProjectCloseoutEvents('completed')).toEqual([
+      { type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' },
+    ])
   })
 })
 
 describe('isHumanProjectCloseoutEvent', () => {
-  it('accepts CLOSEOUT', () => {
+  it('accepts CLOSEOUT and ACKNOWLEDGE_POST_MORTEM', () => {
     expect(isHumanProjectCloseoutEvent('CLOSEOUT')).toBe(true)
+    expect(isHumanProjectCloseoutEvent('ACKNOWLEDGE_POST_MORTEM')).toBe(true)
   })
   it('rejects garbage', () => {
     expect(isHumanProjectCloseoutEvent('CANCEL')).toBe(false)
@@ -128,6 +204,10 @@ describe('isHumanProjectCloseoutEvent', () => {
 describe('parseProjectCloseoutEventRequest', () => {
   it('accepts a well-formed CLOSEOUT', () => {
     const r = parseProjectCloseoutEventRequest({ event: 'CLOSEOUT', state_version: 1 })
+    expect(r.ok).toBe(true)
+  })
+  it('accepts a well-formed ACKNOWLEDGE_POST_MORTEM', () => {
+    const r = parseProjectCloseoutEventRequest({ event: 'ACKNOWLEDGE_POST_MORTEM', state_version: 2 })
     expect(r.ok).toBe(true)
   })
   it('accepts state_version as a numeric string', () => {
@@ -148,7 +228,7 @@ describe('projectCloseoutWorkflow registry', () => {
     expect(projectCloseoutWorkflow.name).toBe('project_closeout')
     expect(projectCloseoutWorkflow.schemaVersion).toBe(1)
     expect(projectCloseoutWorkflow.initialState).toBe('active')
-    expect(projectCloseoutWorkflow.terminalStates).toEqual(['completed'])
+    expect(projectCloseoutWorkflow.terminalStates).toEqual(['post_mortem'])
     expect(projectCloseoutWorkflow.sideEffectTypes).toEqual([])
   })
 })
