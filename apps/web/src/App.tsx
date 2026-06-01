@@ -165,6 +165,9 @@ const WorkerFirstRunScreen = lazy(() =>
 const EstimatorInviteScreen = lazy(() =>
   import('@/screens/mobile/estimator-invite').then((m) => ({ default: m.EstimatorInviteScreen })),
 )
+const AcceptInviteScreen = lazy(() =>
+  import('@/screens/invite/AcceptInvite').then((m) => ({ default: m.AcceptInvite })),
+)
 const InviteTeammateScreen = lazy(() =>
   import('@/screens/mobile/invite-teammate').then((m) => ({ default: m.InviteTeammateScreen })),
 )
@@ -286,6 +289,14 @@ export default function App() {
                   Clerk-gated app shell so signed-out visitors can reach it.
                   Self-gates on tier (404 off the demo deployment). */}
               <Route path="/demo" element={<DemoLandingRoute />} />
+
+              {/* Public teammate-invite accept page. Above the Clerk-gated
+                  shell so a signed-out invitee can render the invite summary
+                  and drive sign-in; the page self-gates the accept action on a
+                  signed-in identity (Clerk in prod, act-as in dev). Distinct
+                  path from the in-shell /invite/{worker,foreman,estimator,
+                  teammate} accept-persona screens. */}
+              <Route path="/invite/accept/:token" element={<AcceptInviteScreen />} />
 
               {/* Authenticated app -- Clerk-gated. */}
               <Route

@@ -7,6 +7,7 @@ import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigEr
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
 import { handleCompanyRoutes } from './routes/companies.js'
+import { handleInviteRoutes } from './routes/invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { dispatch } from './routes/dispatch.js'
@@ -751,6 +752,30 @@ const server = http.createServer(async (req, res) => {
                   // `getCurrentUserId` returns the override only when
                   // tier !== 'prod', so the prod path is unchanged.
                   userId: getCurrentUserId(req),
+                  sendJson: (status, body) => sendJson(res, status, body, req),
+                  readBody: () => readBody(req),
+                })
+              ) {
+                return
+              }
+
+              // Teammate invite + accept. Mounted AFTER resolveIdentity but
+              // BEFORE getCompany() so create/list/revoke self-resolve the
+              // company from the :id path param (no active-company header
+              // needed) and accept works for a user who isn't a member of the
+              // target company yet. The public GET /api/invites/:token view is
+              // reachable by signed-out callers. See routes/invites.ts.
+              if (
+                await handleInviteRoutes(req, url, {
+                  pool,
+                  userId: getCurrentUserId(req),
+                  identitySource: identity.source,
+                  // Anonymous = the default identity with no act-as override.
+                  // In dev act-as the source is still 'default' but
+                  // getCurrentUserId returns a concrete dev id, so compare the
+                  // two: equal → no override → genuinely anonymous.
+                  isAnonymous: identity.source === 'default' && getCurrentUserId(req) === identity.userId,
+                  tier: appConfig.tier,
                   sendJson: (status, body) => sendJson(res, status, body, req),
                   readBody: () => readBody(req),
                 })

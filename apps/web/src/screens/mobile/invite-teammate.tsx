@@ -15,7 +15,7 @@
  */
 import { useNavigate } from 'react-router-dom'
 import { MShell, MBody, MTopBar, MButton, MButtonStack, MInput, MBanner, MI } from '@/components/m'
-import { useInviteMember } from '@/lib/api'
+import { useCreateInvite, useCompanyInvites, useRevokeInvite } from '@/lib/api'
 import { useActiveCompanyId } from '@/lib/api'
 import {
   INVITE_DESIGN_ROLES,
@@ -34,15 +34,20 @@ const ROLE_LABELS: Record<InviteDesignRole, string> = {
 export function InviteTeammateScreen() {
   const navigate = useNavigate()
   const companyId = useActiveCompanyId()
-  const inviteMember = useInviteMember(companyId ?? '')
+  const createInvite = useCreateInvite(companyId ?? '')
 
   // The machine's submitter maps the design role to a COMPANY_ROLE and
-  // POSTs the membership. clerk_user_id carries the email-or-id verbatim
-  // (the server resolves it).
+  // POSTs an invite keyed by email. The invitee gets an email with an accept
+  // link; accepting binds their authenticated Clerk id into the membership
+  // (apps/api/src/routes/invites.ts). The identifier field carries the email.
   const submitter = (payload: InviteSubmitPayload) =>
-    inviteMember.mutateAsync({ clerk_user_id: payload.identifier, role: payload.role })
+    createInvite.mutateAsync({ email: payload.identifier, role: payload.role })
 
   const invite = useInviteTeammate(submitter)
+
+  const invitesQuery = useCompanyInvites(companyId)
+  const revokeInvite = useRevokeInvite(companyId ?? '')
+  const pendingInvites = (invitesQuery.data?.invites ?? []).filter((i) => i.status === 'pending')
 
   return (
     <div className="m-host">
@@ -127,6 +132,54 @@ export function InviteTeammateScreen() {
                 <MBanner tone="warn" title="No active company" body="Open a company before inviting teammates." />
               </div>
             )}
+
+            {pendingInvites.length > 0 ? (
+              <div style={{ marginTop: 24 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--m-ink-3)', marginBottom: 8 }}>
+                  Pending invites
+                </div>
+                <div style={{ border: '2px solid var(--m-ink)', borderRadius: 12, overflow: 'hidden' }}>
+                  {pendingInvites.map((row, i) => (
+                    <div
+                      key={row.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '12px 14px',
+                        borderTop: i === 0 ? 'none' : '1px solid var(--m-ink-1)',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: 'var(--m-ink)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {row.email}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>
+                          {row.role} · expires {new Date(row.expires_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <MButton
+                        variant="ghost"
+                        onClick={() => revokeInvite.mutate({ inviteId: row.id })}
+                        disabled={revokeInvite.isPending}
+                      >
+                        Revoke
+                      </MButton>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div style={{ padding: '24px 20px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>

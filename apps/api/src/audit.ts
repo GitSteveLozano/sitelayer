@@ -6,6 +6,7 @@ export type AuditExecutor = Pick<Pool | PoolClient, 'query'>
 const DOMAIN_ENTITY_TYPES = new Set([
   'company',
   'company_membership',
+  'company_invite',
   'project',
   'customer',
   'worker',

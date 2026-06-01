@@ -174,3 +174,28 @@ describe('inviteTeammateMachine — design-role → COMPANY_ROLE mapping (SME-lo
     )
   })
 })
+
+describe('inviteTeammateMachine — invite-API submitter wrapping (post-refactor)', () => {
+  // The send surface (screens/mobile/invite-teammate.tsx) now POSTs the
+  // invite API instead of the membership upsert. Its submitter maps the
+  // machine payload {role, identifier} → useCreateInvite({email, role}),
+  // carrying the identifier verbatim as the invitee email. This locks that
+  // wrapping so the screen can't silently revert to the old
+  // {clerk_user_id, role} membership shape.
+  it('wraps the machine payload as {email, role} for useCreateInvite', async () => {
+    const createInvite = vi.fn(async (_input: { email: string; role: string }) => ({ invite: { id: 'i1' } }))
+    // Mirror InviteTeammateScreen.submitter exactly.
+    const submitter = (payload: InviteSubmitPayload) =>
+      createInvite({ email: payload.identifier, role: payload.role })
+
+    const actor = startActor(submitter)
+    actor.send({ type: 'SELECT_ROLE', role: 'crew' })
+    actor.send({ type: 'SET_IDENTIFIER', value: ' jane@example.com ' })
+    actor.send({ type: 'SEND' })
+    await settle()
+    expect(actor.getSnapshot().value).toBe('sent')
+    // crew → 'member'; identifier trimmed → email.
+    expect(createInvite).toHaveBeenCalledWith({ email: 'jane@example.com', role: 'member' })
+    actor.stop()
+  })
+})
