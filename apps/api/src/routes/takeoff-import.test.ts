@@ -19,9 +19,14 @@ const COMPANY_ID = 'co-1'
 const PROJECT_ID = '11111111-1111-4111-8111-111111111111'
 const PAGE_ID = '22222222-2222-4222-8222-222222222222'
 const DOC_ID = '33333333-3333-4333-8333-333333333333'
+const DEFAULT_DRAFT_ID = '44444444-4444-4444-8444-444444444444'
 
 class FakePool {
   projectExists = true
+  /** Resolved by resolveDefaultDraftId; null ⇒ project has no active draft (409). */
+  defaultDraftId: string | null = DEFAULT_DRAFT_ID
+  /** Draft ids that validateDraftId(explicit) treats as belonging to the project. */
+  validDraftIds = new Set<string>()
   /** page_id -> blueprint_document_id; null entry = page lookup returns nothing. */
   pages = new Map<string, string | null>()
   measurements: Array<Record<string, unknown>> = []
@@ -64,6 +69,18 @@ class FakePool {
       return { rows: [{ exists: this.projectExists }], rowCount: 1 }
     }
 
+    if (/from takeoff_drafts/i.test(sql)) {
+      // validateDraftId passes (company, project, id); resolveDefaultDraftId
+      // passes only (company, project). Distinguish on param arity.
+      if (params.length >= 3) {
+        const draftId = params[2] as string
+        return this.validDraftIds.has(draftId) ? { rows: [{ id: draftId }], rowCount: 1 } : { rows: [], rowCount: 0 }
+      }
+      return this.defaultDraftId
+        ? { rows: [{ id: this.defaultDraftId }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    }
+
     if (/from blueprint_pages/i.test(sql)) {
       const [, pageId] = params as [string, string]
       const doc = this.pages.get(pageId)
@@ -83,6 +100,7 @@ class FakePool {
         quantity: params[5],
         unit: params[6],
         notes: params[7],
+        draft_id: params[8],
       })
       return { rows: [{ id }], rowCount: 1 }
     }
@@ -275,10 +293,49 @@ describe('handleTakeoffImportRoutes — POST /api/projects/:id/takeoff/import', 
     expect(pool.measurements[1]?.unit).toBe('sqft')
     expect(pool.measurements[1]?.notes).toBe('[imported:planswift]')
     expect(pool.tags[1]?.rate).toBe(0)
+    // Both rows land in the project's resolved default draft (draft_id is
+    // NOT NULL on takeoff_measurements post-#270).
+    expect(pool.measurements[0]?.draft_id).toBe(DEFAULT_DRAFT_ID)
+    expect(pool.measurements[1]?.draft_id).toBe(DEFAULT_DRAFT_ID)
     // One import ledger row (takeoff_import is not auditable, so no audit row).
     expect(pool.syncEvents).toHaveLength(1)
     expect(pool.outbox).toHaveLength(1)
     expect(pool.auditEvents).toHaveLength(0)
+  })
+
+  it('returns 409 when the project has no active default draft', async () => {
+    const pool = new FakePool()
+    pool.defaultDraftId = null
+    const { ctx, responses } = makeCtx(pool, { rows: [{ service_item_code: 'FRAME', quantity: 10 }] })
+    await handleTakeoffImportRoutes({ method: 'POST' } as never, buildUrl(PROJECT_ID), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect((responses[0]?.body as { error: string }).error).toContain('default draft')
+    expect(pool.measurements).toHaveLength(0)
+  })
+
+  it('routes imported rows to an explicit valid draft_id', async () => {
+    const pool = new FakePool()
+    pool.validDraftIds.add(DEFAULT_DRAFT_ID)
+    const { ctx, responses } = makeCtx(pool, {
+      rows: [{ service_item_code: 'FRAME', quantity: 10 }],
+      draft_id: DEFAULT_DRAFT_ID,
+    })
+    await handleTakeoffImportRoutes({ method: 'POST' } as never, buildUrl(PROJECT_ID), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    expect(pool.measurements[0]?.draft_id).toBe(DEFAULT_DRAFT_ID)
+  })
+
+  it('returns 400 for an explicit draft_id that does not belong to the project', async () => {
+    const pool = new FakePool()
+    // validDraftIds intentionally empty ⇒ validateDraftId returns false.
+    const { ctx, responses } = makeCtx(pool, {
+      rows: [{ service_item_code: 'FRAME', quantity: 10 }],
+      draft_id: DEFAULT_DRAFT_ID,
+    })
+    await handleTakeoffImportRoutes({ method: 'POST' } as never, buildUrl(PROJECT_ID), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toContain('draft_id does not belong')
+    expect(pool.measurements).toHaveLength(0)
   })
 
   it('threads the resolved blueprint_document_id when a valid page_id is supplied', async () => {

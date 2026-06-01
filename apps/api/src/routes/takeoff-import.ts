@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
+import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
 
 export type TakeoffImportRouteCtx = {
   pool: Pool
@@ -105,6 +106,32 @@ export async function handleTakeoffImportRoutes(
     ctx.sendJson(404, { error: 'project not found' })
     return true
   }
+
+  // Resolve the target draft. `takeoff_measurements.draft_id` is NOT NULL
+  // (migration #270), so imported rows must land in a draft just like drawn /
+  // promoted measurements do. Explicit body.draft_id wins (validated against
+  // project tenancy); otherwise fall back to the project's active default
+  // draft. Mirrors the resolution in takeoff-write.ts.
+  const explicitDraftId =
+    typeof body.draft_id === 'string' && body.draft_id.trim().length > 0 ? body.draft_id.trim() : null
+  let draftId: string | null
+  if (explicitDraftId) {
+    const ok = await validateDraftId(ctx.pool, ctx.company.id, projectId, explicitDraftId)
+    if (!ok) {
+      ctx.sendJson(400, { error: 'draft_id does not belong to this project' })
+      return true
+    }
+    draftId = explicitDraftId
+  } else {
+    draftId = await resolveDefaultDraftId(ctx.pool, ctx.company.id, projectId)
+    if (!draftId) {
+      ctx.sendJson(409, {
+        error: 'project has no active default draft; create one via POST /api/projects/:id/takeoff-drafts',
+      })
+      return true
+    }
+  }
+
   // Page ownership check — without this, a caller could associate
   // imported measurements with a blueprint page from another company.
   if (pageId) {
@@ -139,9 +166,9 @@ export async function handleTakeoffImportRoutes(
       const measurement = await client.query<{ id: string }>(
         `insert into takeoff_measurements (
            company_id, project_id, blueprint_document_id, page_id, service_item_code, geometry_kind,
-           geometry, quantity, unit, notes
+           geometry, quantity, unit, notes, draft_id
          )
-         values ($1, $2, $3, $4, $5, 'count', '{}'::jsonb, $6, $7, $8)
+         values ($1, $2, $3, $4, $5, 'count', '{}'::jsonb, $6, $7, $8, $9)
          returning id`,
         [
           ctx.company.id,
@@ -152,6 +179,7 @@ export async function handleTakeoffImportRoutes(
           row.quantity,
           row.unit,
           importedNote,
+          draftId,
         ],
       )
       const measurementRow = measurement.rows[0]
