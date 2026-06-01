@@ -337,7 +337,7 @@ async function expectFeedbackTerminalState(
       .toBe('sent')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`${message}\nCapture API failures: ${JSON.stringify(apiFailures, null, 2)}`)
+    throw new Error(`${message}\nCapture API failures: ${JSON.stringify(apiFailures, null, 2)}`, { cause: error })
   }
 }
 

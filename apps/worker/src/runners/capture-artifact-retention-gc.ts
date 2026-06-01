@@ -84,7 +84,7 @@ async function sweepCaptureArtifactRetentionGc(
         const count = result.rowCount ?? 0
         deleted += count
         observeQueuePruneOrGc('capture_artifact_retention_gc', count > 0 ? 'deleted' : 'skipped')
-      } catch (error) {
+      } catch (_error) {
         failed += 1
         observeQueuePruneOrGc('capture_artifact_retention_gc', 'failed')
       }

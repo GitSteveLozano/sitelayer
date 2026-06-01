@@ -205,7 +205,7 @@ const STATE_HERO: Record<ProjectLifecycleState, (id: string) => HeroConfig> = {
     secondary: 'Share link',
     secondaryPath: `/projects/${id}/estimate`,
   }),
-  accepted: (id) => ({
+  accepted: (_id) => ({
     eyebrow: 'Accepted',
     title: 'Assign foreman and lock the start date.',
     body: 'Once scheduled, this appears in the foreman morning flow.',

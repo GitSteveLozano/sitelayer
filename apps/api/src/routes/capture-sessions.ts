@@ -526,7 +526,6 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
   let inserted = 0
   let foundSession = false
   let blockedStatus: string | null = null
-  let finalized = false
   await withMutationTx(ctx.company.id, async (c) => {
     const exists = await c.query<{ id: string; status: string; retention_expires_at: string | null }>(
       `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,

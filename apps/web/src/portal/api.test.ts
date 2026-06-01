@@ -218,7 +218,7 @@ describe('public portal API capture headers', () => {
   })
 
   it('supports estimate finalize and rental artifact upload helper parity', async () => {
-    const fetchSpy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const fetchSpy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       const href = String(url)
       if (href.includes('/artifacts/upload')) {
         return new Response(

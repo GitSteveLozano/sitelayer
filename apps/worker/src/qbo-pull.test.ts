@@ -29,9 +29,9 @@ function startQboQueryMock(): Promise<QboQueryMock> {
   const queriesSeen: string[] = []
   let pending401 = 0
   const server = http.createServer((req, res) => {
-    let body = ''
+    let _body = ''
     req.on('data', (chunk) => {
-      body += chunk
+      _body += chunk
     })
     req.on('end', () => {
       const url = req.url ?? ''

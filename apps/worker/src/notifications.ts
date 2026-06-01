@@ -40,7 +40,6 @@ import {
   type NotificationFailureKind,
   type NotificationWorkflowEvent,
   type NotificationWorkflowSnapshot,
-  type NotificationWorkflowState,
 } from '@sitelayer/workflows'
 import type { EmailConfig, EmailMessage, sendEmail as sendEmailFn } from './email.js'
 import type { ClerkResolver, EmailResolution } from './clerk-hydrate.js'

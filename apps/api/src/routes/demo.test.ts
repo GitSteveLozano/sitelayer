@@ -45,7 +45,7 @@ function makeCtx(opts: {
 const POST = { method: 'POST' } as unknown as http.IncomingMessage
 const GET = { method: 'GET' } as unknown as http.IncomingMessage
 
-function signInUrl(tier: AppTier = 'demo') {
+function signInUrl(_tier: AppTier = 'demo') {
   return new URL('https://api/api/demo/sign-in-link')
 }
 
