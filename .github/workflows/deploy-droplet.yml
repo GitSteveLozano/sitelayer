@@ -473,11 +473,15 @@ jobs:
             git clean -fd -e .env -e ".last_*"
             git checkout -B main "$EXPECTED_GIT_SHA"
             git reset --hard "$EXPECTED_GIT_SHA"
-            export SENTRY_RELEASE="$(git rev-parse --short HEAD)"
+            # Pin to the SHA the image was tagged with (matches /api/version).
+            export SENTRY_RELEASE="$EXPECTED_GIT_SHA"
             export VITE_SENTRY_RELEASE="$SENTRY_RELEASE"
-            export GIT_SHA="$SENTRY_RELEASE"
-            test "$GIT_SHA" = "$EXPECTED_GIT_SHA" || {
-              echo "ERROR: checked out $GIT_SHA but image was built for $EXPECTED_GIT_SHA"
+            export GIT_SHA="$EXPECTED_GIT_SHA"
+            # Verify by FULL resolved SHA, not the abbreviated form: git's
+            # minimal-unique --short length differs per repo (runner vs droplet),
+            # so an 8-vs-7-char string compare can false-fail on the same commit.
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "$EXPECTED_GIT_SHA")" || {
+              echo "ERROR: checked out $(git rev-parse --short HEAD) but image was built for $EXPECTED_GIT_SHA"
               exit 1
             }
             export APP_IMAGE
