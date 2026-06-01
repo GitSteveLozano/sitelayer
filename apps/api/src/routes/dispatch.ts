@@ -190,6 +190,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
 
   const routes: Array<() => Promise<boolean>> = [
+    // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin
+    // on the raw (pre-act-as) identity. Placed first; its namespace is distinct.
+    () => handleAdminRoutes(req, url, { pool, identity, sendJson }),
+
     // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
     () =>
       handleSystemRoutes(req, url, {
