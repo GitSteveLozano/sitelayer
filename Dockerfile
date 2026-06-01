@@ -78,6 +78,12 @@ COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package
 COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
 COPY --from=builder /app/packages/workflows/package.json /app/packages/workflows/package.json
 COPY --from=builder /app/packages/workflows/dist /app/packages/workflows/dist
+# @sitelayer/scenario — apps/api imports it from routes/admin.ts (scenario
+# console + apply). Same class of missing-package crash documented below for
+# the pipe-* packages: without this the prod API exits at module load with
+# "Cannot find package '@sitelayer/scenario'" (the e4672585 deploy crash).
+COPY --from=builder /app/packages/scenario/package.json /app/packages/scenario/package.json
+COPY --from=builder /app/packages/scenario/dist /app/packages/scenario/dist
 # Phase B capture packages — apps/api imports @sitelayer/pipe-* via the
 # takeoff-drafts capture endpoint (Phase C.2). Each needs its
 # package.json (so the workspace symlink in node_modules resolves)
