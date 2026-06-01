@@ -24,6 +24,22 @@ import {
 } from './queue'
 import { uploadDailyLogPhoto } from '@/lib/api/daily-logs'
 import { uploadClockEventPhoto } from '@/lib/api/clock'
+import {
+  createCaptureSession,
+  finalizeCaptureSession,
+  uploadCaptureArtifact,
+  type CaptureArtifactUploadInput,
+  type CaptureSessionCreateInput,
+  type CaptureFinalizeInput,
+} from '@/lib/api/capture-sessions'
+import {
+  finalizePortalEstimateCaptureSession,
+  finalizePortalRentalCaptureSession,
+  startPortalEstimateCaptureSession,
+  startPortalRentalCaptureSession,
+  uploadPortalEstimateCaptureArtifact,
+  uploadPortalRentalCaptureArtifact,
+} from '@/portal/api'
 
 let replayInFlight = false
 let intervalId: ReturnType<typeof setInterval> | null = null
@@ -276,6 +292,15 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
       await request('/api/notification-preferences', { method: 'PUT', json: input })
       return
     }
+    case 'capture_session_start':
+      await replayCaptureSessionStart(row)
+      return
+    case 'capture_artifact_upload':
+      await replayCaptureArtifactUpload(row)
+      return
+    case 'capture_session_finalize':
+      await replayCaptureSessionFinalize(row)
+      return
     default: {
       // Exhaustiveness guard — unknown kinds are dropped after one
       // attempt so a stale queue from an old client doesn't accumulate.
@@ -289,6 +314,104 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
       })
     }
   }
+}
+
+type OfflineCaptureTarget =
+  | { type: 'authenticated' }
+  | { type: 'portal'; portal_surface: 'estimate_portal' | 'rental_portal'; share_token: string }
+
+function parseCaptureTarget(value: unknown): OfflineCaptureTarget {
+  if (!value || typeof value !== 'object') return { type: 'authenticated' }
+  const target = value as Record<string, unknown>
+  if (target.type === 'portal') {
+    const portalSurface = target.portal_surface
+    const shareToken = typeof target.share_token === 'string' ? target.share_token : ''
+    if ((portalSurface === 'estimate_portal' || portalSurface === 'rental_portal') && shareToken.trim()) {
+      return { type: 'portal', portal_surface: portalSurface, share_token: shareToken }
+    }
+  }
+  return { type: 'authenticated' }
+}
+
+function captureUploadInputFromPayload(payload: Record<string, unknown>): CaptureArtifactUploadInput {
+  const file = payload.file
+  const isFile = typeof File !== 'undefined' && file instanceof File
+  const isBlob = typeof Blob !== 'undefined' && file instanceof Blob
+  if (!isFile && !isBlob) {
+    throw new ApiError({
+      status: 400,
+      path: '/api/capture-sessions/:id/artifacts/upload',
+      method: 'POST',
+      requestId: null,
+      body: { error: 'queued capture artifact blob lost on serialization' },
+    })
+  }
+  const input: CaptureArtifactUploadInput = {
+    kind: String(payload.kind ?? ''),
+    file,
+  }
+  if (typeof payload.fileName === 'string') input.fileName = payload.fileName
+  if (typeof payload.duration_ms === 'number') input.duration_ms = payload.duration_ms
+  if (isCapturePiiLevel(payload.pii_level)) input.pii_level = payload.pii_level
+  if (isCaptureAccessPolicy(payload.access_policy)) input.access_policy = payload.access_policy
+  if (isRecord(payload.metadata)) input.metadata = payload.metadata
+  return input
+}
+
+async function replayCaptureSessionStart(row: OfflineMutation): Promise<void> {
+  const input = (isRecord(row.payload.input) ? row.payload.input : {}) as CaptureSessionCreateInput
+  const target = parseCaptureTarget(row.payload.target)
+  if (target.type === 'portal') {
+    if (target.portal_surface === 'estimate_portal') {
+      await startPortalEstimateCaptureSession(target.share_token, input)
+    } else {
+      await startPortalRentalCaptureSession(target.share_token, input)
+    }
+    return
+  }
+  await createCaptureSession(input)
+}
+
+async function replayCaptureArtifactUpload(row: OfflineMutation): Promise<void> {
+  const captureSessionId = String(row.payload.captureSessionId ?? '')
+  const input = captureUploadInputFromPayload(row.payload)
+  const target = parseCaptureTarget(row.payload.target)
+  if (target.type === 'portal') {
+    if (target.portal_surface === 'estimate_portal') {
+      await uploadPortalEstimateCaptureArtifact(target.share_token, captureSessionId, input)
+    } else {
+      await uploadPortalRentalCaptureArtifact(target.share_token, captureSessionId, input)
+    }
+    return
+  }
+  await uploadCaptureArtifact(captureSessionId, input)
+}
+
+async function replayCaptureSessionFinalize(row: OfflineMutation): Promise<void> {
+  const captureSessionId = String(row.payload.captureSessionId ?? '')
+  const input = (isRecord(row.payload.input) ? row.payload.input : {}) as CaptureFinalizeInput
+  const target = parseCaptureTarget(row.payload.target)
+  if (target.type === 'portal') {
+    if (target.portal_surface === 'estimate_portal') {
+      await finalizePortalEstimateCaptureSession(target.share_token, captureSessionId, input)
+    } else {
+      await finalizePortalRentalCaptureSession(target.share_token, captureSessionId, input)
+    }
+    return
+  }
+  await finalizeCaptureSession(captureSessionId, input)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isCapturePiiLevel(value: unknown): value is NonNullable<CaptureArtifactUploadInput['pii_level']> {
+  return value === 'low' || value === 'internal' || value === 'private' || value === 'restricted'
+}
+
+function isCaptureAccessPolicy(value: unknown): value is NonNullable<CaptureArtifactUploadInput['access_policy']> {
+  return value === 'support_only' || value === 'operator_only' || value === 'tenant_visible'
 }
 
 /**

@@ -10,7 +10,7 @@
  * Shares the data layer (hooks, entity APIs) and v2 tokens with mobile; only
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -35,7 +35,16 @@ import {
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
-import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
+// Lazy: the control-plane probe and the feedback-capture dock (which pulls in
+// the rrweb recorder → vendor-rrweb) are owner-only diagnostics. Keeping them
+// out of the static graph holds the desktop-workspace lazy chunk under budget;
+// they mount after the dashboard paints.
+const ControlPlaneProbe = lazy(() =>
+  import('@/components/ControlPlaneProbe').then((m) => ({ default: m.ControlPlaneProbe })),
+)
+const AuthenticatedFeedbackDock = lazy(() =>
+  import('@/components/capture/AuthenticatedFeedbackDock').then((m) => ({ default: m.AuthenticatedFeedbackDock })),
+)
 import { useNotificationFeed, useMarkNotificationRead, type NotificationRow } from '@/lib/api/notifications'
 import { usePendingApprovalsSummary } from '@/lib/api/approvals'
 import { useInventoryItems } from '@/lib/api/rentals'
@@ -761,16 +770,21 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         ))}
       </DMenu>
       <RoleContext.Provider value={persona}>
-        <ControlPlaneProbe
-          companySlug={companySlug ?? ''}
-          projectId={probeRoute.projectId}
-          currentTab={probeRoute.currentTab}
-          userRole={sessionRole}
-          activeProjectName={activeProjectName}
-          projectState={null}
-          timeReviewState={null}
-          billingReviewState={null}
-        />
+        <Suspense fallback={null}>
+          <ControlPlaneProbe
+            companySlug={companySlug ?? ''}
+            projectId={probeRoute.projectId}
+            currentTab={probeRoute.currentTab}
+            userRole={sessionRole}
+            activeProjectName={activeProjectName}
+            projectState={null}
+            timeReviewState={null}
+            billingReviewState={null}
+          />
+        </Suspense>
+        <Suspense fallback={null}>
+          <AuthenticatedFeedbackDock companySlug={companySlug ?? ''} />
+        </Suspense>
         <Routes>
           <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
           <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />

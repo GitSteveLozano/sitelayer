@@ -3,6 +3,7 @@ import { uploadCaptureArtifact } from './api/capture-sessions'
 import {
   CaptureReplayRecorder,
   captureReplayArtifactBlob,
+  createRrwebCaptureReplayRecorder,
   isCaptureReplayRecorderSupported,
   type CaptureReplayRecord,
 } from './capture-replay-recorder'
@@ -10,6 +11,12 @@ import {
 vi.mock('./api/capture-sessions', () => ({
   uploadCaptureArtifact: vi.fn(),
 }))
+
+const rrweb = vi.hoisted(() => ({
+  record: vi.fn(),
+}))
+
+vi.mock('@rrweb/record', () => rrweb)
 
 const uploadCaptureArtifactMock = vi.mocked(uploadCaptureArtifact)
 
@@ -28,6 +35,7 @@ function recordStub(events: unknown[] = []): {
 describe('capture replay recorder', () => {
   beforeEach(() => {
     uploadCaptureArtifactMock.mockReset()
+    rrweb.record.mockReset()
   })
 
   it('reports unsupported without an injected rrweb record function', () => {
@@ -146,5 +154,35 @@ describe('capture replay recorder', () => {
     expect(recorder.status).toBe('canceled')
     expect(recorder.eventCount).toBe(0)
     expect(recorder.buildPayload().events).toEqual([])
+  })
+
+  it('constructs a real rrweb-backed recorder with privacy-preserving defaults', async () => {
+    const stop = vi.fn()
+    rrweb.record.mockImplementation((options?: { emit?: (event: unknown) => void }) => {
+      options?.emit?.({ type: 'rrweb-event' })
+      return stop
+    })
+    const recorder = createRrwebCaptureReplayRecorder({
+      isBrowserSupported: () => true,
+      now: () => '2026-05-31T12:02:00.000Z',
+    })
+
+    expect(recorder.start()).toBe(true)
+    await expect(recorder.stop()).resolves.toMatchObject({ eventCount: 1, upload: null })
+
+    expect(rrweb.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maskAllInputs: true,
+        blockClass: 'sl-capture-block',
+        blockSelector: expect.stringContaining('data-capture-block'),
+        ignoreClass: 'sl-capture-ignore',
+        inlineImages: false,
+        recordCanvas: false,
+        recordCrossOriginIframes: false,
+        collectFonts: false,
+        emit: expect.any(Function),
+      }),
+    )
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 })

@@ -8,9 +8,20 @@ describe('ControlPlaneProbe', () => {
     cleanup()
     delete window.__controlPlaneProbe
     __resetProbePublish()
+    sessionStorage.clear()
   })
 
   it('installs a workspace capture probe with company and route state', () => {
+    sessionStorage.setItem(
+      'sitelayer.capture-session',
+      JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000123',
+        mode: 'feedback',
+        started_at: '2026-06-01T00:00:00.000Z',
+        consent_version: 'pilot-feedback-v1',
+      }),
+    )
+
     render(
       <ControlPlaneProbe
         companySlug="la-ops"
@@ -39,6 +50,12 @@ describe('ControlPlaneProbe', () => {
         project_state: 'estimating',
         time_review_state: null,
         billing_review_state: null,
+        capture_session: {
+          id: '00000000-0000-4000-8000-000000000123',
+          mode: 'feedback',
+          started_at: '2026-06-01T00:00:00.000Z',
+          consent_version: 'pilot-feedback-v1',
+        },
       },
     })
   })

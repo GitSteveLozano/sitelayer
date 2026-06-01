@@ -15,6 +15,7 @@
     "@embedpdf/engines": "^2.14.3",
     "@embedpdf/pdfium": "^2.14.3",
     "@operator/types": "github:taylorSando/operator-types#v1.4.1",
+    "@rrweb/record": "^2.0.0-alpha.20",
     "@sentry/react": "^10.51.0",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/formula-evaluator": "file:../../packages/formula-evaluator",

@@ -2,7 +2,12 @@ import { useMemo, useRef, useState } from 'react'
 import { CheckCircle, Mic, Square, X } from 'lucide-react'
 import { isAudioCaptureSupported } from '@/lib/capture-recorder'
 import { clearLocalCaptureSession, currentCaptureRoutePath, startLocalCaptureSession } from '@/lib/capture-session'
-import { FeedbackCaptureController, type FeedbackCaptureBackend } from '@/lib/feedback-capture-controller'
+import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
+import {
+  FeedbackCaptureController,
+  FeedbackCaptureQueuedError,
+  type FeedbackCaptureBackend,
+} from '@/lib/feedback-capture-controller'
 import {
   appendPortalEstimateCaptureEvents,
   appendPortalRentalCaptureEvents,
@@ -17,7 +22,7 @@ import {
 } from './api'
 
 type PortalFeedbackSurface = 'estimate_portal' | 'rental_portal'
-type CaptureState = 'idle' | 'recording' | 'stopping' | 'sent' | 'error'
+type CaptureState = 'idle' | 'recording' | 'stopping' | 'sent' | 'queued' | 'error'
 
 type PortalFeedbackRecorderProps = {
   surface: PortalFeedbackSurface
@@ -41,6 +46,24 @@ function inviteToken(): string {
   } catch {
     return env('VITE_CAPTURE_INVITE')
   }
+}
+
+function captureReplayEnabled(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const fromUrl = params.get('capture_replay') ?? params.get('captureReplay')
+    if (fromUrl !== null) return isTruthyFlag(fromUrl)
+  } catch {
+    // Fall through to env flag.
+  }
+  return isTruthyFlag(env('VITE_CAPTURE_REPLAY'))
+}
+
+function isTruthyFlag(value: string | null | undefined): boolean {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
 function portalBackend(surface: PortalFeedbackSurface, shareToken: string): FeedbackCaptureBackend {
@@ -92,6 +115,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
   const invite = inviteToken()
   const enabled = Boolean(invite) && Boolean(shareToken)
   const audioSupported = isAudioCaptureSupported()
+  const replayEnabled = captureReplayEnabled()
   const backend = useMemo(() => portalBackend(surface, shareToken), [surface, shareToken])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
   const [state, setState] = useState<CaptureState>('idle')
@@ -107,7 +131,15 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
       mode: 'feedback',
       consent_version: CONSENT_VERSION,
     })
-    const controller = new FeedbackCaptureController({ backend })
+    const controller = new FeedbackCaptureController({
+      backend,
+      offlineQueue: { target: { type: 'portal', portal_surface: surface, share_token: shareToken } },
+      replayRecorder: replayEnabled
+        ? createRrwebCaptureReplayRecorder({
+            upload: backend.uploadArtifact,
+          })
+        : null,
+    })
     controllerRef.current = controller
     try {
       await controller.start({
@@ -124,8 +156,8 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
         },
         consent_scope: {
           portal_surface: surface,
-          streams: ['audio'],
-          dom_replay: false,
+          streams: replayEnabled ? ['audio', 'dom_replay'] : ['audio'],
+          dom_replay: replayEnabled,
         },
       })
       await appendPortalFeedbackEvent(surface, shareToken, local.id, 'portal.feedback.recording_started').catch(
@@ -158,6 +190,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
         route_path: currentCaptureRoutePath(),
         artifact_metadata: {
           portal_surface: surface,
+          dom_replay: replayEnabled,
         },
       })
       clearLocalCaptureSession()
@@ -167,6 +200,15 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
       setState('sent')
       setTimeout(() => setState('idle'), 4000)
     } catch (err) {
+      if (err instanceof FeedbackCaptureQueuedError) {
+        clearLocalCaptureSession()
+        controllerRef.current = null
+        setNote('')
+        setOpen(false)
+        setState('queued')
+        setTimeout(() => setState('idle'), 4000)
+        return
+      }
       setState('error')
       setError(err instanceof Error ? err.message : 'Feedback could not be sent.')
     }
@@ -189,7 +231,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
 
   const pill: React.CSSProperties = {
     position: 'fixed',
-    right: 16,
+    left: 16,
     bottom: 16,
     zIndex: 9999,
     padding: '10px 14px',
@@ -211,9 +253,18 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
     )
   }
 
+  if (state === 'queued') {
+    return (
+      <div style={{ ...pill, display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--m-amber, #b7791f)' }}>
+        <CheckCircle size={16} aria-hidden />
+        Feedback queued
+      </div>
+    )
+  }
+
   if (!open && state !== 'recording' && state !== 'stopping') {
     return (
-      <div style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 9999, display: 'grid', gap: 8 }}>
+      <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 9999, display: 'grid', gap: 8 }}>
         {error ? (
           <div style={{ ...pill, position: 'static', maxWidth: 280, color: 'var(--m-red)' }}>{error}</div>
         ) : null}

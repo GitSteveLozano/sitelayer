@@ -47,12 +47,14 @@ export {
 export {
   appendCaptureArtifacts,
   appendCaptureSessionEvents,
+  createCaptureSession,
   discardCaptureSession,
   ensureCaptureSession,
   startCaptureSession,
   stopCaptureSession,
   type CaptureArtifactInput,
   type CaptureSessionEventInput,
+  type CaptureSessionCreateInput,
   type CaptureSessionResponse,
 } from './capture-sessions'
 

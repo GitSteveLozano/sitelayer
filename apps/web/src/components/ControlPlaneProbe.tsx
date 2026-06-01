@@ -3,6 +3,7 @@ import type { ControlPlaneCapture } from '@operator/types'
 import { Sentry } from '@/instrument'
 import { readActiveControlPlaneTrace, readControlPlaneTraceCapabilitiesWhenActive } from '@/lib/control-plane-trace'
 import { readProbePublishRegistry } from '@/lib/control-plane-probe-pub'
+import { getActiveCaptureSession } from '@/lib/capture-session'
 
 /**
  * Operator-owned probe contract — type now lives in `@operator/types`
@@ -117,6 +118,7 @@ export function ControlPlaneProbe(input: SitelayerProbeInput) {
         const published = readProbePublishRegistry()
         const activeTrace = readActiveControlPlaneTrace()
         const sentryTrace = readSentryTrace()
+        const captureSession = getActiveCaptureSession()
         return {
           ...seed,
           trace: activeTrace ?? sentryTrace,
@@ -135,6 +137,14 @@ export function ControlPlaneProbe(input: SitelayerProbeInput) {
               active: Boolean(activeTrace),
               capabilities: readControlPlaneTraceCapabilitiesWhenActive(),
             },
+            capture_session: captureSession
+              ? {
+                  id: captureSession.id,
+                  mode: captureSession.mode,
+                  started_at: captureSession.started_at,
+                  consent_version: captureSession.consent_version ?? null,
+                }
+              : null,
             sentry_trace: sentryTrace,
           },
           deploy: buildSha ? { build_sha: buildSha, env } : null,

@@ -47,11 +47,14 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
 import { useAssemblies, useAttachAssemblyToMeasurement, useExplodeAssembly, type Assembly } from '@/lib/api/assemblies'
 import { formatMoney } from '../mobile/format.js'
 import { EstAiCountSetupPanel } from './est-ai-count'
 import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
@@ -763,6 +766,58 @@ export function EstCanvas() {
   const blueprintMeasurements = draftMeasurements.filter(
     (m) => activeBlueprint && m.blueprint_document_id === activeBlueprint.id,
   )
+
+  useEffect(() => {
+    if (!projectId) return
+    return registerCaptureArtifactProvider(`takeoff:desktop:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!activeBlueprint && blueprintMeasurements.length === 0 && draftPoints.length === 0) return null
+      const payload = buildCanvasGeometryArtifact({
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        active_draft_id: activeDraftId,
+        active_blueprint_id: activeBlueprint?.id ?? null,
+        active_page_id: activePage?.id ?? null,
+        blueprint: activeBlueprint,
+        page: activePage,
+        viewport: { zoom, pan, mode, tool },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          scale_points: scalePoints,
+          edit_geom_id: editGeomId,
+          edit_points: editPoints,
+        },
+        selection: {
+          selected_measurement_id: selectedMeasurementId,
+          bulk_selected_ids: Array.from(bulkSelected),
+          reassign_ids: reassignIds,
+        },
+        measurements: blueprintMeasurements,
+      })
+      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+        ...metadata,
+        surface: 'desktop_est_canvas',
+      })
+    })
+  }, [
+    activeBlueprint,
+    activeDraftId,
+    activePage,
+    blueprintMeasurements,
+    bulkSelected,
+    draftPoints,
+    draftQuantity,
+    editGeomId,
+    editPoints,
+    mode,
+    pan,
+    projectId,
+    reassignIds,
+    scalePoints,
+    selectedMeasurementId,
+    tool,
+    zoom,
+  ])
 
   // All committed vertices on this sheet — snap targets so a new measurement
   // can latch onto the corner of an existing one (PlanSwift vertex snapping).

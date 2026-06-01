@@ -18,6 +18,12 @@ const api = vi.hoisted(() => ({
 
 vi.mock('./api', () => api)
 
+const rrweb = vi.hoisted(() => ({
+  record: vi.fn(),
+}))
+
+vi.mock('@rrweb/record', () => rrweb)
+
 class FakeTrack {
   stop = vi.fn()
 }
@@ -66,6 +72,11 @@ describe('IssueReporter', () => {
     window.history.pushState(null, '', '/portal/estimates/share-token')
     window.sessionStorage.clear()
     FakeMediaRecorder.instances = []
+    rrweb.record.mockReset()
+    rrweb.record.mockImplementation((options?: { emit?: (event: unknown) => void }) => {
+      options?.emit?.({ type: 'rrweb-full-snapshot', data: { source: 'portal-test' } })
+      return vi.fn()
+    })
     api.appendPortalEstimateCaptureEvents.mockResolvedValue({ accepted: 1 })
     api.appendPortalRentalCaptureEvents.mockResolvedValue({ accepted: 1 })
     api.discardPortalEstimateCaptureSession.mockResolvedValue({
@@ -240,6 +251,62 @@ describe('IssueReporter', () => {
       expect.objectContaining({ event_type: 'portal.feedback.recording_stopped' }),
     ])
     expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
+  })
+
+  it('adds a DOM replay artifact only when capture replay is explicitly enabled', async () => {
+    window.history.pushState(null, '', '/portal/estimates/share-token?capture_invite=invite-1&capture_replay=1')
+    render(<IssueReporter surface="estimate_portal" shareToken="share-token" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    fireEvent.click(screen.getByRole('button', { name: /start/i }))
+
+    await waitFor(() => expect(api.startPortalEstimateCaptureSession).toHaveBeenCalledTimes(1))
+    const startCall = api.startPortalEstimateCaptureSession.mock.calls[0]
+    const captureSessionId = (startCall?.[1] as { capture_session_id: string }).capture_session_id
+    expect(startCall?.[1]).toMatchObject({
+      consent_scope: {
+        portal_surface: 'estimate_portal',
+        streams: ['audio', 'dom_replay'],
+        dom_replay: true,
+      },
+    })
+    expect(rrweb.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maskAllInputs: true,
+        inlineImages: false,
+        recordCanvas: false,
+        recordCrossOriginIframes: false,
+        emit: expect.any(Function),
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+
+    await waitFor(() => expect(api.uploadPortalEstimateCaptureArtifact).toHaveBeenCalledTimes(2))
+    const replayCall = api.uploadPortalEstimateCaptureArtifact.mock.calls.find((call) => call[2]?.kind === 'rrweb')
+    expect(replayCall).toBeDefined()
+    expect(replayCall?.[0]).toBe('share-token')
+    expect(replayCall?.[1]).toBe(captureSessionId)
+    expect(replayCall?.[2]).toMatchObject({
+      kind: 'rrweb',
+      fileName: 'replay.json',
+      pii_level: 'private',
+      access_policy: 'support_only',
+      metadata: expect.objectContaining({
+        source: 'capture_replay_recorder',
+        artifact_type: 'capture.rrweb_replay',
+        schema_version: 1,
+        event_count: 1,
+        portal_surface: 'estimate_portal',
+        dom_replay: true,
+      }),
+    })
+    await expect((replayCall?.[2]?.file as Blob).text().then(JSON.parse)).resolves.toMatchObject({
+      artifact_type: 'capture.rrweb_replay',
+      event_count: 1,
+      events: [{ type: 'rrweb-full-snapshot', data: { source: 'portal-test' } }],
+    })
+    await waitFor(() => expect(api.finalizePortalEstimateCaptureSession).toHaveBeenCalledTimes(1))
   })
 
   it('discards an active portal capture session on the server before clearing local state', async () => {

@@ -41,6 +41,9 @@ export type OfflineMutationKind =
   | 'takeoff_measurement_create'
   | 'time_review_event'
   | 'notification_pref_save'
+  | 'capture_session_start'
+  | 'capture_artifact_upload'
+  | 'capture_session_finalize'
 
 export interface OfflineMutation {
   /** Auto-generated. */
@@ -99,6 +102,9 @@ const BLOB_SLOTS: Record<OfflineMutationKind, readonly string[]> = {
   takeoff_measurement_create: [],
   time_review_event: [],
   notification_pref_save: [],
+  capture_session_start: [],
+  capture_artifact_upload: ['file'],
+  capture_session_finalize: [],
 }
 
 function isBlobLike(value: unknown): value is Blob {

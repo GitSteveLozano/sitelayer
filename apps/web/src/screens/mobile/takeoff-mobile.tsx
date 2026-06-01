@@ -59,7 +59,10 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import {
   MBody,
   MButton,
@@ -402,6 +405,54 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   const bulkPolys = bulkSelected.filter((m) => (m.geometry as { kind?: string }).kind === 'polygon').length
   const bulkTotal = round2(bulkSelected.reduce((s, m) => s + (Number(m.quantity) || 0), 0))
   const bulkUnit = new Set(bulkSelected.map((m) => m.unit)).size === 1 ? (bulkSelected[0]?.unit ?? '') : 'mixed'
+
+  useEffect(() => {
+    if (!projectId) return
+    return registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!activeBlueprint && canvasMeasurements.length === 0 && draftPoints.length === 0) return null
+      const payload = buildCanvasGeometryArtifact({
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        active_draft_id: activeDraftId,
+        active_blueprint_id: activeBlueprint?.id ?? null,
+        active_page_id: activePage?.id ?? null,
+        blueprint: activeBlueprint,
+        page: activePage,
+        viewport: { mode, tool },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          manual_qty: manualQty,
+          edit_id: editId,
+          edit_points: editPoints,
+        },
+        selection: {
+          selected_id: selectedId,
+          bulk_selected_ids: Array.from(bulkIds),
+        },
+        measurements: canvasMeasurements,
+      })
+      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+        ...metadata,
+        surface: 'mobile_takeoff',
+      })
+    })
+  }, [
+    activeBlueprint,
+    activeDraftId,
+    activePage,
+    bulkIds,
+    canvasMeasurements,
+    draftPoints,
+    draftQuantity,
+    editId,
+    editPoints,
+    manualQty,
+    mode,
+    projectId,
+    selectedId,
+    tool,
+  ])
 
   const toggleBulk = (id: string) =>
     setBulkIds((prev) => {

@@ -1,8 +1,15 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
+import { getActiveCompanySlug } from '@/lib/api'
+// Lazy: the feedback-capture dock pulls in the rrweb recorder (vendor-rrweb),
+// so a static import would drag that heavy machinery onto the eager critical
+// path. It mounts only on the capture surfaces below, after first paint.
+const AuthenticatedFeedbackDock = lazy(() =>
+  import('@/components/capture/AuthenticatedFeedbackDock').then((m) => ({ default: m.AuthenticatedFeedbackDock })),
+)
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import { RoleSwitcher } from '@/components/dev/RoleSwitcher'
 import {
@@ -306,7 +313,14 @@ function AppShellRoutes() {
       {/* Project deep routes that need the full viewport. */}
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-      <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      <Route
+        path="/projects/:id/takeoff-canvas"
+        element={
+          <CaptureFeedbackRoute>
+            <TakeoffCanvasScreen />
+          </CaptureFeedbackRoute>
+        }
+      />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
@@ -380,4 +394,15 @@ function AppShellRoutes() {
 function WelcomeRoute() {
   const navigate = useNavigate()
   return <DesktopOnboardingRoute onComplete={() => navigate('/desktop')} />
+}
+
+function CaptureFeedbackRoute({ children }: { children: ReactNode }) {
+  return (
+    <>
+      {children}
+      <Suspense fallback={null}>
+        <AuthenticatedFeedbackDock companySlug={getActiveCompanySlug()} />
+      </Suspense>
+    </>
+  )
 }

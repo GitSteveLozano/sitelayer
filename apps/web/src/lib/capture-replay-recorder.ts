@@ -1,3 +1,4 @@
+import { record as rrwebRecord } from '@rrweb/record'
 import {
   uploadCaptureArtifact,
   type CaptureArtifactUploadResponse,
@@ -18,6 +19,14 @@ export interface CaptureReplayRecorderDependencies {
   upload?: (captureSessionId: string, input: CaptureArtifactUploadInput) => Promise<CaptureArtifactUploadResponse>
   now?: () => string
   isBrowserSupported?: () => boolean
+}
+
+type RrwebRecordOptions = NonNullable<Parameters<typeof rrwebRecord>[0]>
+
+export type RrwebCaptureReplayOptions = Omit<RrwebRecordOptions, 'emit'>
+
+export interface CreateRrwebCaptureReplayRecorderOptions extends CaptureReplayRecorderDependencies {
+  rrwebOptions?: RrwebCaptureReplayOptions
 }
 
 export interface CaptureReplayArtifactPayload {
@@ -46,6 +55,23 @@ export function isCaptureReplayRecorderSupported(deps: CaptureReplayRecorderDepe
 
 export function captureReplayArtifactBlob(payload: CaptureReplayArtifactPayload): Blob {
   return new Blob([JSON.stringify(payload)], { type: 'application/json' })
+}
+
+export function createRrwebCaptureReplayRecorder(
+  options: CreateRrwebCaptureReplayRecorderOptions = {},
+): CaptureReplayRecorder {
+  const { rrwebOptions, record, ...deps } = options
+  return new CaptureReplayRecorder({
+    ...deps,
+    record:
+      record ??
+      (({ emit }) =>
+        rrwebRecord({
+          ...DEFAULT_RRWEB_OPTIONS,
+          ...rrwebOptions,
+          emit: (event) => emit(event),
+        })),
+  })
 }
 
 export class CaptureReplayRecorder {
@@ -111,11 +137,11 @@ export class CaptureReplayRecorder {
           pii_level: 'private',
           access_policy: 'support_only',
           metadata: {
+            ...options.metadata,
             source: 'capture_replay_recorder',
             artifact_type: payload.artifact_type,
             schema_version: payload.schema_version,
             event_count: payload.event_count,
-            ...options.metadata,
           },
         })
       : null
@@ -158,4 +184,16 @@ function defaultBrowserSupport(): boolean {
 function normalizeCaptureSessionId(captureSessionId: string | null | undefined): string | null {
   const trimmed = captureSessionId?.trim()
   return trimmed ? trimmed : null
+}
+
+const DEFAULT_RRWEB_OPTIONS: RrwebCaptureReplayOptions = {
+  maskAllInputs: true,
+  blockClass: 'sl-capture-block',
+  blockSelector: '[data-capture-block], [data-capture-private], [data-pii]',
+  ignoreClass: 'sl-capture-ignore',
+  ignoreSelector: '[data-capture-ignore]',
+  inlineImages: false,
+  recordCanvas: false,
+  recordCrossOriginIframes: false,
+  collectFonts: false,
 }

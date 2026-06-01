@@ -47,7 +47,14 @@ const APPS = {
     // the assembly builder + live formula preview (@sitelayer/formula-evaluator
     // / expr-eval) + apply-assembly-onto-measurement, all on the desktop-workspace
     // lazy chunk. Measured ~88.8KB gzip.
-    lazyAppChunkGzipBudget: 94 * 1024,
+    // 94KB → 112KB on 2026-05-31 for the usage-capture/learning-loop build-out
+    // riding the desktop-workspace lazy chunk: the takeoff drawing surface
+    // (est-canvas) capture wiring + the capture-session / capture-artifact-provider
+    // registration that the takeoff canvas registers on mount. The heavy rrweb
+    // recorder is NOT here — it's split into the exempt lazy `vendor-rrweb` chunk
+    // and the feedback dock + control-plane probe are lazy-mounted, so none of it
+    // rides the eager critical path. Measured ~108.4KB gzip.
+    lazyAppChunkGzipBudget: 112 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },

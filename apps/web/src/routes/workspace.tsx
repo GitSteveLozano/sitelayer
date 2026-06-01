@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
+import { AuthenticatedFeedbackDock } from '@/components/capture/AuthenticatedFeedbackDock'
 import {
   ApiError,
   getActiveCompanySlug,
@@ -151,6 +152,7 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
         timeReviewState={null}
         billingReviewState={null}
       />
+      <AuthenticatedFeedbackDock companySlug={companySlug} />
       <MobileShell
         bootstrap={bootstrapQuery.data ?? null}
         companyRole={companyRole}

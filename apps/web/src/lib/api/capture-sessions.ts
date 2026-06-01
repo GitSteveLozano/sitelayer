@@ -36,6 +36,20 @@ export type CaptureSessionEventInput = {
   payload?: Record<string, unknown>
 }
 
+export type CaptureSessionCreateInput = {
+  capture_session_id: string
+  mode?: CaptureSessionMode
+  consent_version?: string
+  route_path?: string
+  device_kind?: string
+  platform?: string
+  viewport?: string
+  app_build_sha?: string
+  metadata?: Record<string, unknown>
+  consent_scope?: Record<string, unknown>
+  retention_days?: number
+}
+
 export type CaptureArtifactInput = {
   kind: string
   storage_key?: string
@@ -154,6 +168,16 @@ export async function startCaptureSession(
       consent_version: local.consent_version,
       route_path: currentCaptureRoutePath(),
       metadata: args.metadata ?? {},
+    },
+  })
+}
+
+export async function createCaptureSession(input: CaptureSessionCreateInput): Promise<CaptureSessionResponse> {
+  return request<CaptureSessionResponse>('/api/capture-sessions', {
+    method: 'POST',
+    json: {
+      route_path: currentCaptureRoutePath(),
+      ...input,
     },
   })
 }

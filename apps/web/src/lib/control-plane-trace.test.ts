@@ -24,6 +24,7 @@ function clearTraceBridge(): void {
 describe('control-plane trace helpers', () => {
   afterEach(() => {
     clearTraceBridge()
+    sessionStorage.clear()
   })
 
   it('does not emit when there is no active trace', () => {
@@ -37,6 +38,14 @@ describe('control-plane trace helpers', () => {
   it('emits compact summary-only events when active', () => {
     const emit = vi.fn()
     setTraceBridge({ active: () => ({ trace_id: 'trace-1' }), emit })
+    sessionStorage.setItem(
+      'sitelayer.capture-session',
+      JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000123',
+        mode: 'feedback',
+        started_at: '2026-06-01T00:00:00.000Z',
+      }),
+    )
 
     expect(
       emitControlPlaneTrace('sitelayer.workflow.event', {
@@ -61,6 +70,8 @@ describe('control-plane trace helpers', () => {
           event_class: 'workflow_event',
           redaction_status: 'summary_only',
           route_path: '/',
+          capture_session_id: '00000000-0000-4000-8000-000000000123',
+          capture_session_mode: 'feedback',
           workflow_id: 'projectLifecycle',
           event_type: 'ACCEPT',
           state_version: 3,
