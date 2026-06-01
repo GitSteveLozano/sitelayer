@@ -107,10 +107,7 @@ async function geminiBlueprintTakeoff(
   const body = {
     contents: [
       {
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: image.mimeType, data: image.bytes.toString('base64') } },
-        ],
+        parts: [{ text: prompt }, { inline_data: { mime_type: image.mimeType, data: image.bytes.toString('base64') } }],
       },
     ],
     generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
@@ -143,8 +140,7 @@ async function geminiBlueprintTakeoff(
       const value = typeof o.value === 'number' && Number.isFinite(o.value) ? Math.abs(o.value) : NaN
       const unitRaw = typeof o.unit === 'string' ? (o.unit.trim().toLowerCase() as DemoUnit) : ('sqft' as DemoUnit)
       const unit: DemoUnit = GEMINI_UNITS.has(unitRaw) ? unitRaw : 'sqft'
-      const confidence =
-        typeof o.confidence === 'number' && o.confidence >= 0 && o.confidence <= 1 ? o.confidence : 0.5
+      const confidence = typeof o.confidence === 'number' && o.confidence >= 0 && o.confidence <= 1 ? o.confidence : 0.5
       if (description && Number.isFinite(value)) rows.push({ description, value, unit, confidence })
     }
     return rows.length > 0 ? rows.slice(0, 8) : null

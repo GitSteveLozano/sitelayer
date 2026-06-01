@@ -100,7 +100,11 @@ export async function handleGuardrailRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const body = await ctx.readBody()
 
-    const projectId = createPathMatch ? createPathMatch[1]! : (typeof body.project_id === 'string' ? body.project_id.trim() : '')
+    const projectId = createPathMatch
+      ? createPathMatch[1]!
+      : typeof body.project_id === 'string'
+        ? body.project_id.trim()
+        : ''
     if (!isValidUuid(projectId)) {
       ctx.sendJson(400, { error: 'project_id must be a valid uuid' })
       return true
