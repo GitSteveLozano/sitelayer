@@ -216,8 +216,8 @@ jobs:
           npm run build --workspace @sitelayer/config
           npm run build --workspace @sitelayer/domain
           npm run build --workspace @sitelayer/logger
-          npm run build --workspace @sitelayer/queue
           npm run build --workspace @sitelayer/workflows
+          npm run build --workspace @sitelayer/queue
           npm run build --workspace @sitelayer/capture-schema
           npm run build --workspace @sitelayer/capture-catalog
           npm run build --workspace @sitelayer/formula-evaluator
@@ -348,8 +348,8 @@ jobs:
           npm run build --workspace @sitelayer/config
           npm run build --workspace @sitelayer/domain
           npm run build --workspace @sitelayer/logger
-          npm run build --workspace @sitelayer/queue
           npm run build --workspace @sitelayer/workflows
+          npm run build --workspace @sitelayer/queue
           npm run build --workspace @sitelayer/capture-schema
           npm run build --workspace @sitelayer/capture-catalog
           npm run build --workspace @sitelayer/formula-evaluator
