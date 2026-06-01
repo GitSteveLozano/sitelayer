@@ -1,6 +1,8 @@
 # Scenario Harness, Site Admin & Impersonation — Design + Living Plan
 
 > **STATUS (keep this banner current — it's the handoff):**
+>
+> - **v0.5 — 2026-06-01. P1 SHIPPED.** Fragment library (`packages/scenario/src/library.ts` — composable parameterized factories + `composeScenario`) + plan golden snapshots over every `scenarios/*.yaml` (`golden.test.ts` + committed `__snapshots__/`). 49 unit tests green. Registry property tests already live in `packages/workflows`. **P2–P5 pending.**
 > - **v0.3 — 2026-05-31.** Grounded against live code + **operator decision recorded**: superadmin = a Clerk identity with FULL access, no graduated roles (§5, OQ1 closed). Author near 100% weekly usage; may stop mid-stream.
 > - **v0.2 — 2026-05-31.** Skeleton + core thesis + grounded against live code (registry, auth, companies route, scenario format all confirmed — see ✅ marks).
 > - **Why this doc exists:** single source of truth for the design so a fresh agent can resume. **Read the "HANDOFF / NEXT STEPS" section (§10) first.**
@@ -14,13 +16,13 @@
 Sitelayer already has the hard part: **every business process is a pure, deterministic state machine** (`packages/workflows/` reducers `(snapshot, event) → snapshot` + `nextEvents(state)` + an append-only `workflow_event_log`). That foundation lets us treat **a test/demo scenario as a declarative list of workflow events**, replayed through the same reducers production uses. From that one primitive we get, with very little new machinery:
 
 1. **Deterministic tests** — a scenario is reproducible bit-for-bit (pure reducers + idempotent, ref-hashed seeds).
-2. **Composable scenarios** — the end-state of one fragment is the start-state of the next, so scenarios *chain*.
+2. **Composable scenarios** — the end-state of one fragment is the start-state of the next, so scenarios _chain_.
 3. **A scenario-builder UI** — because `nextEvents(state)` enumerates the legal next events, the builder can guide a human to construct an always-valid scenario, preview the resulting snapshots, and export YAML or apply it straight to a dev/demo DB.
 4. **A site admin** (cross-tenant superadmin) that drives all of the above and can spin up demos on the dev UI.
 5. **A production admin** (same shell, prod-safe: read-mostly, gated, audited).
 6. **Impersonation** — "view as user X": a cheap dev/demo path (the existing act-as header) and a real, audited prod path.
 
-The big idea: **the scenario engine, the seed system, the demo tier, and impersonation are all the same machine viewed from different angles.** A seeded scenario is *indistinguishable from real usage history* because it's produced by the exact reducers + event-log writes that real requests produce.
+The big idea: **the scenario engine, the seed system, the demo tier, and impersonation are all the same machine viewed from different angles.** A seeded scenario is _indistinguishable from real usage history_ because it's produced by the exact reducers + event-log writes that real requests produce.
 
 ---
 
@@ -28,19 +30,19 @@ The big idea: **the scenario engine, the seed system, the demo tier, and imperso
 
 > _(verify each against live code — see NEXT STEPS; file paths from CLAUDE.md + the 2026-05-31 session.)_
 
-| Asset | Where | Why it matters here |
-|---|---|---|
-| **Pure workflow reducers + a registry** ✅ | `packages/workflows/src/registry.ts` — `WorkflowDefinition` carries `{name, schemaVersion, initialState, terminalStates, allStates, allEventTypes, reduce, nextEvents, isHumanEvent, sideEffectTypes}`; `getWorkflow(name[, version])` (versioned, so old event-logs replay through the reducer that wrote them). Workflows: rental_billing_run, estimate_push, crew_schedule, project_closeout, time_review_run, labor_payroll_run, project_lifecycle, field_event, rental, daily_log, notification, shipment, damage_charge_settlement, rental_request_approval, qbo_sync_run, scaffold_ops_approval, change_order. | **One stable surface for everything here.** A scenario step = one event applied to a snapshot. `allStates`/`allEventTypes`/`terminalStates` drive exhaustive property tests; `nextEvents`/`isHumanEvent` drive the guided builder. |
-| **`nextEvents(state)` + `isHumanEvent`** ✅ | each definition; surfaced as `WorkflowSnapshot.next_events` | Powers a **guided** builder — only legal, human-dispatchable events are offered at each step. |
-| **`applyEventSequence`** | `packages/workflows/src/test-replay.ts` | Walks an event list through the reducer AND writes `workflow_event_log` rows identical to production. Already used by seed fixtures to author "stuck mid-flight" states. **This is the scenario-execution primitive.** |
-| **Append-only event log** | `workflow_event_log` (unique `(entity_id, workflow_name, state_version)` after mig 106) + `scripts/replay-workflow.ts` | Lets a scenario reproduce a full audit trail; replay audits prod. |
-| **Declarative seeds** | `scripts/seed-scenario.ts` + `scenarios/*.yaml` (e.g. `steve-demo.yaml`) | Already the "scenario as data" format. Deterministic (ref-hashed UUIDs), idempotent (ON CONFLICT DO NOTHING). **The builder's export target.** |
-| **Frontend XState** | `apps/web/src/machines/*` | UI orchestration only (loading/submitting/error/outOfSync) — never mirrors business state. Headless renders `state+context+next_events`. The builder UI is itself an XState machine. |
-| **Dev/preview impersonation** | `x-sitelayer-act-as: e2e-<role>` header + `RoleSwitcher` (`apps/web/src/components/dev/RoleSwitcher.tsx`) + `resolveActAsOverride` (`apps/api/src/auth.ts`, `tier !== 'prod'` only) | The cheap "view as role" primitive. Canonical ids: `e2e-{admin,foreman,office,member,bookkeeper}`. |
-| **Tier system** | `APP_TIER` guard (`packages/config`), tiers local/dev/preview/demo/prod | Lets the same admin shell behave differently per tier (full power on dev, gated on prod). |
-| **Demo tier** | `demo.preview.sitelayer.sandolab.xyz`, Clerk-ON magic-link sign-in tokens, `/api/demo/sign-in-link` | Already a "spin up a populated, role-switchable demo" path — generalize it. |
-| **Company RBAC + company CRUD** ✅ | `company_memberships` (admin/foreman/office/member/bookkeeper; `packages/domain/src/roles.ts`); routes in `apps/api/src/routes/companies.ts` (`handleCompanyRoutes`, `getMemberships(pool, userId)`, slug validation) + an `estimate-shares-admin.ts` precedent for an admin-namespaced route | Tenant-scoped only. **There is NO platform-level admin today** (confirmed: no `platform_admin`/`superadmin`/`impersonat*` route exists). Reuse `companies.ts`+`getMemberships` as building blocks; we add a **platform-scoped** role *above* company RBAC. |
-| **Identity resolution** ✅ | `apps/api/src/auth.ts` — `resolveIdentity(req, config) → Identity = {userId, source:'clerk'\|'internal'\|'header'\|'default'}`; `verifyClerkJwt` (RS256, reads `sub`); an **`internal` bearer path** (`INTERNAL_AUTH_TOKEN` → `{userId: x-sitelayer-user-id ?? 'service', source:'internal'}`) | The single hook for impersonation: extend `Identity` with `actorUserId` + `mode`; `verifyClerkJwt` is where a Clerk `act` claim would surface; the `internal` path is the server-trust precedent the `/admin` backend can use to act on behalf of a subject. |
+| Asset                                       | Where                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Why it matters here                                                                                                                                                                                                                                          |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Pure workflow reducers + a registry** ✅  | `packages/workflows/src/registry.ts` — `WorkflowDefinition` carries `{name, schemaVersion, initialState, terminalStates, allStates, allEventTypes, reduce, nextEvents, isHumanEvent, sideEffectTypes}`; `getWorkflow(name[, version])` (versioned, so old event-logs replay through the reducer that wrote them). Workflows: rental_billing_run, estimate_push, crew_schedule, project_closeout, time_review_run, labor_payroll_run, project_lifecycle, field_event, rental, daily_log, notification, shipment, damage_charge_settlement, rental_request_approval, qbo_sync_run, scaffold_ops_approval, change_order. | **One stable surface for everything here.** A scenario step = one event applied to a snapshot. `allStates`/`allEventTypes`/`terminalStates` drive exhaustive property tests; `nextEvents`/`isHumanEvent` drive the guided builder.                           |
+| **`nextEvents(state)` + `isHumanEvent`** ✅ | each definition; surfaced as `WorkflowSnapshot.next_events`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Powers a **guided** builder — only legal, human-dispatchable events are offered at each step.                                                                                                                                                                |
+| **`applyEventSequence`**                    | `packages/workflows/src/test-replay.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Walks an event list through the reducer AND writes `workflow_event_log` rows identical to production. Already used by seed fixtures to author "stuck mid-flight" states. **This is the scenario-execution primitive.**                                       |
+| **Append-only event log**                   | `workflow_event_log` (unique `(entity_id, workflow_name, state_version)` after mig 106) + `scripts/replay-workflow.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Lets a scenario reproduce a full audit trail; replay audits prod.                                                                                                                                                                                            |
+| **Declarative seeds**                       | `scripts/seed-scenario.ts` + `scenarios/*.yaml` (e.g. `steve-demo.yaml`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Already the "scenario as data" format. Deterministic (ref-hashed UUIDs), idempotent (ON CONFLICT DO NOTHING). **The builder's export target.**                                                                                                               |
+| **Frontend XState**                         | `apps/web/src/machines/*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | UI orchestration only (loading/submitting/error/outOfSync) — never mirrors business state. Headless renders `state+context+next_events`. The builder UI is itself an XState machine.                                                                         |
+| **Dev/preview impersonation**               | `x-sitelayer-act-as: e2e-<role>` header + `RoleSwitcher` (`apps/web/src/components/dev/RoleSwitcher.tsx`) + `resolveActAsOverride` (`apps/api/src/auth.ts`, `tier !== 'prod'` only)                                                                                                                                                                                                                                                                                                                                                                                                                                   | The cheap "view as role" primitive. Canonical ids: `e2e-{admin,foreman,office,member,bookkeeper}`.                                                                                                                                                           |
+| **Tier system**                             | `APP_TIER` guard (`packages/config`), tiers local/dev/preview/demo/prod                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Lets the same admin shell behave differently per tier (full power on dev, gated on prod).                                                                                                                                                                    |
+| **Demo tier**                               | `demo.preview.sitelayer.sandolab.xyz`, Clerk-ON magic-link sign-in tokens, `/api/demo/sign-in-link`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Already a "spin up a populated, role-switchable demo" path — generalize it.                                                                                                                                                                                  |
+| **Company RBAC + company CRUD** ✅          | `company_memberships` (admin/foreman/office/member/bookkeeper; `packages/domain/src/roles.ts`); routes in `apps/api/src/routes/companies.ts` (`handleCompanyRoutes`, `getMemberships(pool, userId)`, slug validation) + an `estimate-shares-admin.ts` precedent for an admin-namespaced route                                                                                                                                                                                                                                                                                                                         | Tenant-scoped only. **There is NO platform-level admin today** (confirmed: no `platform_admin`/`superadmin`/`impersonat*` route exists). Reuse `companies.ts`+`getMemberships` as building blocks; we add a **platform-scoped** role _above_ company RBAC.   |
+| **Identity resolution** ✅                  | `apps/api/src/auth.ts` — `resolveIdentity(req, config) → Identity = {userId, source:'clerk'\|'internal'\|'header'\|'default'}`; `verifyClerkJwt` (RS256, reads `sub`); an **`internal` bearer path** (`INTERNAL_AUTH_TOKEN` → `{userId: x-sitelayer-user-id ?? 'service', source:'internal'}`)                                                                                                                                                                                                                                                                                                                        | The single hook for impersonation: extend `Identity` with `actorUserId` + `mode`; `verifyClerkJwt` is where a Clerk `act` claim would surface; the `internal` path is the server-trust precedent the `/admin` backend can use to act on behalf of a subject. |
 
 ---
 
@@ -60,6 +62,7 @@ scenario := {
 - **Timelines** are executed via `applyEventSequence` → produces the entity row at its final snapshot **and** the matching `workflow_event_log` corpus. The result is byte-identical to what a real user clicking through the app would have produced.
 
 **Composition / chaining.** Because a timeline is `(initial_snapshot, events[])` and reducers are pure:
+
 - A **fragment** = a named, parameterized partial scenario ("a rental mid-billing-dispute", "a project at `estimating` with one AI-takeoff draft pending review", "a payroll run stuck at `failed`").
 - A **scenario** = an ordered composition of fragments over a shared company; the resolved end-state of fragment N is the start-state context fragment N+1 builds on.
 - **Branching for tests**: from any saved snapshot, fork by applying a different event → new scenario. The "scenario tree" is just the event-log DAG.
@@ -74,7 +77,7 @@ This is the same model as deep test-replay: a scenario IS a replay script.
 
 Layers, cheapest → richest:
 
-1. **Reducer unit tests** (exist). Pure `(snapshot, event)` table tests per workflow. Add **property tests** with `fast-check` (already a devDep in `packages/workflows`): generate random *legal* event sequences (guided by `nextEvents`) and assert invariants (no illegal transition, monotonic `state_version`, terminal states absorbing, replay determinism).
+1. **Reducer unit tests** (exist). Pure `(snapshot, event)` table tests per workflow. Add **property tests** with `fast-check` (already a devDep in `packages/workflows`): generate random _legal_ event sequences (guided by `nextEvents`) and assert invariants (no illegal transition, monotonic `state_version`, terminal states absorbing, replay determinism).
 2. **Scenario replay tests**: load a `scenarios/*.yaml`, run it through `applyEventSequence` against an ephemeral PG (the migrate-in-CI Postgres 18), assert the resulting rows + event-log match a golden snapshot. Catches reducer/schema drift.
 3. **API contract tests** (exist, vitest): `GET …/:id` returns `{state, state_version, context, next_events}`; `POST …/events` applies + 409s on stale version. Drive these from scenario fragments.
 4. **Web headless tests** (exist): components render `state+context+next_events`; XState wraps only UI state.
@@ -89,10 +92,12 @@ Determinism guarantees: pure reducers, ref-hashed UUIDs, idempotent upserts, tim
 ## 4. Scenario builder (UI + engine)
 
 ### Engine (headless, reusable in tests + UI)
+
 - `packages/scenario/` (new): a pure library that takes a scenario doc, validates it (Zod), resolves fixtures + timelines, and emits an **apply plan** (ordered SQL/event ops). Reuses `@sitelayer/workflows` reducers + `applyEventSequence`. No DB driver — returns ops the caller executes in one tx (mirrors the workflow event-route pattern).
 - Round-trips: **doc ↔ apply-plan ↔ YAML**. The current `seed-scenario.ts` becomes a thin CLI over this engine.
 
 ### Builder UI (lives in Site Admin, dev/demo only by default)
+
 - **Guided timeline editor**: pick a workflow + entity, see the current snapshot and the `next_events` chips, click one to advance; the panel shows the resulting snapshot diff. Always-legal by construction.
 - **Fixture forms**: company template (LA-ops default via `seedCompanyDefaults`), customers, projects, crew, service items.
 - **Live preview**: apply to a scratch schema and render the actual app screens (reuse impersonation to "view as" each role).
@@ -100,6 +105,7 @@ Determinism guarantees: pure reducers, ref-hashed UUIDs, idempotent upserts, tim
 - Itself an XState machine (`scenario-builder.ts`): states `editing → previewing → applying → applied | error`. UI-only state; the scenario doc is the business data.
 
 ### "Spin up a demo for testing" flow
+
 1. Pick or compose a scenario (or clone `steve-demo`).
 2. Choose target: new company in `sitelayer_dev`, or a fresh per-demo company in `sitelayer_demo`, or an ephemeral PR-preview schema.
 3. Engine applies it; admin gets magic-links per role (reuse `/api/demo/sign-in-link` generalized to any seeded company) or act-as links on dev.
@@ -108,11 +114,12 @@ Determinism guarantees: pure reducers, ref-hashed UUIDs, idempotent upserts, tim
 
 ## 5. Site admin (cross-tenant superadmin)
 
-**The privilege gap.** Today roles are *company-scoped* (`company_memberships`). There is **no platform-level admin**. We need one.
+**The privilege gap.** Today roles are _company-scoped_ (`company_memberships`). There is **no platform-level admin**. We need one.
 
 **DECIDED (operator, 2026-05-31): superadmin = a specific Clerk identity with FULL access to everything.** No graduated roles for v1 — a superadmin can see and do anything across all tenants. (`support`/`read_only` sub-roles can be added later if ever needed.)
 
 Model:
+
 - **Identity:** keyed by the Clerk user id (`sub` from the verified Clerk JWT — `verifyClerkJwt` in `auth.ts`). A request is superadmin iff its `sub` is in the superadmin set.
 - **Storage:** a small `platform_admins(clerk_user_id, created_at, note)` table (new numbered migration) so the set is auditable + editable without a redeploy; an **env allowlist** (`PLATFORM_SUPERADMIN_CLERK_IDS`) bootstraps the first admin (and is the source of truth on prod until the table is populated). `isSuperadmin(sub) = sub ∈ (env allowlist ∪ platform_admins)`.
 - **Gate:** `requirePlatformAdmin` middleware on a new `apps/api/src/routes/admin/*` namespace — verifies a real Clerk JWT, then `isSuperadmin(sub)`. Never reachable via the company-JWT path, the act-as header, or the header-fallback identity. Superadmin grants cross-tenant access (no `company_id` scoping for these routes), so the check must be airtight + every call audited.
@@ -126,6 +133,7 @@ Why separate from the company `admin` role: a company admin must never see other
 ## 6. Production admin system
 
 Same `/admin` shell + `platform_admins`, but **prod policy is restrictive by default**:
+
 - **Read-mostly**: inspection (companies, users, sync queue, audit, workflow snapshots/replay) is fine; **mutations are gated** (explicit confirm + reason, recorded to `audit_events`).
 - **No scenario seeding into prod** (the seeder already refuses `APP_TIER=prod`; keep that — scenarios are a dev/demo concept). Prod admin is for support/ops, not fixture authoring.
 - **Impersonation is the sensitive capability** — see §7; in prod it is audited, time-boxed, reason-required, and visibly flagged.
@@ -138,11 +146,13 @@ Same `/admin` shell + `platform_admins`, but **prod policy is restrictive by def
 "View as user X." Two implementations sharing one audit contract:
 
 ### A. Dev/demo "act-as" (exists, cheap, no real auth)
+
 - The `x-sitelayer-act-as: e2e-<role>` header → `resolveActAsOverride` overrides identity when `tier !== 'prod'`. `RoleSwitcher` writes `localStorage['sitelayer.act-as']`.
 - Generalize from fixed `e2e-<role>` ids to **any seeded user id** in the scenario company, so the builder/admin can "view as Steve's foreman" exactly.
 - This is the testing workhorse — fast, no Clerk round-trip.
 
 ### B. Prod "audited impersonation" (new, support use case)
+
 - A site admin requests an impersonation session for user X **with a reason**. The system mints a **scoped, time-boxed session** that carries BOTH the subject (user X) and the **actor** (the real admin) — never drops the admin's identity.
 - Two viable mechanisms (decide in OPEN QUESTIONS):
   1. **Clerk actor tokens / sign-in tokens** (Clerk supports an `actor` claim for impersonation) → cleanest, the app already verifies Clerk JWTs.
@@ -156,7 +166,7 @@ The unifying contract: **extend the existing `Identity` (`{userId, source}`) to 
 ## 8. Implementation phases (proposed)
 
 - **P0 — Scenario engine extraction** (`packages/scenario/`): factor the doc→plan logic out of `seed-scenario.ts`; Zod schema for the scenario doc; `runFragments` test helper. _Unblocks everything; pure, low risk._
-- **P1 — Scenario replay tests + fragment library**: golden-snapshot tests; a handful of reusable fragments. _Hardens determinism._
+- **P1 — Scenario replay tests + fragment library**: ✅ **DONE (2026-06-01).** `packages/scenario/src/library.ts` — parameterized fragment factories (`projectInProgress`/`projectAtEstimating`, `rentalStuckPosting`/`rentalPostedInvoice`/`rentalBillingFailed`, `estimatePushPendingReview`/`estimatePushFailed`, `damageChargeOpen`/`damageChargeInvoiced`, `qboSyncRunFailed`, `bomApproved`, `rentalRequestApproved`, `starterFixtures`) + `composeScenario()` merge, all mirroring the proven `scenarios/*.yaml` event shapes. Plan golden snapshots over every fixture (`golden.test.ts` + committed `__snapshots__/`). 49 unit tests total. Registry-level `fast-check` property tests already exist per-workflow in `packages/workflows/src/*.property.test.ts`, so not duplicated here.
 - **P2 — `platform_admins` + `requirePlatformAdmin` + `/admin` API skeleton** (read-only first). _The trust boundary._
 - **P3 — `/admin` UI shell + scenario builder** (dev/demo). Guided timeline editor over `next_events`. Apply-to-dev / spin-up-demo. _The headline UX._
 - **P4 — Impersonation**: generalize act-as to any user (dev/demo); then prod audited impersonation with the actor-claim contract + audit + banner.
@@ -173,21 +183,23 @@ Each phase is independently shippable to `dev` first (scratch lane), promoted to
 3. **Where do scenario YAMLs live** — in-repo (`scenarios/`, PR-able, versioned) is the default; does the builder also persist user-built scenarios to a DB table for non-engineers? (Lean: export to repo YAML for durable ones; a `scenario_drafts` table for WIP.)
 4. **Demo company multiplicity** — one curated `steve-demo` vs many per-prospect demo companies in `sitelayer_demo`? (Affects builder "spin up demo" target.)
 5. ~~**Prod admin scope**~~ → implied by §5 "full access": superadmin CAN mutate in prod. Keep mutations behind an explicit confirm + reason and always audit; not a hard read-only wall.
-6. **Impersonation in prod posture** — given superadmin = full access, capability is read-write. Still REQUIRED regardless: a persistent "viewing as X (impersonated by <admin>)" banner, short TTL, reason captured, and every write tagged `impersonated_by`. Optional read-only *view mode* as a safety toggle (not a restriction). _Operator hasn't explicitly chosen the default toggle; lean read-only-view-by-default with one-click elevation._
+6. **Impersonation in prod posture** — given superadmin = full access, capability is read-write. Still REQUIRED regardless: a persistent "viewing as X (impersonated by <admin>)" banner, short TTL, reason captured, and every write tagged `impersonated_by`. Optional read-only _view mode_ as a safety toggle (not a restriction). _Operator hasn't explicitly chosen the default toggle; lean read-only-view-by-default with one-click elevation._
 7. **Bundle budget / chunking** for the `/admin` UI (the prettier+bundle gate is sensitive — see `sitelayer-prettier-quality-gate` memory).
 
 ---
 
-## 10. HANDOFF / CURRENT STATUS / NEXT STEPS  ← read this first if resuming
+## 10. HANDOFF / CURRENT STATUS / NEXT STEPS ← read this first if resuming
 
 **Current state (v0.3):** Design grounded against live code. **OQ1 DECIDED**: superadmin = Clerk identity, full access (§5). Nothing implemented yet.
 
 **Decisions made:** OQ1 (superadmin = Clerk identity, full access) ✅; OQ2 (prod impersonation = Clerk **actor tokens** via `POST /v1/actor_tokens`, reuse the demo minter, read `act` claim in `verifyClerkJwt`) ✅.
 
 **Decision still open (does NOT block P0–P3):**
+
 - **OQ6 — prod impersonation toggle default** (read-only-view vs read-write). Capability is full either way (superadmin); just the default posture + safety toggle. Confirm with operator before shipping P4's prod path.
 
 **Immediate next steps (in order):**
+
 1. **P0 — extract `packages/scenario/`**: lift the `ScenarioYaml` interface (`scripts/seed-scenario.ts:241`) into a Zod schema + a pure doc→apply-plan engine; make `seed-scenario.ts` a thin CLI over it; add a `runFragments([...], {company})` test helper. Pure, low risk, unblocks all. **← suggested first code task.**
 2. **P1 — scenario replay tests + a small fragment library** (golden snapshots over an ephemeral PG); add `fast-check` property tests over the registry's `allStates`/`allEventTypes`/`terminalStates`.
 3. **P2 — `platform_admins` migration + `PLATFORM_SUPERADMIN_CLERK_IDS` env + `requirePlatformAdmin` + read-only `/admin` API** (reuse `companies.ts`/`getMemberships`). Resolve OQ2 (verify Clerk actor tokens) in parallel.
@@ -195,6 +207,7 @@ Each phase is independently shippable to `dev` first (scratch lane), promoted to
 5. **P4 — impersonation** (generalize act-as → any seeded user on dev/demo; then prod audited via the extended `Identity` `{userId, actorUserId, mode}` contract + audit/banner); **P5 — prod hardening**.
 
 **Constraints/gotchas to respect:**
+
 - Prettier + bundle gates are load-bearing (silent prod-deploy skip). Run `npm run format`; chunk the `/admin` bundle.
 - `@sitelayer/*` packages resolve to `src` via tsconfig paths in dev (tsx) but `dist` for some test/prod paths — rebuild dist when editing a package consumed via `@sitelayer/...` in non-aliased contexts.
 - Migrations are immutable + forward-only (`docker/postgres/init/NNN_*.sql`); `platform_admins` etc. are new numbered migrations.
@@ -208,28 +221,47 @@ Each phase is independently shippable to `dev` first (scratch lane), promoted to
 ## 11. Appendix — P0 turnkey artifacts
 
 ### 11a. Scenario-doc contract (Zod sketch — the P0 deliverable)
+
 Lift `scripts/seed-scenario.ts:241 interface ScenarioYaml` into this. Keep field names identical so existing `scenarios/*.yaml` validate unchanged.
 
 ```ts
 // packages/scenario/src/schema.ts  (sketch)
 import { z } from 'zod'
-const Ref = z.string().min(1)                  // stable handle → ref-hashed UUID at apply time
+const Ref = z.string().min(1) // stable handle → ref-hashed UUID at apply time
 const EventLog = z.array(z.record(z.unknown())) // ordered events → applyEventSequence
 
 const Timeline = <T extends z.ZodTypeAny>(extra: T) => extra
 export const ScenarioDoc = z.object({
   company: z.object({ slug: z.string().regex(/^[a-z0-9-]{2,64}$/), name: z.string() }),
-  members:   z.array(z.object({ clerk_user_id: z.string(), role: z.string() })).optional(),
+  members: z.array(z.object({ clerk_user_id: z.string(), role: z.string() })).optional(),
   customers: z.array(z.object({ ref: Ref, name: z.string() })).optional(),
-  workers:   z.array(z.object({ ref: Ref, name: z.string(), role: z.string().optional(),
-                                clerk_user_id: z.string().optional() })).optional(),
-  inventory: z.array(z.object({ ref: Ref, code: z.string(), /* …rates… */ })).optional(),
-  projects:  z.array(z.object({ ref: Ref, name: z.string(), customer_ref: Ref.optional(),
-                                lifecycle_state: z.string().optional(),
-                                lifecycle_state_version: z.number().int().optional(),
-                                lifecycle_event_log: EventLog.optional() })).optional(),
-  rentals:   z.array(z.object({ ref: Ref, project_ref: Ref, inventory_ref: Ref, quantity: z.number(),
-                                billing_event_log: EventLog.optional(), /* … */ })).optional(),
+  workers: z
+    .array(z.object({ ref: Ref, name: z.string(), role: z.string().optional(), clerk_user_id: z.string().optional() }))
+    .optional(),
+  inventory: z.array(z.object({ ref: Ref, code: z.string() /* …rates… */ })).optional(),
+  projects: z
+    .array(
+      z.object({
+        ref: Ref,
+        name: z.string(),
+        customer_ref: Ref.optional(),
+        lifecycle_state: z.string().optional(),
+        lifecycle_state_version: z.number().int().optional(),
+        lifecycle_event_log: EventLog.optional(),
+      }),
+    )
+    .optional(),
+  rentals: z
+    .array(
+      z.object({
+        ref: Ref,
+        project_ref: Ref,
+        inventory_ref: Ref,
+        quantity: z.number(),
+        billing_event_log: EventLog.optional() /* … */,
+      }),
+    )
+    .optional(),
   estimates: z.array(z.object({ ref: Ref, project_ref: Ref, push_event_log: EventLog.optional() })).optional(),
   // …worker_issues(issue_event_log), damage_charges(settlement_event_log),
   //   rental_requests(approval_event_log), qbo_sync_runs(sync_event_log), boms(approval_event_log),
@@ -237,33 +269,44 @@ export const ScenarioDoc = z.object({
 })
 export type ScenarioDoc = z.infer<typeof ScenarioDoc>
 ```
+
 Engine surface: `parseScenario(yaml) → ScenarioDoc`; `planScenario(doc) → ApplyOp[]` (pure, reuses `@sitelayer/workflows` `getWorkflow` + `applyEventSequence` for each `*_event_log`); `applyScenario(client, plan)` (one tx). `seed-scenario.ts` becomes `applyScenario(pool, planScenario(parseScenario(read(file))))`.
 
 ### 11b. Each `*_event_log` is a guided walk — what the builder generates
+
 For a rental stuck mid-billing-dispute, the builder offers `nextEvents('generated')` → `[APPROVE]`, click → `nextEvents('approved')` → `[POST_REQUESTED, VOID]`, etc., emitting:
+
 ```yaml
 rentals:
   - ref: r-dispute
     billing_event_log:
-      - { type: APPROVE }            # generated → approved
-      - { type: POST_REQUESTED }     # approved → posting
-      - { type: POST_FAILED, error: "QBO 402" }   # posting → failed  (worker-only event, builder flags it)
+      - { type: APPROVE } # generated → approved
+      - { type: POST_REQUESTED } # approved → posting
+      - { type: POST_FAILED, error: 'QBO 402' } # posting → failed  (worker-only event, builder flags it)
 ```
+
 `applyEventSequence` walks these through the **real** reducer, writes the `workflow_event_log` rows, and stamps the entity row at its final snapshot. The builder never offers an illegal event because it reads `nextEvents(currentState)` + `isHumanEvent`.
 
 ### 11c. Chaining (the `runFragments` test helper, P0/P1)
+
 ```ts
 // A fragment is (company-scoped) partial ScenarioDoc producing refs later fragments consume.
-const out = await runFragments([
-  companyAtEstimating,            // → returns { projectRef }
-  ({projectRef}) => rentalMidDispute(projectRef),   // builds on the project
-  ({rentalRef})  => damageChargeOpen(rentalRef),
-], { slug: 'test-co' })
+const out = await runFragments(
+  [
+    companyAtEstimating, // → returns { projectRef }
+    ({ projectRef }) => rentalMidDispute(projectRef), // builds on the project
+    ({ rentalRef }) => damageChargeOpen(rentalRef),
+  ],
+  { slug: 'test-co' },
+)
 // Deterministic: pure reducers + ref-hashed ids + offset-based time. Re-run = identical DB state.
 ```
+
 This is also how the **builder "spin up a demo"** works: compose fragments → `planScenario` → apply to dev/demo → hand back per-role magic-links (`/api/demo/sign-in-link`, generalized to the seeded company) or act-as links on dev.
 
 ### 11d. Impersonation contract change (P4)
+
 `apps/api/src/auth.ts`: `Identity` → `{ userId, actorUserId?: string, source, mode?: 'self'|'act_as'|'impersonate' }`.
+
 - Dev/demo `act_as`: `resolveActAsOverride` sets `userId=target, actorUserId=caller, mode='act_as'` (generalize the target from `e2e-<role>` to any seeded user id).
 - Prod `impersonate`: `verifyClerkJwt` reads a Clerk `act` claim (OQ2) → `userId=sub, actorUserId=act, mode='impersonate'`. Data scopes by `userId`; **every `audit_events` write stamps `actorUserId`**; the SPA shows a persistent banner whenever `mode!=='self'`.
