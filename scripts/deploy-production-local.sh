@@ -63,36 +63,42 @@ fi
 echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"
 START=$(date +%s)
 
-# --- build + push (fleet, cached) -------------------------------------------
+# --- build on the fleet host (fast, incremental ~26s) -----------------------
+mkdir -p "$CACHE_DIR"
+HOST_DEPS_STAMP="$CACHE_DIR/host-deps.sha256"
+lock_now="$(sha256sum package-lock.json | awk '{print $1}')"
+if [ ! -d node_modules ] || [ "${lock_now}" != "$(cat "$HOST_DEPS_STAMP" 2>/dev/null || true)" ]; then
+  echo "==> npm ci (host build deps; lockfile changed or node_modules missing)"
+  npm ci
+  printf '%s\n' "$lock_now" > "$HOST_DEPS_STAMP"
+fi
+
+echo "==> Building on the fleet host (incremental)..."
+VITE_API_URL="${VITE_API_URL:-}" \
+VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}" \
+VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}" \
+VITE_USER_ID="${VITE_USER_ID:-demo-user}" \
+VITE_APP_TIER="${VITE_APP_TIER:-prod}" \
+VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" \
+VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}" \
+VITE_SENTRY_RELEASE="$GIT_SHA" \
+VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}" \
+VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}" \
+VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
+SENTRY_RELEASE="$GIT_SHA" GIT_SHA="$GIT_SHA" APP_BUILD_SHA="$GIT_SHA" \
+  npm run build
+# Don't ship sourcemaps (keeps the bundle lean; no Sentry upload step here).
+find apps/web/dist -name '*.map' -type f -delete 2>/dev/null || true
+
+# --- package + push the THIN image (deps stage cached on the persistent builder) ---
 doctl registry login >/dev/null
 docker buildx inspect sitelayer-builder >/dev/null 2>&1 \
   || docker buildx create --name sitelayer-builder --driver docker-container >/dev/null
-mkdir -p "$CACHE_DIR"
-
-secret_arg=()
-[ -n "${SENTRY_AUTH_TOKEN:-}" ] && secret_arg=(--secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN)
 
 docker buildx build \
   --builder sitelayer-builder \
   --target runtime \
-  --cache-from "type=local,src=${CACHE_DIR}" \
-  --cache-to "type=local,dest=${CACHE_DIR},mode=max" \
-  --build-arg VITE_API_URL="${VITE_API_URL:-}" \
-  --build-arg VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}" \
-  --build-arg VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}" \
-  --build-arg VITE_USER_ID="${VITE_USER_ID:-demo-user}" \
-  --build-arg VITE_APP_TIER="${VITE_APP_TIER:-prod}" \
-  --build-arg VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" \
-  --build-arg VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}" \
-  --build-arg VITE_SENTRY_RELEASE="$GIT_SHA" \
-  --build-arg VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}" \
-  --build-arg VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}" \
-  --build-arg VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
-  --build-arg SENTRY_ORG="${SENTRY_ORG:-sandolabs}" \
-  --build-arg SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}" \
-  --build-arg SENTRY_RELEASE="$GIT_SHA" \
   --build-arg GIT_SHA="$GIT_SHA" \
-  "${secret_arg[@]}" \
   -t "$APP_IMAGE" \
   -t "${REGISTRY}:main" \
   --push \

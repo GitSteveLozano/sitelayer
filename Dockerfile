@@ -1,60 +1,16 @@
 # syntax=docker/dockerfile:1.7-labs
+#
+# Thin packaging image. The app is COMPILED ON THE FLEET HOST (fast, incremental
+# ~26s) by scripts/deploy-production-local.sh; this Dockerfile only installs
+# production node_modules and copies the prebuilt dist. No npm ci / tsc / vite
+# runs in here, so a code-change image build is just COPY layers.
 
-FROM node:20-alpine AS builder
+# Production node_modules only — cached by the manifest layer; reinstalls ONLY
+# when package*.json / a workspace package.json changes (not on source edits).
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-ARG VITE_API_URL=""
-ARG VITE_CLERK_PUBLISHABLE_KEY=""
-ARG VITE_COMPANY_SLUG="la-operations"
-ARG VITE_USER_ID="demo-user"
-ARG VITE_APP_TIER="prod"
-ARG VITE_SENTRY_DSN=""
-ARG VITE_SENTRY_ENVIRONMENT="production"
-ARG VITE_SENTRY_RELEASE=""
-ARG VITE_SENTRY_TRACES_SAMPLE_RATE="0.1"
-ARG VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="0.1"
-ARG VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="1.0"
-ARG SENTRY_ORG="sandolabs"
-ARG SENTRY_WEB_PROJECT="sitelayer-web"
-ARG SENTRY_RELEASE=""
-ARG GIT_SHA="unknown"
-
-ENV VITE_API_URL=$VITE_API_URL
-ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
-ENV VITE_COMPANY_SLUG=$VITE_COMPANY_SLUG
-ENV VITE_USER_ID=$VITE_USER_ID
-ENV VITE_APP_TIER=$VITE_APP_TIER
-ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
-ENV VITE_SENTRY_ENVIRONMENT=$VITE_SENTRY_ENVIRONMENT
-ENV VITE_SENTRY_RELEASE=$VITE_SENTRY_RELEASE
-ENV VITE_SENTRY_TRACES_SAMPLE_RATE=$VITE_SENTRY_TRACES_SAMPLE_RATE
-ENV VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE=$VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE
-ENV VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE=$VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE
-ENV SENTRY_RELEASE=$SENTRY_RELEASE
-ENV GIT_SHA=$GIT_SHA
-ENV APP_BUILD_SHA=$GIT_SHA
-
-# Manifests first, so the npm ci layer is cached across source-only changes
-# (the common case). COPY --parents (dockerfile 1.7) preserves the
-# apps/<x>/ + packages/<x>/ structure for the glob — robust, no fragile
-# per-package list to drift (a missing list entry is what crashed the
-# e4672585 prod deploy). The --mount cache keeps npm's download store warm.
-COPY --parents package*.json tsconfig.base.json apps/*/package.json packages/*/package.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
-
-# Source after install: a code change busts only the build layer, not npm ci.
-COPY apps ./apps
-COPY packages ./packages
-COPY scripts ./scripts
-RUN npm run build
-RUN --mount=type=secret,id=sentry_auth_token \
-    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" && \
-    if [ -n "$SENTRY_AUTH_TOKEN" ] && [ -n "$SENTRY_RELEASE" ]; then \
-      SENTRY_AUTH_TOKEN="$SENTRY_AUTH_TOKEN" SENTRY_ORG="$SENTRY_ORG" SENTRY_WEB_PROJECT="$SENTRY_WEB_PROJECT" SENTRY_RELEASE="$SENTRY_RELEASE" \
-        sh scripts/sentry-upload-sourcemaps.sh apps/web/dist; \
-    fi
-RUN find apps/web/dist -name '*.map' -type f -delete
-RUN npm prune --omit=dev
+COPY --parents package*.json apps/*/package.json packages/*/package.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
@@ -66,56 +22,20 @@ ENV SENTRY_RELEASE=$GIT_SHA
 
 RUN apk add --no-cache poppler-utils
 
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/apps/api/package.json /app/apps/api/package.json
-COPY --from=builder /app/apps/api/dist /app/apps/api/dist
-COPY --from=builder /app/apps/web/package.json /app/apps/web/package.json
-COPY --from=builder /app/apps/web/dist /app/apps/web/dist
-COPY --from=builder /app/apps/worker/package.json /app/apps/worker/package.json
-COPY --from=builder /app/apps/worker/dist /app/apps/worker/dist
-COPY --from=builder /app/packages/config/package.json /app/packages/config/package.json
-COPY --from=builder /app/packages/config/dist /app/packages/config/dist
-COPY --from=builder /app/packages/domain/package.json /app/packages/domain/package.json
-COPY --from=builder /app/packages/domain/dist /app/packages/domain/dist
-COPY --from=builder /app/packages/logger/package.json /app/packages/logger/package.json
-COPY --from=builder /app/packages/logger/dist /app/packages/logger/dist
-COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package.json
-COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
-COPY --from=builder /app/packages/workflows/package.json /app/packages/workflows/package.json
-COPY --from=builder /app/packages/workflows/dist /app/packages/workflows/dist
-# @sitelayer/scenario — apps/api imports it from routes/admin.ts (scenario
-# console + apply). Same class of missing-package crash documented below for
-# the pipe-* packages: without this the prod API exits at module load with
-# "Cannot find package '@sitelayer/scenario'" (the e4672585 deploy crash).
-COPY --from=builder /app/packages/scenario/package.json /app/packages/scenario/package.json
-COPY --from=builder /app/packages/scenario/dist /app/packages/scenario/dist
-# Phase B capture packages — apps/api imports @sitelayer/pipe-* via the
-# takeoff-drafts capture endpoint (Phase C.2). Each needs its
-# package.json (so the workspace symlink in node_modules resolves)
-# plus its built dist/. Missing these caused the production API
-# container to crash at module load with "Cannot find module
-# '@sitelayer/pipe-roomplan'" on the 585ec96 deploy (rolled back to
-# 429d9b6 was no longer in the registry).
-COPY --from=builder /app/packages/capture-schema/package.json /app/packages/capture-schema/package.json
-COPY --from=builder /app/packages/capture-schema/dist /app/packages/capture-schema/dist
-COPY --from=builder /app/packages/capture-catalog/package.json /app/packages/capture-catalog/package.json
-COPY --from=builder /app/packages/capture-catalog/dist /app/packages/capture-catalog/dist
-COPY --from=builder /app/packages/capture-catalog/src/seed.yaml /app/packages/capture-catalog/src/seed.yaml
-COPY --from=builder /app/packages/formula-evaluator/package.json /app/packages/formula-evaluator/package.json
-COPY --from=builder /app/packages/formula-evaluator/dist /app/packages/formula-evaluator/dist
-COPY --from=builder /app/packages/pipe-blueprint/package.json /app/packages/pipe-blueprint/package.json
-COPY --from=builder /app/packages/pipe-blueprint/dist /app/packages/pipe-blueprint/dist
-COPY --from=builder /app/packages/pipe-roomplan/package.json /app/packages/pipe-roomplan/package.json
-COPY --from=builder /app/packages/pipe-roomplan/dist /app/packages/pipe-roomplan/dist
-COPY --from=builder /app/packages/pipe-photogrammetry/package.json /app/packages/pipe-photogrammetry/package.json
-COPY --from=builder /app/packages/pipe-photogrammetry/dist /app/packages/pipe-photogrammetry/dist
-COPY --from=builder /app/packages/pipe-drone/package.json /app/packages/pipe-drone/package.json
-COPY --from=builder /app/packages/pipe-drone/dist /app/packages/pipe-drone/dist
+# Prod node_modules (incl. the @sitelayer/* workspace symlinks) from deps.
+COPY --from=deps /app/node_modules ./node_modules
+# Root manifest for `npm start -w @sitelayer/api`.
+COPY package*.json ./
+# Prebuilt dist + manifests from the build context (compiled on the host).
+# COPY --parents globs EVERY workspace — no fragile per-package list to drift
+# (a missing list entry is what crashed the e4672585 prod deploy). The
+# node_modules @sitelayer/* symlinks resolve into these copied dirs.
+COPY --parents apps/*/package.json apps/*/dist packages/*/package.json packages/*/dist ./
+# capture-catalog reads this seed.yaml at runtime (lives under src/, not dist/).
+COPY packages/capture-catalog/src/seed.yaml ./packages/capture-catalog/src/seed.yaml
 
-# Run as the unprivileged `node` user (uid 1000) baked into node:20-alpine.
-# The blueprint_storage volume mounts at /app/storage/blueprints — pre-create
-# it so the directory exists with node ownership before any volume mount.
+# Run as the unprivileged `node` user (uid 1000). The blueprint_storage volume
+# mounts at /app/storage/blueprints — pre-create it with node ownership.
 RUN mkdir -p /app/storage/blueprints && chown -R node:node /app
 USER node
 
