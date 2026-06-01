@@ -13,7 +13,7 @@ import {
   parseBlueprintMultipart,
   type BlueprintMultipartResult,
 } from '../blueprint-upload.js'
-import type { BlueprintStorage } from '../storage.js'
+import { getBlueprintMimeType, type BlueprintStorage } from '../storage.js'
 import { loadServiceItemCatalogIndex, rejectionMessageForCatalog } from '../catalog.js'
 import { captureRoomplanDraft } from '../takeoff-capture-pipelines/roomplan.js'
 import { capturePhotogrammetryDraft } from '../takeoff-capture-pipelines/photogrammetry.js'
@@ -21,7 +21,9 @@ import { captureDroneDraft } from '../takeoff-capture-pipelines/drone.js'
 import {
   captureBlueprintVisionDraft,
   resolveBlueprintVisionMode,
+  resolveBlueprintVisionProvider,
   type BlueprintLiveInputs,
+  type StoredBlueprintInput,
 } from '../takeoff-capture-pipelines/blueprint-vision.js'
 import { defaultCaptureName } from '../takeoff-capture-pipelines/shared.js'
 
@@ -255,6 +257,7 @@ async function dispatchCapturePipeline(
   payload: Record<string, unknown>,
   projectId: string,
   blueprintLive?: BlueprintLiveInputs,
+  storedImage?: StoredBlueprintInput,
 ): Promise<{ result: TakeoffResult; pipelineVersion: string }> {
   switch (kind) {
     case 'roomplan':
@@ -264,7 +267,7 @@ async function dispatchCapturePipeline(
     case 'drone':
       return captureDroneDraft(payload, projectId)
     case 'blueprint_vision':
-      return captureBlueprintVisionDraft(payload, projectId, blueprintLive)
+      return captureBlueprintVisionDraft(payload, projectId, blueprintLive, storedImage)
     default:
       throw new Error(`unsupported capture kind: ${kind}`)
   }
@@ -544,9 +547,34 @@ export async function handleTakeoffDraftRoutes(
       }
     }
 
+    // The Gemini provider reads the project's EXISTING blueprint (the canvas
+    // "AI auto-takeoff" flow sends no multipart upload), so load the latest
+    // blueprint document and hand its bytes in. Non-fatal: any failure falls
+    // through to the dry-run stub.
+    let storedImage: StoredBlueprintInput | undefined
+    if (kind === 'blueprint_vision' && !blueprintLive && ctx.storage && resolveBlueprintVisionProvider() === 'gemini') {
+      try {
+        const bp = await withCompanyClient(ctx.company.id, (c) =>
+          c.query<{ storage_path: string; file_name: string }>(
+            `select storage_path, file_name from blueprint_documents
+             where company_id = $1 and project_id = $2 and deleted_at is null
+             order by created_at desc limit 1`,
+            [ctx.company.id, projectId],
+          ),
+        )
+        const row = bp.rows[0]
+        if (row?.storage_path) {
+          const bytes = await ctx.storage.get(row.storage_path)
+          storedImage = { bytes, mimeType: getBlueprintMimeType(row.file_name) }
+        }
+      } catch {
+        // ignore — dry-run stub is the safe fallback
+      }
+    }
+
     let dispatchOutcome: { result: TakeoffResult; pipelineVersion: string }
     try {
-      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId, blueprintLive)
+      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId, blueprintLive, storedImage)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'pipeline failed'
       ctx.sendJson(422, { error: message })

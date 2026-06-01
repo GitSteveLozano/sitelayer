@@ -3,19 +3,22 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RoleSwitcher } from './RoleSwitcher'
 import { ACT_AS_STORAGE_KEY } from '@/lib/api/client'
 
-// The component reloads the page after a role-flip so cached
-// TanStack Query / XState state can't drift from the new identity.
-// jsdom doesn't allow reassigning `location.reload`, so we replace
-// the whole `location` object with a configurable shim.
+// After a role-flip the component navigates to the site root via
+// location.assign('/') (each persona has a different home surface); the
+// clear button reloads in place. jsdom doesn't allow reassigning
+// location.reload/assign, so we replace the whole `location` object with a
+// configurable shim exposing both spies.
 const reloadSpy = vi.fn()
+const assignSpy = vi.fn()
 const originalLocation = window.location
 beforeEach(() => {
   Object.defineProperty(window, 'location', {
     configurable: true,
-    value: { ...originalLocation, reload: reloadSpy },
+    value: { ...originalLocation, reload: reloadSpy, assign: assignSpy },
   })
   window.localStorage.clear()
   reloadSpy.mockClear()
+  assignSpy.mockClear()
 })
 afterEach(() => {
   cleanup()
@@ -23,11 +26,11 @@ afterEach(() => {
 })
 
 describe('RoleSwitcher', () => {
-  it('writes the act-as id to localStorage and reloads on role click', () => {
+  it('writes the act-as id to localStorage and navigates to root on role click', () => {
     render(<RoleSwitcher />)
     fireEvent.click(screen.getByTestId('role-switcher-foreman'))
     expect(window.localStorage.getItem(ACT_AS_STORAGE_KEY)).toBe('e2e-foreman')
-    expect(reloadSpy).toHaveBeenCalledTimes(1)
+    expect(assignSpy).toHaveBeenCalledWith('/')
   })
 
   it('highlights the currently-active role on mount', () => {

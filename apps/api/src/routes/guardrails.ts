@@ -59,19 +59,135 @@ function rowToGuardrail(row: GuardrailRow): Guardrail {
   }
 }
 
+const GUARDRAIL_TYPES: readonly GuardrailType[] = ['margin', 'schedule', 'safety']
+
+function isGuardrailType(value: unknown): value is GuardrailType {
+  return typeof value === 'string' && (GUARDRAIL_TYPES as readonly string[]).includes(value)
+}
+
+/** Read a numeric body field that may arrive as a number or numeric string. */
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
 /**
  * Guardrail routes (098_guardrails.sql):
- *   GET  /api/projects/:id/guardrails   list a project's guardrails
- *   GET  /api/guardrails/active         company-wide triggered/snoozed (owner attention card)
- *   POST /api/guardrails/:id/snooze     { snoozed_until } → status=snoozed
- *   POST /api/guardrails/:id/mute       { muted_reason }  → status=muted
- *   POST /api/guardrails/:id/clear      re-arm (status=armed, clears triggered/snooze/mute)
+ *   POST /api/guardrails                 create/upsert a guardrail (status=triggered)
+ *   POST /api/projects/:id/guardrails    same, with project id from the path
+ *   GET  /api/projects/:id/guardrails    list a project's guardrails
+ *   GET  /api/guardrails/active          company-wide triggered/snoozed (owner attention card)
+ *   POST /api/guardrails/:id/snooze      { snoozed_until } → status=snoozed
+ *   POST /api/guardrails/:id/mute        { muted_reason }  → status=muted
+ *   POST /api/guardrails/:id/clear       re-arm (status=armed, clears triggered/snooze/mute)
  */
 export async function handleGuardrailRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: GuardrailRouteCtx,
 ): Promise<boolean> {
+  // --- create (the producer for the owner attention card) -----------------
+  // Two shapes: `POST /api/guardrails` (project_id in the body) and
+  // `POST /api/projects/:id/guardrails` (project_id from the path). Both land
+  // a row with status='triggered' so it surfaces immediately on the dashboard.
+  const createPathMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/guardrails$/)
+  const isCreatePath = url.pathname === '/api/guardrails' || createPathMatch !== null
+  if (isCreatePath && req.method === 'POST') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const body = await ctx.readBody()
+
+    const projectId = createPathMatch
+      ? createPathMatch[1]!
+      : typeof body.project_id === 'string'
+        ? body.project_id.trim()
+        : ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project_id must be a valid uuid' })
+      return true
+    }
+
+    // `type` is required and constrained by the table CHECK. We also accept
+    // `severity` as a friendly alias for callers that think in margin/schedule/safety.
+    const rawType = body.type ?? body.severity
+    if (!isGuardrailType(rawType)) {
+      ctx.sendJson(400, { error: "type must be one of 'margin', 'schedule', 'safety'" })
+      return true
+    }
+    const type: GuardrailType = rawType
+
+    const label =
+      typeof body.label === 'string' && body.label.trim() !== ''
+        ? body.label.trim()
+        : typeof body.title === 'string'
+          ? body.title.trim()
+          : ''
+    const detail =
+      typeof body.detail === 'string' && body.detail.trim() !== ''
+        ? body.detail.trim()
+        : typeof body.message === 'string'
+          ? body.message.trim()
+          : ''
+    const threshold = readNumber(body.threshold ?? body.threshold_value) ?? 0
+    const currentValue = readNumber(body.current_value) ?? 0
+
+    try {
+      const result = await withMutationTx(async (client: PoolClient) => {
+        const owns = await client.query<{ id: string }>(
+          `select id from projects
+           where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+          [ctx.company.id, projectId],
+        )
+        if (owns.rows.length === 0) return { kind: 'not_found' as const }
+
+        // One live guardrail per (project, type) — re-creating an existing one
+        // re-triggers it in place (keeps the demo + evaluator idempotent).
+        const inserted = await client.query<GuardrailRow>(
+          `insert into guardrails
+             (company_id, project_id, type, threshold, current_value,
+              status, triggered_at, label, detail)
+           values ($1, $2, $3, $4, $5, 'triggered', now(), $6, $7)
+           on conflict (project_id, type) do update set
+             threshold = excluded.threshold,
+             current_value = excluded.current_value,
+             status = 'triggered',
+             triggered_at = now(),
+             snoozed_until = null,
+             muted_reason = null,
+             label = excluded.label,
+             detail = excluded.detail,
+             version = guardrails.version + 1,
+             updated_at = now()
+           where guardrails.deleted_at is null
+           returning ${GUARDRAIL_COLUMNS}`,
+          [ctx.company.id, projectId, type, threshold, currentValue, label, detail],
+        )
+        const row = inserted.rows[0]!
+        await recordAudit(client, {
+          companyId: ctx.company.id,
+          actorUserId: ctx.currentUserId,
+          action: 'guardrail.triggered',
+          entityType: 'guardrail',
+          entityId: row.id,
+          before: null,
+          after: { status: row.status, type: row.type, project_id: row.project_id },
+        })
+        return { kind: 'ok' as const, row }
+      })
+      if (result.kind === 'not_found') {
+        ctx.sendJson(404, { error: 'project not found' })
+        return true
+      }
+      ctx.sendJson(201, { guardrail: rowToGuardrail(result.row) })
+    } catch (err) {
+      ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to create guardrail' })
+    }
+    return true
+  }
+
   // --- list for a project -------------------------------------------------
   const listMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/guardrails$/)
   if (listMatch && req.method === 'GET') {
