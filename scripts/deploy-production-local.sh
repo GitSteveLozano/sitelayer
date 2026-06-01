@@ -101,6 +101,13 @@ docker buildx build \
 BUILT=$(date +%s)
 echo "==> Built + pushed in $((BUILT - START))s. Deploying on droplet..."
 
+# Prune old registry tags (DO Starter tier caps at 500MB). Keep :main + the
+# newest 10 SHA tags; GC frees the space (async). Replaces registry-gc.yml.
+to_delete="$(doctl registry repository list-tags sitelayer --no-header --format Tag,UpdatedAt 2>/dev/null \
+  | grep -vE '^(main|buildcache)[[:space:]]' | sort -k2 -r | tail -n +11 | awk '{print $1}')"
+for t in $to_delete; do doctl registry repository delete-tag sitelayer "$t" --force >/dev/null 2>&1 || true; done
+[ -n "$to_delete" ] && doctl registry garbage-collection start --include-untagged-manifests --force >/dev/null 2>&1 || true
+
 # --- remote deploy (reuse existing droplet .env) -----------------------------
 ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
   "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' SKIP_MIGRATIONS='$SKIP_MIGRATIONS' bash -s" <<'REMOTE'
