@@ -49,6 +49,7 @@ function makeCtx(opts: { tier: AppTier; accessCode?: string | null; body?: unkno
     tier: opts.tier,
     accessCode: opts.accessCode ?? null,
     appOrigin: 'https://demo.preview.sitelayer.sandolab.xyz',
+    ticketTtlSeconds: 86400,
     mintSignInToken: minter,
     sendJson: (status: number, body: unknown) => {
       captured = { status, body }

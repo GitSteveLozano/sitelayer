@@ -27,7 +27,12 @@ import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
-import { createClerkSignInTokenMinter, handleDemoRoutes, type SignInTokenMinter } from './routes/demo.js'
+import {
+  createClerkSignInTokenMinter,
+  handleDemoRoutes,
+  resolveDemoSignInTokenTtlSeconds,
+  type SignInTokenMinter,
+} from './routes/demo.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -174,10 +179,11 @@ const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.s
 // no-op that returns null, surfacing as a clear "not configured" error.
 const demoAccessCode = process.env.DEMO_ACCESS_CODE?.trim() || null
 const demoAppOrigin = process.env.DEMO_APP_ORIGIN?.trim() || portalBaseUrl
+const demoTicketTtlSeconds = resolveDemoSignInTokenTtlSeconds(process.env)
 const demoSignInTokenMinter: SignInTokenMinter = (() => {
   const clerkSecretKey = process.env.CLERK_SECRET_KEY?.trim()
   if (appConfig.tier === 'demo' && clerkSecretKey) {
-    return createClerkSignInTokenMinter({ secretKey: clerkSecretKey })
+    return createClerkSignInTokenMinter({ secretKey: clerkSecretKey, expiresInSeconds: demoTicketTtlSeconds })
   }
   // Not configured (or not the demo tier): never mints, always "unseeded".
   return async () => null
@@ -814,6 +820,7 @@ const server = http.createServer(async (req, res) => {
                 tier: appConfig.tier,
                 accessCode: demoAccessCode,
                 appOrigin: demoAppOrigin,
+                ticketTtlSeconds: demoTicketTtlSeconds,
                 mintSignInToken: demoSignInTokenMinter,
                 sendJson: (status, body) => sendJson(res, status, body, req),
                 readBody: () => readBody(req),

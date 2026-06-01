@@ -32,6 +32,7 @@ import type { AppTier } from '@sitelayer/config'
 export type DemoRole = 'owner' | 'estimator' | 'foreman' | 'crew'
 
 export const DEMO_ROLES: readonly DemoRole[] = ['owner', 'estimator', 'foreman', 'crew']
+export const DEFAULT_DEMO_SIGN_IN_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
 /** A minted sign-in token, as returned by the Clerk Backend API. */
 export type ClerkSignInToken = {
@@ -59,6 +60,8 @@ export type DemoRouteCtx = {
    * built against this so the browser lands back in-app with the ticket.
    */
   appOrigin: string
+  /** Clerk sign-in token lifetime used by the minter, in seconds. */
+  ticketTtlSeconds: number
   /** Mint a Clerk sign-in token for a role. Network-backed in prod, mocked in tests. */
   mintSignInToken: SignInTokenMinter
   sendJson: (status: number, body: unknown) => void
@@ -92,6 +95,16 @@ export function resolveDemoUserEmail(role: DemoRole, env: NodeJS.ProcessEnv = pr
   return `demo-${role}@${domain}`
 }
 
+export function resolveDemoSignInTokenTtlSeconds(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DEMO_SIGN_IN_TOKEN_TTL_SECONDS?.trim()
+  if (!raw) return DEFAULT_DEMO_SIGN_IN_TOKEN_TTL_SECONDS
+
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DEMO_SIGN_IN_TOKEN_TTL_SECONDS
+
+  return Math.max(DEFAULT_DEMO_SIGN_IN_TOKEN_TTL_SECONDS, Math.floor(parsed))
+}
+
 /**
  * Production minter: looks the seeded user up by email via the Clerk Backend
  * API, then mints a sign-in token. Returns `null` when no user matches the
@@ -103,13 +116,13 @@ export function resolveDemoUserEmail(role: DemoRole, env: NodeJS.ProcessEnv = pr
 export function createClerkSignInTokenMinter(opts: {
   secretKey: string
   env?: NodeJS.ProcessEnv
-  /** Token lifetime in seconds (default 600 = 10 min). */
+  /** Token lifetime in seconds (default 24h for sendable demo emails). */
   expiresInSeconds?: number
   fetchImpl?: typeof fetch
 }): SignInTokenMinter {
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetchImpl ?? fetch
-  const expiresIn = opts.expiresInSeconds ?? 600
+  const expiresIn = opts.expiresInSeconds ?? DEFAULT_DEMO_SIGN_IN_TOKEN_TTL_SECONDS
   const base = (env.CLERK_API_URL?.trim() || 'https://api.clerk.com/v1').replace(/\/$/, '')
   const authHeaders = {
     authorization: `Bearer ${opts.secretKey}`,
@@ -168,11 +181,7 @@ export function buildTicketRedirectUrl(appOrigin: string, token: string): string
  * Routes:
  *   POST /api/demo/sign-in-link  { role, accessCode } → { redirect_url }
  */
-export async function handleDemoRoutes(
-  req: http.IncomingMessage,
-  url: URL,
-  ctx: DemoRouteCtx,
-): Promise<boolean> {
+export async function handleDemoRoutes(req: http.IncomingMessage, url: URL, ctx: DemoRouteCtx): Promise<boolean> {
   // Hard tier gate: the entire /api/demo/* surface only exists on the demo
   // tier. On every other tier we return false so the dispatcher keeps
   // walking and the request ultimately 404s — the route is structurally
@@ -228,6 +237,7 @@ export async function handleDemoRoutes(
     ctx.sendJson(200, {
       role,
       redirect_url: buildTicketRedirectUrl(ctx.appOrigin, minted.token),
+      expires_in_seconds: ctx.ticketTtlSeconds,
     })
     return true
   }

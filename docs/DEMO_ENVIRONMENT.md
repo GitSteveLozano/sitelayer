@@ -98,6 +98,20 @@ to the dev/preview tiers. The `DEMO_ACCESS_CODE` env var in
 `ops/env/demo.env.example` is documented for the operator's reference; wiring the
 credential is the edge unit's responsibility.
 
+## Sendable Email Links
+
+For a simple prospect email, generate a one-click Clerk ticket and email the
+printed body:
+
+```bash
+DEMO_ACCESS_CODE=<shared-code> npm run demo:email -- --role owner --name "Steve"
+```
+
+The default sign-in-token TTL is 24 hours (`DEMO_SIGN_IN_TOKEN_TTL_SECONDS=86400`)
+and shorter env values are clamped back up to 24 hours. The generated email also
+includes the durable fallback path (`/demo` + access code + role), so a stale
+ticket does not require a developer to rescue the demo.
+
 ## Operator setup (one-time)
 
 These steps are not automated; the operator runs them once.
@@ -122,6 +136,8 @@ Required values to fill in (the others can be left as the example):
 - `DATABASE_URL` — least-privilege `sitelayer_demo_app` role connection string
   for `sitelayer_demo` (doctl databases user list `sitelayer-db`)
 - `DEMO_ACCESS_CODE` — shared access code required by `/api/demo/sign-in-link`.
+- `DEMO_SIGN_IN_TOKEN_TTL_SECONDS` — one-click email-link validity; defaults to
+  86400 seconds and is clamped to at least one day.
 - `DEMO_APP_ORIGIN` — demo origin for Clerk ticket redirects; the deploy wrapper
   writes the generated value too, but keep this set for manual API runs.
 - `CLERK_SECRET_KEY` — the Clerk **test** instance secret (`sk_test_…`), for

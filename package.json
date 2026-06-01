@@ -32,6 +32,7 @@
     "capture:portal-smoke": "playwright test -c e2e/portal-feedback-capture.config.ts",
     "capture:auth-browser-smoke": "playwright test -c e2e/authenticated-feedback-capture.config.ts",
     "capture:auth-smoke": "bash scripts/test-authenticated-feedback-capture.sh",
+    "demo:email": "tsx scripts/demo-email.ts",
     "probe:workflows": "tsx apps/api/scripts/probe-workflows.ts",
     "probe:estimate-push:smoke": "playwright test -c e2e/probe-estimate-push-smoke.config.ts",
     "takeoff-preview:smoke": "playwright test -c e2e/takeoff-preview-smoke.config.ts",

@@ -5,6 +5,7 @@ import {
   buildTicketRedirectUrl,
   createClerkSignInTokenMinter,
   handleDemoRoutes,
+  resolveDemoSignInTokenTtlSeconds,
   resolveDemoUserEmail,
   type ClerkSignInToken,
   type DemoRole,
@@ -26,6 +27,7 @@ function makeCtx(opts: {
     tier: opts.tier,
     accessCode: opts.accessCode ?? null,
     appOrigin: opts.appOrigin ?? 'https://demo.preview.sitelayer.sandolab.xyz',
+    ticketTtlSeconds: 86400,
     mintSignInToken:
       opts.minter ??
       (async (role: DemoRole): Promise<ClerkSignInToken | null> => ({ token: `tok-${role}`, userId: `user-${role}` })),
@@ -50,7 +52,11 @@ function signInUrl(tier: AppTier = 'demo') {
 describe('handleDemoRoutes tier gate', () => {
   it('is structurally inert on non-demo tiers (returns false, no response)', async () => {
     for (const tier of ['local', 'dev', 'preview', 'prod'] as AppTier[]) {
-      const { ctx, get } = makeCtx({ tier, accessCode: 'open-sesame', body: { role: 'owner', accessCode: 'open-sesame' } })
+      const { ctx, get } = makeCtx({
+        tier,
+        accessCode: 'open-sesame',
+        body: { role: 'owner', accessCode: 'open-sesame' },
+      })
       const handled = await handleDemoRoutes(POST, signInUrl(), ctx)
       expect(handled, `tier ${tier} should not handle`).toBe(false)
       expect(get(), `tier ${tier} should not respond`).toBeNull()
@@ -114,6 +120,7 @@ describe('POST /api/demo/sign-in-link', () => {
       body: {
         role: 'estimator',
         redirect_url: 'https://demo.preview.sitelayer.sandolab.xyz/sign-in?__clerk_ticket=tok-estimator',
+        expires_in_seconds: 86400,
       },
     })
   })
@@ -161,6 +168,22 @@ describe('resolveDemoUserEmail', () => {
   })
 })
 
+describe('resolveDemoSignInTokenTtlSeconds', () => {
+  it('defaults to 24 hours', () => {
+    expect(resolveDemoSignInTokenTtlSeconds({} as NodeJS.ProcessEnv)).toBe(86400)
+  })
+
+  it('clamps shorter values up to 24 hours', () => {
+    expect(resolveDemoSignInTokenTtlSeconds({ DEMO_SIGN_IN_TOKEN_TTL_SECONDS: '600' } as NodeJS.ProcessEnv)).toBe(86400)
+  })
+
+  it('honours longer explicit values', () => {
+    expect(resolveDemoSignInTokenTtlSeconds({ DEMO_SIGN_IN_TOKEN_TTL_SECONDS: '172800' } as NodeJS.ProcessEnv)).toBe(
+      172800,
+    )
+  })
+})
+
 describe('buildTicketRedirectUrl', () => {
   it('appends the ticket and trims a trailing slash', () => {
     expect(buildTicketRedirectUrl('https://demo.example.com/', 'abc def')).toBe(
@@ -181,7 +204,7 @@ describe('createClerkSignInTokenMinter', () => {
       }
       if (u.endsWith('/sign_in_tokens')) {
         expect(init?.method).toBe('POST')
-        expect(JSON.parse(String(init?.body))).toMatchObject({ user_id: 'user_123' })
+        expect(JSON.parse(String(init?.body))).toMatchObject({ user_id: 'user_123', expires_in_seconds: 86400 })
         return new Response(JSON.stringify({ token: 'st_abc' }), { status: 200 })
       }
       throw new Error(`unexpected url ${u}`)
