@@ -109,11 +109,13 @@ describe('DemoLanding access code + role flow', () => {
     fireEvent.click(screen.getByText('Continue'))
     fireEvent.click(screen.getByText(/Owner —/))
 
-    await waitFor(() =>
-      expect(assignSpy).toHaveBeenCalledWith('https://demo.example.com/?__clerk_ticket=tok-owner'),
-    )
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://demo.example.com/?__clerk_ticket=tok-owner'))
     const call = mockRequest.mock.calls.find((c) => c[0] === '/api/demo/sign-in-link')
-    expect(call?.[1]).toMatchObject({ method: 'POST', skipAuth: true, json: { role: 'owner', accessCode: 'open-sesame' } })
+    expect(call?.[1]).toMatchObject({
+      method: 'POST',
+      skipAuth: true,
+      json: { role: 'owner', accessCode: 'open-sesame' },
+    })
   })
 
   it('re-locks and warns when the access code is rejected (401)', async () => {

@@ -114,7 +114,10 @@ export function parseCaptureArtifactMultipart(
       earlyError =
         err instanceof CaptureArtifactUploadError
           ? err
-          : new CaptureArtifactUploadError(500, `capture artifact upload failed: ${(err as Error).message ?? 'unknown'}`)
+          : new CaptureArtifactUploadError(
+              500,
+              `capture artifact upload failed: ${(err as Error).message ?? 'unknown'}`,
+            )
     }
 
     busboy.on('field', (name, value) => {
@@ -159,7 +162,9 @@ export function parseCaptureArtifactMultipart(
         bytes += chunk.length
         if (bytes > options.maxFileBytes) {
           aborted = true
-          upstream.destroy(new CaptureArtifactUploadError(413, `capture artifact exceeds ${options.maxFileBytes} bytes`))
+          upstream.destroy(
+            new CaptureArtifactUploadError(413, `capture artifact exceeds ${options.maxFileBytes} bytes`),
+          )
           return
         }
         hash.update(chunk)
@@ -191,7 +196,8 @@ export function parseCaptureArtifactMultipart(
       const finish = async () => {
         if (uploadPromise) await uploadPromise
         if (earlyError) throw earlyError
-        if (!firstFileSeen || !storagePath) throw new CaptureArtifactUploadError(400, 'multipart upload missing file part')
+        if (!firstFileSeen || !storagePath)
+          throw new CaptureArtifactUploadError(400, 'multipart upload missing file part')
         const kind = fields.kind?.trim()
         if (!kind) throw new CaptureArtifactUploadError(400, 'kind field is required')
         return {

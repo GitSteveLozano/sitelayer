@@ -140,7 +140,9 @@ describe('createRentalBillingPushRunner', () => {
       expect(summary).toEqual({ processed: 1, posted: 1, failed: 0, skipped: 0 })
 
       // The deterministic stub id appears in the reducer snapshot update param ($10 = qbo_invoice_id).
-      const update = calls.find((c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'))
+      const update = calls.find(
+        (c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'),
+      )
       expect(update?.params[9]).toBe(`STUB-INV-${RUN_ID_PREFIX}`)
 
       // The sync_events insert payload also carries the same stub id.
@@ -192,14 +194,18 @@ describe('createRentalBillingPushRunner', () => {
       const { pool, calls } = makePool(responder)
       const drain = createRentalBillingPushRunner({ pool, logger: testLogger, qboCircuit: makeBreaker() })
       await drain('co-1')
-      const update = calls.find((c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'))
+      const update = calls.find(
+        (c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'),
+      )
       const observed = String(update!.params[9])
 
       // Second drain on the same runId.
       const { pool: pool2, calls: calls2 } = makePool(responder)
       const drain2 = createRentalBillingPushRunner({ pool: pool2, logger: testLogger, qboCircuit: makeBreaker() })
       await drain2('co-1')
-      const update2 = calls2.find((c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'))
+      const update2 = calls2.find(
+        (c) => c.sql.includes('update rental_billing_runs') && c.sql.includes('qbo_invoice_id = $10'),
+      )
       const observed2 = String(update2!.params[9])
 
       expect(observed).toBe(observed2)

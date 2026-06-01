@@ -27,12 +27,7 @@ import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
 import { useDeletePricingOverride, usePricingOverrides, useUpsertPricingOverride } from '@/lib/api/pricing-overrides'
 import { useActiveCompanyId } from '@/lib/api/active-company'
-import {
-  useCompanyRoles,
-  useCreateCustomRole,
-  type CustomRole,
-  type CustomRoleGrant,
-} from '@/lib/api/company-roles'
+import { useCompanyRoles, useCreateCustomRole, type CustomRole, type CustomRoleGrant } from '@/lib/api/company-roles'
 import {
   ACTION_LABELS,
   BUILTIN_ROLE_LABELS,
@@ -840,7 +835,12 @@ function CreateCustomRoleModal({ companyId, onClose }: { companyId: string; onCl
           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--m-ink-3)', textTransform: 'uppercase' }}>
             Name
           </span>
-          <MInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Lead Foreman" aria-label="Role name" />
+          <MInput
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Lead Foreman"
+            aria-label="Role name"
+          />
         </label>
 
         <div style={{ display: 'grid', gap: 6 }}>

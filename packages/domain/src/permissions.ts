@@ -218,8 +218,7 @@ export function resolveEffectivePermissions(
   for (const grant of grants) {
     if (!isPermissionAction(grant.action)) continue
     const existing = out.get(grant.action)
-    const grantConstraints =
-      grant.constraints && Object.keys(grant.constraints).length > 0 ? grant.constraints : null
+    const grantConstraints = grant.constraints && Object.keys(grant.constraints).length > 0 ? grant.constraints : null
     if (!existing) {
       // Additive: the base lacks this action; the grant adds it with its cap.
       out.set(grant.action, { granted: true, constraints: grantConstraints })

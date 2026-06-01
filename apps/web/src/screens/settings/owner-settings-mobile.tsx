@@ -670,24 +670,25 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
           >
             Action
           </div>
-          {(builtinRoles.length ? builtinRoles : (['owner', 'estimator', 'foreman', 'crew', 'bookkeeper'] as const)).map(
-            (role) => (
-              <div
-                key={role}
-                title={BUILTIN_ROLE_LABELS[role]}
-                style={{
-                  padding: '12px 0',
-                  textAlign: 'center',
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: 'var(--m-accent)',
-                }}
-              >
-                {BUILTIN_ROLE_INITIALS[role]}
-              </div>
-            ),
-          )}
+          {(builtinRoles.length
+            ? builtinRoles
+            : (['owner', 'estimator', 'foreman', 'crew', 'bookkeeper'] as const)
+          ).map((role) => (
+            <div
+              key={role}
+              title={BUILTIN_ROLE_LABELS[role]}
+              style={{
+                padding: '12px 0',
+                textAlign: 'center',
+                fontFamily: 'var(--m-num)',
+                fontSize: 12,
+                fontWeight: 700,
+                color: 'var(--m-accent)',
+              }}
+            >
+              {BUILTIN_ROLE_INITIALS[role]}
+            </div>
+          ))}
         </div>
 
         {/* Matrix rows (read-only) */}

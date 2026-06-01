@@ -167,9 +167,7 @@ function assertDatabaseMatchesTier(tier: AppTier, databaseUrl: string) {
   }
 
   if (tier === 'demo' && !/sitelayer_demo\b/.test(dbName) && !isLocalHost) {
-    throw new TierConfigError(
-      `APP_TIER=demo but DATABASE_URL database name is "${dbName}" (expected "sitelayer_demo")`,
-    )
+    throw new TierConfigError(`APP_TIER=demo but DATABASE_URL database name is "${dbName}" (expected "sitelayer_demo")`)
   }
 }
 

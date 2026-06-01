@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { COMPANY_ROLES, normalizeCompanyRole, type CompanyRole } from '@sitelayer/domain'
-import {
-  normalizeGrantConstraints,
-  permissionDecision,
-  resolveCompanyRoleAuthority,
-} from './permission-seam.js'
+import { normalizeGrantConstraints, permissionDecision, resolveCompanyRoleAuthority } from './permission-seam.js'
 
 // ---------------------------------------------------------------------------
 // LAYER 1 seam + LAYER 2 overlay resolution. Pure logic — no DB, no HTTP. These

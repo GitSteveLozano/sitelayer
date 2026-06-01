@@ -131,7 +131,10 @@ class FakePool {
     }
 
     // select … for update (PATCH lock)
-    if (/from custom_roles where id = \$1 and company_id = \$2 and deleted_at is null/i.test(sql) && /for update/i.test(sql)) {
+    if (
+      /from custom_roles where id = \$1 and company_id = \$2 and deleted_at is null/i.test(sql) &&
+      /for update/i.test(sql)
+    ) {
       const [roleId, companyId] = params as [string, string]
       const row = this.roles.find((r) => r.id === roleId && r.company_id === companyId && r.deleted_at === null)
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
@@ -198,10 +201,16 @@ class FakePool {
     }
 
     // assign: lock membership for update
-    if (/^select id, clerk_user_id, role, custom_role_id from company_memberships/i.test(sql) && /for update/i.test(sql)) {
+    if (
+      /^select id, clerk_user_id, role, custom_role_id from company_memberships/i.test(sql) &&
+      /for update/i.test(sql)
+    ) {
       const [membershipId, companyId] = params as [string, string]
       const m = this.memberships.find((r) => r.id === membershipId && r.company_id === companyId)
-      return { rows: m ? [{ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }] : [], rowCount: m ? 1 : 0 }
+      return {
+        rows: m ? [{ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }] : [],
+        rowCount: m ? 1 : 0,
+      }
     }
 
     // assign: update membership role + custom_role_id
@@ -211,7 +220,10 @@ class FakePool {
       if (!m) return { rows: [], rowCount: 0 }
       m.role = role
       m.custom_role_id = customRoleId
-      return { rows: [{ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }], rowCount: 1 }
+      return {
+        rows: [{ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }],
+        rowCount: 1,
+      }
     }
 
     if (/^insert into audit_events/i.test(sql)) {
@@ -244,7 +256,13 @@ function req(method: string) {
 
 const ADMIN_POOL = () => {
   const pool = new FakePool()
-  pool.memberships.push({ id: 'm-admin', company_id: 'co-1', clerk_user_id: 'e2e-admin', role: 'admin', custom_role_id: null })
+  pool.memberships.push({
+    id: 'm-admin',
+    company_id: 'co-1',
+    clerk_user_id: 'e2e-admin',
+    role: 'admin',
+    custom_role_id: null,
+  })
   pool.attach()
   return pool
 }
@@ -291,7 +309,13 @@ describe('GET /api/companies/:id/roles', () => {
 
   it('non-admin → 403', async () => {
     const pool = ADMIN_POOL()
-    pool.memberships.push({ id: 'm-mem', company_id: 'co-1', clerk_user_id: 'e2e-member', role: 'member', custom_role_id: null })
+    pool.memberships.push({
+      id: 'm-mem',
+      company_id: 'co-1',
+      clerk_user_id: 'e2e-member',
+      role: 'member',
+      custom_role_id: null,
+    })
     const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member' })
     await handleCompanyRoleRoutes(req('GET'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(403)
@@ -335,7 +359,13 @@ describe('POST /api/companies/:id/roles — create', () => {
 
   it('non-admin → 403, no row', async () => {
     const pool = ADMIN_POOL()
-    pool.memberships.push({ id: 'm-mem', company_id: 'co-1', clerk_user_id: 'e2e-member', role: 'member', custom_role_id: null })
+    pool.memberships.push({
+      id: 'm-mem',
+      company_id: 'co-1',
+      clerk_user_id: 'e2e-member',
+      role: 'member',
+      custom_role_id: null,
+    })
     const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member', body: { name: 'X', inherit_from: 'crew' } })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(403)
@@ -362,7 +392,11 @@ describe('POST /api/companies/:id/roles — create', () => {
   it('constraint on a non-constrainable action → 400', async () => {
     const pool = ADMIN_POOL()
     const { ctx, captured } = makeCtx(pool, {
-      body: { name: 'X', inherit_from: 'crew', grants: [{ action: 'create_project', constraints: { max_amount_cents: 1000 } }] },
+      body: {
+        name: 'X',
+        inherit_from: 'crew',
+        grants: [{ action: 'create_project', constraints: { max_amount_cents: 1000 } }],
+      },
     })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(400)
@@ -373,7 +407,11 @@ describe('POST /api/companies/:id/roles — create', () => {
   it('wrong constraint key for a constrainable action → 400', async () => {
     const pool = ADMIN_POOL()
     const { ctx, captured } = makeCtx(pool, {
-      body: { name: 'X', inherit_from: 'estimator', grants: [{ action: 'auth_materials', constraints: { max_ot_hours_per_week: 5 } }] },
+      body: {
+        name: 'X',
+        inherit_from: 'estimator',
+        grants: [{ action: 'auth_materials', constraints: { max_ot_hours_per_week: 5 } }],
+      },
     })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(400)
@@ -383,7 +421,11 @@ describe('POST /api/companies/:id/roles — create', () => {
   it('negative cap → 400', async () => {
     const pool = ADMIN_POOL()
     const { ctx, captured } = makeCtx(pool, {
-      body: { name: 'X', inherit_from: 'estimator', grants: [{ action: 'auth_materials', constraints: { max_amount_cents: -100 } }] },
+      body: {
+        name: 'X',
+        inherit_from: 'estimator',
+        grants: [{ action: 'auth_materials', constraints: { max_amount_cents: -100 } }],
+      },
     })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(400)
@@ -393,7 +435,11 @@ describe('POST /api/companies/:id/roles — create', () => {
   it('non-integer cap → 400', async () => {
     const pool = ADMIN_POOL()
     const { ctx, captured } = makeCtx(pool, {
-      body: { name: 'X', inherit_from: 'estimator', grants: [{ action: 'auth_materials', constraints: { max_amount_cents: 12.5 } }] },
+      body: {
+        name: 'X',
+        inherit_from: 'estimator',
+        grants: [{ action: 'auth_materials', constraints: { max_amount_cents: 12.5 } }],
+      },
     })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/roles'), ctx)
     expect(captured[0]?.status).toBe(400)
@@ -446,7 +492,13 @@ describe('PATCH /api/companies/:id/roles/:roleId', () => {
       created_at: '2026-06-01T00:00:00.000Z',
       created_by: 'e2e-admin',
     })
-    pool.grants.push({ id: 'g-old', custom_role_id: 'role-1', company_id: 'co-1', action: 'create_project', constraints: null })
+    pool.grants.push({
+      id: 'g-old',
+      custom_role_id: 'role-1',
+      company_id: 'co-1',
+      action: 'create_project',
+      constraints: null,
+    })
   }
 
   it('rename + replace grants → 200, old grant gone, audit', async () => {
@@ -529,8 +581,20 @@ describe('DELETE /api/companies/:id/roles/:roleId', () => {
       created_at: '2026-06-01T00:00:00.000Z',
       created_by: 'e2e-admin',
     })
-    pool.memberships.push({ id: 'm-2', company_id: 'co-1', clerk_user_id: 'u2', role: 'office', custom_role_id: 'role-1' })
-    pool.memberships.push({ id: 'm-3', company_id: 'co-1', clerk_user_id: 'u3', role: 'office', custom_role_id: 'role-1' })
+    pool.memberships.push({
+      id: 'm-2',
+      company_id: 'co-1',
+      clerk_user_id: 'u2',
+      role: 'office',
+      custom_role_id: 'role-1',
+    })
+    pool.memberships.push({
+      id: 'm-3',
+      company_id: 'co-1',
+      clerk_user_id: 'u3',
+      role: 'office',
+      custom_role_id: 'role-1',
+    })
     const { ctx, captured } = makeCtx(pool)
     await handleCompanyRoleRoutes(req('DELETE'), u('/api/companies/co-1/roles/role-1'), ctx)
     expect(captured[0]?.status).toBe(200)
@@ -581,7 +645,13 @@ describe('POST /api/companies/:id/memberships/:mId/role — assign', () => {
   it('assign builtin_role owner → role=admin, custom_role_id cleared', async () => {
     const pool = ADMIN_POOL()
     seed(pool)
-    pool.memberships.push({ id: 'm-3', company_id: 'co-1', clerk_user_id: 'u3', role: 'office', custom_role_id: 'role-1' })
+    pool.memberships.push({
+      id: 'm-3',
+      company_id: 'co-1',
+      clerk_user_id: 'u3',
+      role: 'office',
+      custom_role_id: 'role-1',
+    })
     const { ctx, captured } = makeCtx(pool, { body: { builtin_role: 'owner' } })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-3/role'), ctx)
     expect(captured[0]?.status).toBe(200)
@@ -593,7 +663,13 @@ describe('POST /api/companies/:id/memberships/:mId/role — assign', () => {
   it('clear custom role (custom_role_id: null) keeps raw company role', async () => {
     const pool = ADMIN_POOL()
     seed(pool)
-    pool.memberships.push({ id: 'm-4', company_id: 'co-1', clerk_user_id: 'u4', role: 'foreman', custom_role_id: 'role-1' })
+    pool.memberships.push({
+      id: 'm-4',
+      company_id: 'co-1',
+      clerk_user_id: 'u4',
+      role: 'foreman',
+      custom_role_id: 'role-1',
+    })
     const { ctx, captured } = makeCtx(pool, { body: { custom_role_id: null } })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-4/role'), ctx)
     expect(captured[0]?.status).toBe(200)
@@ -637,7 +713,13 @@ describe('POST /api/companies/:id/memberships/:mId/role — assign', () => {
   it('non-admin → 403', async () => {
     const pool = ADMIN_POOL()
     seed(pool)
-    pool.memberships.push({ id: 'm-mem', company_id: 'co-1', clerk_user_id: 'e2e-member', role: 'member', custom_role_id: null })
+    pool.memberships.push({
+      id: 'm-mem',
+      company_id: 'co-1',
+      clerk_user_id: 'e2e-member',
+      role: 'member',
+      custom_role_id: null,
+    })
     const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member', body: { custom_role_id: 'role-1' } })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-2/role'), ctx)
     expect(captured[0]?.status).toBe(403)

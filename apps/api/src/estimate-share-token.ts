@@ -59,10 +59,7 @@ export type ShareSecretConfig =
  * start without ESTIMATE_SHARE_SECRET (or, by the caller's choice, a
  * shared QBO_STATE_SECRET). Non-prod tiers may fall back silently.
  */
-export function resolveShareSecretConfig(input: {
-  tier: AppTier
-  env?: NodeJS.ProcessEnv
-}): ShareSecretConfig {
+export function resolveShareSecretConfig(input: { tier: AppTier; env?: NodeJS.ProcessEnv }): ShareSecretConfig {
   const env = input.env ?? process.env
   const explicit = env.ESTIMATE_SHARE_SECRET?.trim() || null
   const qbo = env.QBO_STATE_SECRET?.trim() || null

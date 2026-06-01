@@ -72,7 +72,9 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 })
 
-function multipart(parts: Array<{ name: string; value?: string; filename?: string; contentType?: string; body?: Buffer }>) {
+function multipart(
+  parts: Array<{ name: string; value?: string; filename?: string; contentType?: string; body?: Buffer }>,
+) {
   const boundary = '----capture-artifact-test'
   const chunks: Buffer[] = []
   for (const part of parts) {
@@ -124,7 +126,9 @@ describe('capture artifact upload parser', () => {
   })
 
   it('requires kind before file and rejects oversized uploads', async () => {
-    const missingKind = await postMultipart([{ name: 'file', filename: 'notes.txt', contentType: 'text/plain', body: Buffer.from('x') }])
+    const missingKind = await postMultipart([
+      { name: 'file', filename: 'notes.txt', contentType: 'text/plain', body: Buffer.from('x') },
+    ])
     expect(missingKind.status).toBe(400)
 
     const tooLarge = await postMultipart([

@@ -55,7 +55,10 @@ function recorderCtor(): typeof FakeMediaRecorder {
 describe('capture audio recorder', () => {
   it('reports unsupported when mic or MediaRecorder is unavailable', () => {
     expect(
-      isAudioCaptureSupported({ mediaDevices: null, MediaRecorderCtor: recorderCtor() as unknown as typeof MediaRecorder }),
+      isAudioCaptureSupported({
+        mediaDevices: null,
+        MediaRecorderCtor: recorderCtor() as unknown as typeof MediaRecorder,
+      }),
     ).toBe(false)
     expect(
       isAudioCaptureSupported({
@@ -69,7 +72,9 @@ describe('capture audio recorder', () => {
     const Recorder = recorderCtor()
     Recorder.supported = new Set(['audio/ogg', 'audio/webm'])
 
-    expect(preferredAudioMimeType(Recorder as unknown as Parameters<typeof preferredAudioMimeType>[0])).toBe('audio/webm')
+    expect(preferredAudioMimeType(Recorder as unknown as Parameters<typeof preferredAudioMimeType>[0])).toBe(
+      'audio/webm',
+    )
   })
 
   it('records mic audio, stops tracks, and returns a blob with duration', async () => {

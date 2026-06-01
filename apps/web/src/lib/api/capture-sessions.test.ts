@@ -106,21 +106,22 @@ describe('capture session API client', () => {
   })
 
   it('uploads a binary capture artifact using the multipart route', async () => {
-    const fetchSpy = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          artifact: {
-            id: '00000000-0000-4000-8000-000000000456',
-            kind: 'audio',
-            storage_key: 'companies/co/capture-sessions/s/artifacts/audio.webm',
-            content_type: 'audio/webm',
-            byte_size: 11,
-            content_hash: 'sha256:abc',
-            redaction_version: 'capture-session-v1',
-          },
-        }),
-        { status: 201, headers: { 'content-type': 'application/json' } },
-      ),
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            artifact: {
+              id: '00000000-0000-4000-8000-000000000456',
+              kind: 'audio',
+              storage_key: 'companies/co/capture-sessions/s/artifacts/audio.webm',
+              content_type: 'audio/webm',
+              byte_size: 11,
+              content_hash: 'sha256:abc',
+              redaction_version: 'capture-session-v1',
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        ),
     )
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
@@ -152,11 +153,12 @@ describe('capture session API client', () => {
   })
 
   it('surfaces multipart upload errors as ApiError instances', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ error: 'capture artifact exceeds limit' }), {
-        status: 413,
-        headers: { 'content-type': 'application/json', 'x-request-id': 'api-req-1' },
-      }),
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'capture artifact exceeds limit' }), {
+          status: 413,
+          headers: { 'content-type': 'application/json', 'x-request-id': 'api-req-1' },
+        }),
     ) as unknown as typeof fetch
 
     await expect(

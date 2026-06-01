@@ -170,11 +170,7 @@ export function DemoLanding() {
             <MButton type="submit" variant="primary" disabled={!accessCode.trim()}>
               Continue
             </MButton>
-            <MButton
-              type="button"
-              variant="quiet"
-              onClick={() => window.location.assign('/sign-in')}
-            >
+            <MButton type="button" variant="quiet" onClick={() => window.location.assign('/sign-in')}>
               Sign in normally
             </MButton>
           </form>

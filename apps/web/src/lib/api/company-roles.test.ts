@@ -22,8 +22,7 @@ const requestMock = vi.mocked(request)
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: qc }, children)
+  return ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children)
 }
 
 const rolesResponse: CompanyRolesResponse = {

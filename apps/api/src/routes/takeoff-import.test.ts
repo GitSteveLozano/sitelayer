@@ -76,9 +76,7 @@ class FakePool {
         const draftId = params[2] as string
         return this.validDraftIds.has(draftId) ? { rows: [{ id: draftId }], rowCount: 1 } : { rows: [], rowCount: 0 }
       }
-      return this.defaultDraftId
-        ? { rows: [{ id: this.defaultDraftId }], rowCount: 1 }
-        : { rows: [], rowCount: 0 }
+      return this.defaultDraftId ? { rows: [{ id: this.defaultDraftId }], rowCount: 1 } : { rows: [], rowCount: 0 }
     }
 
     if (/from blueprint_pages/i.test(sql)) {

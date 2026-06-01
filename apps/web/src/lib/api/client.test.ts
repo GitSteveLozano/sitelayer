@@ -149,7 +149,9 @@ describe('api client trace forwarding', () => {
 
   it('forwards the active capture session id on blob requests', async () => {
     startLocalCaptureSession({ id: '00000000-0000-4000-8000-000000000123', mode: 'feedback' })
-    const fetchSpy = vi.fn().mockResolvedValue(new Response('asset-bytes', { headers: { 'content-type': 'text/plain' } }))
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response('asset-bytes', { headers: { 'content-type': 'text/plain' } }))
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     await requestBlob('/api/assets/file')

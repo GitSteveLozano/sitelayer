@@ -131,7 +131,10 @@ type PullState = {
 let customerSeq = 1
 function buildPullClient(state: PullState): QueueClient {
   return {
-    async query<T>(sql: string, params: unknown[] = []): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
+    async query<T>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
       const rows = (() => {
         // GUC bind from processQboPull — no-op here.
         if (sql.includes('set_config')) return []
@@ -346,7 +349,7 @@ describe('createQboPull (live pull fn against localhost mock)', () => {
     mock.failNext401()
     const pull = createQboPull({
       // Stub the token-refresh HTTP call so we never hit Intuit.
-      fetchImpl: ((async (url: string, init?: RequestInit) => {
+      fetchImpl: (async (url: string, init?: RequestInit) => {
         if (typeof url === 'string' && url.includes('oauth.platform.intuit.com')) {
           return new Response(
             JSON.stringify({ access_token: 'access-new', refresh_token: 'refresh-new', expires_in: 3600 }),
@@ -354,9 +357,14 @@ describe('createQboPull (live pull fn against localhost mock)', () => {
           )
         }
         return fetch(url, init)
-      }) as unknown) as typeof fetch,
+      }) as unknown as typeof fetch,
     })
-    const result = await pull({ client: buildPullClient(state), companyId: 'company-1', connectionId: 'conn-1', payload: {} })
+    const result = await pull({
+      client: buildPullClient(state),
+      companyId: 'company-1',
+      connectionId: 'conn-1',
+      payload: {},
+    })
     expect(result.pulledCustomers).toBe(2)
     expect(state.refreshCount).toBeGreaterThanOrEqual(1)
   })
@@ -393,7 +401,10 @@ type EnvState = {
 
 function buildEnvClient(state: EnvState): QueueClient {
   return {
-    async query<T>(sql: string, params: unknown[] = []): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
+    async query<T>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
       const s = sql.toLowerCase()
       const rows = (() => {
         if (s.includes('begin') || s.includes('commit') || s.includes('rollback')) return []
@@ -562,7 +573,10 @@ describe('DEDICATED_HANDLER_MUTATION_TYPES guard', () => {
   it('processOutboxBatch skips a pull_qbo_reference row', async () => {
     let claimSql = ''
     const client: QueueClient = {
-      async query<T>(sql: string, params: unknown[] = []): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
+      async query<T>(
+        sql: string,
+        params: unknown[] = [],
+      ): Promise<{ rows: T[]; rowCount: number; command: string; oid: number; fields: never[] }> {
         const s = sql.toLowerCase()
         if (s.includes('update mutation_outbox') && s.includes('returning id')) {
           claimSql = sql

@@ -6,12 +6,7 @@ import { createLogger, getRequestContext, runWithRequestContext, type RequestCon
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
-import {
-  companyRoleToBuiltin,
-  type BuiltinRole,
-  type PermissionAction,
-  type PermissionGrant,
-} from '@sitelayer/domain'
+import { companyRoleToBuiltin, type BuiltinRole, type PermissionAction, type PermissionGrant } from '@sitelayer/domain'
 import {
   normalizeGrantConstraints,
   permissionDecision,
@@ -932,9 +927,7 @@ const server = http.createServer(async (req, res) => {
                 workRequestCallbackWorkItemId !== null
                   ? await (async () => {
                       const active = await resolveWorkRequestCallbackCompany(pool, workRequestCallbackWorkItemId)
-                      return active
-                        ? { active, effectiveBuiltin: companyRoleToBuiltin(active.role), grants: [] }
-                        : null
+                      return active ? { active, effectiveBuiltin: companyRoleToBuiltin(active.role), grants: [] } : null
                     })()
                   : await getCompany(req)
               // First-user self-onboard. The Clerk webhook that mirrors
@@ -1040,14 +1033,7 @@ const server = http.createServer(async (req, res) => {
                 // by any route — wired here next to requireRole so the next
                 // phase can gate the 9 action routes. See requirePermission().
                 requirePermission: (action, opts) =>
-                  requirePermission(
-                    res,
-                    resolvedCompany.effectiveBuiltin,
-                    resolvedCompany.grants,
-                    action,
-                    opts,
-                    req,
-                  ),
+                  requirePermission(res, resolvedCompany.effectiveBuiltin, resolvedCompany.grants, action, opts, req),
                 readBody: () => readBody(req),
                 sendJson: dispatchSendJson,
                 sendRedirect: (location) => sendRedirect(res, location),

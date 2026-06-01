@@ -108,7 +108,10 @@ type ParsedGrant = { action: PermissionAction; constraints: Record<string, numbe
  *  - cap values must be non-negative integers (cents / whole hours).
  * Returns the normalized grant (constraints null when empty) or throws HttpError.
  */
-function validateGrant(grant: { action: PermissionAction; constraints?: Record<string, number> | null | undefined }): ParsedGrant {
+function validateGrant(grant: {
+  action: PermissionAction
+  constraints?: Record<string, number> | null | undefined
+}): ParsedGrant {
   const raw = grant.constraints
   if (raw === undefined || raw === null || Object.keys(raw).length === 0) {
     return { action: grant.action, constraints: null }
@@ -364,7 +367,12 @@ export async function assignMembershipRoleTx(
   },
 ): Promise<{ membership: { id: string; clerk_user_id: string; role: string; custom_role_id: string | null } }> {
   // Lock the membership and assert it belongs to the company.
-  const membership = await client.query<{ id: string; clerk_user_id: string; role: string; custom_role_id: string | null }>(
+  const membership = await client.query<{
+    id: string
+    clerk_user_id: string
+    role: string
+    custom_role_id: string | null
+  }>(
     `select id, clerk_user_id, role, custom_role_id from company_memberships
        where id = $1 and company_id = $2 for update`,
     [args.membershipId, args.companyId],
@@ -392,7 +400,12 @@ export async function assignMembershipRoleTx(
     nextCustomRoleId = null
   }
 
-  const updated = await client.query<{ id: string; clerk_user_id: string; role: string; custom_role_id: string | null }>(
+  const updated = await client.query<{
+    id: string
+    clerk_user_id: string
+    role: string
+    custom_role_id: string | null
+  }>(
     `update company_memberships set role = $1, custom_role_id = $2
        where id = $3 and company_id = $4
        returning id, clerk_user_id, role, custom_role_id`,

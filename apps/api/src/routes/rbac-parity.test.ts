@@ -317,9 +317,7 @@ describe('(C) RBAC parity — the intended per-action route deltas', () => {
 
   it('the ONLY intended demotions across all 9 routes are auth_materials(foreman,office), submit_daily_log(office), approve_time(office), clock_in_out(bookkeeper)', () => {
     // A single roll-up so an accidental new demotion anywhere fails loudly.
-    const allDeltas = ROUTE_SPECS.flatMap((s) =>
-      computeNewlyDenied(s).map((r) => `${s.action}:${r}`),
-    ).sort()
+    const allDeltas = ROUTE_SPECS.flatMap((s) => computeNewlyDenied(s).map((r) => `${s.action}:${r}`)).sort()
     expect(allDeltas).toEqual(
       [
         'approve_time:office',

@@ -129,7 +129,11 @@ function publicInviteShape(row: InviteRow) {
 export async function acceptInviteTx(
   client: QueryExecutor,
   args: { token: string; acceptingUserId: string },
-): Promise<{ membership: MembershipRow; company: { id: string; slug: string; name: string }; alreadyAccepted: boolean }> {
+): Promise<{
+  membership: MembershipRow
+  company: { id: string; slug: string; name: string }
+  alreadyAccepted: boolean
+}> {
   const lookup = await client.query<InviteRow>(
     `select id, company_id, email, role, status, invited_by, accepted_by, accepted_at, expires_at, created_at
        from company_invites where token = $1 for update`,
@@ -298,7 +302,13 @@ export async function handleInviteRoutes(req: http.IncomingMessage, url: URL, ct
         entityType: 'company_invite',
         entityId: invite.id,
         action: 'create',
-        after: { id: invite.id, email: invite.email, role: invite.role, status: invite.status, expires_at: invite.expires_at },
+        after: {
+          id: invite.id,
+          email: invite.email,
+          role: invite.role,
+          status: invite.status,
+          expires_at: invite.expires_at,
+        },
       })
       observeAudit('company_invite', 'create')
     }
