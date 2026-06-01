@@ -186,6 +186,9 @@ export default defineConfig({
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       '@sitelayer/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
+      '@sitelayer/formula-evaluator': fileURLToPath(
+        new URL('../../packages/formula-evaluator/src/index.ts', import.meta.url),
+      ),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
     },
   },
