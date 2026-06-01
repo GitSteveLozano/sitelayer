@@ -216,3 +216,41 @@ describe('handleAdminRoutes — POST /api/admin/impersonate', () => {
     expect(calls[0]?.status).toBe(502)
   })
 })
+
+describe('handleAdminRoutes — prod mutation gate (P5)', () => {
+  const url = () => new URL('http://x/api/admin/impersonate')
+  const mintActorToken: ActorTokenMinter = async () => ({ token: 't' })
+  const readBody = async () => ({ user_id: 'u', reason: 'r' })
+
+  it('blocks impersonation in prod without PLATFORM_ADMIN_PROD_ENABLED', async () => {
+    const prev = process.env.PLATFORM_ADMIN_PROD_ENABLED
+    delete process.env.PLATFORM_ADMIN_PROD_ENABLED
+    try {
+      const { calls, sendJson } = capture()
+      await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, mintActorToken, tier: 'prod' }))
+      expect(calls[0]?.status).toBe(403)
+    } finally {
+      if (prev === undefined) delete process.env.PLATFORM_ADMIN_PROD_ENABLED
+      else process.env.PLATFORM_ADMIN_PROD_ENABLED = prev
+    }
+  })
+
+  it('allows impersonation in prod once PLATFORM_ADMIN_PROD_ENABLED=1', async () => {
+    const prev = process.env.PLATFORM_ADMIN_PROD_ENABLED
+    process.env.PLATFORM_ADMIN_PROD_ENABLED = '1'
+    try {
+      const { calls, sendJson } = capture()
+      await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, mintActorToken, tier: 'prod' }))
+      expect(calls[0]?.status).toBe(201)
+    } finally {
+      if (prev === undefined) delete process.env.PLATFORM_ADMIN_PROD_ENABLED
+      else process.env.PLATFORM_ADMIN_PROD_ENABLED = prev
+    }
+  })
+
+  it('allows impersonation in non-prod tiers without the flag', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, mintActorToken, tier: 'preview' }))
+    expect(calls[0]?.status).toBe(201)
+  })
+})

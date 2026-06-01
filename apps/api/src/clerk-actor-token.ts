@@ -67,5 +67,5 @@ export function createClerkActorTokenMinter(opts: ActorTokenMinterOptions): Acto
 export function actorTokenMinterFromEnv(env: NodeJS.ProcessEnv = process.env): ActorTokenMinter | null {
   const secretKey = env.CLERK_SECRET_KEY?.trim()
   if (!secretKey) return null
-  return createClerkActorTokenMinter({ secretKey, apiUrl: env.CLERK_API_URL })
+  return createClerkActorTokenMinter({ secretKey, apiUrl: env.CLERK_API_URL ?? null })
 }

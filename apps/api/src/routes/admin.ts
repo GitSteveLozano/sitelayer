@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http'
 import type { Identity } from '../auth.js'
+import type { AppTier } from '../tier.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { actorTokenMinterFromEnv, type ActorTokenMinter } from '../clerk-actor-token.js'
 
@@ -26,6 +27,8 @@ export interface AdminRouteDeps {
   pool: AdminQueryExecutor
   identity: Identity
   sendJson: (status: number, body: unknown) => void
+  /** Tier — admin mutations get a prod-specific second gate (design §6). */
+  tier?: AppTier
   /** Reads + parses the JSON request body (needed for POST /impersonate). */
   readBody?: () => Promise<Record<string, unknown>>
   /** Defaults to parsing PLATFORM_SUPERADMIN_CLERK_IDS from the environment. */
@@ -92,6 +95,15 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
 
   // Mutation: start an audited impersonation session (Clerk actor token).
   if (method === 'POST' && path === '/api/admin/impersonate') {
+    // Prod-specific second gate (design §6): admin mutations are disabled in
+    // prod unless explicitly enabled, so even a leaked superadmin session can't
+    // mint impersonation tokens on prod without an operator flipping the flag.
+    if (deps.tier === 'prod' && process.env.PLATFORM_ADMIN_PROD_ENABLED !== '1') {
+      sendJson(403, {
+        error: 'platform admin mutations are disabled in prod (set PLATFORM_ADMIN_PROD_ENABLED=1)',
+      })
+      return true
+    }
     return handleImpersonateStart(deps, gate.sub)
   }
 
