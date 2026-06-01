@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import type { Identity } from '../auth.js'
 import { handleAdminRoutes, type AdminRouteDeps } from './admin.js'
+import type { DemoLinkCapability } from './demo.js'
 import type { ActorTokenMinter } from '../clerk-actor-token.js'
 import type { ScenarioApplyRunner } from '../admin-scenarios.js'
 
@@ -337,5 +338,107 @@ describe('handleAdminRoutes — POST /api/admin/scenarios/:slug/apply (P3 mutati
     const { calls, sendJson } = capture()
     await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody }))
     expect(calls[0]?.status).toBe(501)
+  })
+})
+
+describe('handleAdminRoutes — demo-link', () => {
+  const url = () => new URL('http://x/api/admin/demo-link')
+  const fakeDemoLink = (over: Partial<DemoLinkCapability> = {}): DemoLinkCapability => ({
+    mintSignInToken: async () => ({ token: 'tkn_abc', userId: 'user_owner' }),
+    appOrigin: 'https://demo.preview.sitelayer.sandolab.xyz',
+    ttlSeconds: 86400,
+    accessCode: 'stucco-demo',
+    ...over,
+  })
+
+  it('409s when no demo-link capability (not the demo tier)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody: async () => ({ role: 'owner' }) }))
+    expect(calls[0]?.status).toBe(409)
+  })
+
+  it('mints a link + ready-to-send email for a valid role', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, demoLink: fakeDemoLink(), readBody: async () => ({ role: 'owner', name: 'Steve' }) }),
+    )
+    expect(calls[0]?.status).toBe(200)
+    const body = calls[0]?.body as Record<string, unknown>
+    expect(body.role).toBe('owner')
+    expect(body.name).toBe('Steve')
+    expect(String(body.link)).toContain('/sign-in?__clerk_ticket=tkn_abc')
+    expect(body.expires_in_seconds).toBe(86400)
+    expect(body.subject).toBe('Sitelayer demo link')
+    expect(String(body.body)).toContain('Hi Steve,')
+    expect(String(body.body)).toContain('Owner')
+    const fallback = body.fallback as Record<string, unknown>
+    expect(fallback.url).toBe('https://demo.preview.sitelayer.sandolab.xyz/demo')
+    expect(fallback.access_code).toBe('stucco-demo')
+  })
+
+  it('400s an invalid role', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, demoLink: fakeDemoLink(), readBody: async () => ({ role: 'wizard' }) }),
+    )
+    expect(calls[0]?.status).toBe(400)
+  })
+
+  it('404s when the demo user is not seeded (minter returns null)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({
+        sendJson,
+        demoLink: fakeDemoLink({ mintSignInToken: async () => null }),
+        readBody: async () => ({ role: 'owner' }),
+      }),
+    )
+    expect(calls[0]?.status).toBe(404)
+  })
+
+  it('502s when the minter throws', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({
+        sendJson,
+        demoLink: fakeDemoLink({
+          mintSignInToken: async () => {
+            throw new Error('clerk down')
+          },
+        }),
+        readBody: async () => ({ role: 'owner' }),
+      }),
+    )
+    expect(calls[0]?.status).toBe(502)
+  })
+
+  it('still enforces the superadmin gate (non-clerk identity → 401, never mints)', async () => {
+    const { calls, sendJson } = capture()
+    let minted = false
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({
+        sendJson,
+        identity: { userId: 'x', source: 'header' },
+        demoLink: fakeDemoLink({
+          mintSignInToken: async () => {
+            minted = true
+            return { token: 't', userId: 'u' }
+          },
+        }),
+        readBody: async () => ({ role: 'owner' }),
+      }),
+    )
+    expect(calls[0]?.status).toBe(401)
+    expect(minted).toBe(false)
   })
 })

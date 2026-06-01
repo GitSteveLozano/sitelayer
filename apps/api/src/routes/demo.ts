@@ -70,8 +70,22 @@ export type DemoRouteCtx = {
   setNoIndexHeader: () => void
 }
 
-function isDemoRole(value: unknown): value is DemoRole {
+export function isDemoRole(value: unknown): value is DemoRole {
   return typeof value === 'string' && (DEMO_ROLES as readonly string[]).includes(value)
+}
+
+/** Human label for a demo role (shared by the email formatter + UI copy). */
+export function demoRoleLabel(role: DemoRole): string {
+  switch (role) {
+    case 'owner':
+      return 'Owner'
+    case 'estimator':
+      return 'Estimator'
+    case 'foreman':
+      return 'Foreman'
+    case 'crew':
+      return 'Crew'
+  }
 }
 
 /** Constant-time access-code comparison. */
@@ -173,6 +187,79 @@ export function createClerkSignInTokenMinter(opts: {
 export function buildTicketRedirectUrl(appOrigin: string, token: string): string {
   const origin = appOrigin.replace(/\/$/, '')
   return `${origin}/sign-in?__clerk_ticket=${encodeURIComponent(token)}`
+}
+
+/**
+ * Render a ready-to-send demo email (subject + body) from a minted link. Pure
+ * so it can back both the `demo:email` CLI and the super-admin
+ * `POST /api/admin/demo-link` surface. `now` is injectable for tests.
+ */
+export function formatDemoEmail(opts: {
+  role: DemoRole
+  name?: string | null
+  link: string
+  expiresInSeconds: number
+  appOrigin: string
+  accessCode: string | null
+  now?: number
+}): { subject: string; body: string; expiresAt: string; roleLabel: string } {
+  const label = demoRoleLabel(opts.role)
+  const nowMs = opts.now ?? Date.now()
+  const expiresAtDate = new Date(nowMs + opts.expiresInSeconds * 1000)
+  const greeting = opts.name?.trim() ? `Hi ${opts.name.trim()},` : 'Hi,'
+  const hours = Math.round(opts.expiresInSeconds / 3600)
+  const fallbackUrl = `${opts.appOrigin.replace(/\/$/, '')}/demo`
+  const accessLine = opts.accessCode ? `Access code: ${opts.accessCode}\n` : ''
+
+  const body = `${greeting}
+
+Here is a one-click Sitelayer demo link as ${label}:
+${opts.link}
+
+It is valid for about ${hours} hours, until ${expiresAtDate.toLocaleString()}.
+
+This is the demo environment with sample data only. Anything you change is disposable.
+
+If the one-click link expires, use this fallback:
+${fallbackUrl}
+${accessLine}Choose: ${label}
+`
+
+  return { subject: 'Sitelayer demo link', body, expiresAt: expiresAtDate.toISOString(), roleLabel: label }
+}
+
+/**
+ * The capability needed to mint sendable demo links from the super-admin
+ * console. Only available on the demo tier (where the TEST-instance
+ * `CLERK_SECRET_KEY` + seeded demo users live); `null` everywhere else, which
+ * the admin route turns into a clear 409.
+ */
+export type DemoLinkCapability = {
+  mintSignInToken: SignInTokenMinter
+  appOrigin: string
+  ttlSeconds: number
+  accessCode: string | null
+}
+
+/**
+ * Build the demo-link capability from the environment, mirroring the demo-tier
+ * minter wired in `server.ts`. Returns `null` off the demo tier or when
+ * `CLERK_SECRET_KEY` is unset (so the feature is structurally absent there).
+ */
+export function demoLinkCapabilityFromEnv(
+  tier: AppTier | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): DemoLinkCapability | null {
+  if (tier !== 'demo') return null
+  const secretKey = env.CLERK_SECRET_KEY?.trim()
+  if (!secretKey) return null
+  const ttlSeconds = resolveDemoSignInTokenTtlSeconds(env)
+  return {
+    mintSignInToken: createClerkSignInTokenMinter({ secretKey, env, expiresInSeconds: ttlSeconds }),
+    appOrigin: env.DEMO_APP_ORIGIN?.trim() || 'https://demo.preview.sitelayer.sandolab.xyz',
+    ttlSeconds,
+    accessCode: env.DEMO_ACCESS_CODE?.trim() || null,
+  }
 }
 
 /**

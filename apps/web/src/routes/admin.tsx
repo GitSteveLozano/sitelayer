@@ -56,7 +56,20 @@ interface ScenarioApplyResult {
   applied: boolean
 }
 
-type TabKey = 'companies' | 'workflows' | 'scenarios'
+interface DemoLinkResult {
+  role: string
+  name: string | null
+  link: string
+  expires_in_seconds: number
+  expires_at: string
+  subject: string
+  body: string
+  fallback: { url: string; access_code: string | null; role_label: string }
+}
+
+const DEMO_ROLE_OPTIONS = ['owner', 'estimator', 'foreman', 'crew'] as const
+
+type TabKey = 'companies' | 'workflows' | 'scenarios' | 'demo'
 
 interface LoadState<T> {
   data: T | null
@@ -327,12 +340,155 @@ function ScenariosTab() {
   )
 }
 
+function DemoLinksTab() {
+  const [role, setRole] = useState<(typeof DEMO_ROLE_OPTIONS)[number]>('owner')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<DemoLinkResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  async function generate() {
+    setBusy(true)
+    setResult(null)
+    setError(null)
+    setCopied(null)
+    try {
+      const res = await request<DemoLinkResult>('/api/admin/demo-link', {
+        method: 'POST',
+        json: { role, name: name.trim() || undefined },
+      })
+      setResult(res)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function copy(label: string, text: string) {
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => setCopied(label))
+      .catch(() => setCopied(null))
+  }
+
+  const notDemoTier = !!error && /demo tier/i.test(error)
+  const hours = result ? Math.round(result.expires_in_seconds / 3600) : 0
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <p style={styles.sub}>
+        Mint a one-click, 24-hour sign-in link for a seeded demo role and a ready-to-send email. Demo tier only — the
+        link signs the recipient straight into the sample-data demo as that role.
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as (typeof DEMO_ROLE_OPTIONS)[number])}
+          style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
+        >
+          {DEMO_ROLE_OPTIONS.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="recipient name (optional)"
+          style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 8px', fontSize: 13, flex: '0 0 220px' }}
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void generate()}
+          style={{
+            background: busy ? '#9ca3af' : '#2563eb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: busy ? 'default' : 'pointer',
+          }}
+        >
+          {busy ? 'Generating…' : 'Generate link'}
+        </button>
+      </div>
+
+      {error && (
+        <div style={styles.err}>
+          {notDemoTier
+            ? 'Demo links can only be generated from the demo console (the demo tier holds the demo Clerk instance + seeded users).'
+            : `Error: ${error}`}
+        </div>
+      )}
+
+      {result && (
+        <div>
+          <div style={styles.card}>
+            <div style={styles.muted}>
+              One-click link · {result.fallback.role_label} · valid ~{hours}h (until {result.expires_at.slice(0, 16)}Z)
+            </div>
+            <div style={{ ...styles.code, display: 'block', marginTop: 6, wordBreak: 'break-all', padding: 8 }}>
+              {result.link}
+            </div>
+            <button type="button" style={{ ...styles.link, marginTop: 6 }} onClick={() => copy('link', result.link)}>
+              {copied === 'link' ? '✓ copied' : 'Copy link'}
+            </button>
+          </div>
+
+          <div style={styles.card}>
+            <div style={styles.muted}>Email — subject: {result.subject}</div>
+            <textarea
+              readOnly
+              value={result.body}
+              rows={12}
+              style={{
+                width: '100%',
+                marginTop: 6,
+                fontFamily: 'ui-monospace, monospace',
+                fontSize: 12,
+                border: '1px solid #e5e7eb',
+                borderRadius: 6,
+                padding: 8,
+                resize: 'vertical',
+              }}
+            />
+            <button
+              type="button"
+              style={{ ...styles.link, marginTop: 6 }}
+              onClick={() => copy('email', `Subject: ${result.subject}\n\n${result.body}`)}
+            >
+              {copied === 'email' ? '✓ copied' : 'Copy email'}
+            </button>
+          </div>
+
+          <p style={styles.muted}>
+            Fallback if the link expires: <span style={styles.code}>{result.fallback.url}</span>
+            {result.fallback.access_code ? (
+              <>
+                {' '}
+                · access code <span style={styles.code}>{result.fallback.access_code}</span>
+              </>
+            ) : null}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AdminRoute() {
   const [tab, setTab] = useState<TabKey>('companies')
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'companies', label: 'Companies' },
     { key: 'workflows', label: 'Workflows' },
     { key: 'scenarios', label: 'Scenarios' },
+    { key: 'demo', label: 'Demo links' },
   ]
   return (
     <div style={styles.wrap}>
@@ -353,6 +509,7 @@ export default function AdminRoute() {
       {tab === 'companies' && <CompaniesTab />}
       {tab === 'workflows' && <WorkflowsTab />}
       {tab === 'scenarios' && <ScenariosTab />}
+      {tab === 'demo' && <DemoLinksTab />}
     </div>
   )
 }

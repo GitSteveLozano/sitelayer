@@ -10,6 +10,14 @@ import {
   type ScenarioApplyRunner,
 } from '../admin-scenarios.js'
 import { COMPANY_SLUG_PATTERN } from '@sitelayer/scenario'
+import {
+  buildTicketRedirectUrl,
+  demoLinkCapabilityFromEnv,
+  formatDemoEmail,
+  isDemoRole,
+  DEMO_ROLES,
+  type DemoLinkCapability,
+} from './demo.js'
 
 /**
  * Cross-tenant platform-admin API (design §5/§6/§7).
@@ -45,6 +53,9 @@ export interface AdminRouteDeps {
   /** Applies a scenario fixture in a tx; injected from dispatch (needs the pool
    *  + seedCompanyDefaults). Absent → apply returns 501. */
   runScenarioApply?: ScenarioApplyRunner
+  /** Demo-link generation capability. Defaults to env-derived (demo tier only,
+   *  needs CLERK_SECRET_KEY). Absent/null → POST /api/admin/demo-link → 409. */
+  demoLink?: DemoLinkCapability | null
 }
 
 interface CompanyRow {
@@ -148,6 +159,61 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       return true
     }
     sendJson(201, result)
+    return true
+  }
+
+  // Mutation: mint a sendable demo sign-in link (super-admin surface over the
+  // demo-tier minter). Only works on the demo tier — the capability is null
+  // elsewhere, so this is a clean 409 rather than a confusing 404/500.
+  if (method === 'POST' && path === '/api/admin/demo-link') {
+    const demoLink = deps.demoLink !== undefined ? deps.demoLink : demoLinkCapabilityFromEnv(deps.tier)
+    if (!demoLink) {
+      sendJson(409, { error: 'demo link generation is only available on the demo tier' })
+      return true
+    }
+    const body = deps.readBody ? await deps.readBody() : {}
+    if (!isDemoRole(body.role)) {
+      sendJson(400, { error: `role must be one of ${DEMO_ROLES.join(', ')}` })
+      return true
+    }
+    const role = body.role
+    const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null
+
+    let minted
+    try {
+      minted = await demoLink.mintSignInToken(role)
+    } catch {
+      sendJson(502, { error: 'could not mint demo sign-in token' })
+      return true
+    }
+    if (!minted) {
+      sendJson(404, { error: `demo user for role "${role}" is not seeded yet — ask the operator to create it` })
+      return true
+    }
+
+    const link = buildTicketRedirectUrl(demoLink.appOrigin, minted.token)
+    const email = formatDemoEmail({
+      role,
+      name,
+      link,
+      expiresInSeconds: demoLink.ttlSeconds,
+      appOrigin: demoLink.appOrigin,
+      accessCode: demoLink.accessCode,
+    })
+    sendJson(200, {
+      role,
+      name,
+      link,
+      expires_in_seconds: demoLink.ttlSeconds,
+      expires_at: email.expiresAt,
+      subject: email.subject,
+      body: email.body,
+      fallback: {
+        url: `${demoLink.appOrigin.replace(/\/$/, '')}/demo`,
+        access_code: demoLink.accessCode,
+        role_label: email.roleLabel,
+      },
+    })
     return true
   }
 
