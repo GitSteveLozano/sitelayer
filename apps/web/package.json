@@ -48,6 +48,6 @@
     "tailwindcss-animate": "^1.0.7",
     "vite": "^7.3.0",
     "vite-plugin-pwa": "^1.2.0",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.8"
   }
 }
