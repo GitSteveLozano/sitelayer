@@ -37,6 +37,11 @@ export type SystemRouteCtx = {
   company: ActiveCompany
   /** Active Clerk (or fallback) user id; used by /api/session. */
   currentUserId: string
+  /** The real impersonator (Clerk `act` sub) when this is an impersonation
+   *  session, else null — surfaced by /api/session for the SPA banner. */
+  actorUserId?: string | null
+  /** 'self' | 'act_as' | 'impersonate' — how currentUserId was assumed. */
+  authMode?: string
   sendJson: (status: number, body: unknown) => void
   /**
    * Per-response side-channels for headers we can't drive through sendJson.
@@ -98,6 +103,9 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
       user: { id: ctx.currentUserId, role: membershipRows[0]?.role ?? 'admin' },
       activeCompany: ctx.company,
       memberships: membershipRows,
+      // Impersonation surface for the SPA "viewing as X" banner (design §7).
+      impersonated_by: ctx.actorUserId ?? null,
+      mode: ctx.authMode ?? 'self',
     })
     return true
   }

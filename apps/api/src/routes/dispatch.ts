@@ -201,6 +201,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         currentUserId,
+        actorUserId: identity.actorUserId ?? null,
+        authMode: identity.mode ?? 'self',
         sendJson,
         setHeader: ctx.setHeader,
         send304: ctx.send304,
