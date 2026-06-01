@@ -39,7 +39,11 @@ COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
 
-RUN npm ci
+# Cache npm's download store across builds (persists in the buildx builder /
+# local cache). Keeps the COPY-everything ordering (no fragile per-package
+# list to drift — that omission is what crashed the e4672585 prod deploy),
+# but makes the npm ci re-resolve fast on the fleet builder.
+RUN --mount=type=cache,target=/root/.npm npm ci
 RUN npm run build
 RUN --mount=type=secret,id=sentry_auth_token \
     SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" && \

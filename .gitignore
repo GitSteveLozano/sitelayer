@@ -21,3 +21,6 @@ docker-compose.override.yml
 # zips need explicit allowlist entries (e.g. /docs/...zip).
 *.zip
 !/docs/WhatsApp Chat with LA _ Tiny Bison.zip
+
+# Fleet-local build secrets for deploy-production-local.sh (never commit)
+ops/env/production.build.env

@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Sitelayer production deploy — run from the FLEET (e.g. taylor-pc-ubuntu),
+# off GitHub Actions. NHL-style: the operator drives the deploy directly.
+#
+#   1. Build the immutable image locally with BuildKit layer cache (fast box).
+#   2. Push it to the DO container registry.
+#   3. SSH to the prod droplet to checkout the matching SHA, pull the image,
+#      back up + migrate the DB, swap containers, and health-check.
+#
+# Runtime secrets STAY on the droplet: this reuses the existing
+# /app/sitelayer/.env (rendered by the previous deploy). Only BUILD-time vars
+# (the VITE_*/SENTRY_* web-bundle args) are read here, from a gitignored
+# ops/env/production.build.env if present (all have safe public defaults).
+#
+# Usage:
+#   scripts/deploy-production-local.sh                 # build + deploy HEAD
+#   SKIP_MIGRATIONS=1 scripts/deploy-production-local.sh   # code-only, skip DB
+#   ALLOW_DIRTY_DEPLOY=1 scripts/deploy-production-local.sh
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+DEPLOY_HOST="${DEPLOY_HOST:-165.245.230.3}"
+DEPLOY_USER="${DEPLOY_USER:-sitelayer}"
+REGISTRY="${SITELAYER_REGISTRY:-registry.digitalocean.com/sitelayer/sitelayer}"
+CACHE_DIR="${SITELAYER_BUILD_CACHE:-$HOME/.cache/sitelayer-buildkit}"
+ALLOW_DIRTY="${ALLOW_DIRTY_DEPLOY:-0}"
+SKIP_MIGRATIONS="${SKIP_MIGRATIONS:-0}"
+
+# Optional build secrets (Sentry DSN + sourcemap auth token). Safe to omit.
+if [ -f ops/env/production.build.env ]; then
+  set -a; . ops/env/production.build.env; set +a
+fi
+
+# --- preflight ---------------------------------------------------------------
+command -v docker >/dev/null || { echo "ERROR: docker required"; exit 1; }
+command -v doctl  >/dev/null || { echo "ERROR: doctl required"; exit 1; }
+docker buildx version >/dev/null 2>&1 || { echo "ERROR: docker buildx required"; exit 1; }
+
+if [ "$ALLOW_DIRTY" != "1" ] && [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: working tree is dirty. Commit/stash, or set ALLOW_DIRTY_DEPLOY=1."
+  git status -s
+  exit 1
+fi
+
+GIT_SHA="$(git rev-parse --short HEAD)"
+FULL_SHA="$(git rev-parse HEAD)"
+APP_IMAGE="${REGISTRY}:${GIT_SHA}"
+
+# The droplet fetches the deploy SHA from GitHub (still our backup remote), so
+# HEAD must be reachable on origin before we deploy it.
+if ! git branch -r --contains "$FULL_SHA" 2>/dev/null | grep -q .; then
+  echo "ERROR: HEAD ($GIT_SHA) is not on any origin branch."
+  echo "       Push it first (e.g. 'git push origin HEAD:dev') so the droplet can fetch it."
+  exit 1
+fi
+
+echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"
+START=$(date +%s)
+
+# --- build + push (fleet, cached) -------------------------------------------
+doctl registry login >/dev/null
+docker buildx inspect sitelayer-builder >/dev/null 2>&1 \
+  || docker buildx create --name sitelayer-builder --driver docker-container >/dev/null
+mkdir -p "$CACHE_DIR"
+
+secret_arg=()
+[ -n "${SENTRY_AUTH_TOKEN:-}" ] && secret_arg=(--secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN)
+
+docker buildx build \
+  --builder sitelayer-builder \
+  --target runtime \
+  --cache-from "type=local,src=${CACHE_DIR}" \
+  --cache-to "type=local,dest=${CACHE_DIR},mode=max" \
+  --build-arg VITE_API_URL="${VITE_API_URL:-}" \
+  --build-arg VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}" \
+  --build-arg VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}" \
+  --build-arg VITE_USER_ID="${VITE_USER_ID:-demo-user}" \
+  --build-arg VITE_APP_TIER="${VITE_APP_TIER:-prod}" \
+  --build-arg VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" \
+  --build-arg VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}" \
+  --build-arg VITE_SENTRY_RELEASE="$GIT_SHA" \
+  --build-arg VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}" \
+  --build-arg VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}" \
+  --build-arg VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
+  --build-arg SENTRY_ORG="${SENTRY_ORG:-sandolabs}" \
+  --build-arg SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}" \
+  --build-arg SENTRY_RELEASE="$GIT_SHA" \
+  --build-arg GIT_SHA="$GIT_SHA" \
+  "${secret_arg[@]}" \
+  -t "$APP_IMAGE" \
+  -t "${REGISTRY}:main" \
+  --push \
+  .
+
+BUILT=$(date +%s)
+echo "==> Built + pushed in $((BUILT - START))s. Deploying on droplet..."
+
+# --- remote deploy (reuse existing droplet .env) -----------------------------
+ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+  "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' SKIP_MIGRATIONS='$SKIP_MIGRATIONS' bash -s" <<'REMOTE'
+set -euo pipefail
+exec 9>/tmp/sitelayer-production-deploy.lock
+flock -n 9 || { echo "ERROR: another production deploy is already running"; exit 1; }
+
+if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
+else echo "ERROR: docker compose not installed"; exit 1; fi
+
+cd /app/sitelayer
+[ -f .env ] || { echo "ERROR: /app/sitelayer/.env missing (run a full GitHub deploy once to seed it)"; exit 1; }
+
+previous_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
+git remote set-url origin https://github.com/GitSteveLozano/sitelayer.git 2>/dev/null || true
+git fetch origin
+git reset --hard
+git clean -fd -e .env -e ".last_*" -e ".env.bak.*"
+git checkout -B main "$EXPECTED_GIT_SHA"
+git reset --hard "$EXPECTED_GIT_SHA"
+test "$(git rev-parse HEAD)" = "$(git rev-parse "$EXPECTED_GIT_SHA")" || {
+  echo "ERROR: checked out $(git rev-parse --short HEAD) but image is $EXPECTED_GIT_SHA"; exit 1; }
+
+export APP_IMAGE GIT_SHA="$EXPECTED_GIT_SHA"
+export SENTRY_RELEASE="$EXPECTED_GIT_SHA" VITE_SENTRY_RELEASE="$EXPECTED_GIT_SHA"
+
+$COMPOSE -f docker-compose.prod.yml config >/dev/null
+$COMPOSE -f docker-compose.prod.yml pull api web worker
+docker image inspect "$APP_IMAGE" >/dev/null
+
+if [ "$SKIP_MIGRATIONS" != "1" ]; then
+  DB_URL_RAW="$(grep -E '^DATABASE_URL=' .env | head -1 | cut -d= -f2-)"
+  DB_URL="${DB_URL_RAW%\"}"; DB_URL="${DB_URL#\"}"; DB_URL="${DB_URL%\'}"; DB_URL="${DB_URL#\'}"
+  # Drop FORCE RLS before backup so the owner can pg_dump (migration 078 parity).
+  if [ -n "$DB_URL" ]; then
+    docker run --rm --network host -e PGURL="$DB_URL" postgres:18-alpine bash -c \
+      'psql "$PGURL" -v ON_ERROR_STOP=1 \
+        -c "ALTER TABLE IF EXISTS audit_events NO FORCE ROW LEVEL SECURITY;" \
+        -c "ALTER TABLE IF EXISTS mutation_outbox NO FORCE ROW LEVEL SECURITY;" \
+        -c "ALTER TABLE IF EXISTS sync_events NO FORCE ROW LEVEL SECURITY;" \
+        -c "ALTER TABLE IF EXISTS workflow_event_log NO FORCE ROW LEVEL SECURITY;"'
+  fi
+  BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}" DATABASE_URL_FILE=/app/sitelayer/.env \
+    PG_DUMP_DOCKER_IMAGE=postgres:18-alpine scripts/backup-postgres.sh
+  PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/migrate-db.sh
+  PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/check-db-schema.sh
+else
+  echo "SKIP_MIGRATIONS=1 — skipping backup + migrate (code-only deploy)"
+fi
+
+$COMPOSE -f docker-compose.prod.yml up -d --remove-orphans
+
+for attempt in $(seq 1 30); do
+  if curl -fsS --resolve sitelayer.sandolab.xyz:443:127.0.0.1 https://sitelayer.sandolab.xyz/health >/dev/null; then
+    break
+  fi
+  [ "$attempt" -eq 30 ] && { echo "ERROR: health check failed after 30 attempts"; exit 1; }
+  sleep 5
+done
+
+EXPECTED_SHA="$GIT_SHA" scripts/verify-prod-deploy.sh || true
+
+[ -n "$previous_sha" ] && printf '%s\n' "$previous_sha" > .last_previous_deployed_sha
+printf '%s\n' "$GIT_SHA" > .last_successful_deployed_sha
+printf '%s\n' "$APP_IMAGE" > .last_successful_app_image
+date -u +%Y-%m-%dT%H:%M:%SZ > .last_successful_deployed_at
+echo "Deployment completed: $GIT_SHA"
+REMOTE
+
+END=$(date +%s)
+echo "==> prod is on $GIT_SHA. Total $((END - START))s (build $((BUILT - START))s, deploy $((END - BUILT))s)."
