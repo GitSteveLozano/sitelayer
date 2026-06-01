@@ -30,22 +30,22 @@ Measured spike (this worktree, before→after, full `npm run build`):
 
 **Recommendation — Path A: adopt `rolldown-vite` now as a single root npm `overrides` alias under Vite 7. Do NOT wait for Vite 8 (Path B).**
 
-> One-liner: *Add `"overrides": { "vite": "npm:rolldown-vite@<pin>" }` to the root `package.json`, validate on the `dev` env first with a build/budget measurement spike + a real-browser Clerk-init smoke, gate on a green `Quality` run, ship, and keep one-revert rollback ready. Defer Vite 8 (Lightning CSS + `oxc.*` config renames) until rolldown-vite has baked.*
+> One-liner: _Add `"overrides": { "vite": "npm:rolldown-vite@<pin>" }` to the root `package.json`, validate on the `dev` env first with a build/budget measurement spike + a real-browser Clerk-init smoke, gate on a green `Quality` run, ship, and keep one-revert rollback ready. Defer Vite 8 (Lightning CSS + `oxc._` config renames) until rolldown-vite has baked.\*
 
 Path A isolates the bundler swap to a single reversible lockfile stanza; Path B couples the bundler swap to a major Vite bump (CSS minifier → Lightning CSS, `optimizeDeps.esbuildOptions`→`optimizeDeps.rolldownOptions`, `esbuild.*`→`oxc.*`, ~15MB install footprint) that you would debug all at once against a revenue-path deploy gate. Strictly worse for isolation.
 
 ### Risk table
 
-| # | Risk | Where | Severity | Mitigable? | Catches in CI? |
-|---|------|-------|----------|------------|----------------|
-| R1 | Chunk-name → filename coupling: Rolldown renames/splits `vendor-three`/`vendor-pdf`, silently re-baking ~538KB 3D + PDFium WASM into the PWA precache | `apps/web/vite.config.ts:113,133,146` (workbox) | **HIGH** | Yes (pin `chunkFileNames` / `advancedChunks`; widen globs) | **No — silent**. Needs explicit dist/SW diff |
-| R2 | Oxc minify size vs the 112KB lazy-app-chunk budget; desktop-workspace chunk last measured **~108.4KB gzip** (~3.3% headroom) | `scripts/check-web-bundle-budget.mjs:57` | **MEDIUM** | Yes (force Terser, or re-baseline) | **Yes — red `Quality`** |
-| R3 | Clerk + React 19 `Activity` chunk-ordering invariant breaks at runtime after re-split/reorder | `apps/web/vite.config.ts:9-25` | **MEDIUM** | Yes (force grouping) | **No — runtime only**. Needs browser smoke |
-| R4 | Bundle-budget script mis-gates if Rolldown runtime/assets dir/prefix differs from expectation | `scripts/check-web-bundle-budget.mjs:58,78` | LOW | Yes | Yes |
-| R5 | Plugin API compat (`@vitejs/plugin-react` 5.2.0, `vite-plugin-pwa` 1.3.0, `vitest` 4.1.5) | `apps/web/package.json` | LOW | n/a (already declare ^8 peer) | Yes |
-| — | Decorators / CJS interop / unsupported hooks / Yarn-PnP | (none in repo) | **NONE** | — | — |
+| #   | Risk                                                                                                                                                  | Where                                           | Severity   | Mitigable?                                                 | Catches in CI?                               |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------- | ---------------------------------------------------------- | -------------------------------------------- |
+| R1  | Chunk-name → filename coupling: Rolldown renames/splits `vendor-three`/`vendor-pdf`, silently re-baking ~538KB 3D + PDFium WASM into the PWA precache | `apps/web/vite.config.ts:113,133,146` (workbox) | **HIGH**   | Yes (pin `chunkFileNames` / `advancedChunks`; widen globs) | **No — silent**. Needs explicit dist/SW diff |
+| R2  | Oxc minify size vs the 112KB lazy-app-chunk budget; desktop-workspace chunk last measured **~108.4KB gzip** (~3.3% headroom)                          | `scripts/check-web-bundle-budget.mjs:57`        | **MEDIUM** | Yes (force Terser, or re-baseline)                         | **Yes — red `Quality`**                      |
+| R3  | Clerk + React 19 `Activity` chunk-ordering invariant breaks at runtime after re-split/reorder                                                         | `apps/web/vite.config.ts:9-25`                  | **MEDIUM** | Yes (force grouping)                                       | **No — runtime only**. Needs browser smoke   |
+| R4  | Bundle-budget script mis-gates if Rolldown runtime/assets dir/prefix differs from expectation                                                         | `scripts/check-web-bundle-budget.mjs:58,78`     | LOW        | Yes                                                        | Yes                                          |
+| R5  | Plugin API compat (`@vitejs/plugin-react` 5.2.0, `vite-plugin-pwa` 1.3.0, `vitest` 4.1.5)                                                             | `apps/web/package.json`                         | LOW        | n/a (already declare ^8 peer)                              | Yes                                          |
+| —   | Decorators / CJS interop / unsupported hooks / Yarn-PnP                                                                                               | (none in repo)                                  | **NONE**   | —                                                          | —                                            |
 
-**Net:** R1 + R3 are the two failure modes a fully-green pipeline can still ship broken — both are *verification gates*, not blockers, and both are addressed by the acceptance checklist in §6.
+**Net:** R1 + R3 are the two failure modes a fully-green pipeline can still ship broken — both are _verification gates_, not blockers, and both are addressed by the acceptance checklist in §6.
 
 ---
 
@@ -56,9 +56,10 @@ Path A isolates the bundler swap to a single reversible lockfile stanza; Path B 
 `apps/web` is the **only** workspace whose build is a bundler: `apps/web/package.json:8` → `"build": "vite build"`. Verified the build-stack versions in `package-lock.json` match the brief: `vite@7.3.2` (single hoisted copy, **zero nested**), `rollup@4.60.2` (prod bundler), `esbuild@0.27.7` (transform/deps), plus `vite-plugin-pwa@1.3.0` (note: brief said 1.2.0; `package.json` pins `^1.2.0`, lockfile resolves **1.3.0**), `@vitejs/plugin-react@5.2.0`, `terser@5.46.2`, `workbox-build@7.4.1`. `rolldown` / `rolldown-vite` are **not** installed yet; the only `rolldown` token in the tree is the transitive `@rolldown/pluginutils@1.0.0-rc.3` dependency of `plugin-react` (which is already Rolldown-aware).
 
 Files that change under Path A:
+
 - **`package.json` (root)** — add `overrides` stanza + regenerated `package-lock.json`. **That's the entire required change.**
 - `apps/web/vite.config.ts` — stays **byte-identical** for Path A (only `manualChunks`/`define`/`resolve.alias`/`build.sourcemap` are used; none of the renamed-under-Vite-8 keys are present).
-- Verification-coupled artifacts (may need edits *if* the dist diff shows drift): the two workbox config blocks in `vite.config.ts` and `scripts/check-web-bundle-budget.mjs`.
+- Verification-coupled artifacts (may need edits _if_ the dist diff shows drift): the two workbox config blocks in `vite.config.ts` and `scripts/check-web-bundle-budget.mjs`.
 
 ### What is NOT touched — `apps/api`, `apps/worker`, all 14 `packages/*`
 
@@ -66,40 +67,47 @@ Every other workspace builds with plain `tsc -p tsconfig.build.json` and has **n
 
 **One subtlety:** the root override swaps the single hoisted `vite`, which the six packages' `vitest@3.2.4` and web's `vitest@4.1.5` also resolve. That only changes how their **tests transform/run**, never their `tsc`-built `dist`. Their unit tests are part of `npm run test` in `ci:quality`, so they ride the same acceptance gate (treat the api/worker/scenario/queue suites — alias-only `vitest.config.ts`, no plugins — as a bundler-agnostic control group).
 
-**Deploy boundary:** the Dockerfile is a thin packaging image (header: *"No npm ci / tsc / vite runs in here"*) that only COPYs prebuilt `dist`. The real `vite build` runs (a) in CI via `.github/workflows/quality.yml` and (b) on the fleet host in `scripts/deploy-production-local.sh:201` (which then **deletes** `*.map` — prod ships no sourcemaps). The CI dist cache key hashes `**/vite.config.ts`, so editing the config correctly busts the cache.
+**Deploy boundary:** the Dockerfile is a thin packaging image (header: _"No npm ci / tsc / vite runs in here"_) that only COPYs prebuilt `dist`. The real `vite build` runs (a) in CI via `.github/workflows/quality.yml` and (b) on the fleet host in `scripts/deploy-production-local.sh:201` (which then **deletes** `*.map` — prod ships no sourcemaps). The CI dist cache key hashes `**/vite.config.ts`, so editing the config correctly busts the cache.
 
 ### Out-of-scope opportunity (do NOT do now)
 
-The 16 tsc-built workspaces *could* later adopt **tsdown** (Rolldown + Oxc for libraries). Payoff is marginal: they're small TS libs (not a perf bottleneck), `tsc` is still needed as the typecheck gate (tsdown would be *additional*, not a replacement), and CLAUDE.md favors a lightweight toolchain (no Nx/Turbo). Keep the web migration fully decoupled from any backend build change.
+The 16 tsc-built workspaces _could_ later adopt **tsdown** (Rolldown + Oxc for libraries). Payoff is marginal: they're small TS libs (not a perf bottleneck), `tsc` is still needed as the typecheck gate (tsdown would be _additional_, not a replacement), and CLAUDE.md favors a lightweight toolchain (no Nx/Turbo). Keep the web migration fully decoupled from any backend build change.
 
 ---
 
 ## 3. Dimension-by-dimension change analysis
 
 ### 3.1 Surface inventory — **Risk: NONE (scoping) / MEDIUM (chunk coupling)**
+
 Scoping is confirmed correct (§2). The single hard coupling is chunk filenames: `manualChunks` names → `assets/[name]-[hash].js` (Vite default, no `chunkFileNames` override anywhere in repo) → consumed by (a) workbox globs/regexes, (b) the bundle-budget prefix exemptions. The pre-seeded `rolldown-runtime-` prefix at `check-web-bundle-budget.mjs:58` shows someone anticipated a Rolldown runtime chunk — **unverified** whether it actually emits with that exact name.
 
 ### 3.2 Plugin compatibility — **Risk: LOW**
+
 - `@vitejs/plugin-react@5.2.0`: peer `vite: ...||^8.0.0`, depends on `@babel/core` + `@rolldown/pluginutils@1.0.0-rc.3`. JSX transform runs through **Babel**, not Oxc — so the "Oxc can't lower decorators" caveat is doubly moot. **Keep it; do NOT swap to `@vitejs/plugin-react-oxc` during the migration** (that would change the transform engine simultaneously with the bundler and drop the Babel fast-refresh path React 19 + Clerk rely on).
 - `vite-plugin-pwa@1.3.0`: peer `vite: ...||^8.0.0`, wraps `workbox-build@7.4.1` as a **post-build** step over the emitted asset list — no custom Rollup transform/render hooks for Rolldown to reject. Plugin API is compatible; the risk is in the **filename-coupled config**, not the plugin.
 - `vitest@4.1.5`: peer `^6||^7||^8`. Web tests `mergeConfig` the full `vite.config.ts`, so a plugin/chunk incompat surfaces in tests first (useful early signal). Pre-existing `vitest` 3.x/4.x skew across packages is unrelated — address separately.
 
 ### 3.3 Code-splitting + bundle budget — **Risk: HIGH (this is the dominant dimension)**
+
 See §4 in depth. Two pressure points: the chunk-name coupling (R1) and the ~3.3% headroom on the 112KB lazy budget under Oxc minify (R2). Under `rolldown-vite` (Vite 7), `output.manualChunks` (function form) and the default filename template are **preserved**, so the LOW-MEDIUM case holds. Under **Vite 8**, `output.manualChunks` is deprecated in favor of `build.rolldownOptions.output.advancedChunks` (different shape) and a default `minSize` re-splits — this is the real hazard and the main reason to defer Path B.
 
 ### 3.4 CSS / WASM / assets — **Risk: LOW**
-- **CSS:** Tailwind 3.4.17 + autoprefixer via `apps/web/postcss.config.cjs` runs through Vite's CSS pipeline, **independent of the JS bundler** — untouched by `rolldown-vite`. Vite 8's switch to **Lightning CSS** affects only the CSS *minifier* (not PostCSS authoring). The repo uses only well-supported CSS (@layer/@import/100dvh/env-safe-area; no nesting/color-mix/oklch/@container), so expect cosmetic-only diffs. Caveat: Lightning CSS prefixes by `build.cssTarget` not the autoprefixer browserslist — for Path B, either keep `build.cssMinify: 'esbuild'` to defer, or pin `build.cssTarget` and visual-diff.
+
+- **CSS:** Tailwind 3.4.17 + autoprefixer via `apps/web/postcss.config.cjs` runs through Vite's CSS pipeline, **independent of the JS bundler** — untouched by `rolldown-vite`. Vite 8's switch to **Lightning CSS** affects only the CSS _minifier_ (not PostCSS authoring). The repo uses only well-supported CSS (@layer/@import/100dvh/env-safe-area; no nesting/color-mix/oklch/@container), so expect cosmetic-only diffs. Caveat: Lightning CSS prefixes by `build.cssTarget` not the autoprefixer browserslist — for Path B, either keep `build.cssMinify: 'esbuild'` to defer, or pin `build.cssTarget` and visual-diff.
 - **WASM:** `embedpdf.ts` imports `pdfium.wasm?url` (asset-as-URL) → `resolveFileUrl`/`renderDynamicImport` do not apply. The `.wasm` is a separate asset **not** matched by the `vendor-pdf` regex. PDFium is the chosen render engine (PDFium WASM, not pdfjs).
 - **Sourcemaps:** `build.sourcemap` is Sentry-env-gated; Rolldown emits standard v3 maps; `scripts/sentry-upload-sourcemaps.sh` uses `@sentry/cli` (bundler-agnostic, no Vite/Rollup plugin). Prod path deletes `*.map`, so this only matters for the separate Sentry-release lane.
 
 ### 3.5 Syntax / CJS / decorators — **Risk: NONE**
+
 Fully inert here, confirmed by grep:
+
 - **Decorators:** the two `@`-line greps are false positives — a CSS `@keyframes` in a `<style>` template literal (`post-install-splash.tsx:123`) and a `@sitelayer/pipe-*` mention inside a JSX comment (`takeoff-canvas.tsx:541`). **Zero** real decorators; **no** tsconfig sets `experimentalDecorators`/`emitDecoratorMetadata`. **Do not add `@rolldown/plugin-babel` / `@rollup/plugin-swc`.**
 - **CJS:** `apps/web` is `"type": "module"`; **zero** `require(`/`module.exports`/`__dirname`/`createRequire` in `src`; the two `.cjs` files are PostCSS/Tailwind configs loaded natively (outside the bundler graph). The web build externalizes nothing and uses no `require()`.
 - **Default-imports:** only `clsx` (prod, ESM-native 2.1.1) and `fast-check` (test-only, ESM-native). **Zero** `import React from 'react'` — fully on the automatic JSX runtime. `three` uses `import * as THREE`. `legacy.inconsistentCjsInterop` is not needed.
 - **Unsupported hooks:** repo-wide grep for `resolveImportMeta`/`resolveFileUrl`/`renderDynamicImport`/`shouldTransformCachedModule`/`output.format 'system'|'amd'` → **zero** hits. Only `output.manualChunks` (supported) + first-party plugins.
 
 ### 3.6 Migration rollout — **Risk: MEDIUM**
+
 Path A via root `overrides` is the recommended mechanism (§5). Confirmed: **no** existing `overrides`/`resolutions` block; single hoisted `vite@7.3.2`, zero nested copies → one override swaps the bundler everywhere reversibly. The dominant rollout risks are the repo-specific R1/R3 verification gates, not the doc's hype. Stage on `dev` first (never straight to prod; rolldown-vite is a technical preview).
 
 ---
@@ -131,13 +139,13 @@ The doc's KEY RISK: Rolldown creates **more granular** chunks and sometimes igno
 
 ### Concrete pass/fail predictions
 
-| Scenario | workbox precache | budget gate | net effect |
-|----------|-----------------|-------------|------------|
-| **Path A, names preserved** (expected) | vendor-three/-pdf excluded ✅ | vendor-* exempt ✅ | **PASS** — no change |
-| **R1a: chunk renamed** | heavy chunk re-baked into precache ❌ | now an over-budget *app* chunk → **red Quality** ⚠️ | **partly loud** (budget catches the rename for the renamed file, but the precache regression is silent) |
-| **R1b: chunk split, sibling un-prefixed** | sibling re-baked into precache ❌ (**silent**) | sibling counts as lazy app chunk → maybe red, maybe under 112KB ⚠️ | **SILENT regression possible** — every PWA install downloads 3D/PDFium they never use |
-| **R2: Oxc minify pushes desktop-workspace chunk >112KB** | n/a | **red Quality** ✅ | **loud** — deploy hard-blocked, fix is mechanical |
-| **R3: Clerk re-split out of vendor-react** | n/a | n/a (vendor-exempt) | **SILENT until runtime** — `Cannot set properties of undefined (setting 'Activity')` at first Clerk init |
+| Scenario                                                 | workbox precache                               | budget gate                                                        | net effect                                                                                               |
+| -------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| **Path A, names preserved** (expected)                   | vendor-three/-pdf excluded ✅                  | vendor-\* exempt ✅                                                | **PASS** — no change                                                                                     |
+| **R1a: chunk renamed**                                   | heavy chunk re-baked into precache ❌          | now an over-budget _app_ chunk → **red Quality** ⚠️                | **partly loud** (budget catches the rename for the renamed file, but the precache regression is silent)  |
+| **R1b: chunk split, sibling un-prefixed**                | sibling re-baked into precache ❌ (**silent**) | sibling counts as lazy app chunk → maybe red, maybe under 112KB ⚠️ | **SILENT regression possible** — every PWA install downloads 3D/PDFium they never use                    |
+| **R2: Oxc minify pushes desktop-workspace chunk >112KB** | n/a                                            | **red Quality** ✅                                                 | **loud** — deploy hard-blocked, fix is mechanical                                                        |
+| **R3: Clerk re-split out of vendor-react**               | n/a                                            | n/a (vendor-exempt)                                                | **SILENT until runtime** — `Cannot set properties of undefined (setting 'Activity')` at first Clerk init |
 
 The two **silent** modes (R1b, R3) are why a green pipeline is **not** proof of safety. They are caught only by an explicit dist/SW-manifest diff (R1b) and a real-browser Clerk-init smoke (R3) — both in the acceptance checklist.
 
@@ -209,7 +217,7 @@ Revert the `overrides` stanza + `package-lock.json`, `npm install`, rebuild → 
 - **"require() preserved / CJS interop matrix changes / `legacy.inconsistentCjsInterop`"** — **inert.** Pure ESM, no `require()`, no `import React from 'react'`, externalizes nothing.
 - **"Unsupported Rollup hooks (resolveImportMeta/resolveFileUrl/renderDynamicImport/shouldTransformCachedModule, output.format system/amd)"** — **zero** hits in repo.
 - **"Catastrophic Yarn-PnP-on-Windows regression"** — **N/A.** Confirmed npm workspaces (`package-lock.json`, no resolutions).
-- **Timeline framed as speculative** — *the opposite of overhype.* Per current sources, Vite 8 stable shipped ~March 2026 (Rolldown default) and Rolldown 1.0 ~May 2026, both **before** today. Availability is real; only the exact `rolldown-vite` pin matching `vite@7.3.2` needs confirming.
+- **Timeline framed as speculative** — _the opposite of overhype._ Per current sources, Vite 8 stable shipped ~March 2026 (Rolldown default) and Rolldown 1.0 ~May 2026, both **before** today. Availability is real; only the exact `rolldown-vite` pin matching `vite@7.3.2` needs confirming.
 
 ### One correction to the operator's own priors (and CLAUDE.md / MEMORY.md)
 
@@ -230,4 +238,4 @@ The repeated **"prod droplet deploy SILENTLY SKIPS if Quality fails"** lore is *
 
 ---
 
-*Prepared from a 6-dimension analysis (surface-inventory, plugin-compat, codesplit-budget, css-wasm-assets, syntax-cjs-decorators, migration-rollout) plus an adversarial reconciliation, with repo facts re-verified against `apps/web/vite.config.ts`, `scripts/check-web-bundle-budget.mjs`, `scripts/deploy-production-local.sh`, and `package.json`/`package-lock.json` on 2026-06-01.*
+_Prepared from a 6-dimension analysis (surface-inventory, plugin-compat, codesplit-budget, css-wasm-assets, syntax-cjs-decorators, migration-rollout) plus an adversarial reconciliation, with repo facts re-verified against `apps/web/vite.config.ts`, `scripts/check-web-bundle-budget.mjs`, `scripts/deploy-production-local.sh`, and `package.json`/`package-lock.json` on 2026-06-01._
