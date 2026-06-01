@@ -1,3 +1,4 @@
+// Deploys run from the fleet via scripts/deploy.sh (off GitHub Actions).
 import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { randomUUID } from 'node:crypto'
