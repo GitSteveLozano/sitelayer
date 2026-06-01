@@ -214,6 +214,15 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // context-work-dispatch.ts so the generic drain cannot mark the
   // Mesh handoff applied before an agent system has actually accepted it.
   'dispatch_mesh_work_request',
+  // Crew-schedule confirm side effects — drained by apps/worker/src/runners/
+  // crew-schedule-confirm.ts (processCrewScheduleConfirm), which materializes
+  // confirmed labor_entries / bumps projects.version and fans out the foreman
+  // decline notification. Without these the generic drain would claim the row
+  // and mark it 'applied' without doing the work, silently dropping labor
+  // materialization — and every auto-confirmed new assignment now enqueues a
+  // materialize_labor_entries row, so the race is on the hot path.
+  'materialize_labor_entries',
+  'notify_foreman_decline',
 ] as const
 
 /**

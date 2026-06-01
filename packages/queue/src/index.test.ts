@@ -179,6 +179,15 @@ describe('queue processing', () => {
     expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('post_qbo_invoice')
   })
 
+  it('excludes the crew-schedule confirm side effects so the dedicated runner is not raced', () => {
+    // crew-schedule-confirm.ts is the single materializer; if the generic
+    // drain claimed these it would mark them applied without doing the work.
+    // Every auto-confirmed new assignment enqueues materialize_labor_entries,
+    // so this exclusion is on the hot path.
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('materialize_labor_entries')
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('notify_foreman_decline')
+  })
+
   it('generic processOutboxBatch passes the dedicated-handler list to SQL', async () => {
     const client = new FakeQueueClient([{ rows: [], rowCount: 0 }])
     await processOutboxBatch(client, 'company-1', 5)
