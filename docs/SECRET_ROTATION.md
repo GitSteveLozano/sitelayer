@@ -31,28 +31,28 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 
 ## Inventory at a glance
 
-| Secret                       | Stored                                                              | Mint via                                                   | If leaked → see |
-| ---------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
+| Secret                       | Stored                                                               | Mint via                                                   | If leaked → see |
+| ---------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
 | Deploy SSH key               | Fleet box `~/.ssh/` + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on the fleet box                   | § 6             |
-| Preview/dev/demo SSH key     | Fleet box `~/.ssh/` + preview droplet `authorized_keys`             | `ssh-keygen -t ed25519` on the fleet box                   | § 7             |
-| `DEPLOY_HOST`                | `scripts/deploy-production-local.sh` default / env (hostname/IP)    | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
-| `DIGITALOCEAN_ACCESS_TOKEN`  | `doctl` auth on the fleet box (`~/.config/doctl`)                   | DO Console → API → Tokens                                  | § 10            |
-| `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                         | Clerk dashboard → Configure → API Keys                     | § 1             |
-| `CLERK_JWT_KEY`              | `/app/sitelayer/.env` on the prod droplet           | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
-| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env` on the prod droplet           | Clerk dashboard → Webhooks                                 | § 1             |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Fleet build env (build-arg); baked into web image              | Clerk dashboard → Frontend API                             | § 1             |
-| `QBO_CLIENT_ID`              | `/app/sitelayer/.env` on the prod droplet         | Intuit dev portal → app → Keys & OAuth                     | § 3             |
-| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` on the prod droplet           | Intuit dev portal → Regenerate Client Secret               | § 3             |
-| `QBO_STATE_SECRET`           | `/app/sitelayer/.env` on the prod droplet           | `openssl rand -base64 32`                                  | § 3             |
-| `SENTRY_AUTH_TOKEN`          | `~/.env.local` on the fleet box (build-time secret)                 | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
-| `SENTRY_DSN`                 | `/app/sitelayer/.env` on the prod droplet           | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` on the prod droplet           | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `VITE_SENTRY_DSN`            | Fleet build env (build-arg); baked into web image              | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
-| `DATABASE_URL`               | `/app/sitelayer/.env` on the prod droplet           | DO managed Postgres → Connection Details → Reset password  | § 9             |
-| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet           | `openssl rand -base64 32`                                  | § 5             |
-| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana | `openssl rand -base64 32`                                  | § 5             |
-| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet           | DO Console → API → Spaces Keys                             | § 4             |
-| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet         | DO Console → Spaces                                        | § 4             |
+| Preview/dev/demo SSH key     | Fleet box `~/.ssh/` + preview droplet `authorized_keys`              | `ssh-keygen -t ed25519` on the fleet box                   | § 7             |
+| `DEPLOY_HOST`                | `scripts/deploy-production-local.sh` default / env (hostname/IP)     | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
+| `DIGITALOCEAN_ACCESS_TOKEN`  | `doctl` auth on the fleet box (`~/.config/doctl`)                    | DO Console → API → Tokens                                  | § 10            |
+| `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                          | Clerk dashboard → Configure → API Keys                     | § 1             |
+| `CLERK_JWT_KEY`              | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
+| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → Webhooks                                 | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Fleet build env (build-arg); baked into web image                    | Clerk dashboard → Frontend API                             | § 1             |
+| `QBO_CLIENT_ID`              | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → app → Keys & OAuth                     | § 3             |
+| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → Regenerate Client Secret               | § 3             |
+| `QBO_STATE_SECRET`           | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                  | § 3             |
+| `SENTRY_AUTH_TOKEN`          | `~/.env.local` on the fleet box (build-time secret)                  | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
+| `SENTRY_DSN`                 | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `VITE_SENTRY_DSN`            | Fleet build env (build-arg); baked into web image                    | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
+| `DATABASE_URL`               | `/app/sitelayer/.env` on the prod droplet                            | DO managed Postgres → Connection Details → Reset password  | § 9             |
+| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                  | § 5             |
+| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana                  | `openssl rand -base64 32`                                  | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet                            | DO Console → API → Spaces Keys                             | § 4             |
+| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet                            | DO Console → Spaces                                        | § 4             |
 
 ---
 

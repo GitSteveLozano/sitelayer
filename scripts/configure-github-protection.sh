@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+#
+# OPTIONAL code-review hygiene for the `main` branch (require PR + 1 review,
+# block force-push/deletions). This is NOT a deploy gate and is NOT required
+# for deploying: under the local-fleet model the prod-ship gate is the LOCAL
+# Quality run inside scripts/deploy-production-local.sh, and nothing in the
+# deploy path queries GitHub. The required_status_checks below are a merge-
+# quality convenience (don't merge a red PR), consuming quality.yml as plain
+# PR CI — they do not gate or authorize any deploy.
 set -euo pipefail
 
 OWNER_REPO="${OWNER_REPO:-${GITHUB_REPOSITORY:-GitSteveLozano/sitelayer}}"
@@ -64,4 +72,5 @@ echo "Configured protection for $OWNER_REPO:$BRANCH"
 echo "  required status checks (strict): $QUALITY_CONTEXTS"
 echo "  required PR reviews: 1 (dismiss stale, require last-push approval)"
 echo "  force-push: disabled; deletions: disabled; conversation resolution: required"
-echo "Configure the GitHub production environment with required reviewers to enforce deploy approval."
+echo "Note: this is code-review hygiene only. Deploy approval is NOT a GitHub concern —"
+echo "      the prod gate is the local Quality run in scripts/deploy-production-local.sh."

@@ -5,11 +5,12 @@
 > Branch Matrix below (78 ahead / 49 ahead / 31 ahead, separate demo
 > identities, etc.) are **superseded**. Adopted model: trunk-ish, `main` is
 > production truth and is being GitHub-branch-protected (PR + green `Quality`
-> + no force-push), `demo` becomes an `APP_TIER=demo` environment deployed
-> from a chosen ref (`dev` now, `main`/release tag later) rather than a
-> long-lived code branch, and a green-`Quality` gate is being added to the
-> prod deploy script. The analysis below is retained as the rationale for
-> that decision.
+>
+> - no force-push), `demo` becomes an `APP_TIER=demo` environment deployed
+>   from a chosen ref (`dev` now, `main`/release tag later) rather than a
+>   long-lived code branch, and a green-`Quality` gate is being added to the
+>   prod deploy script. The analysis below is retained as the rationale for
+>   that decision.
 
 ## Bottom Line
 

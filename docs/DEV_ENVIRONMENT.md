@@ -126,7 +126,7 @@ git fetch origin
 git push origin origin/main:refs/heads/dev
 ```
 
-The workflow fires on push to `dev`; the first deploy bootstraps everything.
+Deploy via `scripts/deploy.sh dev` from the fleet (there is no push-triggered workflow); the first deploy bootstraps everything.
 
 ### 4. Verify
 

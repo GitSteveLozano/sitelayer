@@ -66,13 +66,13 @@ careless merge cannot break a paying customer.
 
 ## What runs where
 
-| Stage           | Trigger                          | Mechanism                                        | Target                                                              |
-| --------------- | -------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| PR / push       | every push (PR or branch)        | `.github/workflows/quality.yml` (CI net)         | none (validates only — lint/build/test)                             |
-| Prod deploy     | manual, from the fleet           | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                |
-| Dev deploy      | manual, from the fleet           | `scripts/deploy.sh dev` → `deploy-preview.sh`    | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres              |
-| Demo deploy     | manual, from the fleet           | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres |
-| PR preview      | manual on the preview droplet    | `scripts/deploy-preview.sh`                      | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
+| Stage       | Trigger                       | Mechanism                                               | Target                                                              |
+| ----------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
+| PR / push   | every push (PR or branch)     | `.github/workflows/quality.yml` (CI net)                | none (validates only — lint/build/test)                             |
+| Prod deploy | manual, from the fleet        | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                       |
+| Dev deploy  | manual, from the fleet        | `scripts/deploy.sh dev` → `deploy-preview.sh`           | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres              |
+| Demo deploy | manual, from the fleet        | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres    |
+| PR preview  | manual on the preview droplet | `scripts/deploy-preview.sh`                             | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
 
 The prod deploy builds + pushes the image on the fleet box, then SSHes
 (flock-locked) to the production droplet. There is no longer a self-hosted
@@ -239,7 +239,7 @@ garbage-collection start`.** Trap discovered 2026-05-04 (workflow run
    registry, including untagged blobs from earlier failed pushes.
 2. GC frees the space, but the _async_ GC can't finalize until every
    active `--read-write` docker-config JWT expires. `doctl registry
-   login` mints a write token at deploy time; GC stays blocked until it
+login` mints a write token at deploy time; GC stays blocked until it
    times out.
 3. While GC is in `waiting for write JWTs to expire` state,
    **all new write tokens for the registry are rejected with `401

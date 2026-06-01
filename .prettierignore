@@ -13,3 +13,8 @@ package-lock.json
 # exports of jsx/css/md/png mockups. Lives under docs/handoff/v<version>/.
 # Format gate skips them so a design re-upload doesn't block PRs.
 docs/handoff
+
+# Steve demo-handoff scratch tree. Untracked by git (docs/steve-handoff/.gitignore
+# ignores `*`), but on-disk audit artifacts (e.g. findings/*.json, captured HTML)
+# would otherwise make `prettier --check` error and block the LOCAL deploy gate.
+docs/steve-handoff

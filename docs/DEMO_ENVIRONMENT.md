@@ -32,9 +32,10 @@ the agent/scratch `dev` tier and the ephemeral per-PR previews:
 
 ## Deploy contract
 
-Push to `demo` → `.github/workflows/deploy-demo.yml` runs on the
-`sitelayer-preview` self-hosted runner → invokes `scripts/deploy-preview.sh`
-with:
+Deploy the demo tier from the fleet (e.g. taylor-pc-ubuntu) with
+`scripts/deploy.sh demo` → `scripts/deploy-preview.sh` on the preview droplet.
+There is no push-trigger and no GitHub Actions in this path; the deploy
+invokes `scripts/deploy-preview.sh` with:
 
 ```
 PREVIEW_SLUG=demo
@@ -145,14 +146,11 @@ Required values to fill in (the others can be left as the example):
 - `DO_SPACES_*` — only if you've created the `sitelayer-blueprints-demo` bucket.
   Otherwise leave commented; uploads will use the per-stack Docker volume.
 
-### 3. Create the `demo` branch on GitHub
+### 3. First deploy
 
-```bash
-git fetch origin
-git push origin origin/main:refs/heads/demo
-```
-
-The workflow fires on push to `demo`; the first deploy bootstraps everything.
+Run `scripts/deploy.sh demo` from the fleet (`demo` is an `APP_TIER=demo`
+environment deployed from a chosen ref, not a long-lived code branch). The
+first deploy bootstraps everything.
 
 ### 4. Verify
 
@@ -182,7 +180,7 @@ Web app should load and display the "DEMO - sample data, public showcase" ribbon
 - `scripts/deploy-preview.sh` — the parameterized deploy script (serves
   preview, dev, and demo tiers)
 - `ops/env/demo.env.example` — shared env template
-- `.github/workflows/deploy-demo.yml` — the workflow
+- `scripts/deploy.sh` — fleet entrypoint (`scripts/deploy.sh demo`)
 - `docs/DEV_ENVIRONMENT.md` — sibling dev tier (the shape this mirrors)
 - `docs/steve-handoff/demo-design/` — the demo-design research + build units
   (R1 tier, R2 auth, R3 edge/DNS, R4 seed, R5 security)

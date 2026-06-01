@@ -1,14 +1,14 @@
 # Sitelayer Preview Deployments
 
-**Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, deploy scripts, GitHub self-hosted runner, TTL cleanup timer, and `main` smoke preview are live
-**Last updated:** 2026-05-20
+**Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, fleet-driven deploy scripts (`scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh`), TTL cleanup timer, and `main` smoke preview are live
+**Last updated:** 2026-06-01
 
 > **Related:** The persistent dev environment (`dev.sitelayer.sandolab.xyz`,
 > backed by the dedicated `sitelayer_dev` database, tracking the `dev` branch)
-> reuses the preview droplet + Traefik + self-hosted runner, but is documented
-> separately in [`docs/DEV_ENVIRONMENT.md`](./DEV_ENVIRONMENT.md). It uses
-> `scripts/deploy-preview.sh` with `PREVIEW_TIER=dev`, which skips per-slug
-> schema isolation.
+> reuses the preview droplet + Traefik, but is documented
+> separately in [`docs/DEV_ENVIRONMENT.md`](./DEV_ENVIRONMENT.md). It deploys via
+> `scripts/deploy.sh dev` from the fleet → `scripts/deploy-preview.sh` with
+> `PREVIEW_TIER=dev`, which skips per-slug schema isolation.
 
 ## Goal
 
@@ -24,25 +24,25 @@ Do not create a second managed Postgres cluster yet. Use the existing `sitelayer
 
 ## Provisioned Preview Infrastructure
 
-| Resource              | Value                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Droplet               | `sitelayer-preview`                                                                                                                               |
-| Droplet ID            | `566806040`                                                                                                                                       |
-| Region                | Toronto `tor1`                                                                                                                                    |
-| Size                  | `s-2vcpu-4gb`                                                                                                                                     |
-| RAM / CPU / disk      | 4GB RAM, 2 vCPU, 80GB disk                                                                                                                        |
-| Droplet public IPv4   | `137.184.169.208`                                                                                                                                 |
-| Reserved IPv4 for DNS | `159.203.53.218`                                                                                                                                  |
-| Private IPv4          | `10.118.0.2`                                                                                                                                      |
-| Firewall              | `sitelayer-preview`, ID `7a8f443e-cd74-4867-af8a-118559f33561`                                                                                    |
-| Firewall inbound      | SSH `22` from `50.71.113.46/32` and prod droplet `566798325`; HTTP `80` public; HTTPS `443` public                                                |
-| Firewall outbound     | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks                                        |
-| Router                | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router`                                                          |
-| Shared env            | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600`                                                                              |
-| Shared preview DB     | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app`, per-preview schemas such as `sitelayer_pr_42`                |
-| GitHub runner         | `sitelayer-preview`, service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service`                                                  |
-| TTL cleanup           | `sitelayer-preview-prune.timer`, daily, 14-day default, installed by `scripts/setup-preview-host.sh` / `scripts/install-preview-prune-systemd.sh` |
-| Smoke preview         | `https://main.preview.sitelayer.sandolab.xyz`                                                                                                     |
+| Resource              | Value                                                                                                                                                                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Droplet               | `sitelayer-preview`                                                                                                                                                                                                            |
+| Droplet ID            | `566806040`                                                                                                                                                                                                                    |
+| Region                | Toronto `tor1`                                                                                                                                                                                                                 |
+| Size                  | `s-2vcpu-4gb`                                                                                                                                                                                                                  |
+| RAM / CPU / disk      | 4GB RAM, 2 vCPU, 80GB disk                                                                                                                                                                                                     |
+| Droplet public IPv4   | `137.184.169.208`                                                                                                                                                                                                              |
+| Reserved IPv4 for DNS | `159.203.53.218`                                                                                                                                                                                                               |
+| Private IPv4          | `10.118.0.2`                                                                                                                                                                                                                   |
+| Firewall              | `sitelayer-preview`, ID `7a8f443e-cd74-4867-af8a-118559f33561`                                                                                                                                                                 |
+| Firewall inbound      | SSH `22` from `50.71.113.46/32` and prod droplet `566798325`; HTTP `80` public; HTTPS `443` public                                                                                                                             |
+| Firewall outbound     | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks                                                                                                                     |
+| Router                | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router`                                                                                                                                       |
+| Shared env            | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600`                                                                                                                                                           |
+| Shared preview DB     | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app`, per-preview schemas such as `sitelayer_pr_42`                                                                                             |
+| Deploy driver         | Fleet-driven: `scripts/deploy.sh dev\|demo` (run from a fleet box such as taylor-pc-ubuntu) → `scripts/deploy-preview.sh` on the preview droplet. The self-hosted `sitelayer-preview` GitHub runner was removed in `70b9584b`. |
+| TTL cleanup           | `sitelayer-preview-prune.timer`, daily, 14-day default, installed by `scripts/setup-preview-host.sh` / `scripts/install-preview-prune-systemd.sh`                                                                              |
+| Smoke preview         | `https://main.preview.sitelayer.sandolab.xyz`                                                                                                                                                                                  |
 
 The firewall does not expose public preview app ports such as `3000`. Traefik should be the only public ingress path.
 
@@ -122,56 +122,41 @@ Current default:
 - App URL uses normal `sslmode=require` plus `DATABASE_SSL_REJECT_UNAUTHORIZED=false` because DigitalOcean managed Postgres presents a certificate chain that Node `pg` rejects unless a CA bundle is configured.
 - Maintenance commands use the same URL with `psql`; deploy and cleanup pass `PGOPTIONS` so migrations, checks, and application connections hit the preview schema instead of `public`.
 
-## GitHub Actions Flow
+## Deploy Flow
 
-Preview automation is defined in `.github/workflows/deploy-preview.yml`.
+Preview/dev/demo deploys are fleet-driven, not GitHub Actions. The `.github/workflows/deploy-preview.yml` workflow and the self-hosted `sitelayer-preview` runner were removed in commit `70b9584b`; only `.github/workflows/quality.yml` remains, and it is optional passive PR CI (lint/build/test) — not a deploy gate.
 
-Trigger candidates:
+Run the deploy from a fleet box (e.g. taylor-pc-ubuntu):
 
-- `pull_request` opened/synchronize/reopened for internal branches only
-- `workflow_dispatch` with `slug`, optional `ref`, and `mode`
+- `scripts/deploy.sh dev` and `scripts/deploy.sh demo` dispatch to `scripts/deploy-preview.sh` on the preview droplet.
+- These persistent stacks run in source-mounted watch-mode (tsx + Vite HMR) — no `docker compose up --build`. PR-style slug previews are still driven by `scripts/deploy-preview.sh` directly.
 
-Do not run secret-bearing preview deploys for untrusted fork PRs.
+What `scripts/deploy-preview.sh` does on the preview droplet:
 
-Current workflow design:
-
-- Runs on a self-hosted runner labeled `sitelayer-preview`.
-- Computes `pr-<number>` for PRs or uses a manual dispatch slug.
-- Defaults to `PREVIEW_MODE=dev`, which source-mounts the app and does not run `docker compose up --build`.
-- Uses `PREVIEW_MODE=prod` when a PR has the `preview-prod` label or manual dispatch sets `mode=prod`; that path builds with `docker-compose.preview-prod.yml`.
-- Runs `scripts/deploy-preview.sh` from the checked-out commit.
+- Computes the slug (`pr-<number>` for a PR preview, or `dev` / `demo` for the persistent tiers).
 - Stages code under `/app/previews/<slug>`.
-- Renders `.env` from `/app/previews/.env.shared` plus slug-specific host and schema values.
-- Creates the preview schema, runs migrations in that schema, and checks that schema.
-- Runs `docker compose -p sitelayer-<slug> ... up -d --remove-orphans`; prod mode adds `--build`.
+- Renders `.env` from the shared env file (`/app/previews/.env.shared`, or `.env.dev.shared` / `.env.demo.shared`) plus slug-specific host and schema values.
+- For per-slug previews, creates the preview schema, runs migrations in that schema, and checks that schema.
+- Brings up the stack with `docker compose -p sitelayer-<slug> ...`.
 - Health-checks `https://<slug>.preview.sitelayer.sandolab.xyz/health`.
 
-Cleanup workflow:
+Cleanup:
 
-1. On PR close, run on the `sitelayer-preview` self-hosted runner.
-2. Run `scripts/cleanup-preview.sh` for `pr-<number>`.
-3. Stop containers and drop the preview schema if `.env` contains `PREVIEW_DB_SCHEMA`.
-4. Remove `/app/previews/<slug>`.
-5. Prune old images/volumes with a TTL guard.
+1. Run `scripts/cleanup-preview.sh` for `pr-<number>` (e.g. from the fleet, or when a slug is retired).
+2. Stop containers and drop the preview schema if `.env` contains `PREVIEW_DB_SCHEMA`.
+3. Remove `/app/previews/<slug>`.
+4. Prune old images/volumes with the TTL guard.
 
-Fresh preview hosts install the same TTL guard during `scripts/setup-preview-host.sh`. The service points at `/app/previews/main/scripts/prune-preview-stacks.sh`; before the `main` preview exists it exits cleanly, then becomes active after the first `main` deploy.
-
-Runner registration completed on 2026-04-24 using an owner-provided token. The runner package is installed at `/home/sitelayer/actions-runner`, and the service is active/enabled:
-
-```bash
-systemctl status actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service
-```
-
-The current `taylorSando` token still cannot list repo runners through the REST API (`403`), but the runner service log shows a successful GitHub broker session and `Listening for Jobs`.
+The TTL guard runs as a systemd prune timer rather than the removed `preview-gc.yml` workflow. Fresh preview hosts install it during `scripts/setup-preview-host.sh` (also installable via `scripts/install-preview-prune-systemd.sh`). The service points at `/app/previews/main/scripts/prune-preview-stacks.sh`; before the `main` preview exists it exits cleanly, then becomes active after the first `main` deploy.
 
 ## Security Rules
 
-- Preview deploys run locally on the `sitelayer-preview` self-hosted runner. The current preview workflow does not consume a preview SSH deploy key.
+- Preview deploys are driven from the fleet (`scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh`), which SSHes to the preview droplet. There is no self-hosted GitHub runner and no GitHub-Actions secret path.
 - Preview env uses sandbox or blank Clerk/QBO/Spaces/Sentry values.
 - Preview blueprint uploads are stored in a per-stack Docker volume; do not upload customer-sensitive plans to preview until access control and retention policy are explicit.
-- Preview deploys run only for trusted internal branches unless manually approved.
+- Preview deploys run only for trusted internal branches; only deploy refs you trust.
 - Preview branch code can execute Docker build scripts on the preview host; treat this as privileged execution.
-- A self-hosted GitHub runner on the preview host is also privileged execution. Only run it for trusted internal branches or manually approved workflow dispatches.
+- Whoever holds fleet SSH access to the preview host effectively has privileged execution there. Only deploy trusted internal refs from the fleet.
 - Protect preview URLs with basic auth or IP allowlisting if customer data appears there.
 - Do not expose public port `3000`; only `80` and `443` should be open.
 
@@ -183,7 +168,7 @@ Approximate starting point:
 - `s-2vcpu-4gb`: 3-6 low-traffic previews with serialized builds.
 - `s-4vcpu-8gb`: many previews or faster builds, but this costs the same class as production.
 
-Keep preview deploy concurrency low. Let GitHub Actions cancel in-progress deploys per branch and serialize builds on the preview droplet.
+Keep preview deploy concurrency low. Serialize deploys from the fleet (one `scripts/deploy.sh` invocation at a time per slug) and let builds serialize on the preview droplet.
 
 ## Scaling Up
 
@@ -209,11 +194,9 @@ If the bottleneck is Docker image storage, attach a volume for Docker data or do
 - [x] Add wildcard preview DNS under `sitelayer.sandolab.xyz`.
 - [x] Install Traefik on preview droplet.
 - [x] Create `docker-compose.preview.yml`.
-- [x] Add `.github/workflows/deploy-preview.yml`.
-- [x] Add preview cleanup workflow.
+- [x] Wire fleet-driven preview deploys via `scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh` (the GitHub Actions `deploy-preview.yml` workflow was removed in `70b9584b`).
+- [x] Add `scripts/cleanup-preview.sh` for slug teardown.
 - [x] Create shared preview DB/user on existing `sitelayer-db`.
 - [x] Smoke deploy `main.preview.sitelayer.sandolab.xyz`.
-- [x] Register self-hosted GitHub runner with label `sitelayer-preview`.
-- [x] Add PR comment with preview URL after deploy.
 - [x] Add TTL-based Docker image/container cleanup script.
 - [x] Install TTL cleanup timer.

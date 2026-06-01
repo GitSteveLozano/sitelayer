@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Reaper for stale `sitelayer-pr-*` docker compose stacks on the preview droplet.
-# Driven by Preview Stack GC workflow (.github/workflows/preview-gc.yml). Reads
-# OPEN_PRS_CSV from the environment (set on the SSH command line) — comma-
-# separated list of open PR numbers. Anything not in that list gets reaped.
+# Now invoked by the systemd preview-prune timer (scripts/install-preview-prune-systemd.sh)
+# or run manually — the Preview Stack GC workflow (.github/workflows/preview-gc.yml)
+# was removed in commit 70b9584b. Reads OPEN_PRS_CSV from the environment (set on
+# the SSH command line) — comma-separated list of open PR numbers. Anything not in
+# that list gets reaped.
 set -euo pipefail
 
 open_csv="${OPEN_PRS_CSV:-}"
