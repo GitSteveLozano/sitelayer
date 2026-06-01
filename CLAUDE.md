@@ -107,16 +107,22 @@ Current Mesh runtime dependencies recorded for `sitelayer` as of 2026-04-24:
 
 These are deployment verification/runtime records. Treat production-critical rows as required evidence when changing infra, deploy, storage, auth, or observability.
 
-> **STALE 2026-06-01 — pending a mesh runtime-dep reconcile for project `282`.**
-> The 2026-04-24 rows above (and the preview rows below) encode a
-> GitHub-Actions + Traefik-preview topology the repo has moved past: deploys
-> are now local-fleet via `scripts/deploy.sh` (Actions deploy workflows
-> removed in `70b9584b`), the `env_file/production-env` source is the
-> droplet-rendered `/app/sitelayer/.env`, and the `docker_container/preview-router-traefik`
-> / self-hosted-runner rows no longer match reality. The mesh-side upsert
-> requires the mesh MCP and an operator — do NOT fabricate replacement rows
-> here. Until reconciled, treat these rows as historical, not current
-> evidence.
+> **STALE 2026-06-01 — mesh runtime-dep ROW upsert tracked in mesh task
+> `#174882` (project `282`).** The repo prose + deploy scripts are now fully
+> reconciled to the local-fleet model (PR #468): deploys are local-fleet via
+> `scripts/deploy.sh` with a LOCAL Quality gate in
+> `scripts/deploy-production-local.sh` (Actions deploy workflows removed in
+> `70b9584b`; nothing in the deploy path queries GitHub), and
+> `env_file/production-env` is the droplet-rendered `/app/sitelayer/.env`
+> (reused each deploy). The 2026-04-24 `project_runtime_deps` rows above (and
+> the preview rows below) still encode the old GitHub-Actions + self-hosted-
+> runner deploy topology and need an operator-mode mesh upsert — the exact
+> per-row changes are enumerated in mesh task `#174882` (the row-write tool is
+> not in the scoped agent session; do NOT fabricate replacement rows here).
+> NOTE: `docker_container/preview-router-traefik` is NOT stale — preview/dev/
+> demo edge is still Traefik; only the PROD edge moved to Caddy. Until the
+> rows are upserted, treat the GitHub-Actions/runner framing in them as
+> historical, not current evidence.
 
 Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for (see STALE note above):
 
