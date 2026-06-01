@@ -16,9 +16,32 @@
  * no dedicated backend API yet. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useEffect, useMemo, useState } from 'react'
+import {
+  BUILTIN_ROLE_PERMISSIONS,
+  CONSTRAINABLE_ACTIONS,
+  CONSTRAINT_ENFORCEMENT,
+  type BuiltinRole,
+  type PermissionAction,
+} from '@sitelayer/domain'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
 import { useDeletePricingOverride, usePricingOverrides, useUpsertPricingOverride } from '@/lib/api/pricing-overrides'
+import { useActiveCompanyId } from '@/lib/api/active-company'
+import {
+  useCompanyRoles,
+  useCreateCustomRole,
+  type CustomRole,
+  type CustomRoleGrant,
+} from '@/lib/api/company-roles'
+import {
+  ACTION_LABELS,
+  BUILTIN_ROLE_LABELS,
+  DEFAULT_APPROVE_OT_HOURS,
+  DEFAULT_AUTH_MATERIALS_DOLLARS,
+  buildBuiltinMatrix,
+  encodeGrants,
+  type ExtraPowerState,
+} from '@/lib/roles-display'
 import { DataTable, DEyebrow, DH1, DModal, type DColumn } from '@/components/d'
 import { MButton, MInput, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
@@ -65,37 +88,12 @@ const SECTIONS: SectionDef[] = [
 ]
 
 // ---- Roles + Permissions matrix ------------------------------------------
-// The design is an ACTION × ROLE editable checkbox grid: 4 built-in roles
-// (OWNER / ESTIMATOR / FOREMAN / CREW) down the columns and 9 named actions down
-// the rows, with yellow-fill checkbox cells. This is a display + local-edit
-// surface; there is no RBAC-write endpoint, so toggles are held locally and
-// server-side RBAC (company_memberships) remains authoritative.
-type RoleKey = 'owner' | 'estimator' | 'foreman' | 'crew'
-
-const ROLE_COLUMNS: Array<{ key: RoleKey; label: string }> = [
-  { key: 'owner', label: 'Owner' },
-  { key: 'estimator', label: 'Estimator' },
-  { key: 'foreman', label: 'Foreman' },
-  { key: 'crew', label: 'Crew' },
-]
-
-interface ActionRow {
-  action: string
-  allowed: Record<RoleKey, boolean>
-}
-
-// Mirrors the 9 action rows + the yellow-fill cells in dsg__27.
-const ACTION_MATRIX: ActionRow[] = [
-  { action: 'Create project', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
-  { action: 'Edit pricing book', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
-  { action: 'Authorize materials · $', allowed: { owner: true, estimator: false, foreman: false, crew: false } },
-  { action: 'Brief crew', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Submit daily log', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Approve time', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Clock in / out', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-  { action: 'Flag issue', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-  { action: 'Stop work', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-]
+// The design is an ACTION × ROLE checkbox grid: the built-in roles across the
+// columns and the 9 named actions down the rows, with yellow-fill cells. The
+// matrix is the immutable system contract from @sitelayer/domain, surfaced by
+// GET /api/companies/:id/roles and rendered READ-ONLY (built-ins are not
+// editable). Custom roles are listed below and created via the + Custom role
+// flow (POST /api/companies/:id/roles).
 
 // ---- Pricing Book (company rate book) ------------------------------------
 // The COMPANY-level rate book. Every service item shows its catalog default
@@ -570,13 +568,27 @@ function LoadedLaborSection() {
 }
 
 // Yellow-fill checkbox cell matching the design's hard-cornered checkboxes.
-function PermCheckbox({ checked, onToggle, label }: { checked: boolean; onToggle: () => void; label: string }) {
+// Read-only here (the built-in matrix is immutable); `onToggle` drives the
+// editable cap toggles in the create-custom-role modal.
+function PermCheckbox({
+  checked,
+  onToggle,
+  label,
+  disabled,
+}: {
+  checked: boolean
+  onToggle?: (() => void) | undefined
+  label: string
+  disabled?: boolean | undefined
+}) {
+  const interactive = Boolean(onToggle) && !disabled
   return (
     <button
       type="button"
       role="checkbox"
       aria-checked={checked}
       aria-label={label}
+      disabled={!interactive}
       onClick={onToggle}
       style={{
         width: 22,
@@ -586,13 +598,14 @@ function PermCheckbox({ checked, onToggle, label }: { checked: boolean; onToggle
         justifyContent: 'center',
         border: '2px solid var(--m-ink)',
         borderRadius: 0,
-        cursor: 'pointer',
+        cursor: interactive ? 'pointer' : 'default',
         background: checked ? 'var(--m-accent)' : 'transparent',
         color: 'var(--m-ink)',
         fontSize: 13,
         fontWeight: 800,
         lineHeight: 1,
         padding: 0,
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {checked ? '✓' : ''}
@@ -601,85 +614,347 @@ function PermCheckbox({ checked, onToggle, label }: { checked: boolean; onToggle
 }
 
 function RolesSection() {
-  // Local edit state seeded from the canonical matrix. There is no RBAC-write
-  // endpoint, so toggles stay local (the design's editable grid) and server-side
-  // RBAC remains authoritative.
-  const [matrix, setMatrix] = useState<ActionRow[]>(() =>
-    ACTION_MATRIX.map((r) => ({ ...r, allowed: { ...r.allowed } })),
-  )
+  const companyId = useActiveCompanyId()
+  const roles = useCompanyRoles(companyId)
+  const [createOpen, setCreateOpen] = useState(false)
 
-  const toggle = (rowIdx: number, role: RoleKey) => {
-    setMatrix((prev) =>
-      prev.map((row, i) => (i === rowIdx ? { ...row, allowed: { ...row.allowed, [role]: !row.allowed[role] } } : row)),
-    )
+  const builtinRoles = useMemo<BuiltinRole[]>(
+    () => (roles.data?.builtins ?? []).map((b) => b.role),
+    [roles.data?.builtins],
+  )
+  const matrix = useMemo(() => buildBuiltinMatrix(builtinRoles), [builtinRoles])
+  const customRoles = roles.data?.custom ?? []
+  const colCount = builtinRoles.length || 5
+  const cols = `minmax(0,1fr) repeat(${colCount}, 84px)`
+
+  return (
+    <div className="d-stack">
+      <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+        {/* Header row: ACTION + the role columns (read-only) + a "+ Custom role" action. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 18px',
+            borderBottom: '2px solid var(--m-ink)',
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: cols,
+              gap: 12,
+              flex: 1,
+              alignItems: 'center',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            <span>Action · built-in (read-only)</span>
+            {(builtinRoles.length
+              ? builtinRoles
+              : (['owner', 'estimator', 'foreman', 'crew', 'bookkeeper'] as const)
+            ).map((role) => (
+              <span key={role} style={{ textAlign: 'center' }}>
+                {BUILTIN_ROLE_LABELS[role]}
+              </span>
+            ))}
+          </div>
+          <span style={{ marginLeft: 16 }}>
+            <MButton size="sm" variant="quiet" onClick={() => setCreateOpen(true)} disabled={!companyId}>
+              + Custom role
+            </MButton>
+          </span>
+        </div>
+
+        {roles.isError ? (
+          <div style={{ padding: '16px 18px', color: 'var(--m-red)', fontSize: 14 }}>Could not load roles.</div>
+        ) : roles.isPending ? (
+          <div style={{ padding: '16px 18px', color: 'var(--m-ink-3)', fontSize: 14 }}>Loading roles…</div>
+        ) : (
+          matrix.map((row, rowIdx) => (
+            <div
+              key={row.action}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: cols,
+                gap: 12,
+                alignItems: 'center',
+                padding: '14px 18px',
+                borderBottom: rowIdx < matrix.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{row.label}</span>
+              {builtinRoles.map((role) => (
+                <span key={role} style={{ textAlign: 'center' }}>
+                  <PermCheckbox checked={row.allowed[role]} label={`${row.label} — ${BUILTIN_ROLE_LABELS[role]}`} />
+                </span>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Custom roles list */}
+      <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div
+          style={{
+            padding: '12px 18px',
+            borderBottom: '2px solid var(--m-ink)',
+            fontWeight: 700,
+            fontSize: 15,
+            color: 'var(--m-ink)',
+          }}
+        >
+          Custom roles {customRoles.length ? `· ${customRoles.length}` : ''}
+        </div>
+        {roles.isPending ? (
+          <div style={{ padding: '16px 18px', color: 'var(--m-ink-3)', fontSize: 14 }}>Loading…</div>
+        ) : customRoles.length === 0 ? (
+          <div style={{ padding: '16px 18px', color: 'var(--m-ink-3)', fontSize: 14 }}>
+            No custom roles yet. Create one to grant extra powers on top of a built-in base.
+          </div>
+        ) : (
+          customRoles.map((role, i) => (
+            <div
+              key={role.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '14px 18px',
+                borderBottom: i < customRoles.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>
+                  {role.name}
+                </span>
+                <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>
+                  Inherits {BUILTIN_ROLE_LABELS[role.inherit_from]} · {describeGrants(role)}
+                </span>
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {createOpen && companyId ? (
+        <CreateCustomRoleModal companyId={companyId} onClose={() => setCreateOpen(false)} />
+      ) : null}
+    </div>
+  )
+}
+
+/** One-line summary of a custom role's extra grants (with caps surfaced). */
+function describeGrants(role: CustomRole): string {
+  if (role.grants.length === 0) return 'No extra powers'
+  return role.grants
+    .map((g) => {
+      const label = ACTION_LABELS[g.action]
+      const capCents = g.constraints?.[CONSTRAINABLE_ACTIONS.auth_materials]
+      const otHours = g.constraints?.[CONSTRAINABLE_ACTIONS.approve_time]
+      if (g.action === 'auth_materials' && capCents != null) return `${label} ≤ ${formatMoney(capCents / 100)}`
+      if (g.action === 'approve_time' && otHours != null) return `${label} ≤ ${otHours}h/wk`
+      return label
+    })
+    .join(' · ')
+}
+
+const DESKTOP_INHERIT_OPTIONS: BuiltinRole[] = ['owner', 'estimator', 'foreman', 'crew', 'bookkeeper']
+const DESKTOP_EXTRA_POWER_ACTIONS: PermissionAction[] = ['auth_materials', 'edit_pricing_book', 'approve_time']
+
+// Create-custom-role modal: name + inherit-from + extra-powers (with the live
+// auth_materials $-cap and the inert approve_time OT-cap) → POST.
+function CreateCustomRoleModal({ companyId, onClose }: { companyId: string; onClose: () => void }) {
+  const create = useCreateCustomRole(companyId)
+  const [name, setName] = useState('')
+  const [inherit, setInherit] = useState<BuiltinRole>('foreman')
+  const [powers, setPowers] = useState<Record<string, ExtraPowerState>>({
+    auth_materials: { on: true, dollars: String(DEFAULT_AUTH_MATERIALS_DOLLARS) },
+    approve_time: { on: true, otHours: String(DEFAULT_APPROVE_OT_HOURS) },
+  })
+  const [error, setError] = useState<string | null>(null)
+
+  const baseActions = BUILTIN_ROLE_PERMISSIONS[inherit] as readonly PermissionAction[]
+  const togglePower = (action: PermissionAction) =>
+    setPowers((p) => ({ ...p, [action]: { ...(p[action] ?? { on: false }), on: !p[action]?.on } }))
+  const setCap = (action: PermissionAction, field: 'dollars' | 'otHours', value: string) =>
+    setPowers((p) => ({ ...p, [action]: { ...(p[action] ?? { on: true }), on: true, [field]: value } }))
+
+  const handleSave = async () => {
+    setError(null)
+    if (name.trim().length === 0) {
+      setError('Give the role a name.')
+      return
+    }
+    let grants: CustomRoleGrant[]
+    try {
+      const addable: Record<string, ExtraPowerState> = {}
+      for (const action of DESKTOP_EXTRA_POWER_ACTIONS) {
+        if (baseActions.includes(action)) continue
+        if (powers[action]) addable[action] = powers[action]!
+      }
+      grants = encodeGrants(addable)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Invalid cap.')
+      return
+    }
+    try {
+      await create.mutateAsync({ name: name.trim(), inherit_from: inherit, grants })
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create failed.')
+    }
   }
 
   return (
-    <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
-      {/* Header row: ACTION + the 4 role columns + a "+ CUSTOM ROLE" action. */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 18px',
-          borderBottom: '2px solid var(--m-ink)',
-        }}
-      >
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0,1fr) repeat(4, 84px)',
-            gap: 12,
-            flex: 1,
-            alignItems: 'center',
-            fontFamily: 'var(--m-num)',
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            color: 'var(--m-ink-3)',
-          }}
-        >
-          <span>Action</span>
-          {ROLE_COLUMNS.map((c) => (
-            <span key={c.key} style={{ textAlign: 'center' }}>
-              {c.label}
-            </span>
-          ))}
+    <DModal
+      open
+      onClose={onClose}
+      title="Custom role"
+      width={560}
+      footer={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+          <span style={{ fontSize: 12, color: error ? 'var(--m-red)' : 'var(--m-ink-3)' }}>
+            {error ?? 'Inherits a built-in base, then adds the toggled powers.'}
+          </span>
+          <span style={{ display: 'flex', gap: 8 }}>
+            <MButton variant="ghost" onClick={onClose} disabled={create.isPending}>
+              Cancel
+            </MButton>
+            <MButton variant="primary" onClick={() => void handleSave()} disabled={create.isPending}>
+              {create.isPending ? 'Creating…' : 'Create role'}
+            </MButton>
+          </span>
         </div>
-        <span style={{ marginLeft: 16 }}>
-          <MButton size="sm" variant="quiet">
-            + Custom role
-          </MButton>
-        </span>
-      </div>
+      }
+    >
+      <div style={{ display: 'grid', gap: 16 }}>
+        <label style={{ display: 'grid', gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--m-ink-3)', textTransform: 'uppercase' }}>
+            Name
+          </span>
+          <MInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Lead Foreman" aria-label="Role name" />
+        </label>
 
-      {matrix.map((row, rowIdx) => (
-        <div
-          key={row.action}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0,1fr) repeat(4, 84px)',
-            gap: 12,
-            alignItems: 'center',
-            padding: '14px 18px',
-            borderBottom: rowIdx < matrix.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
-          }}
-        >
-          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{row.action}</span>
-          {ROLE_COLUMNS.map((c) => (
-            <span key={c.key} style={{ textAlign: 'center' }}>
-              <PermCheckbox
-                checked={row.allowed[c.key]}
-                onToggle={() => toggle(rowIdx, c.key)}
-                label={`${row.action} — ${c.label}`}
-              />
-            </span>
-          ))}
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--m-ink-3)', textTransform: 'uppercase' }}>
+            Inherit from
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {DESKTOP_INHERIT_OPTIONS.map((role) => {
+              const on = inherit === role
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => setInherit(role)}
+                  aria-pressed={on}
+                  style={{
+                    padding: '8px 14px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: 'var(--m-ink)',
+                    background: on ? 'var(--m-accent)' : 'transparent',
+                    border: '2px solid var(--m-ink)',
+                    borderRadius: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {BUILTIN_ROLE_LABELS[role]}
+                </button>
+              )
+            })}
+          </div>
         </div>
-      ))}
-    </div>
+
+        <div style={{ display: 'grid', gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--m-ink-3)', textTransform: 'uppercase' }}>
+            Extra powers · on top of {BUILTIN_ROLE_LABELS[inherit].toLowerCase()}
+          </span>
+          {DESKTOP_EXTRA_POWER_ACTIONS.map((action) => {
+            const inherited = baseActions.includes(action)
+            const state = powers[action] ?? { on: false }
+            const on = inherited || state.on
+            const isAuth = action === 'auth_materials'
+            const isOt = action === 'approve_time'
+            return (
+              <div
+                key={action}
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 0',
+                  borderTop: '1px solid var(--m-line, rgba(0,0,0,0.08))',
+                  opacity: inherited ? 0.55 : 1,
+                }}
+              >
+                <PermCheckbox
+                  checked={on}
+                  onToggle={inherited ? undefined : () => togglePower(action)}
+                  disabled={inherited}
+                  label={ACTION_LABELS[action]}
+                />
+                <span style={{ flex: 1, minWidth: 120 }}>
+                  <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--m-ink)' }}>
+                    {ACTION_LABELS[action]}
+                  </span>
+                  <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, color: 'var(--m-ink-3)' }}>
+                    {inherited
+                      ? `Already in ${BUILTIN_ROLE_LABELS[inherit]}`
+                      : isAuth
+                        ? 'Dollar cap · enforced'
+                        : isOt
+                          ? `OT cap · ${CONSTRAINT_ENFORCEMENT.approve_time === 'inert' ? 'stored, not yet enforced' : 'enforced'}`
+                          : 'No cap'}
+                  </span>
+                </span>
+                {!inherited && on && isAuth ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 800 }}>$</span>
+                    <MInput
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      value={state.dollars ?? ''}
+                      onChange={(e) => setCap(action, 'dollars', e.target.value)}
+                      placeholder="No limit"
+                      aria-label="Auth materials dollar cap"
+                      style={{ width: 120, fontFamily: 'var(--m-num)', textAlign: 'right' }}
+                    />
+                  </span>
+                ) : null}
+                {!inherited && on && isOt ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <MInput
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      step="1"
+                      value={state.otHours ?? ''}
+                      onChange={(e) => setCap(action, 'otHours', e.target.value)}
+                      placeholder="No limit"
+                      aria-label="Approve OT hours per week cap"
+                      style={{ width: 90, fontFamily: 'var(--m-num)', textAlign: 'right' }}
+                    />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--m-ink-3)' }}>H/WK · INERT</span>
+                  </span>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </DModal>
   )
 }
 

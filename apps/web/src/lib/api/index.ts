@@ -510,6 +510,22 @@ export {
   type PublicInviteView,
 } from './invites'
 
+export {
+  useAssignMembershipRole,
+  useCompanyRoles,
+  useCreateCustomRole,
+  useDeleteCustomRole,
+  usePatchCustomRole,
+  type AssignMembershipRoleRequest,
+  type AssignMembershipRoleResponse,
+  type BuiltinRoleView,
+  type CompanyRolesResponse,
+  type CreateCustomRoleRequest,
+  type CustomRole,
+  type CustomRoleGrant,
+  type PatchCustomRoleRequest,
+} from './company-roles'
+
 export { useActiveCompanyId, useActiveCompanyModules } from './active-company'
 
 export {

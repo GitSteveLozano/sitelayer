@@ -21,12 +21,23 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import {
+  BUILTIN_ROLE_PERMISSIONS,
+  CONSTRAINABLE_ACTIONS,
+  CONSTRAINT_ENFORCEMENT,
+  type BuiltinRole,
+  type PermissionAction,
+} from '@sitelayer/domain'
 import type { BootstrapResponse } from '@/lib/api'
 import {
   getActiveCompanySlug,
   useServiceItems,
   useWorkingHours,
   useUpdateWorkingHours,
+  useCompanyRoles,
+  useCreateCustomRole,
+  type CustomRole,
+  type CustomRoleGrant,
   type ServiceItem,
   type WorkingHours,
   type WorkingHoursOtRule,
@@ -38,6 +49,16 @@ import { useLaborBurdenToday } from '@/lib/api/labor-burden'
 import { queryKeys } from '@/lib/api/keys'
 import { MBody, MButton, MInput, MSectionH, MTopBar, MAvatar, initialsFor } from '@/components/m'
 import { formatMoney } from '@/screens/mobile/format'
+import {
+  ACTION_LABELS,
+  BUILTIN_ROLE_INITIALS,
+  BUILTIN_ROLE_LABELS,
+  DEFAULT_APPROVE_OT_HOURS,
+  DEFAULT_AUTH_MATERIALS_DOLLARS,
+  buildBuiltinMatrix,
+  encodeGrants,
+  type ExtraPowerState,
+} from '@/lib/roles-display'
 
 function useActiveCompany(): BootstrapResponse['company'] | null {
   const qc = useQueryClient()
@@ -573,31 +594,28 @@ function TimeTile({ label, value, onChange }: { label: string; value: string; on
 }
 
 // ===========================================================================
-// ROLES + PERMISSIONS (msg__89) — built-in role × action matrix + create
+// ROLES + PERMISSIONS (msg__89) — built-in role × action matrix + custom roles
 // ===========================================================================
-
-type RoleKey = 'owner' | 'estimator' | 'foreman' | 'crew'
-
-const ROLE_COLUMNS: Array<{ key: RoleKey; label: string }> = [
-  { key: 'owner', label: 'O' },
-  { key: 'estimator', label: 'E' },
-  { key: 'foreman', label: 'F' },
-  { key: 'crew', label: 'W' },
-]
-
-const ACTION_MATRIX: Array<{ action: string; allowed: Record<RoleKey, boolean> }> = [
-  { action: 'Create project', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
-  { action: 'Edit pricing book', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
-  { action: 'Auth materials · $', allowed: { owner: true, estimator: false, foreman: false, crew: false } },
-  { action: 'Brief crew', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Submit daily log', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Approve time', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
-  { action: 'Clock in / out', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-  { action: 'Flag issue', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-  { action: 'Stop work', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
-]
+//
+// The matrix is the immutable system contract from @sitelayer/domain, surfaced
+// by GET /api/companies/:id/roles (the `builtins` view) and rendered READ-ONLY —
+// built-in roles are not editable. Below it, the company's CUSTOM roles list
+// (each inheriting a built-in base + additive grants). The action affordance and
+// the bottom CTA both route to the create-custom-role editor.
 
 export function RolesScreen({ navigate }: { navigate: (path: string) => void }) {
+  const companyId = useActiveCompanyId()
+  const roles = useCompanyRoles(companyId)
+
+  // The API returns built-ins in BUILTIN_ROLES order; render every column.
+  const builtinRoles = useMemo<BuiltinRole[]>(
+    () => (roles.data?.builtins ?? []).map((b) => b.role),
+    [roles.data?.builtins],
+  )
+  const matrix = useMemo(() => buildBuiltinMatrix(builtinRoles), [builtinRoles])
+  const customRoles = roles.data?.custom ?? []
+  const cols = `1.6fr repeat(${builtinRoles.length || 5}, 1fr)`
+
   return (
     <>
       <MTopBar
@@ -610,9 +628,11 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
       />
       <MBody>
         <div style={{ padding: '14px 16px 8px' }}>
-          <Eyebrow>4 built-in roles</Eyebrow>
+          <Eyebrow>{builtinRoles.length || 5} built-in roles</Eyebrow>
           <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--m-ink)', marginTop: 4 }}>
-            Owner · Estimator · Foreman · Crew.
+            {builtinRoles.length
+              ? builtinRoles.map((r) => BUILTIN_ROLE_LABELS[r]).join(' · ')
+              : 'Owner · Estimator · Foreman · Crew · Bookkeeper'}
           </div>
           <div
             style={{
@@ -623,15 +643,17 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
               marginTop: 2,
             }}
           >
-            Custom roles inherit from one.
+            Built-in · read-only. Custom roles inherit from one.
           </div>
         </div>
+
+        {roles.isError ? <EmptyRow>Could not load roles.</EmptyRow> : null}
 
         {/* Matrix header (dark) */}
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1.6fr repeat(4, 1fr)',
+            gridTemplateColumns: cols,
             background: 'var(--m-ink)',
             color: 'var(--m-bg)',
           }}
@@ -648,31 +670,34 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
           >
             Action
           </div>
-          {ROLE_COLUMNS.map((c) => (
-            <div
-              key={c.key}
-              style={{
-                padding: '12px 0',
-                textAlign: 'center',
-                fontFamily: 'var(--m-num)',
-                fontSize: 12,
-                fontWeight: 700,
-                color: 'var(--m-accent)',
-              }}
-            >
-              {c.label}
-            </div>
-          ))}
+          {(builtinRoles.length ? builtinRoles : (['owner', 'estimator', 'foreman', 'crew', 'bookkeeper'] as const)).map(
+            (role) => (
+              <div
+                key={role}
+                title={BUILTIN_ROLE_LABELS[role]}
+                style={{
+                  padding: '12px 0',
+                  textAlign: 'center',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: 'var(--m-accent)',
+                }}
+              >
+                {BUILTIN_ROLE_INITIALS[role]}
+              </div>
+            ),
+          )}
         </div>
 
-        {/* Matrix rows */}
+        {/* Matrix rows (read-only) */}
         <div>
-          {ACTION_MATRIX.map((row) => (
+          {(roles.isPending ? [] : matrix).map((row) => (
             <div
               key={row.action}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1.6fr repeat(4, 1fr)',
+                gridTemplateColumns: cols,
                 borderBottom: '1px solid var(--m-line-2)',
                 alignItems: 'center',
               }}
@@ -686,18 +711,31 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
                   textTransform: 'uppercase',
                 }}
               >
-                {row.action}
+                {row.label}
               </div>
-              {ROLE_COLUMNS.map((c) => (
+              {builtinRoles.map((role) => (
                 <div
-                  key={c.key}
+                  key={role}
                   style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '10px 0' }}
                 >
-                  <Checkbox checked={row.allowed[c.key]} />
+                  <Checkbox checked={row.allowed[role]} />
                 </div>
               ))}
             </div>
           ))}
+          {roles.isPending ? <EmptyRow>Loading roles…</EmptyRow> : null}
+        </div>
+
+        {/* Custom roles list */}
+        <MSectionH>Custom roles</MSectionH>
+        <div style={{ borderTop: '1px solid var(--m-line-2)' }}>
+          {roles.isPending ? (
+            <EmptyRow>Loading…</EmptyRow>
+          ) : customRoles.length === 0 ? (
+            <EmptyRow>No custom roles yet. Create one to grant extra powers on top of a built-in base.</EmptyRow>
+          ) : (
+            customRoles.map((role) => <CustomRoleRow key={role.id} role={role} />)
+          )}
         </div>
 
         <div style={{ padding: '16px' }}>
@@ -710,29 +748,117 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
   )
 }
 
-// ===========================================================================
-// CUSTOM ROLE editor (msg__90) — name + inherit-from + extra powers
-// ===========================================================================
+/** One custom-role summary row: name, inherited base, and its extra grants. */
+function CustomRoleRow({ role }: { role: CustomRole }) {
+  const summary =
+    role.grants.length === 0
+      ? 'No extra powers'
+      : role.grants
+          .map((g) => {
+            const label = ACTION_LABELS[g.action]
+            const capCents = g.constraints?.[CONSTRAINABLE_ACTIONS.auth_materials]
+            const otHours = g.constraints?.[CONSTRAINABLE_ACTIONS.approve_time]
+            if (g.action === 'auth_materials' && capCents != null) return `${label} ≤ ${formatMoney(capCents / 100)}`
+            if (g.action === 'approve_time' && otHours != null) return `${label} ≤ ${otHours}h/wk`
+            return label
+          })
+          .join(' · ')
 
-const INHERIT_OPTIONS: Array<{ key: RoleKey; label: string }> = [
-  { key: 'owner', label: 'Owner' },
-  { key: 'estimator', label: 'Estimator' },
-  { key: 'foreman', label: 'Foreman' },
-  { key: 'crew', label: 'Crew' },
-]
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '14px 16px',
+        borderBottom: '1px solid var(--m-line-2)',
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 15, fontWeight: 700, color: 'var(--m-ink)' }}>{role.name}</span>
+        <span
+          style={{
+            display: 'block',
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            color: 'var(--m-ink-3)',
+            textTransform: 'uppercase',
+          }}
+        >
+          Inherits {BUILTIN_ROLE_LABELS[role.inherit_from]} · {summary}
+        </span>
+      </span>
+    </div>
+  )
+}
 
-const EXTRA_POWERS: Array<{ key: string; label: string; meta?: string; trailing?: string }> = [
-  { key: 'auth_materials', label: 'Auth materials · up to $', meta: 'Custom limit · $1,000', trailing: '$1,000' },
-  { key: 'edit_pricing', label: 'Edit pricing book' },
-  { key: 'approve_ot', label: 'Approve OT', meta: 'Per week · ≤ 8H', trailing: '≤ 8H' },
-]
+// ===========================================================================
+// CUSTOM ROLE editor (msg__90) — name + inherit-from + extra powers → POST
+// ===========================================================================
+//
+// Adds extra named-action grants on top of a built-in base. auth_materials
+// carries a live $ cap (max_amount_cents); approve_time carries an OT cap
+// (max_ot_hours_per_week) that is stored + validated but INERT in v1 — clearly
+// labeled as such. On Create this POSTs { name, inherit_from, grants } and
+// returns to the roles list.
+
+const INHERIT_OPTIONS: BuiltinRole[] = ['owner', 'estimator', 'foreman', 'crew', 'bookkeeper']
+
+// Only actions a base does NOT already hold are meaningful as "extra powers".
+// We surface the constrainable ones (with cap inputs) plus edit_pricing_book as
+// the design's representative addable grant.
+const EXTRA_POWER_ACTIONS: PermissionAction[] = ['auth_materials', 'edit_pricing_book', 'approve_time']
 
 export function CustomRoleScreen({ navigate }: { navigate: (path: string) => void }) {
-  const [name, setName] = useState('')
-  const [inherit, setInherit] = useState<RoleKey>('foreman')
-  const [powers, setPowers] = useState<Record<string, boolean>>({ auth_materials: true, approve_ot: true })
+  const companyId = useActiveCompanyId()
+  const create = useCreateCustomRole(companyId ?? '')
 
-  const togglePower = (key: string) => setPowers((p) => ({ ...p, [key]: !p[key] }))
+  const [name, setName] = useState('')
+  const [inherit, setInherit] = useState<BuiltinRole>('foreman')
+  const [powers, setPowers] = useState<Record<string, ExtraPowerState>>({
+    auth_materials: { on: true, dollars: String(DEFAULT_AUTH_MATERIALS_DOLLARS) },
+    approve_time: { on: true, otHours: String(DEFAULT_APPROVE_OT_HOURS) },
+  })
+  const [error, setError] = useState<string | null>(null)
+
+  const togglePower = (action: PermissionAction) =>
+    setPowers((p) => ({ ...p, [action]: { ...(p[action] ?? { on: false }), on: !p[action]?.on } }))
+  const setCap = (action: PermissionAction, field: 'dollars' | 'otHours', value: string) =>
+    setPowers((p) => ({ ...p, [action]: { ...(p[action] ?? { on: true }), on: true, [field]: value } }))
+
+  // Actions already inherited from the base are shown disabled (can't re-grant).
+  const baseActions = BUILTIN_ROLE_PERMISSIONS[inherit] as readonly PermissionAction[]
+
+  const submit = async () => {
+    setError(null)
+    if (!companyId) {
+      setError('No active company.')
+      return
+    }
+    if (name.trim().length === 0) {
+      setError('Give the role a name.')
+      return
+    }
+    let grants: CustomRoleGrant[]
+    try {
+      // Don't send grants for actions the base already holds (no-op additively).
+      const addable: Record<string, ExtraPowerState> = {}
+      for (const action of EXTRA_POWER_ACTIONS) {
+        if (baseActions.includes(action)) continue
+        if (powers[action]) addable[action] = powers[action]!
+      }
+      grants = encodeGrants(addable)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Invalid cap.')
+      return
+    }
+    try {
+      await create.mutateAsync({ name: name.trim(), inherit_from: inherit, grants })
+      navigate('/more/roles')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create failed.')
+    }
+  }
 
   return (
     <>
@@ -764,13 +890,13 @@ export function CustomRoleScreen({ navigate }: { navigate: (path: string) => voi
             margin: '4px 16px 14px',
           }}
         >
-          {INHERIT_OPTIONS.map((o, i) => {
-            const on = inherit === o.key
+          {INHERIT_OPTIONS.map((role, i) => {
+            const on = inherit === role
             return (
               <button
-                key={o.key}
+                key={role}
                 type="button"
-                onClick={() => setInherit(o.key)}
+                onClick={() => setInherit(role)}
                 aria-pressed={on}
                 style={{
                   padding: '16px',
@@ -786,7 +912,7 @@ export function CustomRoleScreen({ navigate }: { navigate: (path: string) => voi
                   cursor: 'pointer',
                 }}
               >
-                {o.label}
+                {BUILTIN_ROLE_LABELS[role]}
               </button>
             )
           })}
@@ -794,69 +920,111 @@ export function CustomRoleScreen({ navigate }: { navigate: (path: string) => voi
 
         {/* Extra powers */}
         <div style={{ padding: '8px 16px 6px' }}>
-          <Eyebrow>
-            Extra powers · on top of {INHERIT_OPTIONS.find((o) => o.key === inherit)?.label.toLowerCase()}
-          </Eyebrow>
+          <Eyebrow>Extra powers · on top of {BUILTIN_ROLE_LABELS[inherit].toLowerCase()}</Eyebrow>
         </div>
         <div style={{ borderTop: '1px solid var(--m-line-2)' }}>
-          {EXTRA_POWERS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => togglePower(p.key)}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                padding: '14px 16px',
-                borderBottom: '1px solid var(--m-line-2)',
-                background: 'transparent',
-                border: 'none',
-                borderBottomWidth: 1,
-                borderBottomStyle: 'solid',
-                borderBottomColor: 'var(--m-line-2)',
-                cursor: 'pointer',
-              }}
-            >
-              <Checkbox checked={Boolean(powers[p.key])} />
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span
+          {EXTRA_POWER_ACTIONS.map((action) => {
+            const inherited = baseActions.includes(action)
+            const state = powers[action] ?? { on: false }
+            const on = inherited || state.on
+            const isAuth = action === 'auth_materials'
+            const isOt = action === 'approve_time'
+            const enforcement = isAuth || isOt ? CONSTRAINT_ENFORCEMENT[action] : null
+            return (
+              <div key={action} style={{ borderBottom: '1px solid var(--m-line-2)' }}>
+                <button
+                  type="button"
+                  onClick={() => !inherited && togglePower(action)}
+                  disabled={inherited}
+                  aria-pressed={on}
                   style={{
-                    display: 'block',
-                    fontSize: 14,
-                    fontWeight: 700,
-                    color: 'var(--m-ink)',
-                    textTransform: 'uppercase',
+                    width: '100%',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '14px 16px',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: inherited ? 'default' : 'pointer',
+                    opacity: inherited ? 0.55 : 1,
                   }}
                 >
-                  {p.label}
-                </span>
-                {p.meta ? (
-                  <span
-                    style={{
-                      display: 'block',
-                      fontFamily: 'var(--m-num)',
-                      fontSize: 10,
-                      color: 'var(--m-ink-3)',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    {p.meta}
+                  <Checkbox checked={on} />
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: 'var(--m-ink)',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {ACTION_LABELS[action]}
+                    </span>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontFamily: 'var(--m-num)',
+                        fontSize: 10,
+                        color: 'var(--m-ink-3)',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {inherited
+                        ? `Already in ${BUILTIN_ROLE_LABELS[inherit]}`
+                        : isAuth
+                          ? 'Dollar cap · enforced'
+                          : isOt
+                            ? `OT cap · ${enforcement === 'inert' ? 'stored, not yet enforced' : 'enforced'}`
+                            : 'No cap'}
+                    </span>
                   </span>
+                </button>
+                {/* Cap input — only for the constrainable actions when toggled on. */}
+                {!inherited && on && isAuth ? (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 14px 50px' }}>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--m-ink)' }}>$</span>
+                    <MInput
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      value={state.dollars ?? ''}
+                      onChange={(e) => setCap(action, 'dollars', e.target.value)}
+                      placeholder="No limit"
+                      aria-label="Auth materials dollar cap"
+                      style={{ flex: 1, fontFamily: 'var(--m-num)' }}
+                    />
+                  </label>
                 ) : null}
-              </span>
-              {p.trailing ? (
-                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--m-ink)' }}>{p.trailing}</span>
-              ) : null}
-            </button>
-          ))}
+                {!inherited && on && isOt ? (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 14px 50px' }}>
+                    <MInput
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      step="1"
+                      value={state.otHours ?? ''}
+                      onChange={(e) => setCap(action, 'otHours', e.target.value)}
+                      placeholder="No limit"
+                      aria-label="Approve OT hours per week cap"
+                      style={{ flex: 1, fontFamily: 'var(--m-num)' }}
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--m-ink-3)' }}>H / WK · INERT v1</span>
+                  </label>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
 
+        {error ? <div style={{ padding: '12px 16px 0', color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+
         <div style={{ padding: '16px' }}>
-          <MButton variant="primary" onClick={() => navigate('/more/roles')}>
-            Create · assign to 2 foremen
+          <MButton variant="primary" onClick={() => void submit()} disabled={create.isPending || !companyId}>
+            {create.isPending ? 'Creating…' : 'Create role'}
           </MButton>
         </div>
       </MBody>
