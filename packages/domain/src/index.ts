@@ -1580,6 +1580,28 @@ export {
   type ProjectRole,
 } from './roles.js'
 
+export {
+  PERMISSION_ACTIONS,
+  BUILTIN_ROLES,
+  BUILTIN_ROLE_PERMISSIONS,
+  CONSTRAINABLE_ACTIONS,
+  CONSTRAINT_ENFORCEMENT,
+  companyRoleToBuiltin,
+  builtinToCompanyRole,
+  resolveEffectivePermissions,
+  hasPermission,
+  checkConstraint,
+  isPermissionAction,
+  isBuiltinRole,
+  isConstrainableAction,
+  type PermissionAction,
+  type BuiltinRole,
+  type ConstrainableAction,
+  type PermissionGrant,
+  type EffectivePermission,
+  type EffectivePermissionMap,
+} from './permissions.js'
+
 // ---------------------------------------------------------------------------
 // v2 entities (Steve's v2 design — see docker/postgres/init/097-099). Shared
 // across api routes, workflow reducers, and the web UI.
