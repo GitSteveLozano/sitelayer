@@ -14,14 +14,14 @@
   },
   "dependencies": {
     "@sitelayer/workflows": "file:../../packages/workflows",
-    "yaml": "^2.8.1",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^25.9.1",
     "@types/pg": "^8.11.11",
-    "pg": "^8.13.1",
-    "tsx": "^4.20.3",
+    "pg": "^8.21.0",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   }
