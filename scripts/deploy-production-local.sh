@@ -40,9 +40,11 @@ command -v docker >/dev/null || { echo "ERROR: docker required"; exit 1; }
 command -v doctl  >/dev/null || { echo "ERROR: doctl required"; exit 1; }
 docker buildx version >/dev/null 2>&1 || { echo "ERROR: docker buildx required"; exit 1; }
 
-if [ "$ALLOW_DIRTY" != "1" ] && [ -n "$(git status --porcelain)" ]; then
-  echo "ERROR: working tree is dirty. Commit/stash, or set ALLOW_DIRTY_DEPLOY=1."
-  git status -s
+# Only tracked, uncommitted changes block a deploy (deploying un-pushed code).
+# Untracked files (local docs, scratch) are fine and ignored.
+if [ "$ALLOW_DIRTY" != "1" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "ERROR: tracked files have uncommitted changes. Commit/stash, or set ALLOW_DIRTY_DEPLOY=1."
+  git status -s --untracked-files=no
   exit 1
 fi
 
