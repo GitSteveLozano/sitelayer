@@ -1,10 +1,47 @@
 import type { IncomingMessage } from 'node:http'
+import { createSign, generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { AuthConfigError, loadAuthConfig, resolveActAsOverride } from './auth.js'
+import { AuthConfigError, loadAuthConfig, resolveActAsOverride, resolveIdentity } from './auth.js'
 
 function fakeReq(headers: Record<string, string | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage
 }
+
+// --- RS256 JWT signing helpers for verifyClerkJwt (via resolveIdentity) ---
+function b64url(input: string): string {
+  return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+const { publicKey: CLERK_PUBLIC_KEY, privateKey: CLERK_PRIVATE_KEY } = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+})
+
+function signJwt(payload: Record<string, unknown>): string {
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  const body = b64url(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, ...payload }))
+  const signer = createSign('RSA-SHA256')
+  signer.update(`${header}.${body}`)
+  signer.end()
+  const sig = signer
+    .sign(CLERK_PRIVATE_KEY)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+  return `${header}.${body}.${sig}`
+}
+
+function clerkReq(payload: Record<string, unknown>): IncomingMessage {
+  return fakeReq({ authorization: `Bearer ${signJwt(payload)}` })
+}
+
+const clerkConfig = loadAuthConfig({
+  APP_TIER: 'preview',
+  CLERK_JWT_KEY: CLERK_PUBLIC_KEY,
+  AUTH_ALLOW_HEADER_FALLBACK: '0',
+})
 
 describe('loadAuthConfig', () => {
   it('allows local header fallback when auth is not configured', () => {
@@ -71,5 +108,34 @@ describe('resolveActAsOverride', () => {
 
   it('handles missing request gracefully', () => {
     expect(resolveActAsOverride(undefined, 'local')).toBeNull()
+  })
+})
+
+describe('resolveIdentity — Clerk JWT + impersonation act claim', () => {
+  it('resolves a normal session to the subject with no actor', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_subject' }), clerkConfig)
+    expect(identity).toEqual({ userId: 'user_subject', source: 'clerk' })
+    expect(identity.actorUserId).toBeUndefined()
+    expect(identity.mode).toBeUndefined()
+  })
+
+  it('reads a Clerk actor-token `act: { sub }` claim as impersonation', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_subject', act: { sub: 'user_admin' } }), clerkConfig)
+    // Data scoping stays on the subject; the actor is the real admin.
+    expect(identity.userId).toBe('user_subject')
+    expect(identity.source).toBe('clerk')
+    expect(identity.actorUserId).toBe('user_admin')
+    expect(identity.mode).toBe('impersonate')
+  })
+
+  it('accepts a bare-string `act` claim', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_subject', act: 'user_admin' }), clerkConfig)
+    expect(identity.actorUserId).toBe('user_admin')
+    expect(identity.mode).toBe('impersonate')
+  })
+
+  it('ignores a malformed `act` claim (no sub) and stays self-auth', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_subject', act: { foo: 'bar' } }), clerkConfig)
+    expect(identity).toEqual({ userId: 'user_subject', source: 'clerk' })
   })
 })
