@@ -52,6 +52,9 @@ const FinancialRoute = lazy(() => import('@/routes/financial'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
 const PhotoRoute = lazy(() => import('@/routes/photo'))
 const LiveCrewRoute = lazy(() => import('@/routes/live-crew'))
+// Cross-tenant superadmin console (P3). API-gated (requirePlatformAdmin); its
+// own lazy chunk so it never weighs on the field bundle.
+const AdminRoute = lazy(() => import('@/routes/admin'))
 const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
 const LocationPrimeRoute = lazy(() => import('@/routes/permissions-location'))
 const NotificationsPrimeRoute = lazy(() => import('@/routes/permissions-notifications'))
@@ -332,6 +335,7 @@ function AppShellRoutes() {
       <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
       <Route path="/photo" element={<PhotoRoute />} />
       <Route path="/live-crew" element={<LiveCrewRoute />} />
+      <Route path="/admin/*" element={<AdminRoute />} />
 
       {/* Onboarding + permission primes -- full-screen takeovers. */}
       <Route path="/onboarding" element={<OnboardingRoute />} />
