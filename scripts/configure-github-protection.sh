@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
+#
+# OPTIONAL code-review hygiene for the `main` branch (require PR + 1 review,
+# block force-push/deletions). This is NOT a deploy gate and is NOT required
+# for deploying: under the local-fleet model the prod-ship gate is the LOCAL
+# Quality run inside scripts/deploy-production-local.sh, and nothing in the
+# deploy path queries GitHub. The required_status_checks below are a merge-
+# quality convenience (don't merge a red PR), consuming quality.yml as plain
+# PR CI — they do not gate or authorize any deploy.
 set -euo pipefail
 
 OWNER_REPO="${OWNER_REPO:-${GITHUB_REPOSITORY:-GitSteveLozano/sitelayer}}"
 BRANCH="${BRANCH:-main}"
-QUALITY_CONTEXT="${QUALITY_CONTEXT:-Quality / validate}"
+
+# Required status-check contexts. The Quality workflow (.github/workflows/quality.yml)
+# exposes one check per JOB, and GitHub reports each check's context as the job's
+# `name:` — or, when a job has no `name:`, the job *id*. None of the Quality jobs
+# set a `name:`, so the contexts are the job ids verbatim:
+#   lint-and-typecheck / build / test / test-integration / e2e
+# (The previous single "Quality / validate" context never existed — that job was
+#  renamed/split — so protection was effectively requiring a check that never
+#  reports, which would have wedged every PR.)
+# Override with QUALITY_CONTEXTS="a b c" if the job set ever changes.
+QUALITY_CONTEXTS="${QUALITY_CONTEXTS:-lint-and-typecheck build test test-integration e2e}"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "ERROR: GitHub CLI (gh) is required" >&2
@@ -11,6 +29,15 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 gh auth status >/dev/null
+
+# Build the JSON contexts array from the space-separated QUALITY_CONTEXTS
+# (pure bash, no jq dependency). The job ids contain only [a-z-] so plain
+# quoting is safe.
+CONTEXTS_JSON=""
+for ctx in $QUALITY_CONTEXTS; do
+  CONTEXTS_JSON="${CONTEXTS_JSON:+$CONTEXTS_JSON, }\"$ctx\""
+done
+CONTEXTS_JSON="[$CONTEXTS_JSON]"
 
 gh api \
   --method PUT \
@@ -21,7 +48,7 @@ gh api \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["$QUALITY_CONTEXT"]
+    "contexts": $CONTEXTS_JSON
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
@@ -41,5 +68,9 @@ gh api \
 }
 JSON
 
-echo "Configured protection for $OWNER_REPO:$BRANCH requiring '$QUALITY_CONTEXT'"
-echo "Configure the GitHub production environment with required reviewers to enforce deploy approval."
+echo "Configured protection for $OWNER_REPO:$BRANCH"
+echo "  required status checks (strict): $QUALITY_CONTEXTS"
+echo "  required PR reviews: 1 (dismiss stale, require last-push approval)"
+echo "  force-push: disabled; deletions: disabled; conversation resolution: required"
+echo "Note: this is code-review hygiene only. Deploy approval is NOT a GitHub concern —"
+echo "      the prod gate is the local Quality run in scripts/deploy-production-local.sh."

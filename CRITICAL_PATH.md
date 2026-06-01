@@ -1,7 +1,7 @@
 # Sitelayer Critical Path to Pilot Launch
 
 **Goal:** First customer onboarded in 4-6 weeks  
-**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images through GitHub Actions; Clerk, Spaces, TLS, backups, and baseline observability are wired. Blueprint uploads stream multipart through the API directly to Spaces, with presigned download URLs.
+**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images via `scripts/deploy.sh prod` run from the fleet (the GitHub Actions deploy workflows were removed in `70b9584b`, 2026-06-01); Clerk, Spaces, TLS, backups, and baseline observability are wired. Blueprint uploads stream multipart through the API directly to Spaces, with presigned download URLs.
 **Next:** validate live QBO sync end to end, then onboard the first pilot company.
 
 **Mesh coordination:** project `sitelayer` / ID `282`. (Historical: the task chain `sitelayer-deploy-reconcile-20260423` no longer exists in mesh — pilot-onboarding state has moved past it. Use the live mesh project `sitelayer` / ID `282` and its open health-emitter tasks as the source of truth.)
@@ -28,7 +28,7 @@
 - [x] Shared preview DB/user created on managed Postgres
 - [x] `main.preview.sitelayer.sandolab.xyz` smoke preview deployed and verified
 - [x] `/app/sitelayer/.env` on production droplet with production `DATABASE_URL`
-- [x] GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
+- [x] Fleet deploy access: `DEPLOY_HOST` / `DEPLOY_SSH_KEY` available to `scripts/deploy.sh prod` on the fleet box (was GitHub Actions secrets before 2026-06-01)
 - [x] Separate managed Postgres DB/user for production (`sitelayer_prod`, `sitelayer_prod_app`)
 - [x] Deploy user public SSH key installed on production droplet
 - [x] First bootable Docker Compose deploy verified at `https://sitelayer.sandolab.xyz`
@@ -96,7 +96,7 @@ REMAINING: Streaming blueprint upload (replace base64 buffering); live QBO sandb
 PHASE 3: DEPLOYMENT (DONE)
 ├─ Apply Postgres schema through managed DB connection
 ├─ Build immutable runtime image with Dockerfile and DO Container Registry
-├─ Deploy via `.github/workflows/deploy-droplet.yml`
+├─ Deploy via `scripts/deploy.sh prod` from the fleet (was GitHub Actions before 2026-06-01)
 ├─ Start api/web/worker/Caddy through `docker compose -f docker-compose.prod.yml`
 ├─ Verify public HTTPS health at `https://sitelayer.sandolab.xyz/health`
 ├─ Verify HTTP redirects to HTTPS
@@ -261,9 +261,9 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 - [x] **Create:** `sitelayer_prod` and `sitelayer_dev` DBs plus separate app users on existing managed Postgres.
 - [x] **Install:** deployment public key for `sitelayer` user on droplet.
-- [x] **Set:** GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`.
+- [x] **Set:** deploy access (`DEPLOY_HOST` / `DEPLOY_SSH_KEY`) on the fleet box that runs `scripts/deploy.sh prod`.
 - [x] **Create:** `/app/sitelayer/.env` on droplet with `DATABASE_URL` and optional integration placeholders.
-- [x] **Deploy:** run the GitHub Actions droplet workflow once.
+- [x] **Deploy:** run `scripts/deploy.sh prod` from the fleet once (previously the GitHub Actions droplet workflow).
 - [x] **Tighten:** remove public firewall port 3000 if no temporary service needs it.
 - [ ] **Decide:** same droplet dev deploy vs separate small dev droplet before exposing `sitelayer_dev`.
 - [ ] **Validate:** live QBO sandbox sync and production token refresh path (streaming upload + presigned download already shipped; presigned 302 still gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1`).

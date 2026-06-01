@@ -1,6 +1,24 @@
 # Deploy Runbook
 
-Last updated: 2026-04-29
+Last updated: 2026-04-29 (deploy model updated 2026-06-01)
+
+> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box — NOT GitHub
+> Actions. The GitHub Actions deploy workflows (`deploy-droplet.yml`,
+> `deploy-dev.yml`, `deploy-demo.yml`, `deploy-preview.yml`, plus
+> `preview-gc.yml` / `registry-gc.yml`) were all removed in commit
+> `70b9584b`. `quality.yml` (lint/build/test) stays as the passive CI net
+> and is what the planned green-gate will consume. The mechanics below
+> (immutable migrations, pre-migration backup, image pinned to the built
+> SHA, `.last_*_deployed_sha` markers, rollback via
+> `scripts/rollback-droplet.sh`) are **unchanged** — only the orchestrator
+> moved from a CI runner to `scripts/deploy-production-local.sh` on the
+> fleet. Adopted policy: `main` is being GitHub-branch-protected (PR +
+> green `Quality` + no force-push) and a green-`Quality` gate is being
+> added to `deploy-production-local.sh` by a follow-on agent; **until that
+> gate lands, confirm `Quality` is green for the deploy SHA before running
+> a prod deploy.** Where this doc still says "the workflow" / "push to
+> `main`", read it as "`scripts/deploy.sh prod`" unless noted.
 
 This is the operating contract for shipping changes to the production
 `sitelayer` droplet (`165.245.230.3`) and managed Postgres database
@@ -15,10 +33,13 @@ careless merge cannot break a paying customer.
 
 ## Hard rules
 
-1. **No commit to `main` lands without going through preview first.**
-   The default deploy path is PR → preview → smoke → merge → prod. If a
-   change cannot be exercised in preview before prod (rare), call it out
-   explicitly in the PR description and have a second pair of eyes.
+1. **Nothing reaches prod without a green `Quality` for that exact SHA.**
+   Under the adopted trunk-ish model (2026-06-01), solo work may commit to
+   `main`/`dev` directly and prune branches aggressively; `main` is being
+   branch-protected (PR + green `Quality` + no force-push). Exercise risky
+   changes on `dev` / a preview first. The hard invariant: the SHA you
+   deploy to prod has a green `Quality` run — manually confirm it until the
+   green-gate lands in `deploy-production-local.sh`.
 
 2. **Migrations are forward-only.** Once a file in
    `docker/postgres/init/*.sql` exists on `main`, it is immutable. To
@@ -45,15 +66,18 @@ careless merge cannot break a paying customer.
 
 ## What runs where
 
-| Stage          | Trigger                   | Workflow                                         | Target                                                              |
-| -------------- | ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| PR opened      | every push to a PR branch | `.github/workflows/quality.yml`                  | none (validates only)                                               |
-| PR opened      | every push to a PR branch | `.github/workflows/deploy-preview.yml`           | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
-| PR closed      | merged or discarded       | `.github/workflows/deploy-preview.yml` (cleanup) | tears down preview stack                                            |
-| Push to `main` | merged PR                 | `.github/workflows/deploy-droplet.yml`           | production droplet, `sitelayer_prod` Postgres                       |
+| Stage       | Trigger                       | Mechanism                                               | Target                                                              |
+| ----------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
+| PR / push   | every push (PR or branch)     | `.github/workflows/quality.yml` (CI net)                | none (validates only — lint/build/test)                             |
+| Prod deploy | manual, from the fleet        | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                       |
+| Dev deploy  | manual, from the fleet        | `scripts/deploy.sh dev` → `deploy-preview.sh`           | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres              |
+| Demo deploy | manual, from the fleet        | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres    |
+| PR preview  | manual on the preview droplet | `scripts/deploy-preview.sh`                             | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
 
-The production deploy job runs on the same self-hosted runner as preview
-(`sitelayer-preview`), then SSHes from there to the production droplet.
+The prod deploy builds + pushes the image on the fleet box, then SSHes
+(flock-locked) to the production droplet. There is no longer a self-hosted
+GitHub Actions runner in the deploy path (the `sitelayer-preview` runner was
+part of the removed Actions topology).
 
 ## Migration workflow in detail
 
@@ -63,10 +87,10 @@ It is invoked by:
 - Local dev: `npm run db:migrate`
 - CI: `quality.yml` → `test-integration` job, against an ephemeral
   Postgres 18 service container
-- Preview deploy: `scripts/deploy-preview.sh:172-174` against
-  `sitelayer_preview`
-- Prod deploy: inline in the deploy-droplet workflow against
-  `sitelayer_prod`
+- Preview/dev/demo deploy: `scripts/deploy-preview.sh` against
+  `sitelayer_preview` / `sitelayer_dev` / `sitelayer_demo`
+- Prod deploy: inline in `scripts/deploy-production-local.sh` (the SSH
+  heredoc on the prod droplet) against `sitelayer_prod`
 
 Inside the script:
 
@@ -98,8 +122,8 @@ this PR, never applied anywhere, and needs editing):
 
 ### Production deploy migration steps
 
-`deploy-droplet.yml` runs these steps on the prod droplet, in order,
-inside the SSH heredoc:
+`scripts/deploy-production-local.sh` runs these steps on the prod droplet,
+in order, inside the SSH heredoc:
 
 1. `git checkout` the exact SHA the image was built from (not
    `origin/main` — concurrent merges could otherwise advance past the
@@ -201,10 +225,11 @@ The `api` and `worker` containers are unchanged in either direction
 
 ### DO Container Registry quota — what to do when push fails
 
-The DO Container Registry Starter tier caps storage at 500 MB. The
-deploy workflow already (a) prunes old SHA tags before each build and
-(b) retries the push once after kicking off `garbage-collection` if the
-first attempt hits `quota exceeded`. That mostly works.
+The DO Container Registry Starter tier caps storage at 500 MB.
+`scripts/deploy-production-local.sh` prunes old SHA tags after each
+build+push (keeps `:main` + the newest 10 SHA tags, then starts an async
+garbage-collection — this replaced the removed `registry-gc.yml`). The same
+quota trap below still applies because GC is async.
 
 **When it doesn't work, do NOT manually run `doctl registry
 garbage-collection start`.** Trap discovered 2026-05-04 (workflow run
@@ -213,8 +238,9 @@ garbage-collection start`.** Trap discovered 2026-05-04 (workflow run
 1. The push hits "quota exceeded" because >500 MB of blobs sit in the
    registry, including untagged blobs from earlier failed pushes.
 2. GC frees the space, but the _async_ GC can't finalize until every
-   active `--read-write` docker-config JWT expires. The workflow mints
-   those at `--expiry-seconds 3600` (1h) — see `deploy-droplet.yml:109`.
+   active `--read-write` docker-config JWT expires. `doctl registry
+login` mints a write token at deploy time; GC stays blocked until it
+   times out.
 3. While GC is in `waiting for write JWTs to expire` state,
    **all new write tokens for the registry are rejected with `401
 Unauthorized`**, blocking every subsequent deploy attempt.
@@ -304,11 +330,16 @@ new no-op migration documenting the prior off-by-one.
 
 ## Who can deploy
 
-Production deploys are gated by GitHub Actions environment
-`production`. The deploy job runs only when a push to `main` is
-authorized for that environment. No human SSHes to the droplet to
-deploy by hand — the `deploy_key` lives in GitHub Secrets and is
-written to disk only inside the runner.
+Production deploys run from a trusted fleet box via `scripts/deploy.sh
+prod`, which builds the image, pushes it to the DO registry, and SSHes
+to the prod droplet as the `sitelayer` deploy user (key authorized on the
+fleet). Whoever can run that script on a fleet box with the deploy key can
+deploy — so the fleet box's access to the deploy key is the gate. The
+adopted policy (rolling in) tightens this further: `main` is being
+GitHub-branch-protected (PR + green `Quality` + no force-push) and a
+green-`Quality` gate is being added to `deploy-production-local.sh` by a
+follow-on agent. **Until that gate lands, confirm `Quality` is green for
+the deploy SHA before deploying.**
 
 Manual SSH access is for diagnostics only:
 

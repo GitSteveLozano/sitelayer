@@ -77,8 +77,16 @@ runSpec('admin walks project lifecycle through every state', async ({ adminPage 
     // Scope to the LifecycleBanner specifically: the state label also appears
     // in the topbar eyebrow + state hero, so an unscoped getByText is a
     // strict-mode collision.
+    //
+    // Generous timeout: each reload re-runs the full SPA bootstrap
+    // (/me/memberships → /bootstrap → per-tab queries) before the
+    // LifecycleBanner's own GET /lifecycle settles. Under the full e2e
+    // suite the bootstrap payload for this fixture project grows with the
+    // audit/notification rows every prior transition emits, so the final
+    // (archived) cross-check can take >5s — the default would flake on the
+    // last step only. See the project-lifecycle e2e isolation notes.
     await expect(
       adminPage.getByTestId('lifecycle-banner').getByText(STATE_LABELS[step.expected], { exact: true }),
-    ).toBeVisible()
+    ).toBeVisible({ timeout: 15_000 })
   }
 })

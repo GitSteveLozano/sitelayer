@@ -74,13 +74,19 @@ function collectImports(appDir) {
 
 function parseDockerfileCopies(path) {
   const src = readFileSync(path, 'utf8')
-  // Match COPY --from=builder /app/packages/<NAME>/dist /app/packages/<NAME>/dist
+  // Explicit per-package form: COPY --from=builder /app/packages/<NAME>/dist ...
   const re = /COPY\s+--from=builder\s+\/app\/packages\/([a-z][a-z0-9-]*)\/dist\s/g
   const copied = new Set()
   for (const match of src.matchAll(re)) {
     copied.add(`@sitelayer/${match[1]}`)
   }
-  return copied
+  // Wildcard form (current Dockerfile, since bc5735f1): a `COPY` that globs
+  // `packages/*/dist` copies EVERY workspace package's prebuilt dist, so no
+  // per-package list can drift — the exact problem this guard was built for is
+  // structurally impossible. Signal it so the caller treats all imports as
+  // covered (the guard still bites if someone reverts to an explicit list).
+  const globAll = /COPY\b[^\n]*\bpackages\/\*\/dist\b/.test(src)
+  return { copied, globAll }
 }
 
 const importsByApp = {}
@@ -91,12 +97,14 @@ const unionImports = new Set()
 for (const set of Object.values(importsByApp)) {
   for (const x of set) unionImports.add(x)
 }
-const copied = parseDockerfileCopies(resolve(ROOT, 'Dockerfile'))
+const { copied, globAll } = parseDockerfileCopies(resolve(ROOT, 'Dockerfile'))
 
 const missing = []
-for (const name of unionImports) {
-  if (ALLOWLIST.has(name)) continue
-  if (!copied.has(name)) missing.push(name)
+if (!globAll) {
+  for (const name of unionImports) {
+    if (ALLOWLIST.has(name)) continue
+    if (!copied.has(name)) missing.push(name)
+  }
 }
 
 // Symmetric report: copies that no app imports. Not a failure (the
@@ -116,7 +124,9 @@ for (const name of copied) {
 
 if (missing.length === 0) {
   console.log(
-    `dockerfile-imports: ok (${unionImports.size} @sitelayer/* imports across ${RUNTIME_APPS.join(', ')}, all present in Dockerfile)`,
+    globAll
+      ? `dockerfile-imports: ok (Dockerfile globs packages/*/dist — all ${unionImports.size} @sitelayer/* imports across ${RUNTIME_APPS.join(', ')} are copied; no per-package drift possible)`
+      : `dockerfile-imports: ok (${unionImports.size} @sitelayer/* imports across ${RUNTIME_APPS.join(', ')}, all present in Dockerfile)`,
   )
   if (unused.length > 0) {
     console.warn(

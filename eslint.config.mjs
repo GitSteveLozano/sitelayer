@@ -15,6 +15,7 @@ export default tseslint.config(
       '.vite/**',
       '**/.vite-cache/**',
       '.turbo/**',
+      'docs/steve-handoff/**',
     ],
   },
   js.configs.recommended,

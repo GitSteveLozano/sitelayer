@@ -1,5 +1,14 @@
 # PlanSwift Phase 2 — Parts / Assembly Engine: Implementation Plan
 
+> **LANDED 2026-06-01.** The core of this plan has shipped on `main` (verified
+> against the repo): the EXPAND migration `docker/postgres/init/109_assembly_explode_and_formulas.sql`,
+> the cladding seed `110_seed_cladding_assemblies.sql`, the assembly-explode
+> logic in `packages/domain/src/assembly.ts`, and the formula evaluator in
+> `packages/formula-evaluator/` (`src/evaluator.ts` + tests). Treat the steps
+> below as the historical build plan for what is now implemented; future
+> changes (e.g. a generic parts catalog, equipment-kind widening) remain the
+> explicitly-deferred items called out in §0.
+>
 > Source brief: `docs/PLANSWIFT_PARITY_PLAN.md` §2-C / §4 — "drag an assembly
 > onto a takeoff and it explodes into material + labor + equipment + sub
 > quantities with formulas and waste."

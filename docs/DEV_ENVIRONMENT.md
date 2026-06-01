@@ -24,13 +24,18 @@ PR previews are ephemeral and per-PR (`sitelayer_pr_42` schema, dropped on PR cl
 
 ## Deploy contract
 
-Push to `dev` → `.github/workflows/deploy-dev.yml` runs on the `sitelayer-preview` self-hosted runner → invokes `scripts/deploy-preview.sh` with:
+> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> `scripts/deploy.sh dev` — the GitHub Actions `deploy-dev.yml` workflow and
+> the self-hosted preview runner were removed in commit `70b9584b`.
+
+From the fleet, `scripts/deploy.sh dev` (with `HEAD` on an origin branch, normally `dev`) SSHes to the preview droplet and invokes `scripts/deploy-preview.sh` with:
 
 ```
 PREVIEW_SLUG=dev
 PREVIEW_HOST=dev.sitelayer.sandolab.xyz
-PREVIEW_TIER=dev                  # new — selects shared-public-schema mode
+PREVIEW_TIER=dev                  # selects shared-public-schema mode
 PREVIEW_SHARED_ENV=/app/previews/.env.dev.shared
+PREVIEW_MODE=dev                  # source-mounted watch-mode (tsx + vite HMR)
 PREVIEW_ENABLE_WORKER=1
 ```
 
@@ -59,8 +64,8 @@ DATABASE_URL=postgres://sitelayer_dev_app:...@.../sitelayer_dev?sslmode=require 
   DATABASE_SSL_REJECT_UNAUTHORIZED=false \
   RESET_DEV_DB_CONFIRM=1 \
   scripts/reset-dev-db.sh
-# 3. Push to dev — the workflow deploys, applies any unseen migrations
-#    incrementally, runs check-db-schema.sh.
+# 3. Commit + push to dev, then `scripts/deploy.sh dev` from the fleet —
+#    deploys, applies any unseen migrations incrementally, runs check-db-schema.sh.
 # 4. Iterate on the .sql file as needed; reset & push again.
 # 5. Once happy, open a PR against main. From that point on the migration
 #    file is immutable per CLAUDE.md "Deploy procedure" rule #2.
@@ -121,7 +126,7 @@ git fetch origin
 git push origin origin/main:refs/heads/dev
 ```
 
-The workflow fires on push to `dev`; the first deploy bootstraps everything.
+Deploy via `scripts/deploy.sh dev` from the fleet (there is no push-triggered workflow); the first deploy bootstraps everything.
 
 ### 4. Verify
 
@@ -136,7 +141,7 @@ Web app should load and display the orange "DEV DATA - not real customers" ribbo
 
 ## What's intentionally NOT here
 
-- **Promotion workflow.** There's no `dev → main` auto-promote. The `dev` branch is a scratch lane, not a release candidate. Production deploys still happen via push to `main` per CLAUDE.md "Deploy procedure" rule #1.
+- **Promotion workflow.** There's no `dev → main` auto-promote. The `dev` branch is a fast-moving integration lane, not a release candidate. Production deploys happen via `scripts/deploy.sh prod` from the fleet per CLAUDE.md "Deploy procedure" rule #1 (and under the adopted model, `main` is the protected production truth).
 - **Backup retention.** The managed Postgres cluster's automatic backups cover `sitelayer_dev` along with everything else, but there's no logical/off-host copy specifically for dev — that's reserved for prod. Treat `sitelayer_dev` as destructible.
 - **Cleanup workflow.** Unlike PR previews, the dev stack is not auto-torn-down. To wind it down manually:
   ```bash
@@ -147,10 +152,10 @@ Web app should load and display the orange "DEV DATA - not real customers" ribbo
 
 ## Cross-references
 
-- `scripts/deploy-preview.sh` — the parameterized deploy script (now serves both preview and dev tiers)
+- `scripts/deploy.sh` — fleet entrypoint (`dev` / `demo` / `prod`)
+- `scripts/deploy-preview.sh` — the parameterized deploy script (serves preview, dev, and demo tiers)
 - `scripts/reset-dev-db.sh` — dev-DB reset helper
 - `ops/env/dev.env.example` — shared env template
-- `.github/workflows/deploy-dev.yml` — the workflow
 - `docs/PREVIEW_DEPLOYMENTS.md` — sibling preview infrastructure (per-PR stacks)
 - `packages/config/src/index.ts` — tier guard + ribbon definitions
 - CLAUDE.md → "Operating Rules" → Env management #1 (APP_TIER load-bearing)

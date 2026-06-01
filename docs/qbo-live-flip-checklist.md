@@ -1,11 +1,16 @@
 # QBO Live-Flip Checklist
 
-Pre-flight for flipping the GitHub production environment variables
-`QBO_LIVE_ESTIMATE_PUSH=1` and `QBO_LIVE_RENTAL_INVOICE=1`.
-Production runtime env is rendered from `ops/env/production.env.json`
-by `.github/workflows/deploy-droplet.yml`; do not hand-edit the
-droplet `.env` except for emergency break-glass, because the next deploy
-will overwrite it.
+> **DEPLOY MODEL UPDATED 2026-06-01.** The GitHub Actions deploy was removed
+> (`70b9584b`); the prod deploy script reuses the existing
+> `/app/sitelayer/.env` on the droplet. So flipping `QBO_LIVE_*` now means
+> editing `/app/sitelayer/.env` on the prod droplet in place and recreating
+> the worker — the droplet `.env` is the source of truth, not a re-rendered
+> artifact. Keep `ops/env/production.env.json` in sync so a future re-render
+> stays correct.
+
+Pre-flight for flipping `QBO_LIVE_ESTIMATE_PUSH=1` and
+`QBO_LIVE_RENTAL_INVOICE=1` in `/app/sitelayer/.env` on the prod droplet.
+`ops/env/production.env.json` is the name/scope manifest for these vars.
 
 Worker push impl gates: `apps/worker/src/worker.ts` reads
 `QBO_LIVE_RENTAL_INVOICE` for rental invoices and
@@ -60,19 +65,22 @@ boot logs `live QBO ... push enabled` instead of the stub line.
 
 - [ ] **Rollback plan: how to flip `QBO_LIVE_*=0` quickly if errors
       spike.**
-  - Preferred rollback: set these GitHub production environment
-    variables back to `0`, run the production deploy workflow, and
+  - Preferred rollback: set both vars back to `0` in
+    `/app/sitelayer/.env` on the prod droplet and recreate the worker;
     confirm the worker restart logs the stub mode line:
 
     ```sh
-    gh variable set QBO_LIVE_ESTIMATE_PUSH --env production --body 0
-    gh variable set QBO_LIVE_RENTAL_INVOICE --env production --body 0
-    gh workflow run deploy-droplet.yml --ref main
+    ssh sitelayer@165.245.230.3 '
+      cd /app/sitelayer &&
+      sed -i -e "s|^QBO_LIVE_ESTIMATE_PUSH=.*|QBO_LIVE_ESTIMATE_PUSH=0|" \
+             -e "s|^QBO_LIVE_RENTAL_INVOICE=.*|QBO_LIVE_RENTAL_INVOICE=0|" .env &&
+      GIT_SHA=$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate worker'
     ```
 
-  - Emergency break-glass only: edit the droplet env and restart the
-    worker, then backfill GitHub variables immediately so the next deploy
-    does not re-enable live mode.
+  - For an even faster graceful stop without touching env, pause the
+    dispatch lane (see Wedge 5 below) — that halts drains within ~5s.
+  - Keep `ops/env/production.env.json` in sync afterward.
   - Worker boots back into stub mode (`STUB-EST-...`,
     `STUB-INV-...` ids); no in-flight work is lost because
     `processEstimatePush` / `processRentalBillingInvoicePush`
@@ -132,11 +140,13 @@ boot logs `live QBO ... push enabled` instead of the stub line.
 
 Follow `DEPLOY_RUNBOOK.md` -> "Live-flag flip protocol":
 
-1. Set the env var(s) in GitHub production environment variables:
+1. Set the env var(s) in `/app/sitelayer/.env` on the prod droplet:
    `QBO_LIVE_ESTIMATE_PUSH`, `QBO_LIVE_RENTAL_INVOICE`,
    `QBO_BASE_URL`, and `QBO_RENTAL_INCOME_ACCOUNT_ID` when needed.
-2. Run the production deploy workflow from `main`; it renders the
-   droplet env and restarts services through `docker-compose.prod.yml`.
+   (Mirror the names in `ops/env/production.env.json`.)
+2. Recreate the worker so it re-reads its env:
+   `cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate worker`.
+   (A full `scripts/deploy.sh prod` is only needed if code/image also changed.)
 3. Watch the next worker heartbeat for the `live QBO ... push enabled`
    line.
 4. Drive one billing run end-to-end (`APPROVE` -> `POST_REQUESTED`)

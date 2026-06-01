@@ -517,18 +517,35 @@ aggregate validation, migration review, and a live trace-to-review smoke.
 
 ## Pilot-readiness blockers that remain
 
+> **Update 2026-06-01 — several of these have LANDED on `main`** (verified
+> against the migrations/files cited): teammate invites
+> (`docker/postgres/init/134_company_invites.sql`), the worker QBO pull lane
+> (`135_qbo_pull_lane.sql`), RBAC custom roles (`136_custom_roles.sql`), and
+> the PlanSwift assembly-explode + formula-evaluator engine
+> (`109_assembly_explode_and_formulas.sql` + `110_seed_cladding_assemblies.sql`,
+> `packages/domain/src/assembly.ts`, `packages/formula-evaluator/`). The
+> PDFium-based blueprint render foundation has also landed
+> (`apps/web/src/lib/pdf/renderer/`). The bullets below predate those merges —
+> treat the invite / QBO-pull / custom-roles items as substantially addressed
+> and re-scope to what still needs sandbox-smoke / live repro rather than
+> greenfield build.
+
 The current worktree improves many screens, but the founder walkthrough still
 has real pilot walls:
 
 - teammate invite is not fully solved unless the backend becomes a real
-  email/phone invite and acceptance flow, not just a membership upsert;
+  email/phone invite and acceptance flow, not just a membership upsert; _(see
+  2026-06-01 update — invite schema landed in migration 134; remaining work is
+  the full email/phone accept loop, not the schema.)_
 - new assignment visibility likely still has the `draft` vs active/confirmed
   mismatch;
 - AI auto-takeoff 404 still needs live deployed repro with the exact failing
   URL and build SHA;
 - QBO pull/backfill has moved toward partial inline sync, but it is not a
-  sandbox-smoked, worker-backed loop;
-- roles/custom roles remain larger schema/API work;
+  sandbox-smoked, worker-backed loop; _(see 2026-06-01 update — the worker QBO
+  pull lane landed in migration 135; remaining work is the sandbox smoke.)_
+- roles/custom roles remain larger schema/API work; _(see 2026-06-01 update —
+  custom-roles schema landed in migration 136.)_
 - takeoff/canvas affordances and mobile shell issues still need a focused pass.
 
 ## Integration risks called out by the audit
