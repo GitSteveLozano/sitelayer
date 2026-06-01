@@ -254,3 +254,25 @@ describe('handleAdminRoutes — prod mutation gate (P5)', () => {
     expect(calls[0]?.status).toBe(201)
   })
 })
+
+describe('handleAdminRoutes — scenario console reads (P3)', () => {
+  it('GET /api/admin/workflows returns the registry', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('GET'), new URL('http://x/api/admin/workflows'), deps({ sendJson }))
+    expect(calls[0]?.status).toBe(200)
+    expect((calls[0]?.body as { workflows: unknown[] }).workflows.length).toBeGreaterThan(0)
+  })
+
+  it('GET /api/admin/scenarios returns an array', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('GET'), new URL('http://x/api/admin/scenarios'), deps({ sendJson }))
+    expect(calls[0]?.status).toBe(200)
+    expect(Array.isArray((calls[0]?.body as { scenarios: unknown[] }).scenarios)).toBe(true)
+  })
+
+  it('GET /api/admin/scenarios/:slug/plan 404s an unknown slug', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('GET'), new URL('http://x/api/admin/scenarios/no-such-slug/plan'), deps({ sendJson }))
+    expect(calls[0]?.status).toBe(404)
+  })
+})

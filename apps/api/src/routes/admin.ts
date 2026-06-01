@@ -3,6 +3,7 @@ import type { Identity } from '../auth.js'
 import type { AppTier } from '../tier.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { actorTokenMinterFromEnv, type ActorTokenMinter } from '../clerk-actor-token.js'
+import { listRegistryWorkflows, listScenarioFiles, previewScenarioPlan } from '../admin-scenarios.js'
 
 /**
  * Cross-tenant platform-admin API (design §5/§6/§7).
@@ -125,6 +126,32 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       [limit, offset],
     )) as { rows: CompanyRow[] }
     sendJson(200, { companies: result.rows, limit, offset })
+    return true
+  }
+
+  // GET /api/admin/workflows — the deterministic-workflow registry.
+  if (path === '/api/admin/workflows') {
+    sendJson(200, { workflows: listRegistryWorkflows() })
+    return true
+  }
+
+  // GET /api/admin/scenarios — the checked-in scenario fixtures.
+  if (path === '/api/admin/scenarios') {
+    sendJson(200, { scenarios: listScenarioFiles() })
+    return true
+  }
+
+  // GET /api/admin/scenarios/:slug/plan — preview the resolved apply plan
+  // (@sitelayer/scenario ApplyOp[]) for a fixture before applying it.
+  const planMatch = path.match(/^\/api\/admin\/scenarios\/([^/]+)\/plan$/)
+  if (planMatch) {
+    const slug = decodeURIComponent(planMatch[1]!)
+    const plan = previewScenarioPlan(slug)
+    if (!plan) {
+      sendJson(404, { error: 'scenario not found' })
+      return true
+    }
+    sendJson(200, { plan })
     return true
   }
 
