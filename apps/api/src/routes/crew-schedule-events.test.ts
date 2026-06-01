@@ -4,6 +4,7 @@ import type pino from 'pino'
 import { nextCrewScheduleEvents } from '@sitelayer/workflows'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleCrewScheduleEventRoutes, type CrewScheduleEventRouteCtx } from './crew-schedule-events.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // ---------------------------------------------------------------------------
 // crew-schedule workflow surface — snapshot GET, event POST, drag-to-
@@ -187,6 +188,7 @@ function makeCtx(
         responses.push({ status: 403, body: { error: 'forbidden' } })
         return false
       },
+      requirePermission: makeTestRequirePermission(role, responses),
       readBody: async () => body,
       sendJson: (status, response) => {
         responses.push({ status, body: response })
@@ -407,6 +409,7 @@ describe('handleCrewScheduleEventRoutes — PATCH /api/schedules/:id', () => {
       company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' },
       currentUserId: 'u-1',
       requireRole: () => true,
+      requirePermission: makeTestRequirePermission('admin', responses),
       readBody: async () => ({ scheduled_for: '2026-05-20', expected_version: 2 }),
       sendJson: (status, body) => responses.push({ status, body }),
       // false => the route's "version conflict already responded" path.

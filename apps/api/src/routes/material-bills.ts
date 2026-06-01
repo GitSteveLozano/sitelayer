@@ -5,6 +5,20 @@ import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildPaginationMeta, parseExpectedVersion, parseJsonBody, parsePagination } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { PermissionAction } from '@sitelayer/domain'
+
+/**
+ * Coerce a bill `amount` (the schema accepts number-or-string dollars) into
+ * integer cents for the auth_materials max_amount_cents constraint. Rounds to
+ * the nearest cent; returns null for a non-finite/unparseable input so the
+ * overlay falls back to an uncapped grant/deny check (the route's own amount
+ * handling still owns shape validation downstream).
+ */
+function parseAmountToCents(amount: unknown): number | null {
+  const dollars = typeof amount === 'number' ? amount : Number(amount)
+  if (!Number.isFinite(dollars)) return null
+  return Math.round(dollars * 100)
+}
 
 // POST /api/projects/:id/material-bills wire-format. The existing route
 // only enforced presence of vendor/amount/bill_type; we tighten amount to
@@ -44,6 +58,8 @@ export type MaterialBillRouteCtx = {
   pool: Pool
   company: ActiveCompany
   requireRole: (allowed: readonly string[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -112,6 +128,14 @@ export async function handleMaterialBillRoutes(
       ctx.sendJson(400, { error: 'vendor, amount, and bill_type are required' })
       return true
     }
+    // LAYER 2: auth_materials — Owner-only by default in the matrix (the
+    // existing requireRole above also lets foreman/office through, so the
+    // overlay is the place the office→estimator + foreman demotion is realized:
+    // a plain foreman/office member passes requireRole but is denied here).
+    // This is also the ONE live constraint: parse the dollar amount to integer
+    // cents and pass it so checkConstraint can enforce a custom role's $-cap.
+    const amountCents = parseAmountToCents(body.amount)
+    if (!ctx.requirePermission('auth_materials', amountCents !== null ? { amountCents } : undefined)) return true
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     if (expectedVersion !== null) {
       const projectVersionResult = await withCompanyClient(ctx.company.id, (c) =>

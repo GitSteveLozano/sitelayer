@@ -12,6 +12,7 @@ import {
   type CrewScheduleWorkflowSnapshot,
   type CrewScheduleWorkflowState,
 } from '@sitelayer/workflows'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
@@ -35,6 +36,8 @@ export type CrewScheduleEventRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -200,6 +203,14 @@ export async function handleCrewScheduleEventRoutes(
       return true
     }
     const { event: eventType, state_version: stateVersion } = parsed.value
+
+    // LAYER 2: brief_crew — gates the CONFIRM event (the act that briefs the
+    // crew: confirms the schedule and locks the labor entries). Matrix base
+    // owner+foreman, so this round-trips the requireRole(['admin','foreman'])
+    // gate above for built-in roles; a custom role can narrow it. DECLINE /
+    // REASSIGN stay on the requireRole gate alone (schedule housekeeping, not
+    // the brief itself).
+    if (eventType === 'CONFIRM' && !ctx.requirePermission('brief_crew')) return true
 
     try {
       const result = await withMutationTx(async (client: PoolClient) => {

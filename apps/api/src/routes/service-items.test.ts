@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleServiceItemRoutes, type ServiceItemRouteCtx } from './service-items.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // In-memory pg double for the /api/service-items routes (U11 — labor_multiplier,
 // status, and the rate-history trail). Matches the route's SQL by substring:
@@ -219,6 +220,7 @@ function makeCtx(pool: FakePool, opts: { role?: boolean } = {}) {
     pool: pool as unknown as Pool,
     company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' },
     requireRole: () => opts.role ?? true,
+    requirePermission: makeTestRequirePermission('admin', responses),
     readBody: async () => (reads.shift() ?? {}) as Record<string, unknown>,
     sendJson: (status, body) => {
       responses.push({ status, body })

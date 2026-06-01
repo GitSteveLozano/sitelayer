@@ -6,6 +6,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleWorkerIssueRoutes, type WorkerIssueRouteCtx } from './worker-issues.js'
+import { permissionDecision } from '../permission-seam.js'
 import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../storage.js'
 
 /**
@@ -381,6 +382,10 @@ function makeCtx(): WorkerIssueRouteCtx {
     company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'foreman' as const },
     currentUserId: 'u-1',
     requireRole: () => true,
+    // foreman → foreman base holds BOTH flag_issue and stop_work in the matrix,
+    // so this faithful overlay always allows here (the route discriminates by
+    // severity='stopped'); a hypothetical deny just returns false.
+    requirePermission: (action, opts = {}) => permissionDecision('foreman', [], action, opts).outcome === 'allowed',
     readBody: async () => ({}),
     sendJson: () => undefined, // overridden per-request below
     storage,

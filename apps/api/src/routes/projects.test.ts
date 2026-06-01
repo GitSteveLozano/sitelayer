@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleProjectRoutes, type ProjectRouteCtx } from './projects.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // ---------------------------------------------------------------------------
 // In-memory pg double for the GET /api/projects/:id/closeout snapshot
@@ -378,6 +379,7 @@ function makeCtx(
       company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' as const },
       currentUserId: 'u-1',
       requireRole: () => true,
+      requirePermission: makeTestRequirePermission('admin', responses),
       readBody: async () => body,
       sendJson: (status: number, response: unknown) => {
         responses.push({ status, body: response })

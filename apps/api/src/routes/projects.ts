@@ -6,6 +6,7 @@ import {
   calculateProjectCost,
   DEFAULT_BONUS_RULE,
   sumMoney,
+  type PermissionAction,
 } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
 import { captureWithEntityContext } from '../instrument.js'
@@ -105,6 +106,12 @@ export type ProjectRouteCtx = {
   /** Currently-active Clerk user id (for the workflow event log actor). */
   currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
+  /**
+   * LAYER 2 named-action overlay (the 9 PERMISSION_ACTIONS). Runs AFTER
+   * requireRole so the design matrix can further restrict the effective base
+   * role and apply custom-role grants. See server.ts:requirePermission.
+   */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -340,6 +347,10 @@ async function fireMarginShortfallAlert(
 export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, ctx: ProjectRouteCtx): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     if (!ctx.requireRole(['admin', 'office'])) return true
+    // LAYER 2: create_project — matrix base owner+estimator (== admin+office),
+    // so for built-in roles this round-trips the requireRole gate above; the
+    // overlay exists so a custom role (or future matrix change) can narrow it.
+    if (!ctx.requirePermission('create_project')) return true
     const parsed = parseJsonBody(ProjectCreateBodySchema, await ctx.readBody())
     if (!parsed.ok) {
       ctx.sendJson(400, { error: parsed.error })

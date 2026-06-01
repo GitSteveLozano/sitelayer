@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { AppTier } from '@sitelayer/config'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { Identity } from '../auth.js'
 import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
@@ -67,6 +68,7 @@ import { handleWorkerRoutes } from './workers.js'
 import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleAdminRoutes } from './admin.js'
+import { handleCompanyRoleRoutes } from './company-roles.js'
 import { makeScenarioApplyRunner } from '../admin-scenarios.js'
 import { seedCompanyDefaults } from '../onboarding.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
@@ -102,6 +104,15 @@ export type DispatchContext = {
 
   // Cross-cutting helpers — all mirror the shapes used in routes/* today.
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /**
+   * LAYER 2 named-action overlay (the 9 PERMISSION_ACTIONS). Resolves the
+   * caller's effective permissions from their built-in base + custom-role
+   * grants. Returns true when the action is held (and, for a constrainable
+   * action with a magnitude supplied via opts, within cap); on false it has
+   * already sent the 403 and the handler should return true to stop the
+   * cascade. Not yet called by any route — see server.ts:requirePermission.
+   */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   sendRedirect: (location: string) => void
@@ -205,6 +216,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         runScenarioApply: makeScenarioApplyRunner(pool, seedCompanyDefaults),
       }),
 
+    // Custom-role management API (admin-gated CRUD for custom_roles +
+    // custom_role_grants; GET surfaces the read-only built-in matrix). The
+    // editable half of the RBAC-A overhaul — see permission-seam.ts for the
+    // LAYER 1/LAYER 2 enforcement that consumes these rows. Namespace
+    // (/api/companies/:id/roles, /memberships/:id/role) is distinct.
+    () =>
+      handleCompanyRoleRoutes(req, url, {
+        pool,
+        userId: currentUserId,
+        sendJson,
+        readBody,
+      }),
+
     // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
     () =>
       handleSystemRoutes(req, url, {
@@ -270,6 +294,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
       }),
@@ -323,6 +348,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         storage: ctx.storage,
@@ -449,6 +475,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -461,6 +488,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -483,6 +511,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -774,6 +803,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -800,6 +830,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         // RoleSwitcher, not the raw demo-user identity.
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         storage: ctx.storage,
@@ -814,6 +845,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
         checkVersion,
@@ -840,6 +872,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
       }),

@@ -10,6 +10,7 @@ import {
   type TimeReviewWorkflowSnapshot,
   type TimeReviewWorkflowState,
 } from '@sitelayer/workflows'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
@@ -27,6 +28,8 @@ export type TimeReviewRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
@@ -451,6 +454,16 @@ export async function handleTimeReviewRunRoutes(
       return true
     }
     const { event: eventType, state_version: stateVersion, reason } = parsed.value
+
+    // LAYER 2: approve_time — gates the APPROVE event only. Matrix base
+    // owner+foreman; the requireRole(['admin','foreman','office']) gate above
+    // also lets office through, so the overlay realizes the office→estimator
+    // demotion: a plain office member passes requireRole but is denied here
+    // (estimator does not hold approve_time). REJECT / REOPEN stay on the
+    // requireRole gate (reviewing is not the approval itself). The OT cap is
+    // INERT in v1: no per-request OT figure exists at this boundary, so we
+    // deliberately do NOT pass otHours — the action-level grant is what gates.
+    if (eventType === 'APPROVE' && !ctx.requirePermission('approve_time')) return true
 
     try {
       const result = await withMutationTx(async (client: PoolClient) => {

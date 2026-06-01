@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
+import type { PermissionAction } from '@sitelayer/domain'
 import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
@@ -46,6 +47,8 @@ export type ServiceItemRouteCtx = {
   pool: Pool
   company: ActiveCompany
   requireRole: (allowed: readonly string[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -139,6 +142,10 @@ export async function handleServiceItemRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/service-items') {
     if (!ctx.requireRole(['admin', 'office'])) return true
+    // LAYER 2: edit_pricing_book — the service-item catalog IS the rate book;
+    // creating an item writes its default_rate. Matrix base owner+estimator
+    // (== admin+office), round-tripping the requireRole gate for built-in roles.
+    if (!ctx.requirePermission('edit_pricing_book')) return true
     const parsed = parseJsonBody(ServiceItemCreateBodySchema, await ctx.readBody())
     if (!parsed.ok) {
       ctx.sendJson(400, { error: parsed.error })
@@ -236,6 +243,9 @@ export async function handleServiceItemRoutes(
 
   if (req.method === 'PATCH' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
+    // LAYER 2: edit_pricing_book — a service-item PATCH is the canonical
+    // rate-book edit (changes default_rate, appends rate history).
+    if (!ctx.requirePermission('edit_pricing_book')) return true
     const code = url.pathname.split('/')[3] ?? ''
     if (!code) {
       ctx.sendJson(400, { error: 'service item code is required' })

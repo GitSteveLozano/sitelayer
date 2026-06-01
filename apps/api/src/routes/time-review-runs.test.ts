@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleTimeReviewRunRoutes, type TimeReviewRouteCtx } from './time-review-runs.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 
 // ---------------------------------------------------------------------------
 // time_review_runs workflow surface. The most consequential assertions are
@@ -278,6 +279,7 @@ function makeCtx(
         responses.push({ status: 403, body: { error: 'forbidden' } })
         return false
       },
+      requirePermission: makeTestRequirePermission(role, responses),
       readBody: async () => body,
       sendJson: (status, response) => {
         responses.push({ status, body: response })

@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { HttpError } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
@@ -43,6 +44,8 @@ export type WorkerIssueRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   /**
@@ -258,6 +261,16 @@ export async function handleWorkerIssueRoutes(
     }
     const projectId = typeof body.project_id === 'string' && body.project_id.length > 0 ? body.project_id : null
     const severity = parseSeverity(body.severity)
+    // LAYER 2: flag_issue vs stop_work — this one route performs BOTH named
+    // actions, discriminated by severity. A 'stopped' severity is a
+    // work-halting safety stop (the stop_work action; matches the
+    // severity='stopped' auto-escalator + the full-screen stop-work takeover);
+    // any other severity is an ordinary flag_issue. The route has no
+    // requireRole (any member may file), so the overlay is the only gate: both
+    // actions are in EVERY built-in base, so built-in roles are unaffected and
+    // the overlay exists purely so a custom role can revoke flagging/stopping.
+    const issueAction: PermissionAction = severity === 'stopped' ? 'stop_work' : 'flag_issue'
+    if (!ctx.requirePermission(issueAction)) return true
     // Structured material-request fields are only meaningful for an
     // out-of-materials ping; ignore them on other kinds so a stray field can't
     // attach phantom material content to a safety/crew/other issue.

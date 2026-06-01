@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleDailyLogRoutes, type DailyLogRouteCtx } from './daily-logs.js'
+import { makeTestRequirePermission } from './test-require-permission.js'
 import type { BlueprintStorage } from '../storage.js'
 
 // ---------------------------------------------------------------------------
@@ -209,6 +210,7 @@ function makeCtx(
       company: { id: COMPANY_ID, slug: 'co', name: 'Co', created_at: '', role },
       currentUserId,
       requireRole: () => true,
+      requirePermission: makeTestRequirePermission(role, responses),
       readBody: async () => body,
       sendJson: (status, response) => {
         responses.push({ status, body: response })

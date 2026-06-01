@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
@@ -23,6 +24,8 @@ export type DailyLogRouteCtx = {
   company: ActiveCompany
   currentUserId: string
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /** LAYER 2 named-action overlay; runs AFTER requireRole. See server.ts. */
+  requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
@@ -507,6 +510,12 @@ export async function handleDailyLogRoutes(
   const eventsMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/events$/)
   if (req.method === 'POST' && eventsMatch) {
     if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    // LAYER 2: submit_daily_log — matrix base owner+foreman. The requireRole
+    // gate above also lets office through, so the overlay is where the
+    // office→estimator demotion lands: a plain office member passes requireRole
+    // but is denied here (estimator does not hold submit_daily_log). The
+    // reducer's only human event is SUBMIT, so gating the whole route is exact.
+    if (!ctx.requirePermission('submit_daily_log')) return true
     const id = eventsMatch[1]!
     if (!isValidUuid(id)) {
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
@@ -561,6 +570,9 @@ export async function handleDailyLogRoutes(
   const submitMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/submit$/)
   if (req.method === 'POST' && submitMatch) {
     if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    // LAYER 2: submit_daily_log — same overlay as the canonical /events route
+    // so the deprecated alias cannot drift (office denied; owner+foreman allow).
+    if (!ctx.requirePermission('submit_daily_log')) return true
     const id = submitMatch[1]!
     if (!isValidUuid(id)) {
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
