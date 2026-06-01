@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { Identity } from '../auth.js'
 import { handleAdminRoutes, type AdminRouteDeps } from './admin.js'
 import type { ActorTokenMinter } from '../clerk-actor-token.js'
+import type { ScenarioApplyRunner } from '../admin-scenarios.js'
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const clerkAdmin: Identity = { userId: 'admin-sub', source: 'clerk' }
@@ -274,5 +275,67 @@ describe('handleAdminRoutes — scenario console reads (P3)', () => {
     const { calls, sendJson } = capture()
     await handleAdminRoutes(req('GET'), new URL('http://x/api/admin/scenarios/no-such-slug/plan'), deps({ sendJson }))
     expect(calls[0]?.status).toBe(404)
+  })
+})
+
+describe('handleAdminRoutes — POST /api/admin/scenarios/:slug/apply (P3 mutation)', () => {
+  const url = (slug = 'mid-flight-rental') => new URL(`http://x/api/admin/scenarios/${slug}/apply`)
+  const runScenarioApply: ScenarioApplyRunner = async (a) => ({
+    slug: a.slug,
+    company_slug: a.target ?? 'acme-midflight',
+    company_id: 'co-1',
+    applied: true,
+  })
+  const readBody = async () => ({})
+
+  it('applies a fixture and returns the result', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, runScenarioApply }))
+    expect(calls[0]?.status).toBe(201)
+    expect(calls[0]?.body).toMatchObject({ company_id: 'co-1', applied: true })
+  })
+
+  it('retargets the company via { target }', async () => {
+    const seen: Array<{ slug: string; target?: string }> = []
+    const runner: ScenarioApplyRunner = async (a) => {
+      seen.push(a)
+      return { slug: a.slug, company_slug: a.target ?? 'x', company_id: 'co-2', applied: true }
+    }
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, readBody: async () => ({ target: 'demo-co-2' }), runScenarioApply: runner }),
+    )
+    expect(seen[0]).toMatchObject({ target: 'demo-co-2' })
+    expect(calls[0]?.status).toBe(201)
+  })
+
+  it('400s an invalid target slug', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, readBody: async () => ({ target: 'Not A Slug' }), runScenarioApply }),
+    )
+    expect(calls[0]?.status).toBe(400)
+  })
+
+  it('404s an unknown fixture (runner returns null)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url('nope'), deps({ sendJson, readBody, runScenarioApply: async () => null }))
+    expect(calls[0]?.status).toBe(404)
+  })
+
+  it('blocks apply in prod (scenarios are dev/demo only)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, runScenarioApply, tier: 'prod' }))
+    expect(calls[0]?.status).toBe(403)
+  })
+
+  it('501s when no runner is wired', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody }))
+    expect(calls[0]?.status).toBe(501)
   })
 })

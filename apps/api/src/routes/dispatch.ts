@@ -67,6 +67,8 @@ import { handleWorkerRoutes } from './workers.js'
 import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleAdminRoutes } from './admin.js'
+import { makeScenarioApplyRunner } from '../admin-scenarios.js'
+import { seedCompanyDefaults } from '../onboarding.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
 import { handleGuardrailRoutes } from './guardrails.js'
@@ -193,7 +195,15 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   const routes: Array<() => Promise<boolean>> = [
     // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin
     // on the raw (pre-act-as) identity. Placed first; its namespace is distinct.
-    () => handleAdminRoutes(req, url, { pool, identity, sendJson, readBody, tier: ctx.tier }),
+    () =>
+      handleAdminRoutes(req, url, {
+        pool,
+        identity,
+        sendJson,
+        readBody,
+        tier: ctx.tier,
+        runScenarioApply: makeScenarioApplyRunner(pool, seedCompanyDefaults),
+      }),
 
     // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
     () =>

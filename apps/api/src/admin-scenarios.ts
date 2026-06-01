@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import type { Pool, PoolClient } from 'pg'
 import { listWorkflows } from '@sitelayer/workflows'
-import { parseScenario, planScenario, type ApplyOp } from '@sitelayer/scenario'
+import { applyScenario, parseScenario, planScenario, type ApplyOp, type ScenarioDoc } from '@sitelayer/scenario'
 
 /**
  * Read-only data sources for the Site Admin scenario console (P3).
@@ -111,4 +112,89 @@ export function previewScenarioPlan(
     }
   }
   return null
+}
+
+// ---------- Apply (seed a fixture into the dev/demo DB) ----------
+
+export interface ScenarioApplyResultDto {
+  slug: string
+  company_slug: string
+  company_id: string
+  applied: boolean
+}
+
+function findScenarioDoc(slug: string, dir: string): ScenarioDoc | null {
+  if (!existsSync(dir)) return null
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.yaml'))) {
+    let doc: ScenarioDoc
+    try {
+      doc = parseScenario(readFileSync(path.join(dir, file), 'utf-8'))
+    } catch {
+      continue
+    }
+    if (doc.company.slug === slug) return doc
+  }
+  return null
+}
+
+/**
+ * Apply a fixture by slug through the @sitelayer/scenario engine (the SAME path
+ * scripts/seed-scenario.ts uses). `target` retargets the company slug so an
+ * admin can "spin up a fresh demo company" from a curated fixture. The caller
+ * owns the transaction (see makeScenarioApplyRunner). Null if no fixture matches.
+ */
+export async function applyScenarioFixture(
+  client: PoolClient,
+  slug: string,
+  opts: {
+    dir?: string
+    target?: string
+    now?: Date
+    seedCompanyDefaults: (c: PoolClient, companyId: string) => Promise<void>
+  },
+): Promise<ScenarioApplyResultDto | null> {
+  const dir = opts.dir ?? scenarioDir()
+  const doc = findScenarioDoc(slug, dir)
+  if (!doc) return null
+  const target = opts.target?.trim()
+  const effective: ScenarioDoc = target ? { ...doc, company: { slug: target, name: doc.company.name } } : doc
+  const summary = await applyScenario(
+    client,
+    effective,
+    opts.now
+      ? { seedCompanyDefaults: opts.seedCompanyDefaults, now: opts.now }
+      : { seedCompanyDefaults: opts.seedCompanyDefaults },
+  )
+  return { slug, company_slug: effective.company.slug, company_id: summary.company_id, applied: true }
+}
+
+export type ScenarioApplyRunner = (args: { slug: string; target?: string }) => Promise<ScenarioApplyResultDto | null>
+
+/**
+ * Build a runner that applies a fixture in a fresh transaction WITHOUT the
+ * per-request company GUC — scenario seeding is cross-tenant (it CREATES the
+ * company), exactly like scripts/seed-scenario.ts.
+ */
+export function makeScenarioApplyRunner(
+  pool: Pool,
+  seedCompanyDefaults: (c: PoolClient, companyId: string) => Promise<void>,
+): ScenarioApplyRunner {
+  return async ({ slug, target }) => {
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const result = await applyScenarioFixture(
+        client,
+        slug,
+        target !== undefined ? { target, seedCompanyDefaults } : { seedCompanyDefaults },
+      )
+      await client.query('commit')
+      return result
+    } catch (err) {
+      await client.query('rollback').catch(() => undefined)
+      throw err
+    } finally {
+      client.release()
+    }
+  }
 }

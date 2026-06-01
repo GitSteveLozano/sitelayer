@@ -3,7 +3,13 @@ import type { Identity } from '../auth.js'
 import type { AppTier } from '../tier.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { actorTokenMinterFromEnv, type ActorTokenMinter } from '../clerk-actor-token.js'
-import { listRegistryWorkflows, listScenarioFiles, previewScenarioPlan } from '../admin-scenarios.js'
+import {
+  listRegistryWorkflows,
+  listScenarioFiles,
+  previewScenarioPlan,
+  type ScenarioApplyRunner,
+} from '../admin-scenarios.js'
+import { COMPANY_SLUG_PATTERN } from '@sitelayer/scenario'
 
 /**
  * Cross-tenant platform-admin API (design §5/§6/§7).
@@ -36,6 +42,9 @@ export interface AdminRouteDeps {
   envIds?: ReadonlySet<string>
   /** Defaults to a minter built from CLERK_SECRET_KEY; injected in tests. */
   mintActorToken?: ActorTokenMinter | null
+  /** Applies a scenario fixture in a tx; injected from dispatch (needs the pool
+   *  + seedCompanyDefaults). Absent → apply returns 501. */
+  runScenarioApply?: ScenarioApplyRunner
 }
 
 interface CompanyRow {
@@ -106,6 +115,40 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       return true
     }
     return handleImpersonateStart(deps, gate.sub)
+  }
+
+  // Mutation: apply a scenario fixture to the dev/demo DB (seed / spin-up-demo).
+  const applyMatch = path.match(/^\/api\/admin\/scenarios\/([^/]+)\/apply$/)
+  if (method === 'POST' && applyMatch) {
+    // Scenarios are a dev/demo concept — never seed prod (the CLI refuses it too).
+    if (deps.tier === 'prod') {
+      sendJson(403, { error: 'scenarios cannot be applied in prod' })
+      return true
+    }
+    if (!deps.runScenarioApply) {
+      sendJson(501, { error: 'scenario apply is not wired in this context' })
+      return true
+    }
+    const slug = decodeURIComponent(applyMatch[1]!)
+    const body = deps.readBody ? await deps.readBody() : {}
+    const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : undefined
+    if (target !== undefined && !COMPANY_SLUG_PATTERN.test(target)) {
+      sendJson(400, { error: 'target must be a valid company slug' })
+      return true
+    }
+    let result
+    try {
+      result = await deps.runScenarioApply(target !== undefined ? { slug, target } : { slug })
+    } catch {
+      sendJson(500, { error: 'scenario apply failed' })
+      return true
+    }
+    if (!result) {
+      sendJson(404, { error: 'scenario not found' })
+      return true
+    }
+    sendJson(201, result)
+    return true
   }
 
   if (method !== 'GET') {

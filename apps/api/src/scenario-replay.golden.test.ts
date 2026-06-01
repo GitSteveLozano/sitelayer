@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Pool, type PoolClient } from 'pg'
 import { applyScenario, parseScenario } from '@sitelayer/scenario'
 import { seedCompanyDefaults } from './onboarding.js'
+import { applyScenarioFixture } from './admin-scenarios.js'
 
 /**
  * Scenario-replay golden tests against an ephemeral Postgres.
@@ -52,6 +53,24 @@ describeIntegration('scenario replay (golden, ephemeral PG)', () => {
     const r = await client.query<{ n: number }>(sql, params)
     return r.rows[0]?.n ?? -1
   }
+
+  it('applyScenarioFixture: seeds a fixture and retargets it to a fresh company (spin-up-demo)', async () => {
+    const result = await applyScenarioFixture(client, 'acme-midflight', {
+      dir: scenariosDir,
+      target: 'demo-applied-test',
+      now: NOW,
+      seedCompanyDefaults,
+    })
+    expect(result).not.toBeNull()
+    expect(result).toMatchObject({ slug: 'acme-midflight', company_slug: 'demo-applied-test', applied: true })
+    // the retargeted company exists with the fixture's rows materialized…
+    expect(await count(`select count(*)::int n from companies where slug = $1`, ['demo-applied-test'])).toBe(1)
+    expect(
+      await count(`select count(*)::int n from rental_billing_runs where company_id = $1`, [result!.company_id]),
+    ).toBe(1)
+    // …and the original fixture slug was NOT created (it was retargeted).
+    expect(await count(`select count(*)::int n from companies where slug = $1`, ['acme-midflight'])).toBe(0)
+  })
 
   it('mid-flight-rental: rental lands in `posting` with a 2-row event log + backdated outbox', async () => {
     const summary = await applyScenario(client, readScenario('mid-flight-rental.yaml'), {
@@ -130,10 +149,9 @@ describeIntegration('scenario replay (golden, ephemeral PG)', () => {
       for (const t of tables) {
         out[t] = await count(`select count(*)::int n from ${t} where company_id = $1`, [companyId])
       }
-      out['workflow_event_log'] = await count(
-        `select count(*)::int n from workflow_event_log where company_id = $1`,
-        [companyId],
-      )
+      out['workflow_event_log'] = await count(`select count(*)::int n from workflow_event_log where company_id = $1`, [
+        companyId,
+      ])
       return out
     }
 
