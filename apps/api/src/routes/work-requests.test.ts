@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
+import { runWithRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { attachMutationTx } from '../mutation-tx.js'
@@ -22,6 +23,7 @@ type SupportPacket = {
   id: string
   company_id: string
   actor_user_id: string
+  capture_session_id: string | null
   request_id: string | null
   route: string | null
   build_sha: string | null
@@ -43,6 +45,7 @@ type WorkItem = {
   lane: string
   severity: string | null
   route: string | null
+  capture_session_id: string | null
   entity_type: string | null
   entity_id: string | null
   assignee_user_id: string | null
@@ -76,6 +79,7 @@ type HandoffEvent = {
   causation_event_id: string | null
   correlation_id: string | null
   request_id: string | null
+  capture_session_id: string | null
   sentry_trace: string | null
   sentry_baggage: string | null
   build_sha: string | null
@@ -95,6 +99,7 @@ type MutationOutbox = {
   payload: JsonRecord
   idempotency_key: string
   status: string
+  capture_session_id: string | null
   attempt_count: number
   next_attempt_at: string | null
   applied_at: string | null
@@ -166,8 +171,9 @@ class FakePool {
         actor_user_id: params[1] as string,
         request_id: (params[2] as string | null) ?? null,
         route: (params[3] as string | null) ?? null,
+        capture_session_id: (params[4] as string | null) ?? null,
         // params[4] = capture_session_id ($5::uuid) — added by the capture
-        // session spine (migration 120); unread here. Indices below shift +1.
+        // session spine (migration 120); indices below shift +1.
         build_sha: (params[5] as string | null) ?? null,
         problem: (params[6] as string | null) ?? null,
         client: JSON.parse(params[7] as string) as JsonRecord,
@@ -195,6 +201,7 @@ class FakePool {
         lane: params[5] as string,
         severity: (params[6] as string | null) ?? null,
         route: (params[7] as string | null) ?? null,
+        capture_session_id: (params[8] as string | null) ?? null,
         // params[8] = capture_session_id ($9::uuid) — capture session spine (migration 120); indices shift +1 below.
         entity_type: (params[9] as string | null) ?? null,
         entity_id: (params[10] as string | null) ?? null,
@@ -237,10 +244,11 @@ class FakePool {
         causation_event_id: (params[10] as string | null) ?? null,
         correlation_id: (params[11] as string | null) ?? null,
         request_id: (params[12] as string | null) ?? null,
-        sentry_trace: (params[13] as string | null) ?? null,
-        sentry_baggage: (params[14] as string | null) ?? null,
-        build_sha: (params[15] as string | null) ?? null,
-        redaction_version: params[16] as string,
+        capture_session_id: (params[13] as string | null) ?? null,
+        sentry_trace: (params[14] as string | null) ?? null,
+        sentry_baggage: (params[15] as string | null) ?? null,
+        build_sha: (params[16] as string | null) ?? null,
+        redaction_version: params[17] as string,
         occurred_at: '2026-05-21T12:00:02.000Z',
         recorded_at: '2026-05-21T12:00:02.000Z',
       }
@@ -269,6 +277,7 @@ class FakePool {
         payload: JSON.parse((directDispatchInsert ? params[4] : params[6]) as string) as JsonRecord,
         idempotency_key: idempotencyKey,
         status: 'pending',
+        capture_session_id: (directDispatchInsert ? params[9] : params[11]) as string | null,
         attempt_count: existing?.attempt_count ?? 0,
         next_attempt_at: existing?.next_attempt_at ?? '2026-05-21T12:00:04.000Z',
         applied_at: existing?.applied_at ?? null,
@@ -321,6 +330,7 @@ class FakePool {
       row.sentry_trace = sentryTrace
       row.sentry_baggage = sentryBaggage
       row.request_id = requestId
+      row.capture_session_id = (params[8] as string | null) ?? null
       return { rows: [row], rowCount: 1 }
     }
 
@@ -444,6 +454,7 @@ class FakePool {
               ? {
                   id: packet.id,
                   route: packet.route,
+                  capture_session_id: packet.capture_session_id,
                   problem: packet.problem,
                   request_id: packet.request_id,
                   build_sha: packet.build_sha,
@@ -559,6 +570,14 @@ class FakePool {
       normalized.includes('from workflow_event_log')
     ) {
       if (normalized.includes('count(*)')) return { rows: [{ count: '0' }], rowCount: 1 }
+      return { rows: [], rowCount: 0 }
+    }
+
+    if (
+      normalized.includes('from capture_sessions') ||
+      normalized.includes('from capture_session_events') ||
+      normalized.includes('from capture_artifacts')
+    ) {
       return { rows: [], rowCount: 0 }
     }
 
@@ -973,7 +992,13 @@ describe('handleWorkRequestRoutes', () => {
   it('dispatches a work request through mutation_outbox with a stable handoff event', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Agent task', client: clientContext })
-    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    await runWithRequestContext(
+      {
+        requestId: 'req-capture-dispatch',
+        captureSessionId: '00000000-0000-4000-8000-000000000999',
+      },
+      () => handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx),
+    )
     const workItemId = pool.workItems[0]!.id
     const dispatch = makeCtx(pool, {})
 
@@ -989,6 +1014,7 @@ describe('handleWorkRequestRoutes', () => {
         status: 'pending',
         attempt_count: 0,
         idempotency_key: `context_work_item:dispatch_mesh:${workItemId}`,
+        capture_session_id: '00000000-0000-4000-8000-000000000999',
       },
       dispatch_queued: true,
     })
@@ -999,9 +1025,17 @@ describe('handleWorkRequestRoutes', () => {
       mutation_type: 'dispatch_mesh_work_request',
       idempotency_key: `context_work_item:dispatch_mesh:${workItemId}`,
       payload: {
+        payload_version: 'sitelayer.context_work_dispatch.v1',
+        capture_session_id: '00000000-0000-4000-8000-000000000999',
         status: 'agent_running',
         lane: 'agent',
         work_request_brief: {
+          diagnostics: {
+            capture_session_id: '00000000-0000-4000-8000-000000000999',
+            evidence_refs: expect.arrayContaining([
+              { type: 'capture_session', id: '00000000-0000-4000-8000-000000000999' },
+            ]),
+          },
           state: {
             status: 'agent_running',
             lane: 'agent',
@@ -1025,6 +1059,9 @@ describe('handleWorkRequestRoutes', () => {
       },
     })
     expect(pool.mutationOutbox[0]?.payload.agent_brief_markdown).toContain(`Work item: ${workItemId}`)
+    expect(pool.mutationOutbox[0]?.payload.agent_brief_markdown).toContain(
+      'Capture session: 00000000-0000-4000-8000-000000000999',
+    )
     expect(JSON.stringify(pool.mutationOutbox[0]?.payload.work_request_brief)).not.toContain('Bearer secret')
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.url).toBe(
       `https://sitelayer.test/api/work-requests/${workItemId}/agent-callback`,
@@ -1443,6 +1480,38 @@ describe('handleWorkRequestRoutes', () => {
     }
   })
 
+  it('validates agent callback payload shape before mutating the work item', async () => {
+    const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+    process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'
+    try {
+      const pool = new FakePool()
+      const created = makeCtx(pool, { title: 'Invalid callback payload', client: clientContext })
+      await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+      const workItemId = pool.workItems[0]!.id
+      const callback = makeCtx(pool, {
+        event_type: 'agent.message_received',
+        agent_ref: 'x'.repeat(201),
+        idempotency_key: 'invalid-agent-callback-shape',
+      })
+
+      await handleWorkRequestRoutes(
+        buildReq('POST', { authorization: 'Bearer callback-secret' }),
+        buildUrl(`/api/work-requests/${workItemId}/agent-callback`),
+        callback.ctx,
+      )
+
+      expect(callback.responses[0]?.status).toBe(400)
+      expect(callback.responses[0]?.body).toMatchObject({
+        error: 'invalid agent callback payload',
+      })
+      expect(pool.workItems[0]).toMatchObject({ status: 'new', lane: 'triage' })
+      expect(pool.handoffEvents.map((event) => event.event_type)).not.toContain('agent.message_received')
+    } finally {
+      if (previous === undefined) delete process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+      else process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = previous
+    }
+  })
+
   it('rejects agent callbacks that try to set reversed status', async () => {
     const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
     process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'
@@ -1684,6 +1753,7 @@ describe('handleWorkRequestRoutes', () => {
       causation_event_id: null,
       correlation_id: null,
       request_id: null,
+      capture_session_id: null,
       sentry_trace: null,
       sentry_baggage: null,
       build_sha: null,
@@ -1735,6 +1805,7 @@ describe('handleWorkRequestRoutes', () => {
       causation_event_id: null,
       correlation_id: null,
       request_id: null,
+      capture_session_id: null,
       sentry_trace: null,
       sentry_baggage: null,
       build_sha: null,

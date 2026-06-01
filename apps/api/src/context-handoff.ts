@@ -1,4 +1,5 @@
 import { getRequestContext } from '@sitelayer/logger'
+import { z } from 'zod'
 import { currentTraceHeaders, type LedgerExecutor, withCompanyClient } from './mutation-tx.js'
 import { sanitizeSupportJson } from './routes/support-packets.js'
 
@@ -82,6 +83,34 @@ export const HANDOFF_EVENT_TYPES = [
 ] as const
 
 export type HandoffEventType = (typeof HANDOFF_EVENT_TYPES)[number]
+
+export const CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION = 'sitelayer.context_work_dispatch.v1' as const
+
+export const AGENT_CALLBACK_EVENT_TYPES = [
+  'agent.dispatch_acknowledged',
+  'agent.message_received',
+  'agent.artifact_attached',
+  'agent.proposal_ready',
+  'agent.completed',
+  'human.review_requested',
+] as const satisfies readonly HandoffEventType[]
+
+export const AgentCallbackBodySchema = z
+  .object({
+    event_type: z.enum(AGENT_CALLBACK_EVENT_TYPES),
+    agent_ref: z.string().trim().min(1).max(200).optional(),
+    message: z.string().trim().min(1).max(4000).optional().nullable(),
+    body: z.string().trim().min(1).max(4000).optional().nullable(),
+    url: z.string().trim().min(1).max(1000).optional().nullable(),
+    artifacts: z.unknown().optional().nullable(),
+    status: z.enum(WORK_ITEM_STATUSES).optional().nullable(),
+    lane: z.enum(WORK_ITEM_LANES).optional().nullable(),
+    metadata: z.unknown().optional(),
+    idempotency_key: z.string().trim().min(1).max(200).optional().nullable(),
+  })
+  .passthrough()
+
+export type AgentCallbackBody = z.infer<typeof AgentCallbackBodySchema>
 
 export type ContextWorkItemRow = {
   id: string
@@ -426,6 +455,7 @@ export async function updateContextWorkItemWithEventTx(
     ...(args.payload !== undefined ? { payload: args.payload } : {}),
     ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
     ...(args.idempotencyKey !== undefined ? { idempotencyKey: args.idempotencyKey } : {}),
+    captureSessionId: existing.capture_session_id,
   }
   const event = await appendContextHandoffEventTx(executor, eventArgs)
   const result = await executor.query<ContextWorkItemRow>(

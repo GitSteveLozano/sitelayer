@@ -9,6 +9,9 @@ import { currentTraceHeaders, type LedgerExecutor, withCompanyClient, withMutati
 import { safeTokenEqual } from '../debug-trace.js'
 import { observeContextHandoff } from '../metrics.js'
 import {
+  AGENT_CALLBACK_EVENT_TYPES,
+  AgentCallbackBodySchema,
+  CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION,
   HANDOFF_EVENT_TYPES,
   WORK_ITEM_LANES,
   WORK_ITEM_SEVERITIES,
@@ -67,6 +70,7 @@ type DispatchOutboxSummary = {
   mutation_type: typeof DISPATCH_MUTATION_TYPE
   idempotency_key: string
   status: string
+  capture_session_id: string | null
   attempt_count: number
   next_attempt_at: string | null
   applied_at: string | null
@@ -82,8 +86,10 @@ type DispatchBackpressureState = {
 }
 
 type DispatchPayload = {
+  payload_version: typeof CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION
   work_item_id: string
   support_packet_id: string
+  capture_session_id: string | null
   title: string
   summary: string | null
   route: string | null
@@ -140,6 +146,7 @@ type WorkRequestBrief = {
     route: string | null
     entity_type: string | null
     entity_id: string | null
+    capture_session_id: string | null
     dispatch_outbox_status: string | null
     evidence_refs: Array<{ type: string; id: string }>
   }
@@ -331,13 +338,13 @@ function workItemResponse(row: ContextWorkItemRow) {
   return {
     id: row.id,
     support_packet_id: row.support_packet_id,
+    capture_session_id: row.capture_session_id,
     title: row.title,
     summary: row.summary,
     status: row.status,
     lane: row.lane,
     severity: row.severity,
     route: row.route,
-    capture_session_id: row.capture_session_id,
     entity_type: row.entity_type,
     entity_id: row.entity_id,
     assignee_user_id: row.assignee_user_id,
@@ -390,7 +397,7 @@ function nextActionForWorkItem(row: ContextWorkItemRow, outbox: DispatchOutboxSu
   if (row.status === 'proposal_expired') return 'redispatch_or_assign_human'
   if (row.status === 'agent_running') return 'monitor_agent_callback'
   if (row.status === 'human_assigned') return 'assigned_human_followup'
-  return row.lane === 'agent' ? 'dispatch_agent' : 'triage'
+  return row.lane === 'agent' || row.lane === 'both' ? 'dispatch_agent' : 'triage'
 }
 
 function buildAgentBriefMarkdown(input: {
@@ -419,6 +426,7 @@ function buildAgentBriefMarkdown(input: {
     `- Route: ${item.route ?? support?.route ?? 'unknown'}`,
     `- Entity: ${item.entity_type ?? 'unknown'}/${item.entity_id ?? 'unknown'}`,
     `- Support packet: ${item.support_packet_id}`,
+    `- Capture session: ${item.capture_session_id ?? 'none'}`,
     `- Request ID: ${support?.request_id ?? 'unknown'}`,
     `- Build: ${support?.build_sha ?? 'unknown'}`,
     `- Reversibility expires: ${item.expires_at ?? 'unknown'}`,
@@ -474,8 +482,14 @@ function buildWorkRequestBrief(
       route: detail.work_item.route ?? detail.work_item.support_packet?.route ?? null,
       entity_type: detail.work_item.entity_type,
       entity_id: detail.work_item.entity_id,
+      capture_session_id: detail.work_item.capture_session_id,
       dispatch_outbox_status: dispatchOutbox?.status ?? null,
-      evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
+      evidence_refs: [
+        { type: 'support_debug_packet', id: detail.work_item.support_packet_id },
+        ...(detail.work_item.capture_session_id
+          ? [{ type: 'capture_session', id: detail.work_item.capture_session_id }]
+          : []),
+      ],
     },
     timeline: timelineEvents,
     timeline_total: detail.events_total,
@@ -612,7 +626,8 @@ async function getDispatchOutboxTx(
   idempotencyKey: string,
 ): Promise<DispatchOutboxSummary | null> {
   const result = await executor.query<DispatchOutboxSummary>(
-    `select id, mutation_type, idempotency_key, status, attempt_count,
+    `select id, mutation_type, idempotency_key, status, capture_session_id,
+            attempt_count,
             next_attempt_at, applied_at, error
        from mutation_outbox
       where company_id = $1
@@ -665,8 +680,9 @@ async function getHandoffEventByIdempotencyTx(
   const result = await executor.query<ContextHandoffEventRow>(
     `select id, company_id, work_item_id, event_type, actor_kind, actor_user_id,
             actor_ref, source_system, payload, metadata, idempotency_key,
-            causation_event_id, correlation_id, request_id, sentry_trace,
-            sentry_baggage, build_sha, redaction_version, occurred_at, recorded_at
+            causation_event_id, correlation_id, request_id, capture_session_id,
+            sentry_trace, sentry_baggage, build_sha, redaction_version,
+            occurred_at, recorded_at
        from context_handoff_events
       where company_id = $1 and idempotency_key = $2
       limit 1`,
@@ -691,11 +707,11 @@ async function enqueueDispatchOutboxTx(
     `insert into mutation_outbox (
        company_id, device_id, actor_user_id, entity_type, entity_id,
        mutation_type, payload, idempotency_key, status,
-       sentry_trace, sentry_baggage, request_id
+       sentry_trace, sentry_baggage, request_id, capture_session_id
      ) values (
        $1, 'server', $2, 'context_work_item', $3,
        $4, $5::jsonb, $6, 'pending',
-       $7, $8, $9
+       $7, $8, $9, $10::uuid
      )
      on conflict (company_id, idempotency_key) do nothing`,
     [
@@ -708,6 +724,7 @@ async function enqueueDispatchOutboxTx(
       trace.sentryTrace,
       trace.baggage,
       requestId,
+      args.payload.capture_session_id,
     ],
   )
   const row = await getDispatchOutboxTx(executor, args.companyId, args.idempotencyKey)
@@ -738,12 +755,14 @@ async function retryDispatchOutboxTx(
             sentry_trace = $6,
             sentry_baggage = $7,
             request_id = $8,
+            capture_session_id = $9::uuid,
             updated_at = now()
       where company_id = $1
         and idempotency_key = $2
         and mutation_type = $3
         and status in ('failed', 'dead')
-      returning id, mutation_type, idempotency_key, status, attempt_count,
+      returning id, mutation_type, idempotency_key, status, capture_session_id,
+                attempt_count,
                 next_attempt_at, applied_at, error`,
     [
       args.companyId,
@@ -754,6 +773,7 @@ async function retryDispatchOutboxTx(
       trace.sentryTrace,
       trace.baggage,
       requestId,
+      args.payload.capture_session_id,
     ],
   )
   const updated = result.rows[0]
@@ -857,8 +877,10 @@ function buildDispatchPayload(
     },
   })
   return {
+    payload_version: CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION,
     work_item_id: row.id,
     support_packet_id: row.support_packet_id,
+    capture_session_id: row.capture_session_id,
     title: row.title,
     summary: row.summary,
     route: row.route,
@@ -1571,6 +1593,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
       mutation_type: result.outbox.mutation_type,
       idempotency_key: result.outbox.idempotency_key,
       status: result.outbox.status,
+      capture_session_id: result.outbox.capture_session_id,
       attempt_count: result.outbox.attempt_count,
       next_attempt_at: result.outbox.next_attempt_at,
       applied_at: result.outbox.applied_at,
@@ -1668,6 +1691,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
       mutation_type: result.outbox.mutation_type,
       idempotency_key: result.outbox.idempotency_key,
       status: result.outbox.status,
+      capture_session_id: result.outbox.capture_session_id,
       attempt_count: result.outbox.attempt_count,
       next_attempt_at: result.outbox.next_attempt_at,
       applied_at: result.outbox.applied_at,
@@ -1704,21 +1728,23 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
     ctx.sendJson(400, { error: 'invalid JSON body' })
     return
   }
-  const eventType = parseAllowed(body.event_type, HANDOFF_EVENT_TYPES) as HandoffEventType | null
-  if (
-    !eventType ||
-    ![
-      'agent.dispatch_acknowledged',
-      'agent.message_received',
-      'agent.artifact_attached',
-      'agent.proposal_ready',
-      'agent.completed',
-      'human.review_requested',
-    ].includes(eventType)
-  ) {
+  const eventType = parseAllowed(body.event_type, AGENT_CALLBACK_EVENT_TYPES) as HandoffEventType | null
+  if (!eventType) {
     ctx.sendJson(400, { error: 'event_type must be an agent callback event' })
     return
   }
+  const parsed = AgentCallbackBodySchema.safeParse(body)
+  if (!parsed.success) {
+    ctx.sendJson(400, {
+      error: 'invalid agent callback payload',
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    })
+    return
+  }
+  const callbackBody = parsed.data
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
   if (!detail) {
     ctx.sendJson(404, { error: 'work request not found' })
@@ -1728,7 +1754,7 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
     ctx.sendJson(409, { error: `work item is ${detail.work_item.status} and cannot accept agent callbacks` })
     return
   }
-  const next = deriveAgentCallbackState(eventType, body)
+  const next = deriveAgentCallbackState(eventType, callbackBody)
   if (next.status === 'reversed') {
     ctx.sendJson(400, { error: 'status reversed must use the reverse endpoint' })
     return
@@ -1739,19 +1765,21 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
       workItemId: id,
       eventType,
       actorKind: 'agent',
-      actorRef: optionalText(body.agent_ref, 200) ?? 'mesh',
+      actorRef: optionalText(callbackBody.agent_ref, 200) ?? 'mesh',
       payload: {
-        message: optionalText(body.message, MAX_SUMMARY_LENGTH),
-        body: optionalText(body.body, MAX_SUMMARY_LENGTH),
-        url: optionalText(body.url, 1000),
-        artifacts: body.artifacts ?? null,
+        message: optionalText(callbackBody.message, MAX_SUMMARY_LENGTH),
+        body: optionalText(callbackBody.body, MAX_SUMMARY_LENGTH),
+        url: optionalText(callbackBody.url, 1000),
+        artifacts: callbackBody.artifacts ?? null,
         status: next.status ?? null,
         lane: next.lane ?? null,
       },
-      metadata: body.metadata ?? {},
+      metadata: callbackBody.metadata ?? {},
       ...(next.status ? { status: next.status } : {}),
       ...(next.lane ? { lane: next.lane } : {}),
-      ...(optionalText(body.idempotency_key, 200) ? { idempotencyKey: optionalText(body.idempotency_key, 200) } : {}),
+      ...(optionalText(callbackBody.idempotency_key, 200)
+        ? { idempotencyKey: optionalText(callbackBody.idempotency_key, 200) }
+        : {}),
     }),
   )
   if (!updated) {

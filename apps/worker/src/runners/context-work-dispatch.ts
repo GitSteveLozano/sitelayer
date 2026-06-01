@@ -2,8 +2,10 @@ import type { Pool, PoolClient } from 'pg'
 import { drainAgentMutations, type AgentDrainSummary } from '../runner-utils.js'
 
 export interface ContextWorkDispatchPayload {
+  payload_version?: string | null
   work_item_id: string
   support_packet_id?: string | null
+  capture_session_id?: string | null
   title?: string | null
   summary?: string | null
   route?: string | null
@@ -29,6 +31,7 @@ export interface ContextWorkDispatchPayload {
 // (sitelayer migration 093); if the payload omits it we fall back to the
 // 24h default to stay backward-compatible with in-flight outbox rows.
 const DEFAULT_REVERSIBILITY_WINDOW_SECONDS = 86_400
+export const CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION = 'sitelayer.context_work_dispatch.v1'
 
 // Mesh routing for the sitelayer implementation lane. Registered in
 // control-plane mesh as:
@@ -70,6 +73,15 @@ async function processContextWorkDispatch(
 ): Promise<{ insightsCreated: number }> {
   const workItemId = payload.work_item_id
   if (!workItemId) throw new Error('context work dispatch missing work_item_id')
+  const payloadVersion = cleanString(payload.payload_version)
+  if (payloadVersion && payloadVersion !== CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION) {
+    throw new Error(`unsupported context work dispatch payload_version: ${payloadVersion}`)
+  }
+  const callbackTokenType = cleanString(payload.callback?.token_type)
+  if (callbackTokenType && callbackTokenType !== 'scoped_bearer') {
+    throw new Error(`unsupported context work dispatch callback token_type: ${callbackTokenType}`)
+  }
+  const captureSessionId = cleanString(payload.capture_session_id)
 
   const dispatchUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL
   if (!dispatchUrl) {
@@ -89,9 +101,10 @@ async function processContextWorkDispatch(
     await client.query(
       `insert into context_handoff_events (
          company_id, work_item_id, event_type, actor_kind, actor_ref,
-         source_system, payload, metadata, idempotency_key, redaction_version
+         source_system, payload, metadata, idempotency_key, capture_session_id,
+         redaction_version
        ) values ($1, $2, 'agent.dispatch_cancel_requested', 'system', 'sitelayer-worker',
-         'sitelayer', $3::jsonb, $4::jsonb, $5, 'context-handoff-v1')
+         'sitelayer', $3::jsonb, $4::jsonb, $5, $6::uuid, 'context-handoff-v1')
        on conflict (company_id, idempotency_key) where idempotency_key is not null do nothing`,
       [
         companyId,
@@ -99,6 +112,7 @@ async function processContextWorkDispatch(
         JSON.stringify({ skipped: true, reason: 'terminal_work_item', status }),
         JSON.stringify({ dispatcher: 'mesh' }),
         `context_work_item:dispatch_skip_terminal:${workItemId}`,
+        captureSessionId,
       ],
     )
     return { insightsCreated: 0 }
@@ -118,9 +132,10 @@ async function processContextWorkDispatch(
   await client.query(
     `insert into context_handoff_events (
        company_id, work_item_id, event_type, actor_kind, actor_ref,
-       source_system, payload, metadata, idempotency_key, redaction_version
+       source_system, payload, metadata, idempotency_key, capture_session_id,
+       redaction_version
      ) values ($1, $2, 'agent.dispatch_acknowledged', 'system', 'sitelayer-worker',
-       'mesh', $3::jsonb, $4::jsonb, $5, 'context-handoff-v1')
+       'mesh', $3::jsonb, $4::jsonb, $5, $6::uuid, 'context-handoff-v1')
      on conflict (company_id, idempotency_key) where idempotency_key is not null do nothing`,
     [
       companyId,
@@ -132,15 +147,16 @@ async function processContextWorkDispatch(
       }),
       JSON.stringify({ dispatcher: 'mesh' }),
       `context_work_item:dispatch_mesh_ack:${workItemId}`,
+      captureSessionId,
     ],
   )
   await client.query(
     `update context_work_items
         set status = 'agent_running',
-            lane = 'agent',
+            lane = case when $3 = 'both' then 'both' else 'agent' end,
             updated_at = now()
       where company_id = $1 and id = $2`,
-    [companyId, workItemId],
+    [companyId, workItemId, payload.lane],
   )
 
   return { insightsCreated: 0 }
@@ -162,12 +178,17 @@ function extractMeshTaskId(responseText: string): string | null {
 }
 
 function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPayload): Record<string, unknown> {
+  const payloadVersion = cleanString(payload.payload_version) ?? CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION
+  const callbackTokenType = cleanString(payload.callback?.token_type) ?? 'scoped_bearer'
+  const callback = payload.callback ? { ...payload.callback, token_type: callbackTokenType } : null
   const contextHandoff = {
+    payload_version: payloadVersion,
     version: 'context-handoff-v1',
     source_system: 'sitelayer',
     company_id: companyId,
     work_item_id: payload.work_item_id,
     support_packet_id: payload.support_packet_id ?? null,
+    capture_session_id: payload.capture_session_id ?? null,
     title: payload.title ?? null,
     summary: payload.summary ?? null,
     route: payload.route ?? null,
@@ -176,7 +197,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     support_packet: payload.support_packet ?? null,
     work_request_brief: payload.work_request_brief ?? null,
     agent_brief_markdown: payload.agent_brief_markdown ?? null,
-    callback: payload.callback ?? null,
+    callback,
   }
   const route = cleanString(payload.route)
   const entityType = cleanString(payload.entity_type)
@@ -185,8 +206,9 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   const title = cleanString(payload.title) ?? `Sitelayer work request ${payload.work_item_id.slice(0, 8)}`
   const callbackPath = cleanString(payload.callback?.path)
   const callbackUrl = cleanString(payload.callback?.url)
+  const captureSessionId = cleanString(payload.capture_session_id)
   const lane = cleanString(payload.lane)
-  const isAgentLane = lane === 'agent'
+  const isAgentLane = isImplementationLane(lane)
 
   // featureBrief drives the steerer workflow's brief template — prefer
   // the operator-authored summary over the generated title because the
@@ -194,7 +216,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   const featureBrief = summary ?? title
   const affectedPackages = deriveAffectedPackages({ route, entityType })
   const baseTags = 'sitelayer,context-handoff,work-request,triage:ready-for-agent'
-  const tags = isAgentLane ? `${baseTags},implementation,sitelayer:lane:agent` : `${baseTags},audit`
+  const tags = isAgentLane ? `${baseTags},implementation,sitelayer:lane:${lane ?? 'agent'}` : `${baseTags},audit`
   const properties: Record<string, unknown> = {
     project_hint: 'sitelayer',
     source_system: 'sitelayer',
@@ -202,24 +224,30 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     company_id: companyId,
     work_item_id: payload.work_item_id,
     support_packet_id: cleanString(payload.support_packet_id),
+    capture_session_id: captureSessionId,
     route,
     entity_type: entityType,
     entity_id: entityId,
     callback_path: callbackPath,
     callback_url: callbackUrl,
+    callback_token_type: payload.callback ? callbackTokenType : null,
     lane,
     work_request_brief_schema: readBriefSchema(payload.work_request_brief),
+    context_handoff_payload_version: payloadVersion,
   }
   const executionContext: Record<string, unknown> = {
+    payload_version: payloadVersion,
     project_hint: 'sitelayer',
     source_system: 'sitelayer',
     work_item_id: payload.work_item_id,
     support_packet_id: cleanString(payload.support_packet_id),
+    capture_session_id: captureSessionId,
     route,
     entity_type: entityType,
     entity_id: entityId,
     callback_path: callbackPath,
     callback_url: callbackUrl,
+    callback_token_type: payload.callback ? callbackTokenType : null,
     dispatch_mode: 'steerer',
     claim_mode: 'steerer',
     context_handoff: contextHandoff,
@@ -262,11 +290,13 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   }
 
   return {
+    payload_version: payloadVersion,
     subject: `[Sitelayer] ${title}`,
     description: buildMeshTaskDescription({
       companyId,
       workItemId: payload.work_item_id,
       supportPacketId: cleanString(payload.support_packet_id),
+      captureSessionId,
       title,
       summary,
       route,
@@ -274,13 +304,14 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       entityId,
       callbackPath: callbackUrl ?? callbackPath,
       isAgentLane,
+      lane,
       affectedPackages,
       agentBriefMarkdown: cleanString(payload.agent_brief_markdown),
     }),
     created_by: 'sitelayer-worker',
     source: 'sitelayer-context-handoff',
     task_type: isAgentLane ? 'implementation' : 'audit',
-    auto_dispatch: true,
+    auto_dispatch: contextWorkDispatchAutoDispatchEnabled(),
     tags,
     project_hint: 'sitelayer',
     idempotency_key: `sitelayer:context_work_item:${payload.work_item_id}`,
@@ -291,6 +322,15 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     properties,
     execution_context: executionContext,
   }
+}
+
+function isImplementationLane(lane: string | null): boolean {
+  return lane === 'agent' || lane === 'both'
+}
+
+function contextWorkDispatchAutoDispatchEnabled(): boolean {
+  const raw = process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH?.trim().toLowerCase()
+  return raw === undefined || !['0', 'false', 'no'].includes(raw)
 }
 
 // deriveAffectedPackages takes the best signal we have at dispatch time
@@ -331,6 +371,7 @@ function buildMeshTaskDescription(input: {
   companyId: string
   workItemId: string
   supportPacketId?: string | null
+  captureSessionId?: string | null
   title: string
   summary?: string | null
   route?: string | null
@@ -338,6 +379,7 @@ function buildMeshTaskDescription(input: {
   entityId?: string | null
   callbackPath?: string | null
   isAgentLane?: boolean
+  lane?: string | null
   affectedPackages?: string[]
   agentBriefMarkdown?: string | null
 }): string {
@@ -349,6 +391,7 @@ function buildMeshTaskDescription(input: {
     `Work item: ${input.workItemId}`,
   ]
   appendLine(lines, 'Support packet', input.supportPacketId)
+  appendLine(lines, 'Capture session', input.captureSessionId)
   appendLine(lines, 'Route', input.route)
   if (input.entityType || input.entityId) {
     lines.push(`Entity: ${input.entityType ?? 'unknown'}:${input.entityId ?? 'unknown'}`)
@@ -359,7 +402,7 @@ function buildMeshTaskDescription(input: {
     lines.push('', 'Agent-readable handoff brief:', input.agentBriefMarkdown)
   }
   if (input.isAgentLane) {
-    appendLine(lines, 'Lane', 'agent (implementation)')
+    appendLine(lines, 'Lane', `${input.lane ?? 'agent'} (implementation)`)
     if (input.affectedPackages?.length) {
       lines.push(`Affected packages: ${input.affectedPackages.join(', ')}`)
     }
