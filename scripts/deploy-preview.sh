@@ -45,6 +45,20 @@ PREVIEW_TIER="${PREVIEW_TIER:-preview}"
 #                                PREVIEW_DB_BACKEND=local deliberately after
 #                                verifying). A managed fallback also stays
 #                                available for preview as a safety valve.
+#
+# Resolution precedence: explicit env var > value persisted in the shared env
+# file > tier default. The shared-env tier is what makes the documented durable
+# per-tier cutover work (docs/PREVIEW_DEPLOYMENTS.md): neither the manual
+# `scripts/deploy.sh dev|demo` path nor the fleet auto-deploy watcher passes
+# PREVIEW_DB_BACKEND through to this script, so persisting it in
+# /app/previews/.env.{dev,demo}.shared is the ONLY durable way to keep dev/demo
+# on the local backend across redeploys.
+if [ -z "${PREVIEW_DB_BACKEND:-}" ] && [ -f "$SHARED_ENV" ]; then
+  shared_db_backend="$(sed -nE 's/^PREVIEW_DB_BACKEND=([A-Za-z]+).*$/\1/p' "$SHARED_ENV" | tail -n1)"
+  if [ -n "$shared_db_backend" ]; then
+    PREVIEW_DB_BACKEND="$shared_db_backend"
+  fi
+fi
 if [ -z "${PREVIEW_DB_BACKEND:-}" ]; then
   if [ "$PREVIEW_TIER" = "preview" ]; then
     PREVIEW_DB_BACKEND="local"

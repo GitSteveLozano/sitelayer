@@ -73,19 +73,22 @@ exit 0
   return bin
 }
 
-function runDeploy({ tier, backend, slug = 'pr-77' }) {
+function runDeploy({ tier, backend, slug = 'pr-77', sharedBackend }) {
   const dir = mkdtempSync(join(tmpdir(), 'sitelayer-dbsplit.'))
   const previewRoot = join(dir, 'previews')
   mkdirSync(previewRoot, { recursive: true })
 
   const sharedEnv = join(dir, '.env.shared')
   // A "managed" DATABASE_URL in the shared env — the local backend must OVERRIDE
-  // this; the managed backend must KEEP it.
+  // this; the managed backend must KEEP it. `sharedBackend`, when set, persists a
+  // PREVIEW_DB_BACKEND line in the shared env (the durable per-tier cutover the
+  // operator performs on the preview droplet).
   writeFileSync(
     sharedEnv,
     [
       'DATABASE_URL=postgres://managed_app:secret@managed-cluster:25060/sitelayer_preview?sslmode=require',
       'VITE_CLERK_PUBLISHABLE_KEY=pk_test_stub',
+      ...(sharedBackend ? [`PREVIEW_DB_BACKEND=${sharedBackend}`] : []),
       '',
     ].join('\n'),
   )
@@ -163,6 +166,23 @@ test('dev tier opts in to the local backend when the flag is flipped', () => {
   assert.equal(result.status, 0, `script failed: ${result.stderr}`)
   assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'local')
   assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer')
+})
+
+test('dev tier honors PREVIEW_DB_BACKEND=local persisted in the shared env (durable cutover)', () => {
+  // No env-var backend — only the shared env carries the flag, exactly as the
+  // operator persists it on the preview droplet. This is what the manual deploy
+  // path and the fleet watcher (neither forwards the env var) must honor.
+  const { result, renderedEnv } = runDeploy({ tier: 'dev', backend: undefined, slug: 'dev', sharedBackend: 'local' })
+  assert.equal(result.status, 0, `script failed: ${result.stderr}`)
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'local')
+  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer')
+})
+
+test('an explicit env-var backend overrides a conflicting shared-env value', () => {
+  const { result, renderedEnv } = runDeploy({ tier: 'dev', backend: 'managed', slug: 'dev', sharedBackend: 'local' })
+  assert.equal(result.status, 0, `script failed: ${result.stderr}`)
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'managed')
+  assert.match(envValue(renderedEnv, 'DATABASE_URL') ?? '', /managed-cluster/)
 })
 
 test('demo tier defaults to managed', () => {
