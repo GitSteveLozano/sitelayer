@@ -22,7 +22,7 @@ export function EstimateStalenessBanner({
   snapshot,
   onRecompute,
   recomputing = false,
-  className,
+  className = '',
 }: {
   snapshot: ScopeVsBidResponse | null | undefined
   onRecompute: () => void
