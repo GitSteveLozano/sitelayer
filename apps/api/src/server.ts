@@ -40,6 +40,7 @@ import {
   sendRedirect,
 } from './http-utils.js'
 import { attachMutationTx } from './mutation-tx.js'
+import { autoOnboardFirstAdmin } from './auto-onboard.js'
 import { continueRequestTrace, shouldBypassTraceContinuation } from './trace-ingress.js'
 import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
@@ -969,23 +970,29 @@ const server = http.createServer(async (req, res) => {
               // role gate stays honest (otherwise every test fixture user
               // gets promoted to admin and the role-rejection tests fail).
               // Drop this block once the Clerk webhook ships.
-              if (!company && !isPublicPath && activeCompanySlug && identity.userId) {
+              //
+              // MULTI-TENANT: resolve the slug the REQUEST actually asked for
+              // (`x-sitelayer-company-slug`, falling back to the dev default)
+              // instead of the process-wide `activeCompanySlug` constant. With
+              // the worker + product now multi-company, a request for company B
+              // that auto-onboarded into `activeCompanySlug` (la-operations)
+              // would (a) grant admin on the WRONG tenant and (b) still 404 on
+              // company B with a misleading "la-operations not found" message.
+              // `getCurrentCompanySlug` is the same resolver getCompany() uses,
+              // so the membership lands on exactly the tenant getCompany() will
+              // re-resolve. (The `x-sitelayer-company-id` path is handled inside
+              // getCompany and never reaches here as a slug onboard.)
+              const requestedCompanySlug = getCurrentCompanySlug(req)
+              if (!company && !isPublicPath && requestedCompanySlug && identity.userId) {
                 try {
-                  await pool.query(
-                    `insert into company_memberships (company_id, clerk_user_id, role)
-                   select c.id, $1, 'admin'
-                   from companies c
-                   where c.slug = $2
-                     and not exists (
-                       select 1 from company_memberships m where m.company_id = c.id
-                     )
-                   on conflict (company_id, clerk_user_id) do nothing`,
-                    [identity.userId, activeCompanySlug],
-                  )
+                  await autoOnboardFirstAdmin(pool, {
+                    resolvedCompanySlug: requestedCompanySlug,
+                    userId: identity.userId,
+                  })
                   company = await getCompany(req)
                 } catch (err) {
                   logger.warn(
-                    { err, route: url.pathname, slug: activeCompanySlug, userId: identity.userId },
+                    { err, route: url.pathname, slug: requestedCompanySlug, userId: identity.userId },
                     'auto-onboard membership insert failed',
                   )
                 }
@@ -996,7 +1003,7 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
                 sendJson(res, 404, {
-                  error: `company slug ${activeCompanySlug} not found`,
+                  error: `company slug ${requestedCompanySlug} not found`,
                   user_id: identity.userId,
                 })
                 return
