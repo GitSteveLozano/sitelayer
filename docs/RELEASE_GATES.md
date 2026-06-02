@@ -1,5 +1,40 @@
 # Release Gates
 
+## The promotion model (dev = churn, main = promoted)
+
+Two deploy lines, deliberately separated so prospects + customers stay OFF the
+raw agent churn while `dev` remains a free playground:
+
+- **`dev` = the agent churn / integration line.** Heavy agent iteration lands
+  here continuously (frequent code + DB-migration churn). It is **auto-everything**:
+  the `dev` tier auto-follows the `dev` branch (`docs/AUTO_DEPLOY.md`) and per-PR
+  **previews are ephemeral**, so churn is cheap and disposable. Nothing
+  customer- or prospect-facing watches `dev`.
+- **`main` = the PROMOTED line.** Code reaches `main` only via a **deliberate,
+  gated `dev → main` promotion** — the operator (or the gate) promotes when `dev`
+  is good. The promotion is gated by:
+  1. the repo-tracked **pre-push standard gate** (`.githooks/pre-push` →
+     `npm run verify`) at land time — it **blocks** a push to `dev`/`main` that
+     fails (see "Land-time enforcement" below), and
+  2. the **post-deploy smoke** (`scripts/smoke-tier.sh`) that confirms the
+     promoted SHA is actually serving (detection, see below).
+- **demo + prod deploy from `main`.** The prospect-facing **demo** tier
+  fast-follows `main` (`AUTODEPLOY_BRANCH_DEMO=main` in
+  `scripts/fleet-auto-deploy.sh`), and the customer-facing **prod** tier ships
+  from `main` via `scripts/deploy.sh prod`. Both ride the promoted line; neither
+  ever sees the `dev` churn line.
+
+```
+dev branch ──(agent churn, auto-deploy dev tier, ephemeral PR previews)
+   │
+   │  deliberate gated promotion: pre-push standard gate + post-deploy smoke
+   ▼
+main branch ──▶ demo tier (prospects)   +   prod (customers)
+```
+
+This is what keeps prospects + customers off the raw churn while keeping `dev` a
+free playground for the heavy agent-iteration loop.
+
 ## The verification gate (local, not CI)
 
 The repo runs **zero GitHub Actions** — `.github/workflows/quality.yml` was

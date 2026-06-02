@@ -1,11 +1,17 @@
 # Sitelayer Fleet-Side Auto-Deploy
 
 **Status:** Tooling shipped; the operator installs the timer (one command below).
-**What it restores:** "merge to `dev` → it's live in ~2 minutes" — WITHOUT GitHub
-Actions. The repo runs **zero GitHub Actions** (the Actions deploy workflows were
-removed in `70b9584b`, and the last workflow `.github/workflows/quality.yml` was
-deleted on 2026-06-02); deploys are local-fleet via `scripts/deploy.sh`, and the
-single verification authority is the local gate `scripts/verify-local.sh`.
+**What it restores:** "land to a tracked branch → it's live in ~2 minutes" —
+WITHOUT GitHub Actions. The repo runs **zero GitHub Actions** (the Actions deploy
+workflows were removed in `70b9584b`, and the last workflow
+`.github/workflows/quality.yml` was deleted on 2026-06-02); deploys are
+local-fleet via `scripts/deploy.sh`, and the single verification authority is the
+local gate `scripts/verify-local.sh`.
+
+**Two lines, not one (2026-06-02):** `dev` fast-follows the `dev` branch (the
+agent churn / integration line); `demo` fast-follows `main` (the promoted /
+stable line) so prospects never see raw agent churn. The `dev → main` promotion
+is a deliberate gated step — see [The promotion model](#the-promotion-model).
 
 ## What it does
 
@@ -17,9 +23,10 @@ Each poll:
    separate from the operator's working tree — the watcher never touches the
    checkout you edit in.
 2. For each managed tier (`dev`, `demo` by default):
-   - **desired** = remote tip of the tier's tracked branch
-     (`git ls-remote origin refs/heads/dev`; both `dev` and `demo` track `dev`
-     today).
+   - **desired** = remote tip of the tier's tracked branch. `dev` tracks the
+     `dev` branch (`git ls-remote origin refs/heads/dev`); `demo` tracks `main`
+     (`git ls-remote origin refs/heads/main`) — the promoted/stable line, so
+     prospects stay off the raw churn.
    - **live** = `build_sha` from `GET https://<host>/api/version`
      (`dev.sitelayer.sandolab.xyz` / `demo.preview.sitelayer.sandolab.xyz`).
    - Compared on the short-sha (7-char) prefix.
@@ -30,17 +37,22 @@ Each poll:
    seconds.
 
 ```
-origin/dev advances ──▶ timer (2min) ──▶ fleet-auto-deploy.sh
+origin/dev  advances ─┐
+origin/main advances ─┴▶ timer (2min) ──▶ fleet-auto-deploy.sh
                                               │
                     desired (ls-remote)  ◀────┤────▶  live (/api/version build_sha)
-                                              │
-                            differ? ──▶ deploy.sh dev   (and demo)
+                                              │   dev  tracks origin/dev
+                                              │   demo tracks origin/main
+                            differ? ──▶ deploy.sh dev / deploy.sh demo
 ```
 
 ## Safety model
 
-This watcher is deliberately conservative. It can only ever fast-follow the
-**dev** branch onto the **dev** and **demo** tiers.
+This watcher is deliberately conservative. It can only ever fast-follow a
+non-prod tier onto its tracked branch: the **dev** tier onto the **dev** branch
+(the churn line) and the **demo** tier onto **main** (the promoted line). It
+cannot deploy prod, and it cannot deploy a branch other than each tier's
+configured one.
 
 - **NEVER prod.** A tier named `prod` is refused outright; the default tier set is
   `dev demo`. Production stays a manual `scripts/deploy.sh prod` per
@@ -64,6 +76,40 @@ This watcher is deliberately conservative. It can only ever fast-follow the
   `~/.cache/sitelayer-autodeploy/auto-deploy.log` AND echoes them to stdout
   (captured by journald). The full deploy output of an actual deploy is appended
   to the same log file.
+
+## The promotion model
+
+Two deploy lines, deliberately separated so prospects + customers never see raw
+agent churn while `dev` stays a free playground:
+
+| Line         | Tracked branch | Who sees it                         | Gating                                                         |
+| ------------ | -------------- | ----------------------------------- | -------------------------------------------------------------- |
+| **churn**    | `dev`          | agents / internal QA                | auto-everything; ephemeral per-PR previews; no promotion gate. |
+| **promoted** | `main`         | prospects (demo) + customers (prod) | the pre-push **standard** gate + the post-deploy smoke.        |
+
+- **`dev` = the agent churn / integration line.** Heavy agent iteration lands
+  here continuously. The `dev` tier auto-follows it and per-PR previews are
+  ephemeral, so churn (and its DB-migration churn) is effectively free.
+- **`main` = the PROMOTED line.** Code reaches `main` only via a **deliberate
+  gated `dev → main` promotion** — the operator (or the gate) promotes when `dev`
+  is good. The promotion is gated by the repo-tracked pre-push hook
+  (`.githooks/pre-push` → `npm run verify`, the **standard** gate) at land time
+  and confirmed by the **post-deploy smoke** (`scripts/smoke-tier.sh`).
+- **demo + prod deploy from `main`.** The `demo` tier here fast-follows `main`
+  (this change), and prod ships from `main` via `scripts/deploy.sh prod`. So the
+  prospect-facing demo and the customer-facing prod both ride the promoted line,
+  not the churn line.
+
+The canonical write-up of the gates lives in
+[`docs/RELEASE_GATES.md`](RELEASE_GATES.md); this section is the auto-deploy
+view of it.
+
+> **Installed-copy note.** The committed `scripts/fleet-auto-deploy.sh` is the
+> source of truth and is what the systemd unit runs (from the operator's
+> checkout). If the operator also keeps a convenience copy on `$PATH`
+> (`~/.local/bin/fleet-auto-deploy.sh`), **re-copy it after this change** so the
+> installed copy also tracks `main` for demo:
+> `cp scripts/fleet-auto-deploy.sh ~/.local/bin/fleet-auto-deploy.sh`.
 
 ## Install / enable
 
@@ -138,21 +184,22 @@ path queries GitHub Actions.
 
 Every path and target is env-overridable (useful for testing on a scratch host).
 
-| Env var                      | Default                                           | Purpose                                                       |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
-| `AUTODEPLOY_TIERS`           | `dev demo`                                        | Space-separated tiers to manage (`prod` refused).             |
-| `AUTODEPLOY_DEFAULT_BRANCH`  | `dev`                                             | Tracked branch for tiers without an override.                 |
-| `AUTODEPLOY_BRANCH_<TIER>`   | _(unset)_                                         | Per-tier tracked branch (e.g. `AUTODEPLOY_BRANCH_DEMO=main`). |
-| `AUTODEPLOY_HOST_<TIER>`     | dev/demo hosts wired in                           | Per-tier live host for `/api/version`.                        |
-| `AUTODEPLOY_REPO_DIR`        | `~/.cache/sitelayer-autodeploy/repo`              | Dedicated deploy checkout (never your tree).                  |
-| `AUTODEPLOY_REMOTE_URL`      | `https://github.com/GitSteveLozano/sitelayer.git` | Remote to clone/fetch.                                        |
-| `AUTODEPLOY_STATE_FILE`      | `~/.cache/sitelayer-autodeploy/state`             | Failed-sha backoff state.                                     |
-| `AUTODEPLOY_LOG_FILE`        | `~/.cache/sitelayer-autodeploy/auto-deploy.log`   | Structured log.                                               |
-| `AUTODEPLOY_LOCK_FILE`       | `/tmp/sitelayer-autodeploy.lock`                  | flock concurrency guard.                                      |
-| `AUTODEPLOY_PAUSED_FILE`     | `~/.cache/sitelayer-autodeploy/PAUSED`            | Kill-switch file.                                             |
-| `AUTODEPLOY_PAUSED`          | `0`                                               | Set `1` to pause via env.                                     |
-| `AUTODEPLOY_CURL_MAX_TIME`   | `15`                                              | `/api/version` request timeout (seconds).                     |
-| `AUTODEPLOY_SHA_COMPARE_LEN` | `7`                                               | Short-sha prefix length for comparison.                       |
+| Env var                      | Default                                           | Purpose                                                                |
+| ---------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `AUTODEPLOY_TIERS`           | `dev demo`                                        | Space-separated tiers to manage (`prod` refused).                      |
+| `AUTODEPLOY_DEFAULT_BRANCH`  | `dev`                                             | Tracked branch for tiers without an override (e.g. `dev`).             |
+| `AUTODEPLOY_BRANCH_DEMO`     | `main`                                            | demo tracks `main` (promoted line), NOT `dev` (churn line).            |
+| `AUTODEPLOY_BRANCH_<TIER>`   | _(unset; demo defaults to `main`)_                | Per-tier tracked-branch override (e.g. `AUTODEPLOY_BRANCH_DEMO=main`). |
+| `AUTODEPLOY_HOST_<TIER>`     | dev/demo hosts wired in                           | Per-tier live host for `/api/version`.                                 |
+| `AUTODEPLOY_REPO_DIR`        | `~/.cache/sitelayer-autodeploy/repo`              | Dedicated deploy checkout (never your tree).                           |
+| `AUTODEPLOY_REMOTE_URL`      | `https://github.com/GitSteveLozano/sitelayer.git` | Remote to clone/fetch.                                                 |
+| `AUTODEPLOY_STATE_FILE`      | `~/.cache/sitelayer-autodeploy/state`             | Failed-sha backoff state.                                              |
+| `AUTODEPLOY_LOG_FILE`        | `~/.cache/sitelayer-autodeploy/auto-deploy.log`   | Structured log.                                                        |
+| `AUTODEPLOY_LOCK_FILE`       | `/tmp/sitelayer-autodeploy.lock`                  | flock concurrency guard.                                               |
+| `AUTODEPLOY_PAUSED_FILE`     | `~/.cache/sitelayer-autodeploy/PAUSED`            | Kill-switch file.                                                      |
+| `AUTODEPLOY_PAUSED`          | `0`                                               | Set `1` to pause via env.                                              |
+| `AUTODEPLOY_CURL_MAX_TIME`   | `15`                                              | `/api/version` request timeout (seconds).                              |
+| `AUTODEPLOY_SHA_COMPARE_LEN` | `7`                                               | Short-sha prefix length for comparison.                                |
 
 ## Dependencies
 
