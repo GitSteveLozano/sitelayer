@@ -60,6 +60,7 @@ import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffDraftRoutes } from './takeoff-drafts.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
+import { handleConditionRoutes } from './conditions.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
 import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerIssueRoutes } from './worker-issues.js'
@@ -545,6 +546,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
     () =>
       handleTakeoffTagRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Condition layer (Takeoff Deep Dive H1) — company-scoped reusable typed
+    // templates. Additive: measurements may record condition_id, the tag flow
+    // above remains the fallback.
+    () =>
+      handleConditionRoutes(req, url, {
         pool,
         company,
         currentUserId,

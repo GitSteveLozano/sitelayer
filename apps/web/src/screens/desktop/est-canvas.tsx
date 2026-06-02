@@ -46,6 +46,12 @@ import {
   type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
+import {
+  useConditions,
+  useCreateCondition,
+  type ConditionMeasurementKind,
+  type TakeoffCondition,
+} from '@/lib/api/conditions'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
@@ -279,6 +285,12 @@ export function EstCanvas() {
   const patchMeasurement = usePatchMeasurement()
   const serviceItems = useServiceItems()
   const items = useMemo(() => serviceItems.data?.serviceItems ?? [], [serviceItems.data])
+  // Condition layer (Deep Dive H1). The list powers the picker + legend; the
+  // create hook backs the inline "+ New" form. Additive — when no condition is
+  // active, measurements save exactly as before (condition_id null).
+  const conditionsQuery = useConditions()
+  const conditions = useMemo(() => conditionsQuery.data?.conditions ?? [], [conditionsQuery.data])
+  const createCondition = useCreateCondition()
 
   // --- Entry state (identical semantics to mobile draw mode) ----------------
   const [tool, setTool] = useState<Tool>('polygon')
@@ -345,6 +357,20 @@ export function EstCanvas() {
   // deduction (window/door opening) whose area subtracts from the net for its
   // service item. Sticky so several openings can be cut in a row.
   const [deduct, setDeduct] = useState(false)
+
+  // Condition layer (Deep Dive H1) — the reusable typed template the next draw
+  // is made against. NULL = legacy shape-first flow (the existing tag/service-
+  // item path is untouched and remains the fallback). `conditionFormOpen`
+  // toggles the inline create form; the three fields back a minimal create.
+  const [activeConditionId, setActiveConditionId] = useState<string | null>(null)
+  const [conditionFormOpen, setConditionFormOpen] = useState(false)
+  const [newConditionName, setNewConditionName] = useState('')
+  const [newConditionColor, setNewConditionColor] = useState('#2f7d32')
+  const [newConditionKind, setNewConditionKind] = useState<ConditionMeasurementKind>('area')
+  const activeCondition = useMemo<TakeoffCondition | null>(
+    () => conditions.find((c) => c.id === activeConditionId) ?? null,
+    [conditions, activeConditionId],
+  )
 
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
@@ -737,6 +763,9 @@ export function EstCanvas() {
         // Cutout/deduct only applies to area (polygon / rect) takeoff.
         is_deduction: isAreaTool && deduct,
         draft_id: activeDraftId,
+        // Condition layer (Deep Dive H1): stamp the active condition when one
+        // is picked. NULL keeps the legacy shape-first behavior unchanged.
+        condition_id: activeConditionId,
       })
       setDraftPoints([])
       setRedoStack([])
@@ -750,6 +779,34 @@ export function EstCanvas() {
       // "service item not in curated catalog for any division") instead of the
       // raw `POST …/measurement → 422` ApiError.message.
       setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  // Condition layer (Deep Dive H1): create a condition from the inline form and
+  // make it active for the next draw. Minimal — name + color + measurement_kind
+  // (drivers + default assembly are PATCH-able later, deeper flow flagged as a
+  // follow-up). Errors surface in the same inline error slot as draws.
+  const onCreateCondition = async () => {
+    const name = newConditionName.trim()
+    if (!name) {
+      setError('Condition name is required')
+      return
+    }
+    setError(null)
+    try {
+      const res = await createCondition.mutateAsync({
+        name,
+        color: newConditionColor,
+        measurement_kind: newConditionKind,
+      })
+      setActiveConditionId(res.condition.id)
+      setNewConditionName('')
+      setConditionFormOpen(false)
+      setSavedToast(`Condition “${res.condition.name}” ready — draws will tag it.`)
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Create condition failed',
+      )
     }
   }
 
@@ -876,6 +933,24 @@ export function EstCanvas() {
   }
   const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
+
+  // Condition legend (Deep Dive H1): per-condition drawn-count + summed
+  // quantity over the current draft, ordered like the picker. Only conditions
+  // with at least one drawn measurement appear, so the legacy (unlinked) draws
+  // simply don't show here — they stay in Running quantities above.
+  const conditionLegend = useMemo(() => {
+    const counts = new Map<string, { count: number; quantity: number }>()
+    for (const m of draftMeasurements) {
+      if (!m.condition_id) continue
+      const prev = counts.get(m.condition_id) ?? { count: 0, quantity: 0 }
+      prev.count += 1
+      prev.quantity += Number(m.quantity) || 0
+      counts.set(m.condition_id, prev)
+    }
+    return conditions
+      .filter((c) => counts.has(c.id))
+      .map((c) => ({ condition: c, ...counts.get(c.id)! }))
+  }, [draftMeasurements, conditions])
 
   // --- Selection derivations for the edit popover + bulk-select toolbar -----
   const selectedMeasurement = useMemo(
@@ -1980,6 +2055,96 @@ export function EstCanvas() {
             </MSelect>
           ) : null}
 
+          {/* Condition picker (Takeoff Deep Dive H1) — pick a reusable typed
+              template the next draw is tagged against, or create one inline.
+              "None" keeps the legacy shape-first flow (condition_id null), so
+              the existing tag/service-item path below is always the fallback. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--m-ink-3)',
+              }}
+            >
+              Condition
+            </span>
+            <MSelect
+              value={activeConditionId ?? ''}
+              onChange={(e) => setActiveConditionId(e.target.value ? e.target.value : null)}
+            >
+              <option value="">None (legacy)</option>
+              {conditions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} · {c.measurement_kind}
+                </option>
+              ))}
+            </MSelect>
+            <MButton variant="ghost" size="sm" onClick={() => setConditionFormOpen((v) => !v)}>
+              {conditionFormOpen ? 'Close' : '+ New'}
+            </MButton>
+            {activeCondition ? (
+              <span
+                aria-hidden
+                title={activeCondition.name}
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: 3,
+                  background: activeCondition.color,
+                  border: '1px solid var(--m-line)',
+                  flex: '0 0 auto',
+                }}
+              />
+            ) : null}
+          </label>
+
+          {/* Inline create-condition form (minimal: name + color + kind). The
+              deeper condition-first draw flow — driver-derived multi-result
+              emission, default-assembly auto-attach — is a flagged follow-up. */}
+          {conditionFormOpen ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={newConditionName}
+                onChange={(e) => setNewConditionName(e.target.value)}
+                placeholder="Condition name"
+                maxLength={120}
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  padding: '4px 8px',
+                  border: '1px solid var(--m-line)',
+                  borderRadius: 6,
+                  background: 'var(--m-surface)',
+                  color: 'var(--m-ink-1)',
+                }}
+              />
+              <input
+                type="color"
+                value={newConditionColor}
+                onChange={(e) => setNewConditionColor(e.target.value)}
+                title="Condition color"
+                style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--m-line)', borderRadius: 6 }}
+              />
+              <MSelect
+                value={newConditionKind}
+                onChange={(e) => setNewConditionKind(e.target.value as ConditionMeasurementKind)}
+              >
+                <option value="area">area</option>
+                <option value="linear">linear</option>
+                <option value="count">count</option>
+                <option value="volume">volume</option>
+              </MSelect>
+              <MButton size="sm" onClick={onCreateCondition} disabled={createCondition.isPending}>
+                {createCondition.isPending ? 'Saving…' : 'Create'}
+              </MButton>
+            </div>
+          ) : null}
+
           {/* Scope item selector */}
           <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
             {items.length === 0 ? <option value="">Loading…</option> : null}
@@ -2184,6 +2349,54 @@ export function EstCanvas() {
               ))}
             </div>
           )}
+
+          {/* Condition legend (Takeoff Deep Dive H1) — per-condition drawn
+              count + quantity, color-keyed to the canvas. Only shows when at
+              least one measurement was drawn against a condition. */}
+          {conditionLegend.length > 0 ? (
+            <>
+              <div
+                style={{
+                  borderTop: '2px solid var(--m-ink)',
+                  paddingTop: 10,
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                Conditions
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {conditionLegend.map((row) => (
+                  <div
+                    key={row.condition.id}
+                    style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 3,
+                          background: row.condition.color,
+                          border: '1px solid var(--m-line)',
+                          flex: '0 0 auto',
+                        }}
+                      />
+                      {row.condition.name}
+                    </span>
+                    <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
+                      {row.count}× · {formatQty(row.quantity)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
 
