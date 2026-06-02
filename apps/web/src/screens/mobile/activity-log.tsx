@@ -1,25 +1,30 @@
 /**
- * Activity log — `activity-log` (mobile, v2 brutalist).
+ * Activity log — the all-roles timeline of state-changing API calls.
  *
- * All-roles timeline of state-changing API calls. Reads the existing
- * audit-events ledger (`useAuditEvents` → GET /api/audit-events) — the
- * same admin-only append-only trail surfaced by the settings audit log.
- * No new API.
+ * Reads the existing audit-events ledger (`useAuditEvents` →
+ * GET /api/audit-events) — the same admin-only append-only trail surfaced by
+ * the settings audit log. No new API.
  *
- * Layout mirrors Steve's `V2ActivityLog`: a vertical timeline where each
- * entry is a square connector dot, a humanized action label (Inter Tight),
- * and a mono actor + relative-timestamp meta line. Entries are grouped by
- * day with mono day dividers. An optional project filter chip row scopes
- * the timeline to a single project's audit rows (matched by entity_id).
+ * Responsive (Phase B) consolidation of the desktop↔mobile activity twins
+ * (was screens/desktop/owner-activity.tsx + screens/mobile/activity-log.tsx).
+ * Both twins read the SAME hooks (useAuditEvents / useProjects) and the same
+ * `dayKey` day-grouping; they differ only in composition — mobile is a
+ * vertical day-grouped timeline (square connector, humanized label, mono
+ * actor + clock meta, with an extra ALL/TIME/MONEY/FIELD/BRIEFS category chip
+ * row and per-row role pill); desktop is a dense DataTable (When · Actor ·
+ * Action · Entity · Detail) with day-label subrows. Both renders live here,
+ * one mounts at a time via useIsDesktop(), preserving every behavior of both.
  *
- * Built from the `components/m/` primitives + `var(--m-*)` tokens only;
- * no new global CSS.
+ * Built from the `components/m` + `components/d` primitives + `var(--m-*)`
+ * tokens only; no new global CSS.
  */
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { DataTable, DEyebrow, DH1, type DColumn } from '../../components/d/index.js'
 import { MChip, MChipRow, MPill, MShell, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
 import { useAuditEvents, useProjects, type AuditEvent } from '../../lib/api/index.js'
+import { useIsDesktop } from '../../lib/use-is-desktop.js'
 
 const MONO = 'var(--m-num)'
 const TIGHT = 'var(--m-font-display)'
@@ -149,7 +154,21 @@ function dayKey(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()
 }
 
+/**
+ * Responsive activity log. Mounts the dense desktop DataTable at >=1024px and
+ * the mobile timeline below it; only one mounts at a time so neither twin's
+ * data hooks run on the wrong surface.
+ */
 export function MobileActivityLog() {
+  const isDesktop = useIsDesktop()
+  return isDesktop ? <OwnerActivityDesktop /> : <MobileActivityLogMobile />
+}
+
+/** Desktop-route alias — kept so screens/desktop/desktop-workspace.tsx can
+ *  keep importing `OwnerActivity` after the desktop twin file was deleted. */
+export const OwnerActivity = MobileActivityLog
+
+function MobileActivityLogMobile() {
   const navigate = useNavigate()
   const [projectId, setProjectId] = useState<string | null>(null)
   const [category, setCategory] = useState<Category>('all')
@@ -329,6 +348,183 @@ function EmptyState({ filtered }: { filtered: boolean }) {
       <div style={{ marginTop: 16, fontFamily: TIGHT, fontSize: 18, fontWeight: 700 }}>No activity yet</div>
       <div style={{ marginTop: 6, fontFamily: MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-3)' }}>
         {filtered ? 'NO EVENTS FOR THIS PROJECT.' : 'STATE-CHANGING ACTIONS WILL APPEAR HERE.'}
+      </div>
+    </div>
+  )
+}
+
+// ===========================================================================
+// DESKTOP — dense DataTable (When · Actor · Action · Entity · Detail).
+// ===========================================================================
+
+// Destructive actions read as a bad pill, creates/approvals as good, the
+// rest neutral.
+function actionTone(action: string): MTone | undefined {
+  const a = action.toLowerCase()
+  if (a === 'delete' || a === 'void' || a === 'reject' || a === 'fail' || a.includes('declin')) return 'red'
+  if (a === 'create' || a === 'approve' || a === 'post' || a.includes('succeed') || a === 'submit') return 'green'
+  return undefined
+}
+
+// "rental_billing_run" + "approve" → "Approved rental billing run".
+function humanizeAction(event: AuditEvent): string {
+  const verbMap: Record<string, string> = {
+    create: 'created',
+    update: 'updated',
+    delete: 'deleted',
+    approve: 'approved',
+    reject: 'rejected',
+    void: 'voided',
+    submit: 'submitted',
+    post: 'posted',
+  }
+  const verb = verbMap[event.action.toLowerCase()] ?? event.action.replace(/_/g, ' ')
+  return verb.charAt(0).toUpperCase() + verb.slice(1)
+}
+
+function humanizeEntity(entityType: string): string {
+  const noun = entityType.replace(/_/g, ' ')
+  return noun.charAt(0).toUpperCase() + noun.slice(1)
+}
+
+function entityDetail(event: AuditEvent): string {
+  if (!event.entity_id) return '—'
+  const id = event.entity_id
+  return id.length > 12 ? `…${id.slice(-8)}` : id
+}
+
+function whenLabel(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d
+    .toLocaleString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .toUpperCase()
+}
+
+// Each row carries the event plus the day label (rendered only on the first
+// row of a day, so the table reads as day-grouped without a custom row API).
+type DesktopActivityRow = { id: string; event: AuditEvent; dayLabel: string | null }
+
+function OwnerActivityDesktop() {
+  const [projectId, setProjectId] = useState<string | null>(null)
+
+  const events = useAuditEvents({ limit: 200 })
+  const projects = useProjects({ limit: 50 })
+
+  const raw = events.data?.events ?? []
+  const filtered = useMemo(() => (projectId ? raw.filter((e) => e.entity_id === projectId) : raw), [raw, projectId])
+
+  // Hook returns rows newest-first; keep that order and stamp a day label on
+  // the first row of each day so the table reads as day-grouped.
+  const rows = useMemo<DesktopActivityRow[]>(() => {
+    let lastDay: string | null = null
+    return filtered.map((e) => {
+      const key = dayKey(e.created_at)
+      const dayLabel = key !== lastDay ? key : null
+      lastDay = key
+      return { id: e.id, event: e, dayLabel }
+    })
+  }, [filtered])
+
+  const projectRows = projects.data?.projects ?? []
+
+  const columns: Array<DColumn<DesktopActivityRow>> = [
+    {
+      key: 'when',
+      header: 'When',
+      render: (r) => (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+          {r.dayLabel ? (
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                color: 'var(--m-ink-2)',
+              }}
+            >
+              {r.dayLabel}
+            </span>
+          ) : null}
+          <span style={{ fontFamily: MONO, fontVariantNumeric: 'tabular-nums', color: 'var(--m-ink-3)' }}>
+            {whenLabel(r.event.created_at)}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: 'actor',
+      header: 'Actor',
+      render: (r) => (
+        <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--m-ink-2)' }}>{actorLabel(r.event)}</span>
+      ),
+    },
+    {
+      key: 'action',
+      header: 'Action',
+      render: (r) => (
+        <span className="d-table-cell-strong" style={{ fontFamily: TIGHT }}>
+          {humanizeAction(r.event)}
+        </span>
+      ),
+    },
+    {
+      key: 'entity',
+      header: 'Entity',
+      render: (r) => (
+        <MPill tone={actionTone(r.event.action)} dot>
+          {humanizeEntity(r.event.entity_type)}
+        </MPill>
+      ),
+    },
+    {
+      key: 'detail',
+      header: 'Detail',
+      render: (r) => (
+        <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--m-ink-3)' }}>{entityDetail(r.event)}</span>
+      ),
+    },
+  ]
+
+  return (
+    <div className="d-content">
+      <div className="d-stack">
+        <div>
+          <DEyebrow>Comms · Activity</DEyebrow>
+          <DH1>Activity</DH1>
+        </div>
+
+        {projectRows.length > 0 ? (
+          <MChipRow>
+            <MChip active={projectId === null} onClick={() => setProjectId(null)}>
+              All
+            </MChip>
+            {projectRows.map((p) => (
+              <MChip key={p.id} active={projectId === p.id} onClick={() => setProjectId(p.id)}>
+                {p.name}
+              </MChip>
+            ))}
+          </MChipRow>
+        ) : null}
+
+        <DataTable<DesktopActivityRow>
+          title="Audit ledger"
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          empty={
+            events.isPending
+              ? 'Loading…'
+              : projectId
+                ? 'No events for this project.'
+                : 'No activity yet. State-changing actions will appear here.'
+          }
+        />
       </div>
     </div>
   )
