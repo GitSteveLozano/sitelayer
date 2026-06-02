@@ -106,10 +106,19 @@ if [ "$TIER" = demo ]; then
   grep -q '^DATABASE_URL=' .env || { echo "ERROR: DATABASE_URL missing in $TARGET/.env"; exit 1; }
   migration_files="$(find docker/postgres/init -maxdepth 1 -type f -name '*.sql' \
     ! -name '087_constrained_role_for_rls_probe.sql' | sort | tr '\n' ' ')"
-  env PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$TARGET/.env" \
-    MIGRATION_FILES="$migration_files" scripts/migrate-db.sh
-  env PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$TARGET/.env" \
-    scripts/check-db-schema.sh
+  # When deploy-preview.sh used the LOCAL backend, .env carries
+  # PREVIEW_DB_BACKEND=local + a DATABASE_URL pointing at the `preview-db`
+  # container. migrate-db.sh / check-db-schema.sh run psql in their OWN
+  # container, so they must join the stack's `app` network to resolve
+  # `preview-db`. (The seed itself runs inside the api container, which is
+  # already on that network.) Default stays managed, so this block is inert
+  # until the operator flips the flag.
+  demo_psql_env=(PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$TARGET/.env")
+  if grep -q '^PREVIEW_DB_BACKEND=local$' .env; then
+    demo_psql_env+=(PSQL_DOCKER_NETWORK=sitelayer-demo_app)
+  fi
+  env "${demo_psql_env[@]}" MIGRATION_FILES="$migration_files" scripts/migrate-db.sh
+  env "${demo_psql_env[@]}" scripts/check-db-schema.sh
   docker compose --env-file .env -f docker-compose.preview.yml -p sitelayer-demo run --rm --no-deps api \
     sh -lc 'npm install --no-audit --no-fund --prefer-offline && npm run seed:demo'
 fi

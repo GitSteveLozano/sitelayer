@@ -25,6 +25,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 source "$SCRIPT_DIR/db-common.sh"
 
+# Local-backend short-circuit: if the dev stack runs on a Postgres CONTAINER
+# (PREVIEW_DB_BACKEND=local in its .env), a "reset" is recreate-the-container,
+# which scripts/reset-tier-db.sh owns. Delegate so there is one container-reset
+# path. Detected from the resolved ENV_FILE or an explicit
+# RESET_DEV_DB_BACKEND=local override.
+_reset_backend="${RESET_DEV_DB_BACKEND:-$(read_env_value "${ENV_FILE:-.env}" PREVIEW_DB_BACKEND)}"
+if [ "$_reset_backend" = "local" ]; then
+  echo "Local backend detected — delegating to scripts/reset-tier-db.sh dev (container recreate)."
+  exec env RESET_TIER_DB_CONFIRM="${RESET_DEV_DB_CONFIRM:-0}" "$SCRIPT_DIR/reset-tier-db.sh" dev
+fi
+
 load_database_url
 
 db_name="$(printf '%s' "$DATABASE_URL" | sed -E 's|.*/([^/?]+).*|\1|')"

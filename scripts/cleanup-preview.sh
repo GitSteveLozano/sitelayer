@@ -30,16 +30,31 @@ for candidate in docker-compose.preview.yml docker-compose.preview-prod.yml; do
   fi
 done
 
+# Local-backend stacks layer docker-compose.preview-db.yml on top. The per-stack
+# Postgres named volume (preview_db_data) is declared there, so it must be in the
+# `down --volumes` file set for the volume to be dropped — otherwise `down -v`
+# would leave an orphaned database volume behind on every cleanup.
+db_overlay_args=()
+if [ -f "$target_dir/.env" ] && grep -qE '^PREVIEW_DB_BACKEND=local$' "$target_dir/.env"; then
+  for db_candidate in "$target_dir/docker-compose.preview-db.yml" "$SCRIPT_DIR/../docker-compose.preview-db.yml"; do
+    if [ -f "$db_candidate" ]; then
+      db_overlay_args=(-f "$db_candidate")
+      break
+    fi
+  done
+fi
+
 if [ -n "$compose_file" ]; then
   env_args=()
   if [ -f "$target_dir/.env" ]; then
     env_args=(--env-file "$target_dir/.env")
   fi
-  # -v drops the per-slug node_modules + vite-cache volumes so the next deploy
-  # for this slug starts clean (also frees disk on the preview droplet).
-  docker compose "${env_args[@]}" -f "$target_dir/$compose_file" -p "$project_name" down --volumes --remove-orphans
+  # -v drops the per-slug node_modules + vite-cache volumes (and the per-stack
+  # preview_db_data volume for local-backend stacks) so the next deploy for this
+  # slug starts clean (also frees disk on the preview droplet).
+  docker compose "${env_args[@]}" -f "$target_dir/$compose_file" "${db_overlay_args[@]}" -p "$project_name" down --volumes --remove-orphans
 else
-  docker compose -p "$project_name" down --volumes --remove-orphans || true
+  docker compose "${db_overlay_args[@]}" -p "$project_name" down --volumes --remove-orphans || true
 fi
 
 if [ -f "$target_dir/.env" ] && grep -qE '^PREVIEW_DB_SCHEMA=' "$target_dir/.env"; then

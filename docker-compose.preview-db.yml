@@ -1,0 +1,47 @@
+# Local-Postgres backend overlay for preview/dev/demo stacks.
+#
+# Layered ON TOP of docker-compose.preview.yml when PREVIEW_DB_BACKEND=local
+# (see scripts/deploy-preview.sh). It adds a per-stack Postgres container so a
+# non-prod tier no longer competes for the shared managed cluster's ~47 raw
+# connections. The container lives only on the `app` network (internal, no
+# egress) — api/worker reach it over that network; nothing outside the stack
+# (or the host) can.
+#
+# Volume semantics:
+#   * preview tier  → EPHEMERAL. The named volume below is namespaced per
+#     compose project (`sitelayer-pr-<n>_preview_db_data`), so `docker compose
+#     down -v` destroys it with the stack. No per-slug-schema accumulation.
+#   * dev / demo    → PERSISTENT. The long-running `sitelayer-dev` /
+#     `sitelayer-demo` projects keep their volume across redeploys (watch-mode
+#     `up -d` never runs `down -v`); a deliberate reset recreates it
+#     (scripts/reset-tier-db.sh).
+#
+# DATABASE_URL is rewritten by deploy-preview.sh to
+#   postgres://sitelayer:sitelayer@preview-db:5432/sitelayer
+# so the app talks to THIS container instead of the managed cluster. The
+# container has no TLS, so the rendered URL carries no sslmode and
+# DATABASE_SSL_REJECT_UNAUTHORIZED is irrelevant here.
+services:
+  preview-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: sitelayer
+      POSTGRES_USER: sitelayer
+      POSTGRES_PASSWORD: sitelayer
+    # pg18 stores data under a major-version subdir of /var/lib/postgresql, so
+    # the volume mounts the parent — matching docker-compose.yml's `db` service.
+    volumes:
+      - preview_db_data:/var/lib/postgresql
+    # `app` only: this DB never needs egress and must not be reachable off-host.
+    # It is `internal: true` in docker-compose.preview.yml.
+    networks:
+      - app
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sitelayer -d sitelayer']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  preview_db_data:

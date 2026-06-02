@@ -58,12 +58,20 @@ for project in "${projects[@]}"; do
     fi
   done
 
+  # Local-backend stacks layer docker-compose.preview-db.yml; include it so the
+  # per-stack Postgres volume (preview_db_data) is dropped by `down -v`.
+  db_overlay_args=()
+  if [ -f "$target_dir/.env" ] && grep -qE '^PREVIEW_DB_BACKEND=local$' "$target_dir/.env" \
+    && [ -f "$target_dir/docker-compose.preview-db.yml" ]; then
+    db_overlay_args=(-f docker-compose.preview-db.yml)
+  fi
+
   if [ -n "$compose_file" ]; then
     env_args=()
     if [ -f "$target_dir/.env" ]; then
       env_args=(--env-file "$target_dir/.env")
     fi
-    ( cd "$target_dir" && docker compose "${env_args[@]}" -f "$compose_file" -p "$project" down -v --remove-orphans ) \
+    ( cd "$target_dir" && docker compose "${env_args[@]}" -f "$compose_file" "${db_overlay_args[@]}" -p "$project" down -v --remove-orphans ) \
       || echo "WARN: docker compose down failed for $project (continuing)"
   else
     docker compose -p "$project" down -v --remove-orphans \

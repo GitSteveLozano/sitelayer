@@ -1,7 +1,7 @@
 # Sitelayer Preview Deployments
 
-**Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, fleet-driven deploy scripts (`scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh`), TTL cleanup timer, and `main` smoke preview are live
-**Last updated:** 2026-06-01
+**Status:** Preview droplet, Traefik routing, fleet-driven deploy scripts (`scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh`), TTL cleanup timer, and `main` smoke preview are live. **Per-PR previews now use an ephemeral local Postgres container** (one throwaway `postgres:18-alpine` per stack); dev/demo still default to the managed cluster behind the `PREVIEW_DB_BACKEND` flag. See [Database Backend (`PREVIEW_DB_BACKEND`)](#database-backend-preview_db_backend).
+**Last updated:** 2026-06-02
 
 > **Related:** The persistent dev environment (`dev.sitelayer.sandolab.xyz`,
 > backed by the dedicated `sitelayer_dev` database, tracking the `dev` branch)
@@ -122,6 +122,42 @@ Current default:
 - App URL uses normal `sslmode=require` plus `DATABASE_SSL_REJECT_UNAUTHORIZED=false` because DigitalOcean managed Postgres presents a certificate chain that Node `pg` rejects unless a CA bundle is configured.
 - Maintenance commands use the same URL with `psql`; deploy and cleanup pass `PGOPTIONS` so migrations, checks, and application connections hit the preview schema instead of `public`.
 
+## Database Backend (`PREVIEW_DB_BACKEND`)
+
+`scripts/deploy-preview.sh` chooses where a stack's Postgres lives via `PREVIEW_DB_BACKEND`:
+
+| Value     | Meaning                                                                                                                                                                                                                                                                                         |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managed` | The DigitalOcean managed cluster `sitelayer-db` (today's behavior). `DATABASE_URL` comes from the shared env; the `preview` tier isolates a per-slug schema inside `sitelayer_preview`.                                                                                                         |
+| `local`   | A Postgres **container** on the preview droplet (`docker-compose.preview-db.yml`, service `preview-db`). `DATABASE_URL` is rewritten to `postgres://sitelayer:sitelayer@preview-db:5432/sitelayer` (no TLS); migrations + the demo reseed run against the container; the schema stays `public`. |
+
+**Default is tier-aware and conservative:**
+
+- **`preview` → `local`** (active now). Each `pr-<n>` stack gets its own throwaway `postgres:18-alpine` container and a project-namespaced named volume (`sitelayer-pr-<n>_preview_db_data`) created on deploy, migrated, and **destroyed with the stack** by the existing `docker compose down -v` cleanup/reap path (`scripts/cleanup-preview.sh`, `scripts/preview-gc-remote.sh`, the in-deploy pre-flight reap). This removes per-slug-schema accumulation under heavy PR churn. Set `PREVIEW_DB_BACKEND=managed` for a single PR to fall back to the shared cluster + per-slug schema.
+- **`dev` / `demo` → `managed`** (no auto-cutover). The operator flips `PREVIEW_DB_BACKEND=local` deliberately, after verifying. With `local`, each tier gets a **persistent** container + named volume (`sitelayer-dev_preview_db_data` / `sitelayer-demo_preview_db_data`) that survives watch-mode redeploys; a deliberate reset recreates it.
+
+The container is on the stack's `app` Docker network only (`internal: true` — no host/internet exposure). `api`/`worker` reach it over that network; migrations run from a psql container that joins `<project>_app` (`PSQL_DOCKER_NETWORK`).
+
+**Cutover (dev/demo) — disposable data, so no data move:** because non-prod data is throwaway, "cutover" is just _point + migrate + reseed_. On the preview droplet, set `PREVIEW_DB_BACKEND=local` for the tier (env on the `scripts/deploy.sh dev|demo` invocation, or persist it in `/app/previews/.env.{dev,demo}.shared`) and redeploy. The deploy starts the container, applies migrations, and (demo) reseeds.
+
+### Resetting a non-prod DB
+
+Non-prod DBs are trivially resettable:
+
+- `scripts/reset-tier-db.sh <dev|demo|preview> [slug]` — the general helper.
+  - **local** backend → recreate the container + its named volume (instant), then re-migrate. For `demo`, re-run `scripts/deploy.sh demo` to reapply the seed.
+  - **managed** backend → conservative per-object drop: `preview` drops + recreates its per-slug schema; `dev` delegates to `scripts/reset-dev-db.sh` (per-object public-schema drop); managed `demo` is intentionally not automated (flip it to `local`, or reset by hand with operator review).
+- `scripts/reset-dev-db.sh` still works as before for the managed dev DB, and now auto-delegates to `reset-tier-db.sh dev` when the dev stack runs the local backend.
+
+### End state
+
+The intended steady state:
+
+- **Managed cluster `sitelayer-db` = PROD ONLY.** Prod keeps its forward-only/immutable migration discipline (`scripts/deploy.sh prod`), its managed connection pool (`sitelayer-prod-pool`), and is the only durable tier.
+- **dev / demo / preview = Docker Postgres on the preview droplet** (disposable). Migration churn on these tiers is free; non-prod tiers stop competing for the managed cluster's ~47 raw connections.
+
+`PREVIEW_DB_BACKEND` defaults keep dev/demo on the managed cluster until the operator does the deliberate per-tier cutover; only the already-ephemeral per-PR previews moved to local Postgres immediately.
+
 ## Deploy Flow
 
 Preview/dev/demo deploys are fleet-driven, not GitHub Actions. The `.github/workflows/deploy-preview.yml` workflow and the self-hosted `sitelayer-preview` runner were removed in commit `70b9584b`; the last remaining workflow, `.github/workflows/quality.yml`, was deleted on 2026-06-02, so **no GitHub Actions remain**. The single verification authority is the local gate `scripts/verify-local.sh` (`npm run verify`), run by `scripts/deploy.sh` and the fleet auto-deploy watcher — there is no CI deploy gate.
@@ -143,7 +179,7 @@ What `scripts/deploy-preview.sh` does on the preview droplet:
 Cleanup:
 
 1. Run `scripts/cleanup-preview.sh` for `pr-<number>` (e.g. from the fleet, or when a slug is retired).
-2. Stop containers and drop the preview schema if `.env` contains `PREVIEW_DB_SCHEMA`.
+2. Stop containers and either drop the preview schema (managed backend, `.env` contains `PREVIEW_DB_SCHEMA`) or destroy the per-stack Postgres volume (local backend, `.env` contains `PREVIEW_DB_BACKEND=local`). For local-backend stacks the cleanup/reap path layers `-f docker-compose.preview-db.yml` so `down -v` drops the `preview_db_data` volume.
 3. Remove `/app/previews/<slug>`.
 4. Prune old images/volumes with the TTL guard.
 

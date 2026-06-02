@@ -243,6 +243,11 @@ stage_build() {
 stage_unit() {
   echo "  -> npm run test (vitest, all workspaces)"
   npm run test || return 1
+  # Hermetic node:test suites for the ops shell scripts (no DB / Docker / network
+  # — they stub external commands). Covers render-production-env.mjs and the
+  # PREVIEW_DB_BACKEND abstraction in deploy-preview.sh.
+  echo "  -> npm run test:scripts (node:test, scripts/*.test.mjs)"
+  npm run test:scripts || return 1
 }
 
 # ============================================================================

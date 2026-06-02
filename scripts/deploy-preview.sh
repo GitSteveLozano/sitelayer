@@ -28,6 +28,31 @@ PREVIEW_MODE="${PREVIEW_MODE:-dev}"
 #                       .github/workflows/deploy-demo.yml.
 PREVIEW_TIER="${PREVIEW_TIER:-preview}"
 
+# PREVIEW_DB_BACKEND selects where the stack's Postgres lives:
+#   managed — the DigitalOcean managed cluster (today's behavior). DATABASE_URL
+#             comes from the shared env file; the `preview` tier isolates a
+#             per-slug schema inside the shared sitelayer_preview database.
+#   local   — a Postgres CONTAINER on the preview droplet (docker-compose.preview-db.yml).
+#             DATABASE_URL is rewritten to point at it; migrations + (demo) reseed
+#             run against the container. Non-prod data is disposable, so a
+#             cutover is just point + migrate + reseed (no data move).
+#
+# Default is TIER-AWARE and conservative:
+#   * preview         → local   (per-PR stacks are already ephemeral, so an
+#                                throwaway per-stack container removes per-slug
+#                                schema accumulation under heavy PR churn).
+#   * dev / demo      → managed  (NO auto-cutover; the operator flips
+#                                PREVIEW_DB_BACKEND=local deliberately after
+#                                verifying). A managed fallback also stays
+#                                available for preview as a safety valve.
+if [ -z "${PREVIEW_DB_BACKEND:-}" ]; then
+  if [ "$PREVIEW_TIER" = "preview" ]; then
+    PREVIEW_DB_BACKEND="local"
+  else
+    PREVIEW_DB_BACKEND="managed"
+  fi
+fi
+
 append_optional_env() {
   local name="$1"
   local value="${!name:-}"
@@ -52,6 +77,21 @@ case "$PREVIEW_MODE" in
     ;;
 esac
 
+case "$PREVIEW_DB_BACKEND" in
+  managed|local) ;;
+  *)
+    echo "ERROR: PREVIEW_DB_BACKEND must be 'managed' or 'local' (got '$PREVIEW_DB_BACKEND')" >&2
+    exit 1
+    ;;
+esac
+
+# Local-backend connection facts. The db service (docker-compose.preview-db.yml)
+# is named `preview-db` and listens on the project's `app` network. The container
+# has no TLS, so the URL carries no sslmode.
+LOCAL_DB_SERVICE="preview-db"
+LOCAL_DB_URL="postgres://sitelayer:sitelayer@${LOCAL_DB_SERVICE}:5432/sitelayer"
+local_db_compose="docker-compose.preview-db.yml"
+
 raw_slug="${PREVIEW_SLUG:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-manual}}}"
 preview_slug="$(printf '%s' "$raw_slug" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
 if [ -z "$preview_slug" ]; then
@@ -63,10 +103,12 @@ preview_host="${PREVIEW_HOST:-$preview_slug.$PREVIEW_DOMAIN}"
 project_name="sitelayer-${preview_slug}"
 target_dir="$PREVIEW_ROOT/$preview_slug"
 
-# Per-slug schema isolation only applies to the `preview` tier. The `dev` tier
-# targets a dedicated database (sitelayer_dev) and uses its public schema, so
-# we skip schema-name derivation and the schema-create step in this branch.
-if [ "$PREVIEW_TIER" = "preview" ]; then
+# Per-slug schema isolation only applies to the managed-backend `preview` tier.
+# The `dev` tier targets a dedicated database (sitelayer_dev) and uses its public
+# schema; the LOCAL backend gives every stack its own database container, so it
+# uses `public` too. In both of those cases we skip schema-name derivation and
+# the schema-create step.
+if [ "$PREVIEW_TIER" = "preview" ] && [ "$PREVIEW_DB_BACKEND" = "managed" ]; then
   schema_slug="$(printf '%s' "$preview_slug" | tr '-' '_' | sed -E 's/[^a-z0-9_]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
   preview_db_schema="${PREVIEW_DB_SCHEMA:-sitelayer_${schema_slug}}"
   if [[ ! "$preview_db_schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
@@ -129,11 +171,18 @@ if [ "${PREVIEW_DEPLOY_SKIP_REAP:-0}" != "1" ]; then
           break
         fi
       done
+      # Local-backend stacks layer docker-compose.preview-db.yml; include it so
+      # the per-stack Postgres volume (preview_db_data) is dropped by `down -v`.
+      stale_db_args=()
+      if [ -f "$stale_dir/.env" ] && grep -qE '^PREVIEW_DB_BACKEND=local$' "$stale_dir/.env" \
+        && [ -f "$stale_dir/docker-compose.preview-db.yml" ]; then
+        stale_db_args=(-f docker-compose.preview-db.yml)
+      fi
       if [ -n "$stale_compose" ]; then
         env_args=()
         [ -f "$stale_dir/.env" ] && env_args=(--env-file "$stale_dir/.env")
         ( cd "$stale_dir" && \
-          docker compose "${env_args[@]}" -f "$stale_compose" -p "$stale" \
+          docker compose "${env_args[@]}" -f "$stale_compose" "${stale_db_args[@]}" -p "$stale" \
             down -v --remove-orphans \
         ) || echo "WARN: pre-flight reap failed for $stale (continuing deploy)"
       else
@@ -166,7 +215,14 @@ rsync -az --delete \
   printf 'PREVIEW_SLUG=%s\n' "$preview_slug"
   printf 'PREVIEW_HOST=%s\n' "$preview_host"
   printf 'PREVIEW_MODE=%s\n' "$PREVIEW_MODE"
-  if [ "$PREVIEW_TIER" = "preview" ]; then
+  printf 'PREVIEW_DB_BACKEND=%s\n' "$PREVIEW_DB_BACKEND"
+  if [ "$PREVIEW_DB_BACKEND" = "local" ]; then
+    # Local backend: the app talks to the per-stack Postgres container instead
+    # of the managed cluster. This DATABASE_URL line comes AFTER the shared env
+    # (which may carry a managed URL), so it wins. No sslmode (no TLS on the
+    # container); the search_path stays at the default `public`.
+    printf 'DATABASE_URL=%s\n' "$LOCAL_DB_URL"
+  elif [ "$PREVIEW_TIER" = "preview" ]; then
     printf 'PREVIEW_DB_SCHEMA=%s\n' "$preview_db_schema"
     printf 'DB_SCHEMA=%s\n' "$preview_db_schema"
     printf 'PGOPTIONS=-c search_path=%s,public\n' "$preview_db_schema"
@@ -204,7 +260,14 @@ fi
 
 cd "$target_dir"
 
-compose_args=(--env-file .env -f "$compose_file" -p "$project_name")
+compose_args=(--env-file .env -f "$compose_file")
+if [ "$PREVIEW_DB_BACKEND" = "local" ]; then
+  # Layer the per-stack Postgres container onto the stack. The named volume is
+  # project-namespaced, so `docker compose down -v` (cleanup/reap) destroys it
+  # with the stack — no per-slug-schema accumulation on the managed cluster.
+  compose_args+=(-f "$local_db_compose")
+fi
+compose_args+=(-p "$project_name")
 profile_args=()
 services=(api web)
 if [ "$PREVIEW_ENABLE_WORKER" = "1" ]; then
@@ -226,6 +289,39 @@ preview_migration_files() {
   find docker/postgres/init "${find_args[@]}" | sort | tr '\n' ' '
 }
 
+# Local backend: bring the per-stack Postgres container up BEFORE migrations so
+# migrate-db.sh can reach it over the project's `app` network. (Managed backend
+# connects straight to the cluster, so there is nothing to start here.)
+local_db_network=""
+if [ "$PREVIEW_DB_BACKEND" = "local" ]; then
+  local_db_network="${project_name}_app"
+  echo "Local DB backend: starting $LOCAL_DB_SERVICE container"
+  docker compose "${compose_args[@]}" up -d "$LOCAL_DB_SERVICE"
+
+  # Wait for the container to report healthy (its compose healthcheck runs
+  # pg_isready). The named volume persists for dev/demo, so on a redeploy this
+  # returns almost immediately.
+  db_deadline=$(( $(date +%s) + 60 ))
+  db_cid=""
+  while :; do
+    db_cid="$(docker compose "${compose_args[@]}" ps -q "$LOCAL_DB_SERVICE" 2>/dev/null || true)"
+    if [ -n "$db_cid" ]; then
+      db_state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$db_cid" 2>/dev/null || true)"
+      case "$db_state" in
+        healthy|running) break ;;
+      esac
+    fi
+    if [ "$(date +%s)" -ge "$db_deadline" ]; then
+      echo "ERROR: $LOCAL_DB_SERVICE container did not become healthy within 60s" >&2
+      if [ -n "$db_cid" ]; then
+        docker logs --tail=50 "$db_cid" >&2 || true
+      fi
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
 # Apply migrations on a fresh schema. If the SHA hasn't moved since last deploy,
 # skip — the schema is already current.
 current_sha="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || printf '')"
@@ -234,7 +330,13 @@ if [ -n "$current_sha" ] && [ -f "$migrations_marker" ] && [ "$(cat "$migrations
   echo "Migrations already applied for $current_sha — skipping"
 else
   psql_env=(PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env")
-  if [ "$PREVIEW_TIER" = "preview" ]; then
+  if [ "$PREVIEW_DB_BACKEND" = "local" ]; then
+    # Reach the container over the project network with the rewritten URL; the
+    # .env already carries that DATABASE_URL, but PSQL_DOCKER_NETWORK must be set
+    # so the psql runner joins the same network as `preview-db`.
+    psql_env+=(PSQL_DOCKER_NETWORK="$local_db_network" DATABASE_URL="$LOCAL_DB_URL")
+  fi
+  if [ "$PREVIEW_TIER" = "preview" ] && [ "$PREVIEW_DB_BACKEND" = "managed" ]; then
     env "${psql_env[@]}" "$target_dir/scripts/ensure-preview-schema.sh"
   fi
   env "${psql_env[@]}" MIGRATION_FILES="$(preview_migration_files)" "$target_dir/scripts/migrate-db.sh"
