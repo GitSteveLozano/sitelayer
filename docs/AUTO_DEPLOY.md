@@ -127,8 +127,11 @@ replacement for it:
 There is **no CI gate** — the single verification authority is the local script
 `scripts/verify-local.sh` (`npm run verify`), which `scripts/deploy.sh` runs
 before it ships. Because the watcher calls `scripts/deploy.sh <tier>` verbatim,
-every auto-deploy of `dev`/`demo` runs that gate too; the prod path
-(`deploy.sh prod`) runs the full gate before building the image. Nothing in this
+every auto-deploy of `dev`/`demo` runs that gate too (fast by default; set
+`VERIFY_LEVEL` in the unit Environment to add the integration suite). The prod
+path (`deploy.sh prod`) runs the standard gate (incl. the DB-backed integration
+suite) before building the image; the Playwright e2e suite is an opt-in `--full`
+level (`npm run verify:full`), not part of the deploy gate. Nothing in this
 path queries GitHub Actions.
 
 ## Configuration (env overrides)

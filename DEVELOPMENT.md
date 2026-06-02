@@ -94,6 +94,6 @@ VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
 npm run e2e
 ```
 
-`npm run verify` (`bash scripts/verify-local.sh`) is the single verification authority — there is no CI workflow. It runs shell syntax, lint, format, typecheck, tests, build, web bundle budget, fixture build, Playwright e2e, and the docker-compose integration checks. `scripts/deploy.sh` runs it before it ships. (`npm run ci:quality` runs the same fast checks without the integration/e2e steps.)
+`npm run verify` (`bash scripts/verify-local.sh`) is the single verification authority — there is no CI workflow. By default (the "standard" level) it runs shell syntax, lint, format, typecheck, tests, build, web bundle budget, and the docker-compose DB-backed integration checks. `scripts/deploy.sh` runs it before it ships. The Playwright e2e suite is an opt-in `--full` level (`npm run verify:full`, resource-heavy — run on a quiet/dedicated box), not part of the default/deploy gate. (`npm run verify:fast` runs static+build+unit only.)
 
 For release gate details, use `docs/RELEASE_GATES.md`. For first-30-minutes setup, use this file and `docs/ONBOARDING_DEVELOPER.md`. Operator-only architecture/deploy notes can wait until after the local stack is working.

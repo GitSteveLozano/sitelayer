@@ -3,6 +3,11 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 const PUSH_ID = '00000000-0000-4000-8000-000000000208'
 const BUILD_SHA = 'probe-smoke-build-sha'
 
+// Default to the CI ports (3001/3100); honor E2E_API_PORT/E2E_WEB_PORT so the
+// local gate can run on alternate ports alongside a developer's live stack.
+const API_ORIGIN = `http://localhost:${process.env.E2E_API_PORT ?? '3001'}`
+const WEB_ORIGIN = `http://localhost:${process.env.E2E_WEB_PORT ?? '3100'}`
+
 const snapshot = {
   state: 'approved',
   state_version: 3,
@@ -166,7 +171,7 @@ function expectEstimatePushCapture(capture: CaptureSmoke): void {
 }
 
 async function installApiMocks(page: Page): Promise<void> {
-  await page.route('http://localhost:3001/api/**', async (route) => {
+  await page.route(`${API_ORIGIN}/api/**`, async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
 
@@ -212,7 +217,7 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
     status: 200,
     contentType: 'application/json',
     headers: {
-      'access-control-allow-origin': 'http://localhost:3100',
+      'access-control-allow-origin': WEB_ORIGIN,
       'access-control-expose-headers': 'x-sitelayer-build-sha',
       'x-sitelayer-build-sha': BUILD_SHA,
     },

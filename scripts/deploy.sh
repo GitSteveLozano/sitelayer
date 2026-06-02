@@ -54,9 +54,11 @@ fi
 # --- local verification gate (NHL model: the fleet is the deploy authority) --
 # Every deploy runs scripts/verify-local.sh on the SHA being deployed BEFORE
 # we ship it — the same single gate that scripts/deploy-production-local.sh
-# (prod, --full) uses. dev/demo default to VERIFY_LEVEL=fast (static+build+unit)
-# so watch-mode iteration stays quick; set VERIFY_LEVEL=full to run the
-# integration + e2e stages too. Break-glass: SKIP_VERIFY=1 (loud warning).
+# (prod, "standard" = static+build+unit+integration) uses. dev/demo default to
+# VERIFY_LEVEL=fast (static+build+unit) so watch-mode iteration stays quick; set
+# VERIFY_LEVEL=standard to add the DB-backed integration suite, or
+# VERIFY_LEVEL=full to also run the (resource-heavy) e2e suite. Break-glass:
+# SKIP_VERIFY=1 (loud warning).
 if [ "${SKIP_VERIFY:-0}" = "1" ]; then
   echo "############################################################"
   echo "## WARNING: SKIP_VERIFY=1 — local verification gate SKIPPED."

@@ -6,6 +6,13 @@ const BLUEPRINT_ID = '00000000-0000-4000-8000-000000000302'
 const PAGE_ID = '00000000-0000-4000-8000-000000000303'
 const DRAFT_ID = '00000000-0000-4000-8000-000000000304'
 
+// The web app calls VITE_API_URL (E2E_API_PORT) and its SPA origin is the web
+// port (E2E_WEB_PORT). Default to the CI ports (3001/3100) so behavior is
+// unchanged in CI, but honor the env so the local gate can run on alternate
+// ports alongside a developer's live stack.
+const API_ORIGIN = `http://localhost:${process.env.E2E_API_PORT ?? '3001'}`
+const WEB_ORIGIN = `http://localhost:${process.env.E2E_WEB_PORT ?? '3100'}`
+
 test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', { tag: '@takeoff' }, async ({ page }) => {
   const mockState = { sawDraftScopedMeasurements: false, sawAuthenticatedPageFileFetch: false }
   await installApiMocks(page, mockState)
@@ -72,7 +79,7 @@ async function installApiMocks(
   page: Page,
   state: { sawDraftScopedMeasurements: boolean; sawAuthenticatedPageFileFetch: boolean },
 ): Promise<void> {
-  await page.route('http://localhost:3001/api/**', async (route) => {
+  await page.route(`${API_ORIGIN}/api/**`, async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
 
@@ -138,7 +145,7 @@ async function installApiMocks(
         status: 200,
         contentType: 'image/png',
         headers: {
-          'access-control-allow-origin': 'http://localhost:3100',
+          'access-control-allow-origin': WEB_ORIGIN,
         },
         body: blueprintPngFixture(),
       })
@@ -290,7 +297,7 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
     status: 200,
     contentType: 'application/json',
     headers: {
-      'access-control-allow-origin': 'http://localhost:3100',
+      'access-control-allow-origin': WEB_ORIGIN,
     },
     body: JSON.stringify(body),
   })

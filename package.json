@@ -47,6 +47,7 @@
     "ci:quality": "bash -n scripts/*.sh && npm run lint && npm run format && npm run typecheck && npm run test && npm run build && npm run web:bundle-budget && npm run check:dockerfile-imports",
     "verify": "bash scripts/verify-local.sh",
     "verify:fast": "bash scripts/verify-local.sh --fast",
+    "verify:full": "bash scripts/verify-local.sh --full",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",

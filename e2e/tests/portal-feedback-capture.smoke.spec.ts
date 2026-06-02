@@ -3,6 +3,11 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 const SHARE_TOKEN = 'portal-feedback-smoke-token'
 const BUILD_SHA = 'portal-feedback-smoke-build-sha'
 
+// Default to the CI ports (3001/3100); honor E2E_API_PORT/E2E_WEB_PORT so the
+// local gate can run on alternate ports alongside a developer's live stack.
+const API_ORIGIN = `http://localhost:${process.env.E2E_API_PORT ?? '3001'}`
+const WEB_ORIGIN = `http://localhost:${process.env.E2E_WEB_PORT ?? '3100'}`
+
 type JsonObject = Record<string, unknown>
 
 type PortalCaptureState = {
@@ -131,7 +136,7 @@ async function installFakeMediaRecorder(page: Page): Promise<void> {
 }
 
 async function installPortalApiMocks(page: Page, state: PortalCaptureState): Promise<void> {
-  await page.route('http://localhost:3001/api/**', async (route) => {
+  await page.route(`${API_ORIGIN}/api/**`, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname
@@ -272,7 +277,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200): Promise<v
 
 function corsHeaders(): Record<string, string> {
   return {
-    'access-control-allow-origin': 'http://localhost:3100',
+    'access-control-allow-origin': WEB_ORIGIN,
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-headers': 'content-type,x-request-id,sentry-trace,baggage,x-sitelayer-capture-session-id',
   }

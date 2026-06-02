@@ -166,10 +166,12 @@ paired with _why_ it exists (often a real footgun) and _how to apply_ it.
 > **Adopted operating model (2026-06-02):** `main` is production truth. The
 > single verification authority is **`scripts/verify-local.sh`** (also
 > `npm run verify`) — there is no CI gate. It is run **locally by the deploy
-> path**: `scripts/deploy.sh prod` runs the full gate (shell-syntax,
+> path**: `scripts/deploy.sh prod` runs the **standard** gate (shell-syntax,
 > migration-immutability, prettier, lint, typecheck, unit tests,
 > dockerfile-import guard, then `web:bundle-budget` after the build, plus the
-> docker-compose integration/e2e checks) BEFORE pushing the image, and the
+> docker-compose DB-backed **integration** suite; the Playwright **e2e** suite
+> is an opt-in `--full` level — `npm run verify:full` on a quiet box — NOT part
+> of the deploy gate) BEFORE pushing the image, and the
 > fleet auto-deploy watcher (`scripts/fleet-auto-deploy.sh` → `deploy.sh
 dev|demo`) runs it for the dev/demo tiers. GitHub Actions is NOT the deploy
 > authority (NHL model). There is no `gh api` / CI-status dependency; the

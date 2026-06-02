@@ -45,9 +45,10 @@ and `@capture`) so they surface in either area's lane.
 ## Safety invariant
 
 Tags **scope** runs; they never **skip** anything permanently. The untagged
-full run is the source of truth and always executes as part of the local gate
-(`scripts/verify-local.sh`'s e2e step, which `scripts/deploy.sh` runs before it
-ships). Adding a tag to a spec must not remove it from the full suite — the
+full run is the source of truth and executes via the local gate's e2e step
+(`scripts/verify-local.sh --full` / `npm run verify:full` — the opt-in e2e
+level, run on a quiet box). Adding a tag to a spec must not remove it from the
+full suite — the
 `{ tag }` option does not filter the default run.
 
 ## Adding a new area tag

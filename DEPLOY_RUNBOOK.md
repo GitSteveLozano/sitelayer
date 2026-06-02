@@ -70,13 +70,13 @@ careless merge cannot break a paying customer.
 
 ## What runs where
 
-| Stage       | Trigger                       | Mechanism                                               | Target                                                              |
-| ----------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
-| Verify gate | local, before every deploy    | `scripts/verify-local.sh` (`npm run verify`)            | none (validates only — lint/typecheck/test/build/integration/e2e)   |
-| Prod deploy | manual, from the fleet        | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                       |
-| Dev deploy  | manual, from the fleet        | `scripts/deploy.sh dev` → `deploy-preview.sh`           | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres              |
-| Demo deploy | manual, from the fleet        | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres    |
-| PR preview  | manual on the preview droplet | `scripts/deploy-preview.sh`                             | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
+| Stage       | Trigger                       | Mechanism                                               | Target                                                                  |
+| ----------- | ----------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Verify gate | local, before every deploy    | `scripts/verify-local.sh` (`npm run verify`)            | none (validates only — static/build/unit/integration; e2e via `--full`) |
+| Prod deploy | manual, from the fleet        | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                           |
+| Dev deploy  | manual, from the fleet        | `scripts/deploy.sh dev` → `deploy-preview.sh`           | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres                  |
+| Demo deploy | manual, from the fleet        | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres        |
+| PR preview  | manual on the preview droplet | `scripts/deploy-preview.sh`                             | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres     |
 
 The prod deploy runs the local gate, builds + pushes the image on the fleet
 box, then SSHes (flock-locked) to the production droplet. There is no GitHub

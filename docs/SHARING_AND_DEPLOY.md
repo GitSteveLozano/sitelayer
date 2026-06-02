@@ -86,11 +86,13 @@ npm run verify           # = bash scripts/verify-local.sh
 ```
 
 `scripts/verify-local.sh` is what `scripts/deploy.sh` runs before it ships an
-image: `deploy.sh prod` runs the **full** gate (shell-syntax,
+image: `deploy.sh prod` runs the **standard** gate (shell-syntax,
 migration-immutability, prettier, lint, typecheck, unit tests, the
 dockerfile-import guard, the post-build bundle-budget, and the docker-compose
-integration/e2e checks), and the fleet auto-deploy watcher runs it for the
-dev/demo tiers. Run it yourself before pushing. Nothing in this path queries
+DB-backed **integration** suite), and the fleet auto-deploy watcher runs it for
+the dev/demo tiers. The Playwright **e2e** suite is an opt-in `--full` level
+(`npm run verify:full`, resource-heavy — run on a quiet/dedicated box), not part
+of the deploy gate. Run it yourself before pushing. Nothing in this path queries
 GitHub Actions.
 
 ## 4. Pre-share checklist

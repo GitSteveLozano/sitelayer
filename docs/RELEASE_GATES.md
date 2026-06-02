@@ -16,7 +16,8 @@ deleted on 2026-06-02 (the deploy workflows had already been removed in
 - web bundle budget (`npm run web:bundle-budget`)
 - fixture-mode web build
 - Playwright fixture route smoke tests
-- docker-compose integration + e2e checks (real Postgres 18 + booted API)
+- docker-compose DB-backed integration checks (real Postgres 18 + booted API) — in the default/standard gate
+- Playwright e2e (full app stack + browser) — opt-in `--full` level (`npm run verify:full`); resource-heavy, run on a quiet box, NOT in the deploy gate
 
 There is no PR CI and no status check. GitHub branch protection on `main`
 (PR + review) is optional code-review hygiene only — it is no longer enforced
@@ -34,5 +35,5 @@ Production deploys run from the fleet via `scripts/deploy.sh prod`. There is no 
 
 Safety now depends on:
 
-- **The local gate `scripts/verify-local.sh`, run by `scripts/deploy.sh prod` on the exact deploy SHA before the image is pushed.** The prod deploy runs the full gate locally (shell-syntax, migration-immutability, prettier, lint, typecheck, unit tests, the dockerfile-import guard, then `web:bundle-budget` after the build, plus the docker-compose integration/e2e checks) and aborts the deploy on failure. There is no `gh api` / GitHub-CI dependency; the break-glass override is `FORCE_DEPLOY_UNCHECKED=1`.
+- **The local gate `scripts/verify-local.sh`, run by `scripts/deploy.sh prod` on the exact deploy SHA before the image is pushed.** The prod deploy runs the **standard** gate locally (shell-syntax, migration-immutability, prettier, lint, typecheck, unit tests, the dockerfile-import guard, then `web:bundle-budget` after the build, plus the docker-compose DB-backed **integration** suite) and aborts the deploy on failure. The Playwright **e2e** suite is an opt-in `--full` level (`npm run verify:full`) for a quiet/dedicated box — it is resource-heavy and deliberately not part of the deploy gate. There is no `gh api` / GitHub-CI dependency; the break-glass override is `FORCE_DEPLOY_UNCHECKED=1`.
 - **Optional branch protection on `main`** (PR + review, apply via `scripts/configure-github-protection.sh`) is code-review hygiene, not the deploy authority. With no GitHub Actions left there is no `Quality` status check to require; the deploy never queries any GitHub status.

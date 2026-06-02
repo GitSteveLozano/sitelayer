@@ -68,10 +68,12 @@ fi
 # The gate definition lives in ONE place: scripts/verify-local.sh. This used to
 # carry an inline copy of the stages (shell, migrations, format, lint,
 # typecheck, unit, dockerfile-import) — that duplication is now deleted in
-# favour of `verify-local.sh --full`, which is the single authority that
-# replaces .github/workflows/quality.yml (it also runs the DB-backed
-# integration suite and the docker-compose Playwright e2e suite — the heavy
-# jobs that previously stayed in PR CI).
+# favour of `verify-local.sh` (the default "standard" level: static, build,
+# unit, and the DB-backed integration suite), which is the single authority
+# that replaces .github/workflows/quality.yml. The Playwright e2e suite is an
+# opt-in `--full` level (resource-heavy — stands up the app stack + a real
+# browser); it is deliberately NOT in the prod deploy gate so a loaded box
+# cannot flake a ship. Run `npm run verify:full` on a quiet/dedicated box for e2e.
 #
 # The repo runs no GitHub Actions; runtime correctness is additionally verified
 # post-deploy by the droplet health check + verify-prod-deploy.sh below.
@@ -87,11 +89,11 @@ if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ] || [ "${SKIP_VERIFY:-0}" = "1" ]; th
   echo "############################################################"
   echo "## WARNING: FORCE_DEPLOY_UNCHECKED=1 — local Quality gate SKIPPED."
   echo "## Shipping UNVERIFIED SHA $FULL_SHA ($GIT_SHA) to prod."
-  echo "## Lint/typecheck/tests/integration/e2e may be red for this commit."
+  echo "## Lint/typecheck/tests/integration may be red for this commit."
   echo "############################################################"
 else
-  echo "==> Running FULL local verification gate for $GIT_SHA (scripts/verify-local.sh --full)..."
-  if ! bash scripts/verify-local.sh --full; then
+  echo "==> Running local verification gate for $GIT_SHA (scripts/verify-local.sh — standard: static+build+unit+integration)..."
+  if ! bash scripts/verify-local.sh; then
     echo "ERROR: local verification gate FAILED for $GIT_SHA."
     echo "       Fix the failures and redeploy, or set FORCE_DEPLOY_UNCHECKED=1 to override."
     exit 1

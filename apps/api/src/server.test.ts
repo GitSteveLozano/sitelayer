@@ -5,16 +5,25 @@ import { Pool } from 'pg'
 
 const describeIntegration = process.env.RUN_API_INTEGRATION === '1' ? describe : describe.skip
 
+// The integration specs drive a live api over HTTP. Default to :3001 (the CI
+// port) but honor PORT so the local gate can run alongside a developer's live
+// stack that already binds 3001.
+const INTEGRATION_API_PORT = Number(process.env.PORT ?? '3001')
+
+// Honor DATABASE_URL when set (CI/local gate provide it) and only fall back to
+// the local-dev default. This mirrors the other integration suites
+// (fk-orphan/rls/scenario-replay) so the suite is portable to a throwaway
+// postgres on a non-5432 host port (e.g. when 5432 is already taken).
+const INTEGRATION_DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+
 beforeAll(async () => {
-  process.env.DATABASE_URL = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+  process.env.DATABASE_URL = INTEGRATION_DATABASE_URL
   process.env.ACTIVE_COMPANY_SLUG = 'la-operations'
   process.env.ACTIVE_USER_ID = 'demo-user'
 })
 
 const dbPool: Pool | null =
-  process.env.RUN_API_INTEGRATION === '1'
-    ? new Pool({ connectionString: 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer', max: 2 })
-    : null
+  process.env.RUN_API_INTEGRATION === '1' ? new Pool({ connectionString: INTEGRATION_DATABASE_URL, max: 2 }) : null
 
 afterAll(async () => {
   if (dbPool) await dbPool.end()
@@ -28,7 +37,7 @@ async function apiCall<T>(
 ): Promise<T & { status: number }> {
   const options: http.RequestOptions = {
     hostname: 'localhost',
-    port: 3001,
+    port: INTEGRATION_API_PORT,
     path,
     method,
     headers: {
@@ -71,7 +80,7 @@ async function rawHttpCall(
 ): Promise<{ status: number; body: string }> {
   const options: http.RequestOptions = {
     hostname: 'localhost',
-    port: 3001,
+    port: INTEGRATION_API_PORT,
     path,
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
@@ -105,7 +114,7 @@ async function apiCallWithHeaders<T>(
 ): Promise<T & { status: number; headers: http.IncomingHttpHeaders }> {
   const options: http.RequestOptions = {
     hostname: 'localhost',
-    port: 3001,
+    port: INTEGRATION_API_PORT,
     path,
     method,
     headers: {
