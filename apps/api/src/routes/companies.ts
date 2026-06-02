@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { z } from 'zod'
-import { normalizeCompanyRole } from '@sitelayer/domain'
+import { DEFAULT_SEED_TEMPLATE_SLUG, normalizeCompanyRole, resolveSeedTemplate } from '@sitelayer/domain'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
@@ -43,6 +43,12 @@ const CompanyCreateBodySchema = z.object({
   slug: z.string().optional(),
   name: z.string().optional(),
   seed_defaults: z.boolean().optional(),
+  // Onboarding seed template slug. Defaults (when omitted) to the trade-neutral
+  // GENERIC template so company #2..#N is NOT seeded with L&A Operations'
+  // stucco/EIFS divisions. An operator can pass 'la-operations' to clone LA's
+  // reference set, or any registered slug. Unknown slugs fall back to generic
+  // (resolveSeedTemplate never throws). See @sitelayer/domain SEED_TEMPLATES.
+  template: z.string().trim().min(1).max(64).optional(),
 })
 
 // Settings PATCH: ot_service_item_code must explicitly appear in the body
@@ -723,6 +729,11 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       return true
     }
     const seedDefaults = parsed.value.seed_defaults !== false
+    // Multi-tenant onboarding defaults to the trade-neutral GENERIC template
+    // (DEFAULT_SEED_TEMPLATE_SLUG), so a brand-new company is never mis-seeded
+    // with L&A Operations' stucco/EIFS divisions. The operator may override via
+    // the `template` field; an unknown slug resolves back to generic.
+    const seedTemplate = resolveSeedTemplate(parsed.value.template ?? DEFAULT_SEED_TEMPLATE_SLUG).template
     const client = await pool.connect()
     try {
       await client.query('begin')
@@ -767,7 +778,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
         [newCompany.id, userId],
       )
       if (seedDefaults) {
-        await seedCompanyDefaults(client, newCompany.id)
+        await seedCompanyDefaults(client, newCompany.id, { template: seedTemplate })
       }
       // Enqueue the welcome email for the new owner. We scope the row to the
       // freshly-created company so RLS keeps it tenant-clean, and use a
@@ -806,7 +817,11 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
         after: newCompany,
       })
       observeAudit('company', 'create')
-      sendJson(201, { company: newCompany, role: 'admin' })
+      sendJson(201, {
+        company: newCompany,
+        role: 'admin',
+        seed_template: seedDefaults ? seedTemplate.slug : null,
+      })
     } catch (err) {
       await client.query('rollback').catch(() => {})
       throw err
