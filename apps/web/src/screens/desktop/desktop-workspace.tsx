@@ -65,8 +65,12 @@ import {
   type DNotifItem,
 } from '@/components/d'
 import { MButton } from '@/components/m'
-import { EstAiTakeoffSetup, EstAiTakeoffReview } from './est-ai-takeoff'
-import { EstAiCountSetup, EstAiCountReview } from './est-ai-count'
+// Phase B responsive consolidation: the AI takeoff/count screens are now single
+// responsive screens living in the mobile (canonical) tree — they render the
+// desktop layout at the `lg:` breakpoint. The former desktop twins
+// (est-ai-takeoff.tsx / est-ai-count.tsx) were deleted.
+import { TakeoffAiTakeoffSetup, TakeoffAiTakeoffReview } from '../mobile/takeoff-ai-takeoff'
+import { TakeoffAiCountSetup, TakeoffAiCountReview } from '../mobile/takeoff-ai-count'
 import { OwnerDashboard } from './owner-dashboard'
 import { OwnerProjects } from './owner-projects'
 import { OwnerTeam } from './owner-team'
@@ -834,10 +838,13 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
             path="fm/blocker/:issueId"
             element={<FmBlockerDetail bootstrap={bootstrap} companySlug={companySlug ?? ''} />}
           />
-          <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
-          <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
-          <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />
-          <Route path="ai-count/:projectId/review" element={<EstAiCountReview />} />
+          <Route path="ai-takeoff/:projectId" element={<TakeoffAiTakeoffSetup companySlug={companySlug ?? ''} />} />
+          <Route
+            path="ai-takeoff/:projectId/review"
+            element={<TakeoffAiTakeoffReview companySlug={companySlug ?? ''} />}
+          />
+          <Route path="ai-count/:projectId" element={<TakeoffAiCountSetup companySlug={companySlug ?? ''} />} />
+          <Route path="ai-count/:projectId/review" element={<TakeoffAiCountReview companySlug={companySlug ?? ''} />} />
           <Route path="*" element={<DComingSoon name="Screen" />} />
         </Routes>
       </RoleContext.Provider>
