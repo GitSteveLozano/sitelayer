@@ -25,6 +25,7 @@ import {
   useAddAssemblyComponent,
   useAssemblies,
   useAssembly,
+  useCloneAssembly,
   useCreateAssembly,
   useDeleteAssembly,
   useRemoveAssemblyComponent,
@@ -208,6 +209,12 @@ export function EstAssemblies() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
 
+  const cloneAssembly = useCloneAssembly()
+  // Which row is mid-clone — disables that row's button while the create +
+  // component copies are in flight.
+  const [cloningId, setCloningId] = useState<string | null>(null)
+  const [cloneError, setCloneError] = useState<string | null>(null)
+
   const openNew = () => {
     setEditingId(null)
     setEditorOpen(true)
@@ -215,6 +222,18 @@ export function EstAssemblies() {
   const openEdit = (id: string) => {
     setEditingId(id)
     setEditorOpen(true)
+  }
+  const handleClone = async (id: string) => {
+    setCloningId(id)
+    setCloneError(null)
+    try {
+      await cloneAssembly.mutateAsync({ id })
+      void assembliesQuery.refetch()
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCloningId(null)
+    }
   }
 
   const totalRateSum = useMemo(() => assemblies.reduce((sum, a) => sum + (Number(a.total_rate) || 0), 0), [assemblies])
@@ -233,16 +252,29 @@ export function EstAssemblies() {
       key: 'edit',
       header: '',
       render: (r) => (
-        <MButton
-          size="sm"
-          variant="quiet"
-          onClick={(e) => {
-            e.stopPropagation()
-            openEdit(r.id)
-          }}
-        >
-          Edit
-        </MButton>
+        <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+          <MButton
+            size="sm"
+            variant="quiet"
+            disabled={cloningId === r.id}
+            onClick={(e) => {
+              e.stopPropagation()
+              void handleClone(r.id)
+            }}
+          >
+            {cloningId === r.id ? 'Cloning…' : 'Clone'}
+          </MButton>
+          <MButton
+            size="sm"
+            variant="quiet"
+            onClick={(e) => {
+              e.stopPropagation()
+              openEdit(r.id)
+            }}
+          >
+            Edit
+          </MButton>
+        </span>
       ),
     },
   ]
@@ -271,6 +303,10 @@ export function EstAssemblies() {
             meta="Distinct service items"
           />
         </DKpiStrip>
+
+        {cloneError ? (
+          <div style={{ fontSize: 12, color: 'var(--m-red)' }}>Couldn’t clone assembly: {cloneError}</div>
+        ) : null}
 
         {assembliesQuery.isLoading ? (
           <DLoadingState label="Loading assemblies…" />

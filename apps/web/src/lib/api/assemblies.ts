@@ -192,6 +192,56 @@ export function useDeleteAssembly() {
   })
 }
 
+/**
+ * Duplicate an assembly + all of its components. Reuses the create path
+ * (POST /api/assemblies then POST …/components for each line) rather than a
+ * server-side clone route so it stays additive against the existing API.
+ *
+ * Fetches the source detail so the copy carries the full recipe even when the
+ * caller only has the list header. The new assembly gets a "(copy)" suffix on
+ * its name and the same scope service item / unit / description; every
+ * component (kind / name / quantity / cost / waste + any Phase 2 formula) is
+ * re-created on the new assembly. Returns the freshly created assembly.
+ */
+export function useCloneAssembly() {
+  const qc = useQueryClient()
+  return useMutation<{ assembly: Assembly }, Error, { id: string }>({
+    mutationFn: async ({ id }) => {
+      const source = await request<AssemblyDetailResponse>(`/api/assemblies/${encodeURIComponent(id)}`)
+      const created = await request<{ assembly: Assembly; components: AssemblyComponent[] }>('/api/assemblies', {
+        method: 'POST',
+        json: {
+          service_item_code: source.assembly.service_item_code,
+          name: `${source.assembly.name} (copy)`,
+          ...(source.assembly.description != null ? { description: source.assembly.description } : {}),
+          unit: source.assembly.unit,
+        },
+      })
+      const newId = created.assembly.id
+      // Copy components one at a time, preserving sort order. The server
+      // recomputes the cached total_rate on each component write.
+      for (const c of source.components) {
+        await request(`/api/assemblies/${encodeURIComponent(newId)}/components`, {
+          method: 'POST',
+          json: {
+            kind: c.kind,
+            name: c.name,
+            quantity_per_unit: Number(c.quantity_per_unit),
+            unit: c.unit,
+            unit_cost: Number(c.unit_cost),
+            waste_pct: Number(c.waste_pct),
+            ...(c.quantity_formula
+              ? { quantity_formula: c.quantity_formula, formula_vars: c.formula_vars ?? null }
+              : {}),
+          },
+        })
+      }
+      return { assembly: created.assembly }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assemblies'] }),
+  })
+}
+
 /** PATCH one component (and recompute the parent's cached total_rate server-side). */
 export function useUpdateAssemblyComponent() {
   const qc = useQueryClient()
