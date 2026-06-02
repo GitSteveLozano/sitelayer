@@ -43,6 +43,17 @@ export interface AssemblyComponent {
   quantity_formula?: string | null
   /** Named vars bound when evaluating `quantity_formula` (e.g. {"coverage_rate": 32}). */
   formula_vars?: Record<string, number | string> | null
+  /**
+   * Optional boolean inclusion expression (e.g. "height > 8" or "sides >= 4").
+   * Evaluated by the CALLER (the explode path) against the same driver context
+   * as `quantity_formula`; when present and it evaluates falsy, this component is
+   * SKIPPED in the explosion. NULL/absent => the component always explodes (the
+   * current behavior). Like `quantity_formula`, the boolean result is decided by
+   * the explode path so @sitelayer/domain stays formula-evaluator-free — the
+   * caller simply omits a skipped component from the `components` it passes to
+   * {@link resolveAssembly}.
+   */
+  include_when?: string | null
 }
 
 export interface AssemblyHeader {

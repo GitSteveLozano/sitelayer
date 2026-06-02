@@ -51,6 +51,7 @@ import { handleObstructionsRoutes } from './obstructions.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
+import { handleBlueprintDiffRoutes } from './blueprint-diffs.js'
 import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
 import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 import { handleBidAccuracyRoutes } from './bid-accuracy.js'
@@ -60,6 +61,7 @@ import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffDraftRoutes } from './takeoff-drafts.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
+import { handleConditionRoutes } from './conditions.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
 import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerIssueRoutes } from './worker-issues.js'
@@ -553,6 +555,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         sendJson,
       }),
 
+    // Condition layer (Takeoff Deep Dive H1) — company-scoped reusable typed
+    // templates. Additive: measurements may record condition_id, the tag flow
+    // above remains the fallback.
+    () =>
+      handleConditionRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
     // Blueprint pages + per-page calibration (Phase 3B/C)
     () =>
       handleBlueprintPageRoutes(req, url, {
@@ -566,6 +581,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
         sendFileContent: ctx.sendFileContent,
         sendFileRedirect: ctx.sendFileRedirect,
+      }),
+
+    // Plan-revision diffs (H3) — serve stored blueprint_page_diffs +
+    // affected_measurement_ids so the takeoff surface can render the
+    // "N measurements affected" badge. Read-only; diff population is a
+    // follow-up slice.
+    () =>
+      handleBlueprintDiffRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
       }),
 
     // Takeoff CSV import (Phase 3G)

@@ -28,9 +28,10 @@ import {
   type AssemblyKind,
   type AssemblyResolution,
   type MarkupBreakdown,
+  type MeasurementDrivers,
   type SubtotalsByKind,
 } from '@sitelayer/domain'
-import { evaluateFormulaUnsafe, type FormulaContext } from '@sitelayer/formula-evaluator'
+import { evaluateBooleanFormulaUnsafe, evaluateFormulaUnsafe, type FormulaContext } from '@sitelayer/formula-evaluator'
 import type { LedgerExecutor } from './mutation-tx.js'
 import { HttpError } from './http-utils.js'
 
@@ -59,6 +60,7 @@ type AssemblyComponentRow = {
   sort_order: number
   quantity_formula: string | null
   formula_vars: Record<string, unknown> | null
+  include_when: string | null
 }
 
 /**
@@ -89,7 +91,7 @@ export async function loadAssembliesByMeasurement(
   const presentIds = headers.rows.map((h) => h.id)
   const components = await executor.query<AssemblyComponentRow>(
     `select id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct,
-            sort_order, quantity_formula, formula_vars
+            sort_order, quantity_formula, formula_vars, include_when
        from service_item_assembly_components
       where company_id = $1 and assembly_id = any($2::uuid[])
       order by sort_order asc, created_at asc`,
@@ -117,6 +119,7 @@ export async function loadAssembliesByMeasurement(
       sort_order: c.sort_order,
       quantity_formula: c.quantity_formula,
       formula_vars: normalizeFormulaVars(c.formula_vars),
+      include_when: c.include_when,
     })
   }
   return byId
@@ -136,26 +139,84 @@ function normalizeFormulaVars(raw: Record<string, unknown> | null): Record<strin
 }
 
 /**
+ * Build the formula-evaluator context for one component: the always-bound
+ * measurement quantity + unit, the five measurement DRIVERS (each defaulted to
+ * `0` when the geometry carried none, so a referencing formula stays defined),
+ * then the component's own `formula_vars` last (a component var may intentionally
+ * shadow a driver of the same name). Pure — no I/O.
+ */
+function buildFormulaContext(
+  component: AssemblyComponent,
+  measurementQuantity: number,
+  measurementUnit: string,
+  drivers: MeasurementDrivers | undefined,
+): FormulaContext {
+  return {
+    measurement_quantity: measurementQuantity,
+    measurement_unit: measurementUnit,
+    // Absent drivers bind to 0 so `height > 8` / `perimeter * 2` never error
+    // with "undefined variable" on an uncalibrated or count geometry.
+    height: drivers?.height ?? 0,
+    width: drivers?.width ?? 0,
+    thickness: drivers?.thickness ?? 0,
+    perimeter: drivers?.perimeter ?? 0,
+    sides: drivers?.sides ?? 0,
+    ...(component.formula_vars ?? {}),
+  }
+}
+
+/**
+ * Decide whether a component is included in the explosion. A component with no
+ * `include_when` is always included (unchanged behavior). When present, the
+ * expression is evaluated against the same driver context and the component is
+ * included only when the numeric result is truthy (non-zero). Throws
+ * HttpError(400) on a bad expression so the recompute transaction aborts cleanly
+ * with no partial write — same failure discipline as a bad quantity_formula.
+ */
+export function includeComponent(
+  assembly: LoadedAssembly,
+  component: AssemblyComponent,
+  measurementQuantity: number,
+  measurementUnit: string,
+  drivers?: MeasurementDrivers,
+): boolean {
+  const expr = component.include_when
+  if (!expr || expr.trim() === '') return true
+  const ctx = buildFormulaContext(component, measurementQuantity, measurementUnit, drivers)
+  // Boolean-aware eval: a bare comparison (`height > 8`) yields a boolean, an
+  // arithmetic expr (`sides`) yields a number reduced to truthiness. Same
+  // hardened sandbox as quantity_formula.
+  const result = evaluateBooleanFormulaUnsafe(expr, ctx)
+  if (!result.ok || result.value === undefined) {
+    throw new HttpError(
+      400,
+      `Assembly "${assembly.header.name}" component "${component.name}" include_when: ${
+        result.error?.message ?? 'expression evaluation failed'
+      }`,
+    )
+  }
+  return result.value
+}
+
+/**
  * Evaluate every component's optional quantity_formula against the concrete
- * measurement quantity, returning the per-component resolved per-unit map that
- * {@link resolveAssembly} consumes. Throws HttpError(400) on the first bad
- * formula so the surrounding recompute transaction aborts cleanly with no
- * partial write.
+ * measurement quantity + drivers, returning the per-component resolved per-unit
+ * map that {@link resolveAssembly} consumes. Components skipped by `include_when`
+ * are not evaluated. Throws HttpError(400) on the first bad formula so the
+ * surrounding recompute transaction aborts cleanly with no partial write.
  */
 export function resolveComponentFormulas(
   assembly: LoadedAssembly,
   measurementQuantity: number,
   measurementUnit: string,
+  drivers?: MeasurementDrivers,
 ): Map<string, number> {
   const resolved = new Map<string, number>()
   for (const c of assembly.components) {
+    if (!includeComponent(assembly, c, measurementQuantity, measurementUnit, drivers)) continue
     const formula = c.quantity_formula
     if (!formula) continue
-    const ctx: FormulaContext = {
-      measurement_quantity: measurementQuantity,
-      measurement_unit: measurementUnit,
-      ...(c.formula_vars ?? {}),
-    }
+    const ctx = buildFormulaContext(c, measurementQuantity, measurementUnit, drivers)
     const result = evaluateFormulaUnsafe(formula, ctx)
     if (!result.ok || result.value === undefined) {
       throw new HttpError(
@@ -191,7 +252,12 @@ export interface ExplodeResult {
  * Explode one measurement's assembly into priced, signed estimate lines.
  *
  * Pipeline (per docs/PLANSWIFT_PHASE2_PLAN.md §3b):
- *   1. formula → resolvedQuantities (per component, formula-evaluator).
+ *   0. include_when → drop components whose boolean expression evaluates falsy
+ *      (M2; against the measurement-driver context). NULL include_when always
+ *      keeps the component, so the legacy path is unchanged.
+ *   1. formula → resolvedQuantities (per component, formula-evaluator), with the
+ *      measurement DRIVERS (height/width/thickness/perimeter/sides) bound so one
+ *      drawn object can drive several component quantities.
  *   2. resolveAssembly → per-component raw COST (quantity × waste × unit_cost).
  *   3. applyMarkup over the per-kind subtotals → per-kind multipliers + profit.
  *   4. bake the per-kind multiplier into each component line amount so every
@@ -216,11 +282,39 @@ export function explodeMeasurement(args: {
   fallbackServiceItemCode: string
   /** Raw pricing-profile `config` jsonb (markup buckets). Defaults applied inside applyMarkup. */
   profileConfig: unknown
+  /**
+   * Measurement DRIVERS (height/width/thickness/perimeter/sides) bound into the
+   * component formula + include_when context. Optional: an absent map binds
+   * every driver to 0 (pre-M2 behavior — formulas referencing only
+   * measurement_quantity are unaffected).
+   */
+  drivers?: MeasurementDrivers
 }): ExplodeResult {
-  const { assembly, measurementQuantity, measurementUnit, isDeduction, divisionCode, fallbackServiceItemCode } = args
+  const {
+    assembly,
+    measurementQuantity,
+    measurementUnit,
+    isDeduction,
+    divisionCode,
+    fallbackServiceItemCode,
+    drivers,
+  } = args
 
-  const resolvedQuantities = resolveComponentFormulas(assembly, measurementQuantity, measurementUnit)
-  const resolution = resolveAssembly(measurementQuantity, assembly.header, assembly.components, resolvedQuantities)
+  // M2: drop components whose include_when evaluates falsy BEFORE the formula +
+  // cost passes, so a skipped component contributes no resolved quantity, no
+  // cost subtotal, and no estimate line.
+  const includedComponents = assembly.components.filter((c) =>
+    includeComponent(assembly, c, measurementQuantity, measurementUnit, drivers),
+  )
+  const includedAssembly: LoadedAssembly = { header: assembly.header, components: includedComponents }
+
+  const resolvedQuantities = resolveComponentFormulas(includedAssembly, measurementQuantity, measurementUnit, drivers)
+  const resolution = resolveAssembly(
+    measurementQuantity,
+    includedAssembly.header,
+    includedAssembly.components,
+    resolvedQuantities,
+  )
 
   const subtotals: SubtotalsByKind = resolution.by_kind
   const markup = applyMarkup(subtotals, args.profileConfig)

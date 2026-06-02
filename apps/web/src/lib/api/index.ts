@@ -613,6 +613,7 @@ export {
   useAddTakeoffTag,
   useAssemblies,
   useAssembly,
+  useBlueprintDiffs,
   useBlueprintPages,
   useCalibratePage,
   useCreateAssembly,
@@ -632,8 +633,10 @@ export {
   useVerifyPage,
   type Assembly,
   type AssemblyComponent,
+  type BlueprintDiffsResponse,
   type BlueprintDocument,
   type BlueprintPage,
+  type BlueprintPageDiff,
   type CreateMeasurementInput,
   type ImportRow,
   type MeasurementGeometry,
@@ -644,6 +647,17 @@ export {
   type UploadBlueprintOptions,
   type UseUploadBlueprintInput,
 } from './takeoff'
+
+export {
+  useConditions,
+  useCreateCondition,
+  useUpdateCondition,
+  useDeleteCondition,
+  type ConditionMeasurementKind,
+  type CreateConditionInput,
+  type TakeoffCondition,
+  type UpdateConditionInput,
+} from './conditions'
 
 export {
   useCaptureTakeoffDraft,

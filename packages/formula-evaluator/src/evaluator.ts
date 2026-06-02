@@ -3,6 +3,7 @@ import pkg from 'expr-eval'
 import {
   MAX_FORMULA_LENGTH,
   MAX_RESULT_MAGNITUDE,
+  type BooleanFormulaResult,
   type FormulaContext,
   type FormulaResult,
   type FormulaValidationError,
@@ -85,6 +86,10 @@ function coerceContext(ctx: FormulaContext): Record<string, number | string> {
   const scope: Record<string, number | string> = {}
   for (const key of Object.keys(ctx)) {
     const value = ctx[key]
+    // An explicit `undefined` driver means "not supplied" — drop it from scope
+    // (the preflight then reports it as an undefined variable only if a formula
+    // actually references it), rather than rejecting the whole context.
+    if (value === undefined) continue
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) {
         throw new Error(`variable "${key}" is not a finite number`)
@@ -186,4 +191,85 @@ export function evaluateFormulaUnsafe(formula: string, ctx: FormulaContext): For
     return { ok: false, error: syntaxError(errorMessage(err)) }
   }
   return evaluateFormula(parsed, ctx)
+}
+
+/**
+ * Evaluate a parsed expression as a BOOLEAN (an assembly component's
+ * `include_when`). Shares the exact same hardened parser + `coerceContext`
+ * sandbox as {@link evaluateFormula} — the only difference is the accepted
+ * result type: expr-eval yields a JS `boolean` for a bare comparison
+ * (`height > 8`) and a `number` for arithmetic (`sides`); a number is reduced to
+ * truthiness (`0 → false`, any other finite value → true). NaN / non-finite /
+ * other types are rejected so a malformed expression fails loudly rather than
+ * silently skipping (or keeping) a component.
+ *
+ * Never throws. Failure modes mirror `evaluateFormula`
+ * (`UNDEFINED_VARIABLE` / `INVALID_RESULT` / `SYNTAX_ERROR`).
+ */
+export function evaluateBooleanFormula(parsed: ParsedFormula, ctx: FormulaContext): BooleanFormulaResult {
+  let scope: Record<string, number | string>
+  try {
+    scope = coerceContext(ctx)
+  } catch (err) {
+    return { ok: false, error: { code: 'INVALID_RESULT', message: errorMessage(err) } }
+  }
+
+  const missing = parsed.variables.filter((name) => !(name in scope))
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'UNDEFINED_VARIABLE',
+        message: `undefined variable${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`,
+      },
+    }
+  }
+
+  let raw: unknown
+  try {
+    raw = parsed.expression.evaluate(scope)
+  } catch (err) {
+    return { ok: false, error: syntaxError(errorMessage(err)) }
+  }
+
+  if (typeof raw === 'boolean') {
+    return { ok: true, value: raw }
+  }
+  if (typeof raw === 'number') {
+    if (Number.isNaN(raw)) {
+      return { ok: false, error: { code: 'INVALID_RESULT', message: 'result is NaN' } }
+    }
+    if (!Number.isFinite(raw)) {
+      return { ok: false, error: { code: 'DIVIDE_BY_ZERO', message: 'result is not finite (divide by zero?)' } }
+    }
+    return { ok: true, value: raw !== 0 }
+  }
+  return {
+    ok: false,
+    error: { code: 'INVALID_RESULT', message: `result is not a boolean or number (got ${typeof raw})` },
+  }
+}
+
+/**
+ * One-shot parse + boolean-evaluate. Convenient for the explode path's
+ * `include_when` check. Never throws — parse failures come back as
+ * `SYNTAX_ERROR` / `TOO_LONG`.
+ */
+export function evaluateBooleanFormulaUnsafe(formula: string, ctx: FormulaContext): BooleanFormulaResult {
+  if (typeof formula !== 'string' || formula.trim().length === 0) {
+    return { ok: false, error: syntaxError('formula is empty') }
+  }
+  if (formula.length > MAX_FORMULA_LENGTH) {
+    return {
+      ok: false,
+      error: { code: 'TOO_LONG', message: `formula exceeds ${MAX_FORMULA_LENGTH} characters` },
+    }
+  }
+  let parsed: ParsedFormula
+  try {
+    parsed = parseFormula(formula)
+  } catch (err) {
+    return { ok: false, error: syntaxError(errorMessage(err)) }
+  }
+  return evaluateBooleanFormula(parsed, ctx)
 }

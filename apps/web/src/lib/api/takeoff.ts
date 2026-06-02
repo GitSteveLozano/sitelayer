@@ -50,6 +50,14 @@ export interface MeasurementGeometry {
    */
   world_per_board_x?: number
   world_per_board_y?: number
+  /**
+   * Optional roof/slope pitch driver (rise:run, e.g. 6:12). When present the
+   * server multiplies the scaled area/length by `√(rise²+run²)/run` so sloped
+   * cladding/gables read true surface area. Stored inside this JSONB geometry —
+   * no column. Absent ⇒ flat/vertical ⇒ factor 1.0. See `@sitelayer/domain`
+   * `slopeFactor` / `calculateGeometryQuantity` (deep-dive H2).
+   */
+  pitch?: { rise: number; run: number }
 }
 
 /**
@@ -98,6 +106,12 @@ export interface TakeoffMeasurement {
    * lines instead of one flat line. NULL = flat-line behavior (the default).
    */
   assembly_id?: string | null
+  /**
+   * Condition layer (Takeoff Deep Dive H1): the reusable typed template this
+   * measurement was drawn against, or null for the legacy shape-first flow.
+   * Additive — the canvas legend groups by it; the tag flow stays the fallback.
+   */
+  condition_id?: string | null
   version: number
   created_at: string
 }
@@ -218,6 +232,8 @@ export interface CreateMeasurementInput {
   is_deduction?: boolean
   /** Phase A.2: route the measurement to a specific takeoff draft. When omitted, the API falls back to the project's default draft. */
   draft_id?: string | null
+  /** Condition layer (Deep Dive H1): the reusable typed template this measurement is drawn against. NULL/omitted = legacy shape-first flow (the tag fallback is unaffected). */
+  condition_id?: string | null
 }
 
 export type CreateMeasurementResult = TakeoffMeasurement | { queued: true }
@@ -424,6 +440,55 @@ export function useVerifyPage() {
         json: { verified },
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['blueprints'] }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Plan-revision diffs (H3)
+// ---------------------------------------------------------------------------
+
+/**
+ * One stored region-of-change between plan revisions (migration 037
+ * `blueprint_page_diffs`). `affected_measurement_ids` is the snapshot of
+ * takeoff measurements whose centroid falls inside the changed bbox — the
+ * cache that drives the "N measurements affected" badge. Numeric fields come
+ * back as strings (pg numeric) per this codebase's convention.
+ */
+export interface BlueprintPageDiff {
+  id: string
+  new_page_id: string
+  prior_page_id: string | null
+  new_page_number: number
+  prior_page_number: number | null
+  change_kind: 'added' | 'removed' | 'modified'
+  bbox_x: string
+  bbox_y: string
+  bbox_w: string
+  bbox_h: string
+  confidence: string
+  affected_measurement_ids: string[]
+  notes: string | null
+  created_at: string
+}
+
+export interface BlueprintDiffsResponse {
+  diffs: BlueprintPageDiff[]
+  /** Deduped union of every diff's affected measurement ids (server rollup). */
+  affected_measurement_ids: string[]
+  affected_measurement_count: number
+}
+
+/**
+ * Stored plan-revision diffs for a blueprint document (GET
+ * /api/blueprints/:id/diffs). Returns an empty list when no diff worker has
+ * populated rows yet, so callers can hide the badge on an empty result. The
+ * route is read-only; diff population is a follow-up slice.
+ */
+export function useBlueprintDiffs(docId: string | null | undefined) {
+  return useQuery<BlueprintDiffsResponse>({
+    queryKey: ['blueprints', 'diffs', docId ?? ''],
+    queryFn: () => request(`/api/blueprints/${encodeURIComponent(docId!)}/diffs`),
+    enabled: Boolean(docId),
   })
 }
 

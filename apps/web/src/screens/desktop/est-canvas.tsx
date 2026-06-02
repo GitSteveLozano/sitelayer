@@ -25,6 +25,8 @@ import {
   calculateLinealLengthScaled,
   calculatePolygonAreaScaled,
   calculatePolygonCentroid,
+  slopeFactor,
+  type PitchDriver,
   type TakeoffPoint,
 } from '@sitelayer/domain'
 import {
@@ -46,6 +48,12 @@ import {
   type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
+import {
+  useConditions,
+  useCreateCondition,
+  type ConditionMeasurementKind,
+  type TakeoffCondition,
+} from '@/lib/api/conditions'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
@@ -57,6 +65,7 @@ import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
@@ -279,6 +288,12 @@ export function EstCanvas() {
   const patchMeasurement = usePatchMeasurement()
   const serviceItems = useServiceItems()
   const items = useMemo(() => serviceItems.data?.serviceItems ?? [], [serviceItems.data])
+  // Condition layer (Deep Dive H1). The list powers the picker + legend; the
+  // create hook backs the inline "+ New" form. Additive — when no condition is
+  // active, measurements save exactly as before (condition_id null).
+  const conditionsQuery = useConditions()
+  const conditions = useMemo(() => conditionsQuery.data?.conditions ?? [], [conditionsQuery.data])
+  const createCondition = useCreateCondition()
 
   // --- Entry state (identical semantics to mobile draw mode) ----------------
   const [tool, setTool] = useState<Tool>('polygon')
@@ -346,6 +361,42 @@ export function EstCanvas() {
   // service item. Sticky so several openings can be cut in a row.
   const [deduct, setDeduct] = useState(false)
 
+  // Pitch / slope driver (H2) for area + lineal takeoff. Empty ⇒ flat/vertical
+  // (slope factor 1.0, unchanged). When set to a valid rise:run the next saved
+  // measurement carries `pitch` inside its JSONB geometry and the server applies
+  // `√(rise²+run²)/run` to the scaled quantity. Sticky across saves like deduct.
+  const [pitchRise, setPitchRise] = useState('')
+  const [pitchRun, setPitchRun] = useState('12')
+
+  // Condition layer (Deep Dive H1) — the reusable typed template the next draw
+  // is made against. NULL = legacy shape-first flow (the existing tag/service-
+  // item path is untouched and remains the fallback). `conditionFormOpen`
+  // toggles the inline create form; the three fields back a minimal create.
+  const [activeConditionId, setActiveConditionId] = useState<string | null>(null)
+  const [conditionFormOpen, setConditionFormOpen] = useState(false)
+  const [newConditionName, setNewConditionName] = useState('')
+  const [newConditionColor, setNewConditionColor] = useState('#2f7d32')
+  const [newConditionKind, setNewConditionKind] = useState<ConditionMeasurementKind>('area')
+  const activeCondition = useMemo<TakeoffCondition | null>(
+    () => conditions.find((c) => c.id === activeConditionId) ?? null,
+    [conditions, activeConditionId],
+  )
+
+  // Copy / array / mirror tools (deep-dive gap H6 — repeated bays/typicals).
+  // When a selection exists in SELECT mode, a small toolbar group lets the
+  // estimator duplicate the selected measurement(s) by a board-space offset,
+  // array them N-up along a row/grid, or mirror/rotate the copies. Each copy is
+  // saved as a NEW measurement via the existing `useCreateMeasurement` path, so
+  // quantities recompute server-side just like a hand-drawn shape. `copyOpen`
+  // toggles the parameter panel; the rest hold the user's chosen plan.
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [copyDx, setCopyDx] = useState('6')
+  const [copyDy, setCopyDy] = useState('0')
+  const [copyCount, setCopyCount] = useState('3')
+  const [copyMirror, setCopyMirror] = useState<MirrorAxis | 'none'>('none')
+  const [copyRotate, setCopyRotate] = useState('0')
+  const [copyBusy, setCopyBusy] = useState(false)
+
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
   // the "JUMPED FROM …" panel can offer a one-click RETURN. The callouts are
@@ -378,17 +429,36 @@ export function EstCanvas() {
     return a && b && c ? arcPolyline(a, b, c) : null
   }, [tool, draftPoints])
 
+  // Pitch / slope driver (H2). A valid rise:run yields a `PitchDriver`; an empty
+  // or non-positive run is treated as flat (null ⇒ slope factor 1.0). Pitch only
+  // applies to sloped-surface tools (area + lineal/arc), never to counts.
+  const activePitch = useMemo<PitchDriver | null>(() => {
+    const rise = Number(pitchRise)
+    const run = Number(pitchRun)
+    if (!Number.isFinite(rise) || !Number.isFinite(run)) return null
+    if (rise <= 0 || run <= 0) return null
+    return { rise, run }
+  }, [pitchRise, pitchRun])
+  const pitchAppliesToTool = tool === 'polygon' || tool === 'rect' || tool === 'lineal' || tool === 'arc'
+  const pitchFactor = pitchAppliesToTool ? slopeFactor(activePitch) : 1
+  // On-canvas audit suffix (deep-dive H2: "show the multiplier on the canvas
+  // label"). Only shown when pitch is actually multiplying the quantity (> 1).
+  const pitchLabel =
+    activePitch && pitchFactor > 1 ? ` ×${round2(pitchFactor)} (${activePitch.rise}:${activePitch.run})` : ''
+
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
     // Mirror the server's quantity math: when the page is calibrated, the live
-    // running quantity reads in real sqft/lf, not board-space units.
+    // running quantity reads in real sqft/lf, not board-space units. The optional
+    // pitch slope-factor is the 4th arg (default 1.0 ⇒ flat ⇒ legacy behavior).
     const wx = worldScale?.wx ?? 1
     const wy = worldScale?.wy ?? 1
-    if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy))
-    if (tool === 'lineal') return round2(calculateLinealLengthScaled(draftPoints, wx, wy))
-    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy)) : 0
+    if (tool === 'polygon' || tool === 'rect')
+      return round2(calculatePolygonAreaScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'lineal') return round2(calculateLinealLengthScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy, pitchFactor)) : 0
     return draftPoints.length
-  }, [tool, draftPoints, arcCurve, worldScale])
+  }, [tool, draftPoints, arcCurve, worldScale, pitchFactor])
 
   // Screen→board mapping uses the shared `screenToBoardPoint` CTM transform
   // (`@/lib/takeoff/canvas-math`), the same one the mobile + projects canvases use.
@@ -718,11 +788,15 @@ export function EstCanvas() {
         worldScale && (tool === 'polygon' || tool === 'rect' || tool === 'arc' || tool === 'lineal')
           ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
           : {}
+      // Pitch (H2): stamp the rise:run driver inside the JSONB geometry (no
+      // column) for sloped-surface tools when a valid pitch is set. The server's
+      // `calculateGeometryQuantity` applies the slope factor; flat ⇒ omitted.
+      const pitch = pitchAppliesToTool && activePitch ? { pitch: activePitch } : {}
       // RECT produces a polygon; ARC tessellates its 3 control points into a
       // lineal polyline. Both reuse the existing geometry kinds — no new model.
-      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale }
-      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints, ...scale }
-      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints, ...scale }
+      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale, ...pitch }
+      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints, ...scale, ...pitch }
+      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints, ...scale, ...pitch }
       else geometry = { kind: 'count', points: draftPoints }
       const res = await create.mutateAsync({
         blueprint_document_id: activeBlueprint?.id ?? null,
@@ -737,6 +811,9 @@ export function EstCanvas() {
         // Cutout/deduct only applies to area (polygon / rect) takeoff.
         is_deduction: isAreaTool && deduct,
         draft_id: activeDraftId,
+        // Condition layer (Deep Dive H1): stamp the active condition when one
+        // is picked. NULL keeps the legacy shape-first behavior unchanged.
+        condition_id: activeConditionId,
       })
       setDraftPoints([])
       setRedoStack([])
@@ -750,6 +827,34 @@ export function EstCanvas() {
       // "service item not in curated catalog for any division") instead of the
       // raw `POST …/measurement → 422` ApiError.message.
       setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  // Condition layer (Deep Dive H1): create a condition from the inline form and
+  // make it active for the next draw. Minimal — name + color + measurement_kind
+  // (drivers + default assembly are PATCH-able later, deeper flow flagged as a
+  // follow-up). Errors surface in the same inline error slot as draws.
+  const onCreateCondition = async () => {
+    const name = newConditionName.trim()
+    if (!name) {
+      setError('Condition name is required')
+      return
+    }
+    setError(null)
+    try {
+      const res = await createCondition.mutateAsync({
+        name,
+        color: newConditionColor,
+        measurement_kind: newConditionKind,
+      })
+      setActiveConditionId(res.condition.id)
+      setNewConditionName('')
+      setConditionFormOpen(false)
+      setSavedToast(`Condition “${res.condition.name}” ready — draws will tag it.`)
+    } catch (e) {
+      setError(
+        e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Create condition failed',
+      )
     }
   }
 
@@ -877,6 +982,22 @@ export function EstCanvas() {
   const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
 
+  // Condition legend (Deep Dive H1): per-condition drawn-count + summed
+  // quantity over the current draft, ordered like the picker. Only conditions
+  // with at least one drawn measurement appear, so the legacy (unlinked) draws
+  // simply don't show here — they stay in Running quantities above.
+  const conditionLegend = useMemo(() => {
+    const counts = new Map<string, { count: number; quantity: number }>()
+    for (const m of draftMeasurements) {
+      if (!m.condition_id) continue
+      const prev = counts.get(m.condition_id) ?? { count: 0, quantity: 0 }
+      prev.count += 1
+      prev.quantity += Number(m.quantity) || 0
+      counts.set(m.condition_id, prev)
+    }
+    return conditions.filter((c) => counts.has(c.id)).map((c) => ({ condition: c, ...counts.get(c.id)! }))
+  }, [draftMeasurements, conditions])
+
   // --- Selection derivations for the edit popover + bulk-select toolbar -----
   const selectedMeasurement = useMemo(
     () => blueprintMeasurements.find((m) => m.id === selectedMeasurementId) ?? null,
@@ -981,6 +1102,7 @@ export function EstCanvas() {
     setEditGeomId(null)
     setEditPoints([])
     editDragIdxRef.current = null
+    setCopyOpen(false)
   }
 
   // Real delete (was a no-op that only cleared the highlight).
@@ -1016,6 +1138,76 @@ export function EstCanvas() {
       draft_id: activeDraftId,
     })
     clearSelection()
+  }
+
+  // --- Copy / array / mirror (deep-dive H6) --------------------------------
+  // The measurements a copy plan acts on: the marquee bulk set when several are
+  // selected, otherwise the single selected measurement. Only point-based
+  // geometries (polygon / lineal / count) are copyable in board space; the
+  // toolbar is suppressed when none of the selection qualifies.
+  const copyTargets = useMemo<TakeoffMeasurement[]>(() => {
+    if (bulkRows.length > 0) return bulkRows
+    return selectedMeasurement ? [selectedMeasurement] : []
+  }, [bulkRows, selectedMeasurement])
+  const copyableTargets = useMemo(
+    () => copyTargets.filter((m) => Array.isArray((m.geometry as MeasurementGeometry).points)),
+    [copyTargets],
+  )
+
+  // Build the chosen CopyPlan from the panel inputs. Mirror/rotate ride along
+  // as per-copy modifiers; an array of count>1 lays the copies along the row,
+  // otherwise it is a single offset copy.
+  const buildCopyPlan = (mode: CopyPlan['mode']): CopyPlan => {
+    const dx = Number(copyDx)
+    const dy = Number(copyDy)
+    const count = Math.max(1, Math.floor(Number(copyCount) || 1))
+    const rotateDeg = Number(copyRotate) || 0
+    return {
+      mode,
+      delta: { dx: Number.isFinite(dx) ? dx : 0, dy: Number.isFinite(dy) ? dy : 0 },
+      count,
+      ...(copyMirror === 'none' ? {} : { mirror: copyMirror }),
+      rotateDeg,
+    }
+  }
+
+  // Run a copy plan: for each copyable selected measurement, generate the
+  // duplicate geometries (board-space transforms) and save each as a NEW
+  // measurement via the existing create path — same scope/unit/sheet/deduct, so
+  // quantities recompute server-side. Sequential to keep the optimistic-queue
+  // and 30-req/min API budget calm; the selection is cleared on completion.
+  const runCopyPlan = async (mode: CopyPlan['mode']) => {
+    if (copyableTargets.length === 0 || copyBusy) return
+    const plan = buildCopyPlan(mode)
+    setError(null)
+    setCopyBusy(true)
+    let made = 0
+    try {
+      for (const m of copyableTargets) {
+        const geo = m.geometry as MeasurementGeometry
+        const dupes = buildDuplicateGeometries(geo, plan)
+        for (const dupe of dupes) {
+          await create.mutateAsync({
+            blueprint_document_id: m.blueprint_document_id ?? activeBlueprint?.id ?? null,
+            page_id: m.page_id ?? activePage?.id ?? null,
+            service_item_code: m.service_item_code,
+            unit: m.unit,
+            elevation: m.elevation ?? null,
+            geometry: dupe as MeasurementGeometry,
+            is_deduction: m.is_deduction ?? false,
+            draft_id: activeDraftId,
+          })
+          made += 1
+        }
+      }
+      setSavedToast(made > 0 ? `Copied ${made} measurement${made === 1 ? '' : 's'}.` : 'Nothing to copy.')
+      setCopyOpen(false)
+      clearSelection()
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Copy failed')
+    } finally {
+      setCopyBusy(false)
+    }
   }
 
   // Interactive "edit geometry" (dsg__48): engage in-place vertex drag on the
@@ -1128,6 +1320,32 @@ export function EstCanvas() {
     letterSpacing: '0.06em',
     textTransform: 'uppercase',
   }
+  // Shared field + action styling for the copy/array/mirror panel (H6).
+  const copyInputStyle: React.CSSProperties = {
+    display: 'block',
+    width: '100%',
+    marginTop: 4,
+    padding: '6px 8px',
+    border: '2px solid var(--m-ink)',
+    background: 'var(--m-card)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 12,
+    fontWeight: 700,
+    color: 'var(--m-ink)',
+  }
+  const copyActionStyle = (danger: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: '10px 8px',
+    border: '2px solid var(--m-ink)',
+    background: 'var(--m-accent)',
+    color: danger ? 'var(--m-red)' : 'var(--m-accent-ink)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+    cursor: copyBusy ? 'not-allowed' : 'pointer',
+    opacity: copyBusy ? 0.6 : 1,
+  })
 
   return (
     <div className="d-content-full" style={{ position: 'relative' }}>
@@ -1555,6 +1773,7 @@ export function EstCanvas() {
                     >
                       {deduct ? '−' : ''}
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -1573,6 +1792,7 @@ export function EstCanvas() {
                       pointerEvents="none"
                     >
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -1591,6 +1811,7 @@ export function EstCanvas() {
                       pointerEvents="none"
                     >
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -1980,6 +2201,96 @@ export function EstCanvas() {
             </MSelect>
           ) : null}
 
+          {/* Condition picker (Takeoff Deep Dive H1) — pick a reusable typed
+              template the next draw is tagged against, or create one inline.
+              "None" keeps the legacy shape-first flow (condition_id null), so
+              the existing tag/service-item path below is always the fallback. */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--m-ink-3)',
+              }}
+            >
+              Condition
+            </span>
+            <MSelect
+              value={activeConditionId ?? ''}
+              onChange={(e) => setActiveConditionId(e.target.value ? e.target.value : null)}
+            >
+              <option value="">None (legacy)</option>
+              {conditions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} · {c.measurement_kind}
+                </option>
+              ))}
+            </MSelect>
+            <MButton variant="ghost" size="sm" onClick={() => setConditionFormOpen((v) => !v)}>
+              {conditionFormOpen ? 'Close' : '+ New'}
+            </MButton>
+            {activeCondition ? (
+              <span
+                aria-hidden
+                title={activeCondition.name}
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: 3,
+                  background: activeCondition.color,
+                  border: '1px solid var(--m-line)',
+                  flex: '0 0 auto',
+                }}
+              />
+            ) : null}
+          </label>
+
+          {/* Inline create-condition form (minimal: name + color + kind). The
+              deeper condition-first draw flow — driver-derived multi-result
+              emission, default-assembly auto-attach — is a flagged follow-up. */}
+          {conditionFormOpen ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={newConditionName}
+                onChange={(e) => setNewConditionName(e.target.value)}
+                placeholder="Condition name"
+                maxLength={120}
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  padding: '4px 8px',
+                  border: '1px solid var(--m-line)',
+                  borderRadius: 6,
+                  background: 'var(--m-surface)',
+                  color: 'var(--m-ink-1)',
+                }}
+              />
+              <input
+                type="color"
+                value={newConditionColor}
+                onChange={(e) => setNewConditionColor(e.target.value)}
+                title="Condition color"
+                style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--m-line)', borderRadius: 6 }}
+              />
+              <MSelect
+                value={newConditionKind}
+                onChange={(e) => setNewConditionKind(e.target.value as ConditionMeasurementKind)}
+              >
+                <option value="area">area</option>
+                <option value="linear">linear</option>
+                <option value="count">count</option>
+                <option value="volume">volume</option>
+              </MSelect>
+              <MButton size="sm" onClick={onCreateCondition} disabled={createCondition.isPending}>
+                {createCondition.isPending ? 'Saving…' : 'Create'}
+              </MButton>
+            </div>
+          ) : null}
+
           {/* Scope item selector */}
           <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
             {items.length === 0 ? <option value="">Loading…</option> : null}
@@ -2141,6 +2452,53 @@ export function EstCanvas() {
             ) : null}
           </div>
 
+          {/* Pitch / slope driver (H2). Rise:run drives the slope factor
+              √(rise²+run²)/run applied to the scaled area/length so sloped
+              cladding/gables read true surface area. Blank/0 ⇒ flat ⇒ ×1.0. */}
+          {pitchAppliesToTool ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'var(--m-ink-3)',
+              }}
+            >
+              <span title="Roof/slope pitch — rise in run (e.g. 6 in 12). Blank = flat.">PITCH</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                value={pitchRise}
+                onChange={(e) => setPitchRise(e.target.value)}
+                placeholder="rise"
+                aria-label="Pitch rise"
+                style={pitchInputStyle}
+              />
+              <span style={{ color: 'var(--m-ink)' }}>:</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={pitchRun}
+                onChange={(e) => setPitchRun(e.target.value)}
+                placeholder="run"
+                aria-label="Pitch run"
+                style={pitchInputStyle}
+              />
+              <span style={{ color: activePitch && pitchFactor > 1 ? 'var(--m-amber)' : 'var(--m-ink-3)' }}>
+                ×{round2(pitchFactor)}
+              </span>
+            </div>
+          ) : null}
+
           <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
             {create.isPending
               ? 'Saving…'
@@ -2184,6 +2542,54 @@ export function EstCanvas() {
               ))}
             </div>
           )}
+
+          {/* Condition legend (Takeoff Deep Dive H1) — per-condition drawn
+              count + quantity, color-keyed to the canvas. Only shows when at
+              least one measurement was drawn against a condition. */}
+          {conditionLegend.length > 0 ? (
+            <>
+              <div
+                style={{
+                  borderTop: '2px solid var(--m-ink)',
+                  paddingTop: 10,
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                Conditions
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {conditionLegend.map((row) => (
+                  <div
+                    key={row.condition.id}
+                    style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 3,
+                          background: row.condition.color,
+                          border: '1px solid var(--m-line)',
+                          flex: '0 0 auto',
+                        }}
+                      />
+                      {row.condition.name}
+                    </span>
+                    <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
+                      {row.count}× · {formatQty(row.quantity)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -2583,6 +2989,7 @@ export function EstCanvas() {
                 },
                 { l: 'EDIT GEOM', action: onEditGeom },
                 { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
+                { l: copyOpen ? 'COPY ✕' : 'COPY…', action: () => setCopyOpen((v) => !v) },
                 { l: 'DELETE', danger: true, action: onDeleteSelected },
               ] as const)
           ).map((b, i, arr) => (
@@ -2699,6 +3106,24 @@ export function EstCanvas() {
           </button>
           <button
             type="button"
+            onClick={() => setCopyOpen((v) => !v)}
+            style={{
+              padding: '0 24px',
+              background: copyOpen ? 'var(--m-accent)' : 'var(--m-card)',
+              color: copyOpen ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+              border: 'none',
+              borderRight: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              cursor: 'pointer',
+            }}
+          >
+            {copyOpen ? 'COPY ✕' : 'COPY…'}
+          </button>
+          <button
+            type="button"
             onClick={onBulkDelete}
             style={{
               padding: '0 24px',
@@ -2714,6 +3139,97 @@ export function EstCanvas() {
           >
             DELETE {bulkSelected.size}
           </button>
+        </div>
+      ) : null}
+
+      {/* ---- Copy / array / mirror panel (deep-dive H6) ----
+          Additive toolbar group: when a selection exists in SELECT mode and the
+          COPY… button is toggled on, offer copy-with-offset, array-paste (N along
+          a row), and mirror/rotate of the duplicated geometry. Each action saves
+          NEW measurements through `useCreateMeasurement` (same scope/unit/sheet),
+          so quantities recompute server-side. Only point-based geometries copy. */}
+      {mode === 'select' && copyOpen && copyableTargets.length > 0 ? (
+        <div style={floatBox({ bottom: 110, left: '50%', transform: 'translateX(-50%)', width: 360 })}>
+          <div style={floatHead}>
+            Copy · {copyableTargets.length} {copyableTargets.length === 1 ? 'measurement' : 'measurements'}
+          </div>
+          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                OFFSET X (BOARD)
+                <input
+                  type="number"
+                  value={copyDx}
+                  onChange={(e) => setCopyDx(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                OFFSET Y (BOARD)
+                <input
+                  type="number"
+                  value={copyDy}
+                  onChange={(e) => setCopyDy(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                ARRAY COUNT
+                <input
+                  type="number"
+                  min={1}
+                  value={copyCount}
+                  onChange={(e) => setCopyCount(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                MIRROR
+                <select
+                  value={copyMirror}
+                  onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
+                  style={copyInputStyle}
+                >
+                  <option value="none">None</option>
+                  <option value="x">Flip ↔</option>
+                  <option value="y">Flip ↕</option>
+                </select>
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                ROTATE °
+                <input
+                  type="number"
+                  value={copyRotate}
+                  onChange={(e) => setCopyRotate(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                disabled={copyBusy}
+                onClick={() => void runCopyPlan('offset')}
+                style={copyActionStyle(false)}
+              >
+                {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
+              </button>
+              <button
+                type="button"
+                disabled={copyBusy}
+                onClick={() => void runCopyPlan('array')}
+                style={copyActionStyle(false)}
+              >
+                ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
+              </button>
+            </div>
+            <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', lineHeight: 1.4 }}>
+              New measurements keep the same item, unit, and sheet — quantities recompute on save. Mirror / rotate apply
+              to every copy.
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -2782,6 +3298,19 @@ function ghostChip(disabled: boolean): React.CSSProperties {
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.4 : 1,
   }
+}
+
+// Compact numeric input for the pitch rise:run driver (H2).
+const pitchInputStyle: React.CSSProperties = {
+  width: 44,
+  padding: '4px 6px',
+  background: 'transparent',
+  color: 'var(--m-ink)',
+  border: '2px solid var(--m-ink)',
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  textAlign: 'center',
 }
 
 /**

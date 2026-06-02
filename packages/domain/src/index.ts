@@ -2,6 +2,11 @@
 // callers see the inferred element type of WORKFLOW_STAGES.
 type WorkflowStage = 'foundation' | 'takeoff' | 'field' | 'sync' | 'analytics' | 'extensions'
 
+// Geometry math (Blocker 2 split) lives in ./geometry.ts. Imported here only
+// because `computeProductivity` rounds via `roundMeasurement`; everything else
+// is re-exported through the barrel block at the bottom of this file.
+import { roundMeasurement } from './geometry.js'
+
 export interface TenantTemplate {
   slug: string
   name: string
@@ -47,48 +52,12 @@ export interface BonusTier {
   payoutPercent: number
 }
 
-export interface TakeoffPoint {
-  x: number
-  y: number
-}
-
-export interface PolygonGeometry {
-  kind: 'polygon'
-  points: TakeoffPoint[]
-  sheet_scale?: number | null
-  calibration_length?: number | null
-  calibration_unit?: string | null
-  /**
-   * Real-world distance per board-space unit, PER AXIS. The drawing surface is
-   * a 0–100 board space stretched to the page's aspect ratio (anisotropic), so
-   * x and y board units cover different real distances. Storing both lets the
-   * quantity math produce true sqft/lf: area = boardArea·wx·wy, length =
-   * Σ hypot(Δx·wx, Δy·wy). Absent = uncalibrated → board-space quantity (legacy).
-   */
-  world_per_board_x?: number | null
-  world_per_board_y?: number | null
-}
-
-export interface LinealGeometry {
-  kind: 'lineal'
-  points: TakeoffPoint[]
-  sheet_scale?: number | null
-  calibration_length?: number | null
-  calibration_unit?: string | null
-  /** See PolygonGeometry.world_per_board_x — per-axis real-world scale. */
-  world_per_board_x?: number | null
-  world_per_board_y?: number | null
-}
-
-export interface VolumeGeometry {
-  kind: 'volume'
-  length: number
-  width: number
-  height: number
-  unit?: string | null
-}
-
-export type TakeoffGeometry = PolygonGeometry | LinealGeometry | VolumeGeometry
+// Takeoff geometry primitives + math live in ./geometry.ts (Blocker 2 split).
+// The barrel re-export at the bottom of this file keeps `TakeoffPoint`,
+// `MeasurementDrivers`, `PolygonGeometry`, `LinealGeometry`, `VolumeGeometry`,
+// `TakeoffGeometry`, `PitchDriver` and the calc/normalize/driver helpers on the
+// public `@sitelayer/domain` surface unchanged. `roundMeasurement` is imported
+// below because `computeProductivity` (still in this file) calls it.
 
 export interface ProductivitySample {
   quantity: number
@@ -265,6 +234,57 @@ export interface AssemblyTemplate {
   description: string
   unit: 'sqft' | 'lf' | 'ea'
   components: AssemblyComponentTemplate[]
+}
+
+/**
+ * The typed geometry primitive a Condition measures against. Mirrors
+ * `takeoff_measurements.geometry_kind` but in Condition vocabulary — `area`
+ * is the canvas polygon/rect default. See migration `137_takeoff_conditions`.
+ */
+export type ConditionMeasurementKind = 'area' | 'linear' | 'count' | 'volume'
+
+export const CONDITION_MEASUREMENT_KINDS: readonly ConditionMeasurementKind[] = ['area', 'linear', 'count', 'volume']
+
+/**
+ * Condition layer (Takeoff Deep Dive H1) — a company-level, named/colored,
+ * *typed* reusable template. The keystone abstraction that turns a shape-first
+ * takeoff (draw a polygon, then attach scope) into a condition-first one (pick
+ * a typed template, draw against it). A Condition fixes the measurement kind +
+ * drivers (height / thickness / sides / slope) + an optional default assembly,
+ * and declares which of the up-to-three derivable results a drawn object emits
+ * (LF, single/both-side SF, CY). It is the future home for pitch math and
+ * trade-aware deductions.
+ *
+ * Additive: a measurement records its `condition_id`, but the existing
+ * tag-based model remains the fallback (no backfill — existing rows stay
+ * unlinked). Shape mirrors the API/DB snake_case row so api + web share it.
+ */
+export interface TakeoffCondition {
+  id: string
+  company_id: string
+  name: string
+  /** Hex color the canvas legend + drawn geometry render in (e.g. '#2f7d32'). */
+  color: string
+  measurement_kind: ConditionMeasurementKind
+  /**
+   * Drivers. All nullable — a Condition only fixes the drivers its
+   * measurement_kind + result emission need. height/thickness are world feet;
+   * sides is 1 or 2; slope is a rise:run ratio (rise over a run of 12; null =
+   * flat / 1.0).
+   */
+  height_value: number | null
+  thickness_value: number | null
+  sides: number | null
+  slope_value: number | null
+  /** Optional default assembly to attach to drawn measurements (null = flat-line). */
+  default_assembly_id: string | null
+  /** Result-emission flags: which derivable results a drawn object emits. */
+  emit_linear: boolean
+  emit_area: boolean
+  emit_volume: boolean
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export const EXTERIOR_CLADDING_PACK: AssemblyTemplate[] = [
@@ -670,237 +690,9 @@ export function roundPercent(value: number): number {
   return Math.round(value * 10000) / 10000
 }
 
-export function clampBoardCoordinate(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  return Math.min(100, Math.max(0, value))
-}
-
-export function calculatePolygonArea(points: readonly TakeoffPoint[]): number {
-  if (points.length < 3) return 0
-  let sum = 0
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index]
-    const next = points[(index + 1) % points.length]
-    if (!current || !next) continue
-    sum += current.x * next.y - next.x * current.y
-  }
-  return Math.abs(sum / 2)
-}
-
-export function calculatePolygonCentroid(points: readonly TakeoffPoint[]): TakeoffPoint | null {
-  if (points.length < 3) return null
-  let areaFactor = 0
-  let cx = 0
-  let cy = 0
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index]
-    const next = points[(index + 1) % points.length]
-    if (!current || !next) continue
-    const cross = current.x * next.y - next.x * current.y
-    areaFactor += cross
-    cx += (current.x + next.x) * cross
-    cy += (current.y + next.y) * cross
-  }
-  const area = areaFactor / 2
-  if (area === 0) return null
-  return { x: cx / (6 * area), y: cy / (6 * area) }
-}
-
-export function calculateTakeoffQuantity(points: readonly TakeoffPoint[], multiplier = 1): number {
-  const resolvedMultiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
-  return roundMeasurement(calculatePolygonArea(points) * resolvedMultiplier)
-}
-
-export function roundMeasurement(value: number): number {
-  return Math.round(value * 100) / 100
-}
-
-export function normalizePolygonGeometry(input: unknown): PolygonGeometry | null {
-  if (!isRecord(input)) return null
-  if (input.kind !== 'polygon') return null
-  if (!Array.isArray(input.points)) return null
-
-  const points = input.points.map(normalizeBoardPoint)
-  if (points.some((point) => point === null)) return null
-  const normalizedPoints = points.filter((point): point is TakeoffPoint => point !== null)
-  if (normalizedPoints.length < 3) return null
-
-  const geometry: PolygonGeometry = {
-    kind: 'polygon',
-    points: normalizedPoints,
-  }
-  const sheetScale = positiveNumberOrNull(input.sheet_scale)
-  const calibrationLength = positiveNumberOrNull(input.calibration_length)
-  const calibrationUnit = typeof input.calibration_unit === 'string' ? input.calibration_unit.trim() : ''
-
-  if (sheetScale !== null) geometry.sheet_scale = sheetScale
-  if (calibrationLength !== null) geometry.calibration_length = calibrationLength
-  if (calibrationUnit) geometry.calibration_unit = calibrationUnit.slice(0, 32)
-
-  const worldX = positiveNumberOrNull(input.world_per_board_x)
-  const worldY = positiveNumberOrNull(input.world_per_board_y)
-  if (worldX !== null) geometry.world_per_board_x = worldX
-  if (worldY !== null) geometry.world_per_board_y = worldY
-
-  return geometry
-}
-
-function normalizeBoardPoint(input: unknown): TakeoffPoint | null {
-  if (!isRecord(input)) return null
-  const x = Number(input.x)
-  const y = Number(input.y)
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
-  if (x < 0 || x > 100 || y < 0 || y > 100) return null
-  return { x: roundMeasurement(x), y: roundMeasurement(y) }
-}
-
-function positiveNumberOrNull(value: unknown): number | null {
-  if (value === undefined || value === null || value === '') return null
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-export function normalizeLinealGeometry(input: unknown): LinealGeometry | null {
-  if (!isRecord(input)) return null
-  if (input.kind !== 'lineal') return null
-  if (!Array.isArray(input.points)) return null
-
-  const points = input.points.map(normalizeBoardPoint)
-  if (points.some((point) => point === null)) return null
-  const normalizedPoints = points.filter((point): point is TakeoffPoint => point !== null)
-  if (normalizedPoints.length < 2) return null
-
-  const geometry: LinealGeometry = {
-    kind: 'lineal',
-    points: normalizedPoints,
-  }
-  const sheetScale = positiveNumberOrNull(input.sheet_scale)
-  const calibrationLength = positiveNumberOrNull(input.calibration_length)
-  const calibrationUnit = typeof input.calibration_unit === 'string' ? input.calibration_unit.trim() : ''
-
-  if (sheetScale !== null) geometry.sheet_scale = sheetScale
-  if (calibrationLength !== null) geometry.calibration_length = calibrationLength
-  if (calibrationUnit) geometry.calibration_unit = calibrationUnit.slice(0, 32)
-
-  const worldX = positiveNumberOrNull(input.world_per_board_x)
-  const worldY = positiveNumberOrNull(input.world_per_board_y)
-  if (worldX !== null) geometry.world_per_board_x = worldX
-  if (worldY !== null) geometry.world_per_board_y = worldY
-
-  return geometry
-}
-
-export function normalizeVolumeGeometry(input: unknown): VolumeGeometry | null {
-  if (!isRecord(input)) return null
-  if (input.kind !== 'volume') return null
-
-  const length = Number(input.length)
-  const width = Number(input.width)
-  const height = Number(input.height)
-  if (!Number.isFinite(length) || length <= 0) return null
-  if (!Number.isFinite(width) || width <= 0) return null
-  if (!Number.isFinite(height) || height <= 0) return null
-
-  const geometry: VolumeGeometry = {
-    kind: 'volume',
-    length: roundMeasurement(length),
-    width: roundMeasurement(width),
-    height: roundMeasurement(height),
-  }
-  const unit = typeof input.unit === 'string' ? input.unit.trim() : ''
-  if (unit) geometry.unit = unit.slice(0, 32)
-
-  return geometry
-}
-
-export function normalizeGeometry(input: unknown): TakeoffGeometry | null {
-  if (!isRecord(input)) return null
-  if (input.kind === 'polygon') return normalizePolygonGeometry(input)
-  if (input.kind === 'lineal') return normalizeLinealGeometry(input)
-  if (input.kind === 'volume') return normalizeVolumeGeometry(input)
-  return null
-}
-
-export function calculateLinealLength(points: readonly TakeoffPoint[]): number {
-  if (points.length < 2) return 0
-  let total = 0
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index]
-    const next = points[index + 1]
-    if (!current || !next) continue
-    const dx = next.x - current.x
-    const dy = next.y - current.y
-    total += Math.sqrt(dx * dx + dy * dy)
-  }
-  return total
-}
-
-export function calculateLinealQuantity(points: readonly TakeoffPoint[], multiplier = 1): number {
-  const resolvedMultiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
-  return roundMeasurement(calculateLinealLength(points) * resolvedMultiplier)
-}
-
-export function calculateVolumeQuantity(input: { length: number; width: number; height: number }): number {
-  const { length, width, height } = input
-  if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height)) return 0
-  if (length <= 0 || width <= 0 || height <= 0) return 0
-  return roundMeasurement(length * width * height)
-}
-
-/**
- * Resolve the per-axis real-world scale from a geometry. Prefers the explicit
- * per-axis `world_per_board_x/y` (set at save time from page calibration +
- * page aspect). Falls back to a legacy isotropic `sheet_scale`, then to 1
- * (board space — what uncalibrated pages produce today).
- */
-function resolveWorldScale(geometry: PolygonGeometry | LinealGeometry): { wx: number; wy: number } {
-  const wx = positiveNumberOrNull(geometry.world_per_board_x)
-  const wy = positiveNumberOrNull(geometry.world_per_board_y)
-  if (wx !== null && wy !== null) return { wx, wy }
-  const scale = positiveNumberOrNull(geometry.sheet_scale)
-  if (scale !== null) return { wx: scale, wy: scale }
-  return { wx: 1, wy: 1 }
-}
-
-/**
- * Polygon area under an anisotropic linear map (x·wx, y·wy). The shoelace area
- * scales by exactly wx·wy under independent per-axis scaling, so we can scale
- * the board-space area directly.
- */
-export function calculatePolygonAreaScaled(points: readonly TakeoffPoint[], wx: number, wy: number): number {
-  return calculatePolygonArea(points) * wx * wy
-}
-
-/** Polyline length under an anisotropic linear map (x·wx, y·wy). */
-export function calculateLinealLengthScaled(points: readonly TakeoffPoint[], wx: number, wy: number): number {
-  if (points.length < 2) return 0
-  let total = 0
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index]
-    const next = points[index + 1]
-    if (!current || !next) continue
-    const dx = (next.x - current.x) * wx
-    const dy = (next.y - current.y) * wy
-    total += Math.sqrt(dx * dx + dy * dy)
-  }
-  return total
-}
-
-export function calculateGeometryQuantity(geometry: TakeoffGeometry): number {
-  if (geometry.kind === 'polygon') {
-    const { wx, wy } = resolveWorldScale(geometry)
-    return roundMeasurement(calculatePolygonAreaScaled(geometry.points, wx, wy))
-  }
-  if (geometry.kind === 'lineal') {
-    const { wx, wy } = resolveWorldScale(geometry)
-    return roundMeasurement(calculateLinealLengthScaled(geometry.points, wx, wy))
-  }
-  return calculateVolumeQuantity(geometry)
-}
+// Takeoff geometry math (area/length/centroid/normalizers/scale + pitch +
+// measurement drivers) moved to ./geometry.ts (Blocker 2 split). Re-exported
+// from the barrel at the bottom of this file — public surface unchanged.
 
 export function computeProductivity(input: { entries: readonly ProductivitySample[] }): ProductivityResult {
   const validRatios: number[] = []
@@ -1534,6 +1326,36 @@ export function splitStraightAndOt(
   if (totalHours <= threshold) return { straight_hours: totalHours, ot_hours: 0 }
   return { straight_hours: threshold, ot_hours: totalHours - threshold }
 }
+
+// Takeoff geometry (Blocker 2 split — docs/PROJECT_DECOMPOSITION_PLAN.md §3.5,
+// docs/TAKEOFF_DEEP_DIVE_2026-06-01.md H2). Re-exported here so the public
+// `@sitelayer/domain` surface is byte-identical and no import site moves.
+export {
+  slopeFactor,
+  roundMeasurement,
+  clampBoardCoordinate,
+  calculatePolygonArea,
+  calculatePolygonCentroid,
+  calculateTakeoffQuantity,
+  calculateLinealLength,
+  calculateLinealQuantity,
+  calculateVolumeQuantity,
+  calculatePolygonAreaScaled,
+  calculateLinealLengthScaled,
+  calculateGeometryQuantity,
+  deriveMeasurementDrivers,
+  normalizePolygonGeometry,
+  normalizeLinealGeometry,
+  normalizeVolumeGeometry,
+  normalizeGeometry,
+  type TakeoffPoint,
+  type PitchDriver,
+  type MeasurementDrivers,
+  type PolygonGeometry,
+  type LinealGeometry,
+  type VolumeGeometry,
+  type TakeoffGeometry,
+} from './geometry.js'
 
 export {
   resolveAssembly,

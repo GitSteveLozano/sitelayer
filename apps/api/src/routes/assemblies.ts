@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { validateFormula } from '@sitelayer/formula-evaluator'
+import { validateFormula, MEASUREMENT_DRIVER_VARS } from '@sitelayer/formula-evaluator'
+import type { MeasurementDrivers } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
@@ -23,7 +24,7 @@ const ASSEMBLY_COLUMNS = `
 
 const COMPONENT_COLUMNS = `
   id, company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost,
-  waste_pct, sort_order, quantity_formula, formula_vars, created_at, updated_at
+  waste_pct, sort_order, quantity_formula, formula_vars, include_when, created_at, updated_at
 `
 
 /**
@@ -32,7 +33,7 @@ const COMPONENT_COLUMNS = `
  * Used to preflight a formula at write time (reject `unknown variable: x`).
  */
 function allowedFormulaVars(formulaVars: Record<string, number | string> | null): string[] {
-  return ['measurement_quantity', 'measurement_unit', ...Object.keys(formulaVars ?? {})]
+  return ['measurement_quantity', 'measurement_unit', ...MEASUREMENT_DRIVER_VARS, ...Object.keys(formulaVars ?? {})]
 }
 
 /**
@@ -46,6 +47,8 @@ function parseFormulaFields(body: Record<string, unknown>): {
   quantityFormula: string | null
   hasVars: boolean
   formulaVars: Record<string, number | string> | null
+  hasIncludeWhen: boolean
+  includeWhen: string | null
 } {
   const hasVars = body.formula_vars !== undefined
   let formulaVars: Record<string, number | string> | null = null
@@ -73,7 +76,41 @@ function parseFormulaFields(body: Record<string, unknown>): {
     }
     quantityFormula = formula
   }
-  return { hasFormula, quantityFormula, hasVars, formulaVars }
+
+  // M2: optional boolean inclusion expression. Validated against the same
+  // allowed vars as quantity_formula (the five drivers are always-bound, like
+  // measurement_quantity, so they need no opt-in). null/'' clears it back to
+  // "always include".
+  const hasIncludeWhen = body.include_when !== undefined
+  let includeWhen: string | null = null
+  if (hasIncludeWhen && body.include_when !== null && String(body.include_when).trim() !== '') {
+    const expr = String(body.include_when)
+    const result = validateFormula(expr, allowedFormulaVars(formulaVars))
+    if (!result.valid) {
+      throw new HttpError(400, `include_when invalid: ${result.errors.join('; ')}`)
+    }
+    includeWhen = expr
+  }
+
+  return { hasFormula, quantityFormula, hasVars, formulaVars, hasIncludeWhen, includeWhen }
+}
+
+/**
+ * Parse the optional `drivers` object from an explode-preview body into a clean
+ * {@link MeasurementDrivers}. Only the five known fields are kept, each only
+ * when finite and non-negative. Returns `undefined` when nothing usable is
+ * supplied (the explode path then binds every driver to 0).
+ */
+function parseDriversBody(raw: unknown): MeasurementDrivers | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const record = raw as Record<string, unknown>
+  const out: MeasurementDrivers = {}
+  for (const key of MEASUREMENT_DRIVER_VARS) {
+    if (record[key] === undefined) continue
+    const value = Number(record[key])
+    if (Number.isFinite(value) && value >= 0) out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 interface AssemblyRow {
@@ -104,6 +141,7 @@ interface ComponentRow {
   sort_order: number
   quantity_formula: string | null
   formula_vars: Record<string, number | string> | null
+  include_when: string | null
   created_at: string
   updated_at: string
 }
@@ -392,13 +430,20 @@ export async function handleAssemblyRoutes(
         sort_order: c.sort_order,
         quantity_formula: c.quantity_formula,
         formula_vars: c.formula_vars,
+        include_when: c.include_when,
       })),
     }
+    // M2: an optional `drivers` object in the preview body lets a caller exercise
+    // the height/width/thickness/perimeter/sides formula + include_when paths
+    // without a stored geometry. Absent => every driver binds to 0 (pre-M2
+    // behavior).
+    const drivers = parseDriversBody(body.drivers)
     try {
       const exploded = explodeMeasurement({
         assembly: loaded,
         measurementQuantity,
         measurementUnit,
+        ...(drivers ? { drivers } : {}),
         isDeduction,
         divisionCode: null,
         fallbackServiceItemCode: headerRow.service_item_code,
@@ -483,8 +528,8 @@ export async function handleAssemblyRoutes(
       const sortOrder = (max.rows[0]?.max_sort ?? -1) + 1
       const insert = await client.query<ComponentRow>(
         `insert into service_item_assembly_components
-           (company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct, sort_order, quantity_formula, formula_vars)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+           (company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct, sort_order, quantity_formula, formula_vars, include_when)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
          returning ${COMPONENT_COLUMNS}`,
         [
           ctx.company.id,
@@ -498,6 +543,7 @@ export async function handleAssemblyRoutes(
           sortOrder,
           formulaFields.quantityFormula,
           formulaFields.formulaVars === null ? null : JSON.stringify(formulaFields.formulaVars),
+          formulaFields.includeWhen,
         ],
       )
       // Refresh the cached header rate from all components.
@@ -594,11 +640,12 @@ export async function handleAssemblyRoutes(
         values.push(waste)
         sets.push(`waste_pct = $${values.length}`)
       }
-      // Phase 2: optional formula fields. Either may be patched independently;
-      // a formula supplied without vars is validated against the always-bound
-      // vars plus any vars in the SAME patch. Setting quantity_formula to
-      // null/'' clears it (back to the static quantity_per_unit path).
-      if (body.quantity_formula !== undefined || body.formula_vars !== undefined) {
+      // Phase 2 / M2: optional formula + include_when fields. Any may be patched
+      // independently; a formula/expr supplied without vars is validated against
+      // the always-bound vars (incl. the five drivers) plus any vars in the SAME
+      // patch. Setting quantity_formula / include_when to null/'' clears it (back
+      // to the static quantity_per_unit path / "always include").
+      if (body.quantity_formula !== undefined || body.formula_vars !== undefined || body.include_when !== undefined) {
         let formulaFields: ReturnType<typeof parseFormulaFields>
         try {
           formulaFields = parseFormulaFields(body)
@@ -616,6 +663,10 @@ export async function handleAssemblyRoutes(
         if (formulaFields.hasVars) {
           values.push(formulaFields.formulaVars === null ? null : JSON.stringify(formulaFields.formulaVars))
           sets.push(`formula_vars = $${values.length}::jsonb`)
+        }
+        if (formulaFields.hasIncludeWhen) {
+          values.push(formulaFields.includeWhen)
+          sets.push(`include_when = $${values.length}`)
         }
       }
       if (sets.length === 0) {

@@ -41,6 +41,10 @@ type PreparedTakeoffMeasurementInput = {
   // (e.g. a window/door opening) and the estimate subtracts its area from the
   // net for its service item. `quantity` itself stays the positive area.
   isDeduction: boolean
+  // Condition layer (Takeoff Deep Dive H1): the reusable typed template this
+  // measurement was drawn against, or null for the legacy shape-first flow.
+  // Additive — existing readers ignore it; the tag flow stays the fallback.
+  conditionId: string | null
 }
 
 const ELEVATION_VOCAB = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
@@ -125,6 +129,10 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
         `${label}.geometry must be a polygon (>=3 points), a lineal path (>=2 points), or a volume box with positive L/W/H`,
       )
     }
+    // Pitch (H2): `normalizeGeometry` validates+carries an optional `pitch`
+    // (rise:run) inside the geometry, and `calculateGeometryQuantity` applies
+    // `slopeFactor = √(rise²+run²)/run` to the scaled area/length. No column —
+    // pitch round-trips through the JSONB persisted below. Flat ⇒ factor 1.0.
     quantity = calculateGeometryQuantity(geometry)
     // Reject NaN/Infinity: a self-intersecting polygon or a pathological volume
     // box can produce NaN, and `n <= 0` is false for NaN so the trailing check
@@ -141,6 +149,14 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
 
   const isDeduction = input.is_deduction === true
 
+  const conditionId =
+    input.condition_id === undefined || input.condition_id === null || String(input.condition_id).trim() === ''
+      ? null
+      : String(input.condition_id).trim()
+  if (conditionId && !isValidUuid(conditionId)) {
+    throw new HttpError(400, `${label}.condition_id must be a valid uuid`)
+  }
+
   return {
     serviceItemCode,
     quantity,
@@ -153,6 +169,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     elevation,
     imageThumbnail,
     isDeduction,
+    conditionId,
   }
 }
 
@@ -323,14 +340,35 @@ export async function handleTakeoffWriteRoutes(
       return true
     }
 
+    // Condition layer (Deep Dive H1): when a measurement is drawn against a
+    // Condition, confirm the Condition is a live row for THIS company before
+    // persisting condition_id (defense in depth — the FK only checks
+    // existence, not tenancy). Additive: condition_id stays null for the
+    // legacy shape-first flow and nothing else changes.
+    if (measurementInput.conditionId) {
+      const ownsCondition = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ exists: boolean }>(
+          `select exists(
+             select 1 from takeoff_conditions
+             where company_id = $1 and id = $2 and deleted_at is null
+           ) as exists`,
+          [ctx.company.id, measurementInput.conditionId],
+        ),
+      )
+      if (!ownsCondition.rows[0]?.exists) {
+        ctx.sendJson(400, { error: 'condition_id does not belong to this company' })
+        return true
+      }
+    }
+
     const measurement = await withMutationTx(async (client) => {
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction
+          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14)
-        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15)
+        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -347,6 +385,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.imageThumbnail,
           draftId,
           measurementInput.isDeduction,
+          measurementInput.conditionId,
         ],
       )
       const row = insertResult.rows[0]

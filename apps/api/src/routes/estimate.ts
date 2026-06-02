@@ -1,7 +1,13 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import ExcelJS from 'exceljs'
-import { compareBidVsScope, repriceForTargetMargin } from '@sitelayer/domain'
+import {
+  compareBidVsScope,
+  deriveMeasurementDrivers,
+  normalizeGeometry,
+  repriceForTargetMargin,
+  type MeasurementDrivers,
+} from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import {
   recordMutationLedger,
@@ -193,10 +199,11 @@ export async function createEstimateFromMeasurements(
     division_code: string | null
     is_deduction: boolean
     assembly_id: string | null
+    geometry: unknown
   }>(
     draftId
-      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
     draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
@@ -281,6 +288,12 @@ export async function createEstimateFromMeasurements(
 
       const attached = measurement.assembly_id ? assembliesById.get(measurement.assembly_id) : undefined
       if (attached) {
+        // M2: derive the real-world drivers (height/width/thickness/perimeter/
+        // sides) from the stored geometry so component formulas + include_when
+        // can reference them. Malformed geometry → no drivers (every driver
+        // binds to 0), preserving the pre-M2 behavior for those rows.
+        const geometry = normalizeGeometry(measurement.geometry)
+        const drivers: MeasurementDrivers | undefined = geometry ? deriveMeasurementDrivers(geometry) : undefined
         // EXPLODE path. Throws HttpError(400) on a bad component formula so the
         // whole recompute transaction rolls back — no partial estimate write.
         const exploded = explodeMeasurement({
@@ -291,6 +304,7 @@ export async function createEstimateFromMeasurements(
           divisionCode: effectiveDivisionCode,
           fallbackServiceItemCode: measurement.service_item_code,
           profileConfig,
+          ...(drivers ? { drivers } : {}),
         })
         assemblyBreakdowns.push({
           assembly_id: attached.header.id,

@@ -64,6 +64,7 @@ import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-provider
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { formatQty } from '@/lib/takeoff/canvas-totals'
 import {
   MBody,
@@ -187,6 +188,18 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkIds, setBulkIds] = useState<Set<string>>(() => new Set())
+  // Copy / array / mirror tools (deep-dive gap H6). When a measurement is
+  // selected (single or bulk), a small COPY panel offers copy-with-offset,
+  // array-paste (N along a row), and mirror/rotate of the copies. Each copy is
+  // saved as a NEW measurement via the existing create path; quantities
+  // recompute server-side. `copyOpen` toggles the panel.
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [copyDx, setCopyDx] = useState('6')
+  const [copyDy, setCopyDy] = useState('0')
+  const [copyCount, setCopyCount] = useState('3')
+  const [copyMirror, setCopyMirror] = useState<MirrorAxis | 'none'>('none')
+  const [copyRotate, setCopyRotate] = useState('0')
+  const [copyBusy, setCopyBusy] = useState(false)
   // EDIT GEOM (msg22 vertex drag). When a saved polygon/lineal is selected, the
   // EDIT GEOM action turns its committed vertices into draggable handles; the
   // working point set lives here until APPLY PATCHes the new geometry (server
@@ -403,6 +416,101 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   const bulkPolys = bulkSelected.filter((m) => (m.geometry as { kind?: string }).kind === 'polygon').length
   const bulkTotal = round2(bulkSelected.reduce((s, m) => s + (Number(m.quantity) || 0), 0))
   const bulkUnit = new Set(bulkSelected.map((m) => m.unit)).size === 1 ? (bulkSelected[0]?.unit ?? '') : 'mixed'
+
+  // --- Copy / array / mirror (deep-dive H6) --------------------------------
+  // The measurements a copy plan acts on: the bulk set when bulk-selecting,
+  // otherwise the single selected measurement. Only point-based geometries
+  // (polygon / lineal / count) are copyable in board space.
+  const copyTargets: TakeoffMeasurement[] =
+    bulkMode && bulkSelected.length > 0 ? bulkSelected : selected ? [selected] : []
+  const copyableTargets = copyTargets.filter((m) => Array.isArray((m.geometry as MeasurementGeometry).points))
+
+  const buildCopyPlan = (mode: CopyPlan['mode']): CopyPlan => {
+    const dx = Number(copyDx)
+    const dy = Number(copyDy)
+    const count = Math.max(1, Math.floor(Number(copyCount) || 1))
+    const rotateDeg = Number(copyRotate) || 0
+    return {
+      mode,
+      delta: { dx: Number.isFinite(dx) ? dx : 0, dy: Number.isFinite(dy) ? dy : 0 },
+      count,
+      ...(copyMirror === 'none' ? {} : { mirror: copyMirror }),
+      rotateDeg,
+    }
+  }
+
+  // Run a copy plan: generate the duplicate geometries for each copyable target
+  // and save each as a NEW measurement (same scope/unit/sheet/deduct) — server
+  // recomputes quantities. Sequential to stay within the offline-queue + API
+  // budget. Clears the selection + panel on success.
+  const runCopyPlan = async (mode: CopyPlan['mode']) => {
+    if (copyableTargets.length === 0 || copyBusy) return
+    const plan = buildCopyPlan(mode)
+    setError(null)
+    setCopyBusy(true)
+    let made = 0
+    try {
+      for (const m of copyableTargets) {
+        const geo = m.geometry as MeasurementGeometry
+        const dupes = buildDuplicateGeometries(geo, plan)
+        for (const dupe of dupes) {
+          await create.mutateAsync({
+            blueprint_document_id: m.blueprint_document_id,
+            page_id: m.page_id,
+            service_item_code: m.service_item_code,
+            unit: m.unit,
+            elevation: m.elevation ?? null,
+            geometry: dupe as MeasurementGeometry,
+            is_deduction: m.is_deduction ?? false,
+            draft_id: activeDraftId,
+          })
+          made += 1
+        }
+      }
+      setSavedToast(made > 0 ? `Copied ${made} measurement${made === 1 ? '' : 's'}.` : 'Nothing to copy.')
+      setCopyOpen(false)
+      setSelectedId(null)
+      setBulkIds(new Set())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Copy failed')
+    } finally {
+      setCopyBusy(false)
+    }
+  }
+  // Field + action styling for the mobile copy panel (H6).
+  const mCopyLabelStyle: React.CSSProperties = {
+    flex: 1,
+    fontFamily: 'var(--m-num)',
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    color: 'var(--m-ink-4)',
+  }
+  const mCopyInputStyle: React.CSSProperties = {
+    display: 'block',
+    width: '100%',
+    marginTop: 4,
+    padding: '8px 8px',
+    border: '2px solid var(--m-ink-2)',
+    background: 'var(--m-sand)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 13,
+    fontWeight: 700,
+    color: 'var(--m-ink)',
+  }
+  const mCopyActionStyle: React.CSSProperties = {
+    flex: 1,
+    padding: '12px 8px',
+    border: 'none',
+    background: 'var(--m-accent)',
+    color: 'var(--m-accent-ink)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+    cursor: copyBusy ? 'not-allowed' : 'pointer',
+    opacity: copyBusy ? 0.6 : 1,
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -903,6 +1011,25 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                           </button>
                           <button
                             type="button"
+                            onClick={() => setCopyOpen((v) => !v)}
+                            style={{
+                              flex: 1,
+                              padding: '12px 6px',
+                              background: copyOpen ? 'var(--m-accent)' : 'transparent',
+                              color: copyOpen ? 'var(--m-accent-ink)' : 'var(--m-sand)',
+                              border: 'none',
+                              borderRight: '1px solid var(--m-ink-2)',
+                              fontFamily: 'var(--m-num)',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              letterSpacing: '0.04em',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {copyOpen ? 'COPY ✕' : 'COPY…'}
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => void bulkDelete()}
                             disabled={deleteMeasurement.isPending}
                             style={{
@@ -920,6 +1047,101 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                           >
                             DELETE {bulkSelected.length}
                           </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {/* Copy / array / mirror panel (deep-dive H6). Renders when the
+                        COPY… toggle is on and a copyable measurement is selected
+                        (single or bulk). Saves NEW measurements via the create
+                        path — same item/unit/sheet — so quantities recompute. */}
+                    {copyOpen && copyableTargets.length > 0 ? (
+                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
+                        <div
+                          style={{
+                            padding: '10px 14px',
+                            borderBottom: '1px solid var(--m-ink-2)',
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.06em',
+                            color: 'var(--m-accent)',
+                          }}
+                        >
+                          COPY · {copyableTargets.length}{' '}
+                          {copyableTargets.length === 1 ? 'MEASUREMENT' : 'MEASUREMENTS'}
+                        </div>
+                        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <label style={mCopyLabelStyle}>
+                              OFFSET X
+                              <input
+                                type="number"
+                                value={copyDx}
+                                onChange={(e) => setCopyDx(e.target.value)}
+                                style={mCopyInputStyle}
+                              />
+                            </label>
+                            <label style={mCopyLabelStyle}>
+                              OFFSET Y
+                              <input
+                                type="number"
+                                value={copyDy}
+                                onChange={(e) => setCopyDy(e.target.value)}
+                                style={mCopyInputStyle}
+                              />
+                            </label>
+                            <label style={mCopyLabelStyle}>
+                              COUNT
+                              <input
+                                type="number"
+                                min={1}
+                                value={copyCount}
+                                onChange={(e) => setCopyCount(e.target.value)}
+                                style={mCopyInputStyle}
+                              />
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <label style={mCopyLabelStyle}>
+                              MIRROR
+                              <select
+                                value={copyMirror}
+                                onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
+                                style={mCopyInputStyle}
+                              >
+                                <option value="none">None</option>
+                                <option value="x">Flip ↔</option>
+                                <option value="y">Flip ↕</option>
+                              </select>
+                            </label>
+                            <label style={mCopyLabelStyle}>
+                              ROTATE °
+                              <input
+                                type="number"
+                                value={copyRotate}
+                                onChange={(e) => setCopyRotate(e.target.value)}
+                                style={mCopyInputStyle}
+                              />
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              type="button"
+                              disabled={copyBusy}
+                              onClick={() => void runCopyPlan('offset')}
+                              style={mCopyActionStyle}
+                            >
+                              {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={copyBusy}
+                              onClick={() => void runCopyPlan('array')}
+                              style={mCopyActionStyle}
+                            >
+                              ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -986,6 +1208,12 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                                   label: 'DUPLICATE',
                                   sub: 'NEW POLY',
                                   on: () => void duplicateSelected(),
+                                  danger: false,
+                                },
+                                {
+                                  label: copyOpen ? 'COPY ✕' : 'COPY…',
+                                  sub: 'ARRAY / MIRROR',
+                                  on: () => setCopyOpen((v) => !v),
                                   danger: false,
                                 },
                                 { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
