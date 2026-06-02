@@ -74,13 +74,13 @@ Legacy/specialized paths still reachable for orientation (not an exhaustive list
 
 ## Preview Deploys
 
-Open or update a trusted PR and GitHub Actions deploys:
+Preview deploys are fleet-driven (no GitHub Actions): run `scripts/deploy-preview.sh` for a PR/branch slug from the preview droplet, which serves:
 
 ```text
 https://pr-<number>.preview.sitelayer.sandolab.xyz
 ```
 
-Closing the PR runs cleanup automatically. Preview infrastructure details live in `docs/PREVIEW_DEPLOYMENTS.md`.
+`scripts/cleanup-preview.sh` drops the slug schema and stack when you're done. Preview infrastructure details live in `docs/PREVIEW_DEPLOYMENTS.md`.
 
 Each preview uses the shared `sitelayer_preview` database with an isolated schema such as `sitelayer_pr_42`. Deploy creates the schema and cleanup drops it with the stack.
 
@@ -94,6 +94,6 @@ VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
 npm run e2e
 ```
 
-`npm run ci:quality` is the full local mirror of the Quality workflow: shell syntax, lint, format, typecheck, tests, build, web bundle budget, fixture build, and Playwright e2e.
+`npm run verify` (`bash scripts/verify-local.sh`) is the single verification authority — there is no CI workflow. It runs shell syntax, lint, format, typecheck, tests, build, web bundle budget, fixture build, Playwright e2e, and the docker-compose integration checks. `scripts/deploy.sh` runs it before it ships. (`npm run ci:quality` runs the same fast checks without the integration/e2e steps.)
 
 For release gate details, use `docs/RELEASE_GATES.md`. For first-30-minutes setup, use this file and `docs/ONBOARDING_DEVELOPER.md`. Operator-only architecture/deploy notes can wait until after the local stack is working.

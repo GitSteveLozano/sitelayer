@@ -185,17 +185,18 @@ path yet — that's a follow-up if rollback ever bites.
 
 ## Why no automation
 
-Two reasons we run this by hand instead of triggering it from CI:
+Two reasons we run this by hand instead of automating it:
 
 1. The QBO sandbox smoke needs human-supplied OAuth tokens that expire
-   in 60 minutes. Wiring that into CI means storing long-lived sandbox
+   in 60 minutes. Automating it means storing long-lived sandbox
    credentials, which Intuit's terms of service mark as not-recommended.
-2. The deploy workflow requires the `production` GitHub Actions
-   environment, which by design requires a human approver. Same gate
-   that protects every other prod change.
+2. A prod env change here means editing `/app/sitelayer/.env` on the prod
+   droplet and bouncing the worker, which is a deliberate human-driven step
+   under the local-fleet deploy model (there is no GitHub Actions
+   `production` environment / approver gate — the repo runs zero workflows).
+   Same care that protects every other prod change.
 
-So this stays a documented operator runbook, not a workflow_dispatch
-trigger.
+So this stays a documented operator runbook, not an automated trigger.
 
 ## Future automation
 

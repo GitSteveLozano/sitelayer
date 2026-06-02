@@ -34,8 +34,11 @@ the agent/scratch `dev` tier and the ephemeral per-PR previews:
 
 Deploy the demo tier from the fleet (e.g. taylor-pc-ubuntu) with
 `scripts/deploy.sh demo` → `scripts/deploy-preview.sh` on the preview droplet.
-There is no push-trigger and no GitHub Actions in this path; the deploy
-invokes `scripts/deploy-preview.sh` with:
+There is no push-trigger and **no GitHub Actions** in this path (the repo runs
+zero workflows — `quality.yml` was deleted on 2026-06-02); the verification
+authority is the local gate `scripts/verify-local.sh` (`npm run verify`), run by
+`scripts/deploy.sh` and the fleet auto-deploy watcher. The deploy invokes
+`scripts/deploy-preview.sh` with:
 
 ```
 PREVIEW_SLUG=demo

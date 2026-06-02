@@ -110,19 +110,22 @@ These are deployment verification/runtime records. Treat production-critical row
 > **STALE 2026-06-01 — mesh runtime-dep ROW upsert tracked in mesh task
 > `#174882` (project `282`).** The repo prose + deploy scripts are now fully
 > reconciled to the local-fleet model (PR #468): deploys are local-fleet via
-> `scripts/deploy.sh` with a LOCAL Quality gate in
-> `scripts/deploy-production-local.sh` (Actions deploy workflows removed in
-> `70b9584b`; nothing in the deploy path queries GitHub), and
+> `scripts/deploy.sh` with a LOCAL verification gate
+> (`scripts/verify-local.sh`) run by the deploy path, and
 > `env_file/production-env` is the droplet-rendered `/app/sitelayer/.env`
-> (reused each deploy). The 2026-04-24 `project_runtime_deps` rows above (and
-> the preview rows below) still encode the old GitHub-Actions + self-hosted-
-> runner deploy topology and need an operator-mode mesh upsert — the exact
-> per-row changes are enumerated in mesh task `#174882` (the row-write tool is
-> not in the scoped agent session; do NOT fabricate replacement rows here).
-> NOTE: `docker_container/preview-router-traefik` is NOT stale — preview/dev/
-> demo edge is still Traefik; only the PROD edge moved to Caddy. Until the
-> rows are upserted, treat the GitHub-Actions/runner framing in them as
-> historical, not current evidence.
+> (reused each deploy). **The repo now runs ZERO GitHub Actions** —
+> `.github/workflows/quality.yml` was deleted (2026-06-02); the deploy
+> workflows were already removed in `70b9584b`. Nothing in the pipeline
+> queries GitHub Actions; the single verification authority is
+> `scripts/verify-local.sh`. The 2026-04-24 `project_runtime_deps` rows above
+> (and the preview rows below) still encode the old GitHub-Actions +
+> self-hosted-runner deploy topology and need an operator-mode mesh upsert —
+> the exact per-row changes are enumerated in mesh task `#174882` (the
+> row-write tool is not in the scoped agent session; do NOT fabricate
+> replacement rows here). NOTE: `docker_container/preview-router-traefik` is
+> NOT stale — preview/dev/demo edge is still Traefik; only the PROD edge moved
+> to Caddy. Until the rows are upserted, treat the GitHub-Actions/runner
+> framing in them as historical, not current evidence.
 
 Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for (see STALE note above):
 
@@ -149,27 +152,32 @@ paired with _why_ it exists (often a real footgun) and _how to apply_ it.
 
 ### Deploy procedure
 
-> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> **DEPLOY MODEL UPDATED 2026-06-02.** Deploys are now local-fleet via
 > `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box (e.g.
-> taylor-pc-ubuntu) — NOT GitHub Actions. The GitHub Actions deploy
-> workflows (`deploy-droplet.yml`, `deploy-dev.yml`, `deploy-demo.yml`,
-> `deploy-preview.yml`, plus `preview-gc.yml` / `registry-gc.yml`) were all
-> removed in commit `70b9584b`. `quality.yml` remains ONLY as optional
-> passive PR CI (lint/build/test) — it is NOT a deploy gate and nothing in
-> the deploy path queries GitHub Actions.
+> taylor-pc-ubuntu) — NOT GitHub Actions. **The repo now runs ZERO GitHub
+> Actions.** The deploy workflows (`deploy-droplet.yml`, `deploy-dev.yml`,
+> `deploy-demo.yml`, `deploy-preview.yml`, plus `preview-gc.yml` /
+> `registry-gc.yml`) were removed in commit `70b9584b`, and the last
+> remaining workflow, `.github/workflows/quality.yml`, was deleted on
+> 2026-06-02. `.github/workflows/` no longer exists; only non-workflow files
+> (`CODEOWNERS`, `ISSUE_TEMPLATE/`, `PULL_REQUEST_TEMPLATE.md`) remain under
+> `.github/`. Nothing in the pipeline touches GitHub Actions.
 >
-> **Adopted operating model (2026-06-01):** `main` is production truth. The
-> prod-ship gate is now a **local Quality gate inside
-> `scripts/deploy-production-local.sh`** — it runs shell-syntax,
-> migration-immutability, prettier, lint, typecheck, unit tests, and the
-> dockerfile-import guard on the deploy SHA locally, then `web:bundle-budget`
-> after the build, BEFORE pushing the image. GitHub Actions is NOT the deploy
+> **Adopted operating model (2026-06-02):** `main` is production truth. The
+> single verification authority is **`scripts/verify-local.sh`** (also
+> `npm run verify`) — there is no CI gate. It is run **locally by the deploy
+> path**: `scripts/deploy.sh prod` runs the full gate (shell-syntax,
+> migration-immutability, prettier, lint, typecheck, unit tests,
+> dockerfile-import guard, then `web:bundle-budget` after the build, plus the
+> docker-compose integration/e2e checks) BEFORE pushing the image, and the
+> fleet auto-deploy watcher (`scripts/fleet-auto-deploy.sh` → `deploy.sh
+dev|demo`) runs it for the dev/demo tiers. GitHub Actions is NOT the deploy
 > authority (NHL model). There is no `gh api` / CI-status dependency; the
 > break-glass override is `FORCE_DEPLOY_UNCHECKED=1`. GitHub branch protection
 > on `main` (PR + review) is optional code-review hygiene, not a deploy
-> requirement. `demo` is an `APP_TIER=demo` environment deployed from a chosen
-> ref (currently `dev`, later `main` or a release tag), not a long-lived code
-> branch.
+> requirement, and is no longer enforced by any status check. `demo` is an
+> `APP_TIER=demo` environment deployed from a chosen ref (currently `dev`,
+> later `main` or a release tag), not a long-lived code branch.
 
 1. **The deploy path is `scripts/deploy.sh <prod|dev|demo>` from the
    fleet — no GitHub Actions, no ad-hoc SSH `docker compose up -d`.**

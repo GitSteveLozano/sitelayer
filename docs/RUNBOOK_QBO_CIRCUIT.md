@@ -91,8 +91,10 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml logs worker --tail 200 
 
 4. **Tune for noise.** If the breaker trips on every Intuit hiccup and
    it's costing you on-call attention, raise `QBO_CIRCUIT_THRESHOLD`
-   (default 3) via the GitHub Actions `production` environment, then
-   re-deploy. Do not flip the threshold below 3 — that's the floor where
+   (default 3) by editing `/app/sitelayer/.env` on the prod droplet (the
+   live source; also update `ops/env/production.env.json`) and bouncing the
+   worker. Deploys are local-fleet — there is no GitHub Actions `production`
+   environment. Do not flip the threshold below 3 — that's the floor where
    the breaker still detects real outages.
 
 ## Manual queue drain

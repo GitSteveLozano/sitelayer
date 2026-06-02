@@ -41,9 +41,11 @@ they're ephemeral and noise would drown the real signal.
    compare against `cat /app/sitelayer/.last_successful_deployed_sha` on
    the droplet. If divergent, run
    `scripts/rollback-droplet.sh TARGET_SHA=$(cat /app/sitelayer/.last_successful_deployed_sha)`.
-3. **Monitor 3 (dev tier) red** → low urgency. Check the latest
-   `deploy-dev` workflow run in GitHub Actions; if a recent push broke
-   migration apply, the dev DB is reset via `scripts/reset-dev-db.sh`.
+3. **Monitor 3 (dev tier) red** → low urgency. Check the fleet auto-deploy
+   watcher log (`~/.cache/sitelayer-autodeploy/auto-deploy.log`) or the
+   `scripts/deploy.sh dev` output for the latest dev deploy — deploys are
+   local-fleet, not GitHub Actions. If a recent push broke migration apply,
+   the dev DB is reset via `scripts/reset-dev-db.sh`.
 
 ## Setup (one-time)
 

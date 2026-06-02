@@ -8,15 +8,17 @@
 # checksum mismatch and refuse to apply, which means the deploy that
 # included the edit will be rejected at the migration step.
 #
-# This script catches that class of mistake at PR time so it never reaches
-# a deploy. It compares the current branch against the merge base with
-# origin/main and fails if any pre-existing migration file is modified or
-# removed. New files (status A) are always allowed.
+# This script catches that class of mistake before a deploy. It compares the
+# current branch against the merge base with origin/main and fails if any
+# pre-existing migration file is modified or removed. New files (status A) are
+# always allowed.
 #
 # Run locally:
 #   bash scripts/check-migrations-immutable.sh
 #
-# CI usage: see .github/workflows/quality.yml.
+# Gate usage: this runs as part of the local gate scripts/verify-local.sh,
+# which scripts/deploy.sh runs before it ships. The repo runs no GitHub
+# Actions.
 
 set -euo pipefail
 

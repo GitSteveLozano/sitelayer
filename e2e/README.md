@@ -45,15 +45,15 @@ and `@capture`) so they surface in either area's lane.
 ## Safety invariant
 
 Tags **scope** runs; they never **skip** anything permanently. The untagged
-full run is the source of truth and always executes on `push: main`
-(`.github/workflows/quality.yml` → `e2e` job). Adding a tag to a spec must not
-remove it from the full suite — the `{ tag }` option does not filter the
-default run.
+full run is the source of truth and always executes as part of the local gate
+(`scripts/verify-local.sh`'s e2e step, which `scripts/deploy.sh` runs before it
+ships). Adding a tag to a spec must not remove it from the full suite — the
+`{ tag }` option does not filter the default run.
 
 ## Adding a new area tag
 
 1. Pick or reuse an area token (lowercase, `@`-prefixed).
 2. Pass it via the `{ tag }` option on the spec's `test(...)` / `runSpec(...)`.
 3. Add a row to the table above.
-4. If the area maps to a CI path, widen the `changes` filter in
-   `.github/workflows/quality.yml` (Seam 4) so the matching PR lane runs it.
+4. The full untagged suite always runs in the local gate, so a new tag needs no
+   extra wiring; use tags only to scope a faster local subset.

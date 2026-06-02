@@ -15,7 +15,7 @@ For each incident: **detect → mitigate → investigate → comms (when custome
 ```bash
 doctl compute ssh sitelayer
 docker compose -f /app/sitelayer/docker-compose.prod.yml ps
-gh run watch -R GitSteveLozano/sitelayer
+curl -fsS https://sitelayer.sandolab.xyz/api/version   # live build_sha (deploys are local-fleet, no GitHub Actions)
 curl -fsS https://sitelayer.sandolab.xyz/health
 docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail 200 -f api
 ```
@@ -162,13 +162,14 @@ Common causes: rate-limited by LE (5 fails/hour) — wait an hour; CF "Full (str
 
 ## 7. Deploy stuck or failed
 
-**Detect:** GitHub Actions workflow run red; or hung near the 45-minute workflow timeout.
+**Detect:** `scripts/deploy.sh prod` errored on the fleet box (the local gate failed, the build/push failed, or the on-droplet SSH step failed); or the fleet auto-deploy watcher logged a failed SHA. Deploys are local-fleet — there is no GitHub Actions run to inspect.
 
 **Mitigate:**
 
 ```bash
-gh run list -R GitSteveLozano/sitelayer --limit 5
-gh run view <run-id> -R GitSteveLozano/sitelayer --log-failed
+# Inspect the deploy output on the fleet box that ran it (foreground stdout),
+# or the auto-deploy watcher log for dev/demo:
+tail -n 200 ~/.cache/sitelayer-autodeploy/auto-deploy.log
 
 # App-only rollback to the previously deployed SHA. This assumes the schema is
 # backward compatible with the previous app. If the failed deploy included a

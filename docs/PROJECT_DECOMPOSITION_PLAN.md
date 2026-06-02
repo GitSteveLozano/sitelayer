@@ -3,6 +3,14 @@
 Audience: Taylor (operator) + the agents/devs who execute in parallel.
 Status: prescriptive. Every move below is a file split / type re-export / additive route / test seam within the existing npm-workspaces + raw-`tsc`/vite + raw-SQL + single-web-app layout. No ORM, no Nx/Turbo, no rewrite.
 
+> **CI note (2026-06-02):** the "CI lanes" seams below (Seam 4 path-filtered PR
+> lanes, the `quality.yml` references) predate the move off GitHub Actions. The
+> repo now runs **zero GitHub Actions** — `.github/workflows/quality.yml` was
+> deleted, and the single verification authority is the local gate
+> `scripts/verify-local.sh` (`npm run verify`), run by `scripts/deploy.sh`.
+> Read those seams as proposals for **scoping the local gate** (a faster
+> per-slice `verify-local.sh` subset), not for editing a workflow file.
+
 ---
 
 ## 1. Thesis

@@ -73,6 +73,11 @@ fi
 # integration suite and the docker-compose Playwright e2e suite — the heavy
 # jobs that previously stayed in PR CI).
 #
+# The repo runs no GitHub Actions; runtime correctness is additionally verified
+# post-deploy by the droplet health check + verify-prod-deploy.sh below.
+# web:bundle-budget runs inside verify-local's build stage (it checks the built
+# bundle).
+#
 # web:bundle-budget runs inside verify-local's build stage; the redundant
 # post-build invocation below is kept harmless but the gate already covers it.
 #
@@ -121,8 +126,8 @@ VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RA
 VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
 SENTRY_RELEASE="$GIT_SHA" GIT_SHA="$GIT_SHA" APP_BUILD_SHA="$GIT_SHA" \
   npm run build
-# Web bundle-budget guard (was part of the Quality CI gate; runs here now,
-# against the freshly-built dist, before we package the image).
+# Web bundle-budget guard (part of the local gate; runs here against the
+# freshly-built dist, before we package the image).
 if [ "${FORCE_DEPLOY_UNCHECKED:-0}" != "1" ]; then
   npm run web:bundle-budget
 fi

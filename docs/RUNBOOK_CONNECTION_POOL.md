@@ -102,13 +102,17 @@ managed Postgres instance.
    ```
 
 4. **Right-size `PG_POOL_MAX`** — if the cause is legitimate load
-   growth, raise via the GitHub Actions `production` environment:
+   growth, edit `/app/sitelayer/.env` on the prod droplet (the live source
+   of truth; also update the `ops/env/production.env.json` manifest) and
+   bounce the affected container. Deploys are local-fleet — there is no
+   GitHub Actions `production` environment:
 
    ```bash
-   gh variable set PG_POOL_MAX --env production --body "20"  # lower it
-   # OR
-   gh variable set PG_POOL_MAX --env production --body "60"  # raise it
-   gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+   ssh sitelayer@165.245.230.3 \
+     "sed -i 's/^PG_POOL_MAX=.*/PG_POOL_MAX=60/' /app/sitelayer/.env && \
+      cd /app/sitelayer && \
+      GIT_SHA=\$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d --force-recreate api worker"
    ```
 
    Lower when the managed-Postgres connection cap is being hit. Raise

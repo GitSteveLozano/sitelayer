@@ -67,7 +67,7 @@ Every other workspace builds with plain `tsc -p tsconfig.build.json` and has **n
 
 **One subtlety:** the root override swaps the single hoisted `vite`, which the six packages' `vitest@3.2.4` and web's `vitest@4.1.5` also resolve. That only changes how their **tests transform/run**, never their `tsc`-built `dist`. Their unit tests are part of `npm run test` in `ci:quality`, so they ride the same acceptance gate (treat the api/worker/scenario/queue suites — alias-only `vitest.config.ts`, no plugins — as a bundler-agnostic control group).
 
-**Deploy boundary:** the Dockerfile is a thin packaging image (header: _"No npm ci / tsc / vite runs in here"_) that only COPYs prebuilt `dist`. The real `vite build` runs (a) in CI via `.github/workflows/quality.yml` and (b) on the fleet host in `scripts/deploy-production-local.sh:201` (which then **deletes** `*.map` — prod ships no sourcemaps). The CI dist cache key hashes `**/vite.config.ts`, so editing the config correctly busts the cache.
+**Deploy boundary:** the Dockerfile is a thin packaging image (header: _"No npm ci / tsc / vite runs in here"_) that only COPYs prebuilt `dist`. The real `vite build` runs (a) in the local gate via `scripts/verify-local.sh` (the repo runs zero GitHub Actions — `quality.yml` was deleted on 2026-06-02) and (b) on the fleet host in `scripts/deploy-production-local.sh:201` (which then **deletes** `*.map` — prod ships no sourcemaps).
 
 ### Out-of-scope opportunity (do NOT do now)
 
@@ -221,7 +221,7 @@ Revert the `overrides` stanza + `package-lock.json`, `npm install`, rebuild → 
 
 ### One correction to the operator's own priors (and CLAUDE.md / MEMORY.md)
 
-The repeated **"prod droplet deploy SILENTLY SKIPS if Quality fails"** lore is **STALE for the prod path.** `scripts/deploy-production-local.sh:63-107` now has a fail-closed green-`Quality` CI gate: if the Quality workflow for the SHA is not completed+success — or `gh` is missing/unauthenticated — the script prints an error and **`exit 1`** (only `FORCE_DEPLOY_UNCHECKED=1` skips it, with a loud warning). So a Rolldown-induced red budget/build **HARD-BLOCKS** the prod deploy with a clear message, not a silent skip. The risk is **louder and safer** than previously assumed. (The "silent skip" likely described the older GitHub-Actions deploy path, removed per commit `70b9584b`.)
+The repeated **"prod droplet deploy SILENTLY SKIPS if Quality fails"** lore is **STALE for the prod path.** `scripts/deploy-production-local.sh` now runs a fail-closed **local** verification gate (`scripts/verify-local.sh`) on the deploy SHA before it builds/pushes the image — no GitHub Actions, no `gh` dependency (the repo runs zero workflows; `quality.yml` was deleted on 2026-06-02). If the gate fails the script prints an error and **`exit 1`** (only `FORCE_DEPLOY_UNCHECKED=1` skips it, with a loud warning). So a Rolldown-induced red budget/build **HARD-BLOCKS** the prod deploy with a clear message, not a silent skip. The risk is **louder and safer** than previously assumed. (The "silent skip" likely described the older GitHub-Actions deploy path, removed per commit `70b9584b`.)
 
 ---
 
