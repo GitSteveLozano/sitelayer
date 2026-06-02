@@ -111,6 +111,24 @@ export function OwnerJobCosts() {
         return <MPill tone={marginTone(margin)}>{`${(margin * 100).toFixed(0)}%`}</MPill>
       },
     },
+    {
+      // Bid vs actuals above is the live estimate; this links to the frozen
+      // BUDGET vs actuals view (Deep Dive §4) where an explicit freeze locks
+      // the sold number and tracks variance per cost code.
+      key: 'budget',
+      header: '',
+      numeric: true,
+      render: (r) => (
+        <button
+          type="button"
+          className="d-linklike"
+          onClick={() => navigate(`/desktop/budget/${r.project.id}`)}
+          style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}
+        >
+          Budget →
+        </button>
+      ),
+    },
   ]
 
   const divisionColumns: Array<DColumn<AnalyticsDivision>> = [
