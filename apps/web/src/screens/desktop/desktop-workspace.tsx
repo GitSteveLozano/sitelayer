@@ -74,6 +74,7 @@ import { OwnerApprovals } from './owner-approvals'
 import { OwnerClients } from './owner-clients'
 import { OwnerMoney } from './owner-money'
 import { OwnerJobCosts } from './est-actuals'
+import { OwnerBudgetVariance } from './budget-variance'
 import { FmConfirmDay } from './fm-confirm-day'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
@@ -812,6 +813,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="assemblies" element={<EstAssemblies />} />
           <Route path="clients/:clientId" element={<EstClientProfile />} />
           <Route path="estimate/:projectId" element={<EstQuantities />} />
+          <Route path="budget/:projectId" element={<OwnerBudgetVariance />} />
           <Route path="ingest/:projectId" element={<EstPlanIngest />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />
