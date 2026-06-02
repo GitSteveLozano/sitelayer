@@ -80,6 +80,17 @@ import { OwnerMoney } from './owner-money'
 import { OwnerJobCosts } from './est-actuals'
 import { OwnerBudgetVariance } from './budget-variance'
 import { FmConfirmDay } from './fm-confirm-day'
+// Phase B responsive consolidation: the foreman desktop↔mobile twin pairs were
+// merged into one responsive screen each (the canonical file is the mobile one).
+// The desktop command center imports the desktop render from those merged files
+// via the preserved `Fm*` aliases; the standalone screens/desktop/fm-*.tsx twin
+// files were deleted.
+import { FmToday } from '../mobile/foreman-today'
+import { FmCrew } from '../mobile/foreman-crew'
+import { FmTime } from '../mobile/foreman-time-entry'
+import { FmBrief } from '../mobile/foreman-brief'
+import { FmBlockerDetail } from '../mobile/foreman-blocker-detail'
+import { FmLog } from '../mobile/foreman-log'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
 import { OwnerRentalsAsset } from './owner-rentals-asset'
@@ -97,15 +108,10 @@ import { EstQuantities } from './est-quantities'
 import { EstScaleVerify } from './est-scale-verify'
 // Plan ingest is now ONE responsive screen (Phase B merge); the desktop layout
 // renders at the `lg:` breakpoint inside the canonical mobile file.
+// (FmToday/FmCrew are imported above from the merged foreman mobile screens.)
 import { TakeoffIngest } from '../mobile/takeoff-ingest'
-import { FmToday } from './fm-today'
-import { FmCrew } from './fm-crew'
 import { EstCanvas } from './est-canvas'
 import { FmSchedule } from './fm-schedule'
-import { FmTime } from './fm-time'
-import { FmBrief } from './fm-brief'
-import { FmBlockerDetail } from './fm-blocker-detail'
-import { FmLog } from './fm-log'
 import { OwnerRentalsUtilization } from './owner-rentals-utilization'
 import { OwnerNewProject } from './owner-new-project'
 import { OwnerMessages } from './owner-messages'

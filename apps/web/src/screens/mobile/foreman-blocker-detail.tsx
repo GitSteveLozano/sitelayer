@@ -18,16 +18,38 @@
  *      to a presigned URL when BLUEPRINT_DOWNLOAD_PRESIGNED=1)
  */
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type BootstrapResponse } from '@/lib/api'
 import { API_URL } from '../../lib/api/client.js'
 import { MBanner, MBody, MButton, MButtonStack, MI, MSectionH, MTextarea, MTopBar } from '../../components/m/index.js'
+import { DEyebrow, DErrorState, DH1, DLoadingState } from '../../components/d/index.js'
 import {
   useFieldEvent,
   type FieldEventResolutionAction,
   type FieldEventSnapshotContext,
 } from '../../machines/field-event.js'
+import { useIsDesktop } from '../../lib/use-is-desktop.js'
+import { resolveForemanNav } from '../foreman-nav.js'
 import { timeOfDay } from './format.js'
+
+/**
+ * Responsive Foreman blocker detail (field-event resolution). Mounts the dense
+ * desktop composition (the former `screens/desktop/fm-blocker-detail.tsx`,
+ * `ForemanBlockerDetailDesktop`) at >=1024px and the richer mobile composition
+ * below it. Both drive the SAME headless `useFieldEvent` machine off the
+ * server-computed `next_events`; the mobile render additionally surfaces the
+ * legacy direct-fetch fallback, persisted voice/photo attachments, the GPS pin,
+ * and the materials_out hero. Only ONE render mounts at a time. Navigation is
+ * resolved via `resolveForemanNav` so each surface returns to its own shell.
+ */
+export function ForemanBlockerDetail(props: { bootstrap: BootstrapResponse | null; companySlug: string }) {
+  const isDesktop = useIsDesktop()
+  return isDesktop ? <ForemanBlockerDetailDesktop {...props} /> : <ForemanBlockerDetailMobile {...props} />
+}
+
+/** Desktop-route alias — kept so desktop-workspace.tsx can keep importing
+ *  `FmBlockerDetail` after the desktop twin file was deleted. */
+export const FmBlockerDetail = ForemanBlockerDetailDesktop
 
 type IssueRow = {
   id: string
@@ -67,7 +89,7 @@ const RESOLUTION_OPTIONS: ReadonlyArray<{
   { id: 'change_order', label: 'Change order', Icon: MI.FileText },
 ]
 
-export function ForemanBlockerDetail({
+function ForemanBlockerDetailMobile({
   bootstrap,
   companySlug,
 }: {
@@ -75,6 +97,7 @@ export function ForemanBlockerDetail({
   companySlug: string
 }) {
   const navigate = useNavigate()
+  const nav = resolveForemanNav(useLocation().pathname)
   const params = useParams<{ issueId: string }>()
   const issueId = params.issueId ?? ''
 
@@ -193,7 +216,7 @@ export function ForemanBlockerDetail({
     if (!fe.snapshot) return
     const s = fe.snapshot.state
     if (s === 'resolved' || s === 'escalated' || s === 'dismissed') {
-      const t = window.setTimeout(() => navigate('/field'), 600)
+      const t = window.setTimeout(() => navigate(nav.field), 600)
       return () => window.clearTimeout(t)
     }
     return undefined
@@ -208,7 +231,7 @@ export function ForemanBlockerDetail({
 
   return (
     <>
-      <MTopBar back title="Field event" sub={project?.name} onBack={() => navigate('/field')} />
+      <MTopBar back title="Field event" sub={project?.name} onBack={() => navigate(nav.field)} />
       <MBody pad>
         {missing ? (
           <MBanner
@@ -216,7 +239,7 @@ export function ForemanBlockerDetail({
             title="Couldn't load this event"
             body="This field event may have been removed or belongs to another company. Head back to Field for the latest list."
             action={
-              <MButton size="sm" variant="quiet" onClick={() => navigate('/field')}>
+              <MButton size="sm" variant="quiet" onClick={() => navigate(nav.field)}>
                 Back to Field
               </MButton>
             }
@@ -647,4 +670,194 @@ function shortAgo(iso: string): string {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
+}
+
+// ---------------------------------------------------------------------------
+// Desktop composition — the former screens/desktop/fm-blocker-detail.tsx,
+// folded in verbatim (data + behavior preserved) with navigation resolved
+// through resolveForemanNav. Reuses the module-level RESOLUTION_OPTIONS above
+// (the desktop render simply doesn't read the per-option Icon field).
+// ---------------------------------------------------------------------------
+
+function ForemanBlockerDetailDesktop({
+  bootstrap,
+  companySlug,
+}: {
+  bootstrap: BootstrapResponse | null
+  companySlug: string
+}) {
+  const navigate = useNavigate()
+  const nav = resolveForemanNav(useLocation().pathname)
+  const params = useParams<{ issueId: string }>()
+  const issueId = params.issueId ?? ''
+  const fe = useFieldEvent(issueId, companySlug)
+
+  const ctx = fe.snapshot?.context
+  const state = fe.snapshot?.state ?? 'open'
+  const actions = new Set((fe.snapshot?.next_events ?? []).map((e) => e.type))
+  const message = (ctx?.message ?? '')
+    .replace(/^\[[^\]]+\]\s*/g, '')
+    .replace(/\[severity:[^\]]+\]/g, '')
+    .trim()
+  const worker = bootstrap?.workers.find((w) => w.id === ctx?.worker_id)
+  const project = bootstrap?.projects.find((p) => p.id === ctx?.project_id)
+
+  const [action, setAction] = useState<FieldEventResolutionAction>('order_more')
+  const [reply, setReply] = useState('')
+  const [escalateMode, setEscalateMode] = useState(false)
+  const [escalateReason, setEscalateReason] = useState('')
+  const [dismissMode, setDismissMode] = useState(false)
+
+  if (fe.isLoading && !fe.snapshot) return <DLoadingState label="Loading blocker…" />
+  if (!fe.snapshot) return <DErrorState title="Couldn't load this blocker" body="It may have been removed." />
+
+  const handleReopen = () => {
+    setEscalateMode(false)
+    setDismissMode(false)
+    fe.dispatch({ event: 'REOPEN' })
+  }
+
+  return (
+    <div className="d-content">
+      <div className="d-stack">
+        <div>
+          <DEyebrow>
+            Foreman · {state === 'open' ? (ctx?.severity ?? 'open').toUpperCase() : state.toUpperCase()} ·{' '}
+            {worker?.name ?? 'Unknown worker'}
+          </DEyebrow>
+          <DH1>“{message}”</DH1>
+          {project?.name ? <DEyebrow>{project.name}</DEyebrow> : null}
+        </div>
+
+        {fe.error ? (
+          <MBanner
+            tone="error"
+            title={fe.outOfSync ? 'Server has a newer version' : "Couldn't apply that action"}
+            body={fe.error}
+            action={
+              <MButton size="sm" variant="quiet" onClick={fe.dismissError}>
+                Dismiss
+              </MButton>
+            }
+          />
+        ) : null}
+
+        {state === 'open' ? (
+          !escalateMode && !dismissMode ? (
+            <>
+              <MSectionH>Resolve · pick one</MSectionH>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {RESOLUTION_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setAction(opt.id)}
+                    aria-pressed={action === opt.id}
+                    style={{
+                      display: 'flex',
+                      width: '100%',
+                      alignItems: 'center',
+                      gap: 14,
+                      padding: '14px 18px',
+                      background: action === opt.id ? 'var(--m-accent)' : 'var(--m-card-soft)',
+                      color: action === opt.id ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                      border: '2px solid var(--m-ink)',
+                      textAlign: 'left',
+                      fontFamily: 'var(--m-font)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ flex: 1, fontWeight: 700 }}>{opt.label}</span>
+                    <span style={{ fontWeight: 800 }}>→</span>
+                  </button>
+                ))}
+              </div>
+              <MSectionH>Reply to worker</MSectionH>
+              <MTextarea
+                value={reply}
+                onChange={(e) => setReply(e.currentTarget.value)}
+                placeholder="On its way · 30m"
+                style={{ width: '100%', minHeight: 80 }}
+              />
+              <MButtonStack>
+                <MButton
+                  variant="primary"
+                  onClick={() => fe.dispatch({ event: 'RESOLVE', action, message_to_worker: reply.trim() })}
+                  disabled={fe.isSubmitting || reply.trim().length === 0}
+                >
+                  {fe.isSubmitting ? 'Resolving…' : 'Resolve'}
+                </MButton>
+                {actions.has('ESCALATE') ? (
+                  <MButton variant="ghost" onClick={() => setEscalateMode(true)}>
+                    Escalate to estimator
+                  </MButton>
+                ) : null}
+                {actions.has('DISMISS') ? (
+                  <MButton variant="ghost" onClick={() => setDismissMode(true)}>
+                    Dismiss
+                  </MButton>
+                ) : null}
+              </MButtonStack>
+            </>
+          ) : escalateMode ? (
+            <>
+              <MSectionH>Why escalate?</MSectionH>
+              <MTextarea
+                value={escalateReason}
+                onChange={(e) => setEscalateReason(e.currentTarget.value)}
+                placeholder="What does the estimator need to decide?"
+                style={{ width: '100%', minHeight: 100 }}
+              />
+              <MButtonStack>
+                <MButton
+                  variant="primary"
+                  onClick={() => fe.dispatch({ event: 'ESCALATE', reason: escalateReason.trim() || message })}
+                  disabled={fe.isSubmitting}
+                >
+                  {fe.isSubmitting ? 'Escalating…' : 'Send to estimator'}
+                </MButton>
+                <MButton variant="ghost" onClick={() => setEscalateMode(false)}>
+                  Back
+                </MButton>
+              </MButtonStack>
+            </>
+          ) : (
+            <>
+              <MSectionH>Dismiss this event?</MSectionH>
+              <div style={{ color: 'var(--m-ink-3)', fontSize: 14, lineHeight: 1.5 }}>
+                No reply is sent to the worker and the estimator isn't looped in. It stays as the audit trail and can be
+                reopened.
+              </div>
+              <MButtonStack>
+                <MButton variant="primary" onClick={() => fe.dispatch({ event: 'DISMISS' })} disabled={fe.isSubmitting}>
+                  {fe.isSubmitting ? 'Dismissing…' : 'Dismiss event'}
+                </MButton>
+                <MButton variant="ghost" onClick={() => setDismissMode(false)}>
+                  Back
+                </MButton>
+              </MButtonStack>
+            </>
+          )
+        ) : (
+          <div>
+            <MBanner
+              tone={state === 'resolved' ? 'ok' : state === 'escalated' ? 'attention' : 'info'}
+              title={state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'}
+              body={state === 'escalated' && ctx?.escalation_reason ? `“${ctx.escalation_reason}”` : undefined}
+            />
+            {actions.has('REOPEN') ? (
+              <MButtonStack>
+                <MButton variant="ghost" onClick={handleReopen} disabled={fe.isSubmitting}>
+                  {fe.isSubmitting ? 'Reopening…' : 'Reopen'}
+                </MButton>
+                <MButton variant="quiet" onClick={() => navigate(nav.today)}>
+                  Back to Today
+                </MButton>
+              </MButtonStack>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
