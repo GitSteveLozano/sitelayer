@@ -253,6 +253,67 @@ describe('measurement drivers (M2)', () => {
   })
 })
 
+describe('dimensional guard (§4 units — non-fatal)', () => {
+  it('surfaces a unit_warning when a recognised component unit is incompatible with the measurement unit', () => {
+    // A sqft measurement exploding through a per-LF component is the exact
+    // silent-error class §4 calls out. The line still emits (non-fatal) but
+    // carries a warning.
+    const a = loaded([
+      baseComp({ id: 'sf', name: 'mesh', kind: 'material', unit: 'sqft', unit_cost: 1, sort_order: 1 }),
+      baseComp({ id: 'lf', name: 'corner bead', kind: 'material', unit: 'lf', unit_cost: 2, sort_order: 2 }),
+    ])
+    const out = explodeMeasurement({
+      assembly: a,
+      measurementQuantity: 100,
+      measurementUnit: 'sqft',
+      isDeduction: false,
+      divisionCode: null,
+      fallbackServiceItemCode: 'EIFS',
+      profileConfig: { material_waste_pct: 0, profit_margin_pct: 0 },
+    })
+    expect(out.lines).toHaveLength(2)
+    const sf = out.lines.find((l) => l.assembly_component_id === 'sf')!
+    const lf = out.lines.find((l) => l.assembly_component_id === 'lf')!
+    // sqft-vs-sqft is compatible → no warning.
+    expect(sf.unit_warning).toBeUndefined()
+    // sqft-vs-lf is dimensionally incompatible → warning present, but the line
+    // is still emitted (non-fatal).
+    expect(lf.unit_warning).toBeDefined()
+    expect(lf.unit_warning).toMatch(/dimensionally incorrect/)
+    expect(lf.amount).toBe(200) // 100 × 2, still produced
+  })
+
+  it('does NOT warn when either unit is free text we cannot type (tolerant default)', () => {
+    const a = loaded([
+      baseComp({ id: 'freetext', name: 'special widget', kind: 'material', unit: 'per wall', unit_cost: 3 }),
+    ])
+    const out = explodeMeasurement({
+      assembly: a,
+      measurementQuantity: 100,
+      measurementUnit: 'sqft',
+      isDeduction: false,
+      divisionCode: null,
+      fallbackServiceItemCode: 'EIFS',
+      profileConfig: { material_waste_pct: 0, profit_margin_pct: 0 },
+    })
+    expect(out.lines[0]!.unit_warning).toBeUndefined()
+  })
+
+  it('does NOT warn on aliased-but-compatible spellings (SF measurement, sq ft component)', () => {
+    const a = loaded([baseComp({ id: 'c', name: 'board', kind: 'material', unit: 'sq ft', unit_cost: 1 })])
+    const out = explodeMeasurement({
+      assembly: a,
+      measurementQuantity: 100,
+      measurementUnit: 'SF',
+      isDeduction: false,
+      divisionCode: null,
+      fallbackServiceItemCode: 'EIFS',
+      profileConfig: { material_waste_pct: 0, profit_margin_pct: 0 },
+    })
+    expect(out.lines[0]!.unit_warning).toBeUndefined()
+  })
+})
+
 describe('include_when (M2)', () => {
   it('includeComponent: null/empty expr always includes', () => {
     const a = loaded([baseComp({ id: 'c1', include_when: null })])
