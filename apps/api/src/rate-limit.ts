@@ -25,6 +25,14 @@ export type RateLimitConfig = {
   perUserPerMin: number
   /** Token capacity (per minute) for anonymous/IP-keyed callers. */
   perIpPerMin: number
+  /**
+   * Token capacity (per minute) for a whole company (tenant). A second,
+   * independent bucket on top of the per-user one: it caps the AGGREGATE
+   * request rate of a single tenant so one noisy company (many users, or a
+   * runaway client) can't starve the shared API for every other tenant.
+   * Sized HIGH relative to per-user so it only bites pathological tenants.
+   */
+  perCompanyPerMin: number
   /** Window length in milliseconds. Refill rate = capacity / windowMs. */
   windowMs: number
 }
@@ -32,21 +40,32 @@ export type RateLimitConfig = {
 export const DEFAULT_RATE_LIMIT_CONFIG: RateLimitConfig = {
   perUserPerMin: 100,
   perIpPerMin: 30,
+  // ~10x the per-user cap: a busy 10-seat tenant stays well under it, but a
+  // single tenant flooding the API gets bounded before it can starve others.
+  perCompanyPerMin: 1000,
   windowMs: 60_000,
 }
 
 export function loadRateLimitConfig(env: NodeJS.ProcessEnv = process.env): RateLimitConfig {
   const perUser = Number(env.RATE_LIMIT_PER_USER_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin)
   const perIp = Number(env.RATE_LIMIT_PER_IP_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin)
+  const perCompany = Number(env.RATE_LIMIT_PER_COMPANY_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin)
   return {
     perUserPerMin:
       Number.isFinite(perUser) && perUser > 0 ? Math.floor(perUser) : DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin,
     perIpPerMin: Number.isFinite(perIp) && perIp > 0 ? Math.floor(perIp) : DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin,
+    perCompanyPerMin:
+      Number.isFinite(perCompany) && perCompany > 0
+        ? Math.floor(perCompany)
+        : DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin,
     windowMs: DEFAULT_RATE_LIMIT_CONFIG.windowMs,
   }
 }
 
 type Bucket = { tokens: number; updatedAt: number }
+
+/** Which keyed bucket a decision came from. `company` is the per-tenant cap. */
+export type RateLimitScope = 'user' | 'ip' | 'company'
 
 export type RateLimitResult =
   | { allowed: true; remaining: number; capacity: number }
@@ -54,13 +73,13 @@ export type RateLimitResult =
 
 export type RateLimitDecision = RateLimitResult & {
   /** Resolution that was used: which key, what scope. */
-  scope: 'user' | 'ip'
+  scope: RateLimitScope
   key: string
 }
 
 export type RateLimiter = {
   /** Test a single bucket. Returns whether the call may proceed and how long to wait if not. */
-  consume: (scope: 'user' | 'ip', key: string, now?: number) => RateLimitDecision
+  consume: (scope: RateLimitScope, key: string, now?: number) => RateLimitDecision
   /** Drop all in-memory state. Used by tests; not wired to an admin endpoint. */
   reset: () => void
 }
@@ -84,7 +103,8 @@ export function createRateLimiter(config: RateLimitConfig = DEFAULT_RATE_LIMIT_C
     }
   }
 
-  const capacityFor = (scope: 'user' | 'ip') => (scope === 'user' ? config.perUserPerMin : config.perIpPerMin)
+  const capacityFor = (scope: RateLimitScope) =>
+    scope === 'user' ? config.perUserPerMin : scope === 'company' ? config.perCompanyPerMin : config.perIpPerMin
 
   return {
     consume(scope, key, now = Date.now()) {
@@ -157,18 +177,48 @@ export type EnforceArgs = {
   pathname: string
   /** Resolved authenticated user id (from JWT/getRequestContext). Null for anon. */
   userId: string | null
+  /**
+   * Resolved company/tenant key (slug or id), from the same place auth reads it
+   * (`x-sitelayer-company-slug` / the active company). Null/absent skips the
+   * per-company bucket — e.g. signed-out callers or routes with no tenant.
+   */
+  companyKey?: string | null
 }
 
 export type RateLimitRejection = Extract<RateLimitDecision, { allowed: false }>
+
+/**
+ * Resolve the tenant key for the per-company bucket from the same header auth
+ * uses (`x-sitelayer-company-slug`). Returns null when absent so the company
+ * bucket is simply skipped (no synthetic "unknown" tenant pooling every
+ * headerless caller into one shared bucket).
+ */
+export function resolveCompanyKey(req: http.IncomingMessage): string | null {
+  const raw = req.headers['x-sitelayer-company-slug']
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
 
 /**
  * Decide whether to allow the request. Returns null when allowed; returns the
  * 429 metadata to write when blocked. The handler is responsible for actually
  * formatting the response — we keep the limiter pure so tests don't drag in
  * an HTTP server.
+ *
+ * Two INDEPENDENT buckets must both pass:
+ *   1. the per-COMPANY bucket (when a tenant key is present) — the tenant-level
+ *      fairness cap, checked FIRST so a noisy tenant is throttled regardless of
+ *      which user/IP it hammers from.
+ *   2. the per-user bucket (authenticated) OR the per-IP bucket (anonymous).
  */
 export function enforceRateLimit(limiter: RateLimiter, args: EnforceArgs): RateLimitRejection | null {
   if (isRateLimitExempt(args.pathname)) return null
+  const companyKey = args.companyKey?.trim()
+  if (companyKey) {
+    const companyDecision = limiter.consume('company', companyKey)
+    if (!companyDecision.allowed) return companyDecision
+  }
   if (args.userId) {
     const decision = limiter.consume('user', args.userId)
     return decision.allowed ? null : decision
@@ -193,7 +243,12 @@ export function applyRateLimit(
   pathname: string,
   userId: string | null,
 ): boolean {
-  const decision = enforceRateLimit(limiter, { req, pathname, userId })
+  const decision = enforceRateLimit(limiter, {
+    req,
+    pathname,
+    userId,
+    companyKey: resolveCompanyKey(req),
+  })
   if (!decision) return false
   res.setHeader('retry-after', String(decision.retryAfterSeconds))
   res.writeHead(429, { 'content-type': 'application/json; charset=utf-8' })

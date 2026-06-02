@@ -14,7 +14,7 @@ import {
   resolveCompanyRoleAuthority,
   type CustomRoleAuthority,
 } from './permission-seam.js'
-import { handleCompanyRoutes } from './routes/companies.js'
+import { handleCompanyRoutes, loadCompanyCreateGateConfig } from './routes/companies.js'
 import { handleInviteRoutes } from './routes/invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
@@ -306,10 +306,16 @@ logger.info(
   {
     perUserPerMin: rateLimitConfig.perUserPerMin,
     perIpPerMin: rateLimitConfig.perIpPerMin,
+    perCompanyPerMin: rateLimitConfig.perCompanyPerMin,
     windowMs: rateLimitConfig.windowMs,
   },
   '[rate-limit] configured',
 )
+
+// Scale-hygiene: company self-creation is platform-admin-only by default.
+// `ALLOW_OPEN_COMPANY_SIGNUP=1` re-opens the historical self-serve pilot flow.
+const companyCreateGateConfig = loadCompanyCreateGateConfig(process.env)
+logger.info({ allowOpenSignup: companyCreateGateConfig.allowOpenSignup }, '[company-create] gate configured')
 logger.info(
   {
     pgPoolMax,
@@ -897,6 +903,12 @@ const server = http.createServer(async (req, res) => {
                   // `getCurrentUserId` returns the override only when
                   // tier !== 'prod', so the prod path is unchanged.
                   userId: getCurrentUserId(req),
+                  // Company-creation gate (scale hygiene). Uses the RAW
+                  // (pre-act-as) identity — the platform-admin trust boundary
+                  // is only reachable via a verified Clerk session, never via
+                  // the dev act-as / header / default paths, exactly like
+                  // /api/admin/*.
+                  createGate: { identity, config: companyCreateGateConfig },
                   sendJson: (status, body) => sendJson(res, status, body, req),
                   readBody: () => readBody(req),
                 })
