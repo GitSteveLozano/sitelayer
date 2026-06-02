@@ -1,0 +1,22 @@
+[Unit]
+Description=Run the Sitelayer deterministic e2e suite (nightly by default; per-dev-advance optional)
+Documentation=https://github.com/GitSteveLozano/sitelayer/blob/main/docs/E2E_RUNNER.md
+
+[Timer]
+# Default cadence: NIGHTLY at 04:30 (box-local time), with jitter so a fleet of
+# boxes doesn't stampede the registry/db at the same instant. Persistent=true so
+# a missed window (box asleep) fires once on the next wake rather than
+# backfilling. The runner is flock-guarded, so an overlapping fire is harmless.
+#
+# To run PER-DEV-ADVANCE instead (poll origin/dev every N minutes and run only
+# when it moved), the installer can switch this to OnUnitActiveSec via
+# E2E_RUNNER_CADENCE=poll (see scripts/install-e2e-runner-systemd.sh). The runner
+# itself short-circuits when the checked-out SHA already passed, so a frequent
+# timer is cheap on an idle tip.
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=sitelayer-e2e-runner.service
+
+[Install]
+WantedBy=timers.target
