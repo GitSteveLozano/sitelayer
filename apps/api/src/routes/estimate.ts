@@ -445,9 +445,78 @@ export async function getScopeVsBid(
   const scopeTotal = linesResult.rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
   const comparison = compareBidVsScope({ bidTotal, scopeTotal })
 
+  // H4 staleness signal. The recompute path deletes + re-inserts every
+  // estimate_lines row for the draft (see createEstimateFromMeasurements),
+  // so the newest line's created_at is a faithful "estimate last recomputed"
+  // timestamp without needing a dedicated recomputed_at column. We compare it
+  // against the newest mutation on the inputs the estimate is derived from —
+  // the draft's live measurements (new/edited measurements insert fresh rows)
+  // and any assemblies (+ their components) those measurements attach (rate /
+  // component edits bump assemblies.updated_at). If a source row is newer than
+  // the estimate, the estimate is out of date and the UI shows a recompute
+  // banner. Derived, additive, and read-only — no schema change.
+  //
+  // node-pg returns timestamptz as Date (no type parser override here), so we
+  // normalize to ISO strings for the JSON contract and compare on epoch millis.
+  const toIso = (value: unknown): string | null => {
+    if (value == null) return null
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
+    const d = new Date(value as string)
+    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+  }
+  const recomputedAt = linesResult.rows.reduce<string | null>((latest, row) => {
+    const ts = toIso(row.created_at)
+    if (!ts) return latest
+    return latest === null || ts > latest ? ts : latest
+  }, null)
+
+  const sourceResult = await withCompanyClient(companyId, (client) =>
+    client.query<{ source_updated_at: string | null }>(
+      draftId
+        ? `select max(ts) as source_updated_at from (
+             select created_at as ts
+               from takeoff_measurements
+              where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null
+             union all
+             select greatest(a.updated_at, coalesce(max(c.updated_at), a.updated_at)) as ts
+               from takeoff_measurements m
+               join service_item_assemblies a
+                 on a.company_id = m.company_id and a.id = m.assembly_id and a.deleted_at is null
+               left join service_item_assembly_components c
+                 on c.company_id = a.company_id and c.assembly_id = a.id
+              where m.company_id = $1 and m.project_id = $2 and m.draft_id = $3
+                and m.deleted_at is null and m.assembly_id is not null
+              group by a.id, a.updated_at
+           ) sources`
+        : `select max(ts) as source_updated_at from (
+             select created_at as ts
+               from takeoff_measurements
+              where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null
+             union all
+             select greatest(a.updated_at, coalesce(max(c.updated_at), a.updated_at)) as ts
+               from takeoff_measurements m
+               join service_item_assemblies a
+                 on a.company_id = m.company_id and a.id = m.assembly_id and a.deleted_at is null
+               left join service_item_assembly_components c
+                 on c.company_id = a.company_id and c.assembly_id = a.id
+              where m.company_id = $1 and m.project_id = $2 and m.draft_id is null
+                and m.deleted_at is null and m.assembly_id is not null
+              group by a.id, a.updated_at
+           ) sources`,
+      draftId ? [companyId, projectId, draftId] : [companyId, projectId],
+    ),
+  )
+  const sourceUpdatedAt = toIso(sourceResult.rows[0]?.source_updated_at)
+  // Stale only when we have both a computed estimate and a newer source edit.
+  // Both are normalized ISO strings, so lexical > matches chronological >.
+  const isStale = recomputedAt !== null && sourceUpdatedAt !== null && sourceUpdatedAt > recomputedAt
+
   return {
     ...comparison,
     draft_id: draftId,
+    recomputed_at: recomputedAt,
+    source_updated_at: sourceUpdatedAt,
+    is_stale: isStale,
     lines: linesResult.rows,
   }
 }

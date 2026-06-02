@@ -600,6 +600,8 @@ export {
   estimatePdfUrl,
   estimateQueryKeys,
   fetchScopeVsBid,
+  isEstimateStale,
+  recomputeEstimate,
   useScopeVsBid,
   type BidVsScopeStatus,
   type EstimateLine,
