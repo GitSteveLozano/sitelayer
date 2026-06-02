@@ -13,14 +13,18 @@
  *     --admin-user-id user_2abcXYZ \
  *     [--admin-email taylor@acme.example] \
  *     [--clerk-org-id org_2xyz] \
+ *     [--template generic-construction] \
  *     [--skip-seed]
  *
  * Steps:
  *   1. Insert into `companies` (no-op if slug already exists).
  *   2. Insert the admin into `company_memberships` (idempotent).
  *   3. Seed default divisions, service_items, pricing_profiles,
- *      bonus_rules via the same `seedCompanyDefaults` the API uses for
- *      the demo tenant. Skipped with --skip-seed for tests.
+ *      bonus_rules via the same `seedCompanyDefaults` the API uses. The
+ *      template defaults to the trade-neutral GENERIC construction set so a
+ *      new company is NOT seeded with L&A Operations' stucco/EIFS divisions;
+ *      pass `--template la-operations` to clone LA's reference set. Skipped
+ *      with --skip-seed for tests.
  *
  * The script intentionally does NOT touch QBO — that's a follow-up
  * once the customer has connected their Intuit account in the SPA.
@@ -34,6 +38,7 @@
  */
 
 import { Pool } from 'pg'
+import { DEFAULT_SEED_TEMPLATE_SLUG, resolveSeedTemplate } from '@sitelayer/domain'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../apps/api/src/onboarding.js'
 
 type Args = {
@@ -42,6 +47,7 @@ type Args = {
   adminUserId: string
   adminEmail: string | null
   clerkOrgId: string | null
+  template: string
   skipSeed: boolean
 }
 
@@ -51,6 +57,7 @@ function parseArgs(argv: string[]): Args {
   let adminUserId: string | null = null
   let adminEmail: string | null = null
   let clerkOrgId: string | null = null
+  let template: string = DEFAULT_SEED_TEMPLATE_SLUG
   let skipSeed = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -76,6 +83,10 @@ function parseArgs(argv: string[]): Args {
         clerkOrgId = next ?? null
         i++
         break
+      case '--template':
+        template = next ?? DEFAULT_SEED_TEMPLATE_SLUG
+        i++
+        break
       case '--skip-seed':
         skipSeed = true
         break
@@ -98,11 +109,16 @@ function parseArgs(argv: string[]): Args {
     process.stderr.write(`slug ${slug} does not match ${COMPANY_SLUG_PATTERN}\n`)
     process.exit(1)
   }
-  return { slug, name, adminUserId, adminEmail, clerkOrgId, skipSeed }
+  return { slug, name, adminUserId, adminEmail, clerkOrgId, template, skipSeed }
 }
 
 function usage(): string {
-  return `Usage: onboard-company.ts --slug <slug> --name <name> --admin-user-id <id> [--admin-email <email>] [--clerk-org-id <id>] [--skip-seed]\n`
+  return (
+    `Usage: onboard-company.ts --slug <slug> --name <name> --admin-user-id <id> ` +
+    `[--admin-email <email>] [--clerk-org-id <id>] [--template <slug>] [--skip-seed]\n` +
+    `  --template defaults to '${DEFAULT_SEED_TEMPLATE_SLUG}' (trade-neutral); ` +
+    `pass 'la-operations' to clone L&A's reference set.\n`
+  )
 }
 
 async function main(): Promise<void> {
@@ -141,9 +157,22 @@ async function main(): Promise<void> {
       )
       process.stdout.write(`[onboard] upserted admin membership for user ${args.adminUserId}\n`)
 
+      // Resolve the seed template up front so an unknown slug surfaces as a
+      // generic fallback BEFORE we write (resolveSeedTemplate never throws).
+      const { template: seedTemplate, matched } = resolveSeedTemplate(args.template)
       if (!args.skipSeed) {
-        await seedCompanyDefaults(client, companyId, { includeSampleCustomers: false })
-        process.stdout.write(`[onboard] seeded default divisions + service_items + pricing_profile + bonus_rule\n`)
+        if (!matched) {
+          process.stdout.write(
+            `[onboard] template '${args.template}' not recognized — falling back to '${seedTemplate.slug}'\n`,
+          )
+        }
+        await seedCompanyDefaults(client, companyId, {
+          includeSampleCustomers: false,
+          template: seedTemplate,
+        })
+        process.stdout.write(
+          `[onboard] seeded '${seedTemplate.slug}' defaults: divisions + service_items + pricing_profile + bonus_rule\n`,
+        )
       }
 
       await client.query('commit')
@@ -156,6 +185,7 @@ async function main(): Promise<void> {
           ...(args.clerkOrgId ? { clerk_org_id: args.clerkOrgId } : {}),
           ...(args.adminEmail ? { admin_email: args.adminEmail } : {}),
           seeded: !args.skipSeed,
+          ...(args.skipSeed ? {} : { seed_template: seedTemplate.slug }),
         }) + '\n',
       )
     } catch (err) {

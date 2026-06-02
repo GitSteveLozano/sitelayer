@@ -430,6 +430,173 @@ export const EXTERIOR_CLADDING_PACK: AssemblyTemplate[] = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// Generic construction starter template (multi-tenant onboarding).
+//
+// The LA_* constants above are L&A Operations' OWN reference data — a stucco /
+// EIFS / masonry exterior-cladding subcontractor. Seeding company #2..#N with
+// them mis-seeds every other trade (a roofer would get "EIFS" and "Cultured
+// Stone" divisions). The GENERIC_* set below is a trade-neutral default a
+// general contractor can keep or prune: CSI-style high-level divisions and a
+// handful of common measurable + accounting line items, no trade-specific
+// assemblies. Onboarding (`seedCompanyDefaults`) defaults a fresh tenant to
+// this template; LA stays selectable by slug for the original company's seed
+// (the scenario engine + golden test explicitly request it).
+// ---------------------------------------------------------------------------
+
+export const GENERIC_CONSTRUCTION_TEMPLATE: TenantTemplate = {
+  slug: 'generic-construction',
+  name: 'Generic Construction',
+  description: 'Trade-neutral starter divisions + service items for a new construction company.',
+}
+
+export const GENERIC_DIVISIONS: DivisionTemplate[] = [
+  { code: 'D1', name: 'General Requirements', sortOrder: 1 },
+  { code: 'D2', name: 'Site Work', sortOrder: 2 },
+  { code: 'D3', name: 'Concrete', sortOrder: 3 },
+  { code: 'D4', name: 'Framing', sortOrder: 4 },
+  { code: 'D5', name: 'Exterior', sortOrder: 5 },
+  { code: 'D6', name: 'Interior', sortOrder: 6 },
+  { code: 'D7', name: 'Mechanical / Electrical / Plumbing', sortOrder: 7 },
+  { code: 'D8', name: 'Overhead', sortOrder: 8 },
+]
+
+export const GENERIC_SERVICE_ITEMS: ServiceItemTemplate[] = [
+  // Measurable trade line items, each curated for a generic division. Rates
+  // are nominal seed defaults the pilot tunes — not contract.
+  {
+    code: 'Labor',
+    name: 'General Labor',
+    category: 'measurable',
+    unit: 'hr',
+    defaultRate: 65,
+    defaultDivisionCode: 'D1',
+  },
+  {
+    code: 'Sitework',
+    name: 'Site Preparation',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 2.5,
+    defaultDivisionCode: 'D2',
+  },
+  {
+    code: 'Concrete Flatwork',
+    name: 'Concrete Flatwork',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 8,
+    defaultDivisionCode: 'D3',
+  },
+  {
+    code: 'Framing',
+    name: 'Wall Framing',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 6.5,
+    defaultDivisionCode: 'D4',
+  },
+  {
+    code: 'Exterior Finish',
+    name: 'Exterior Finish',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 7,
+    defaultDivisionCode: 'D5',
+  },
+  {
+    code: 'Drywall',
+    name: 'Drywall',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 2.75,
+    defaultDivisionCode: 'D6',
+  },
+  // Accounting line items land under Overhead (D8) so rollups don't drop them.
+  {
+    code: 'Change Order',
+    name: 'Change Order',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
+  {
+    code: 'Deposit',
+    name: 'Deposit',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
+  {
+    code: 'Holdback',
+    name: 'Holdback',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
+]
+
+/**
+ * A complete onboarding seed bundle: the divisions, service items, pricing
+ * profile tag, and (optionally) a trade assembly pack to seed for a fresh
+ * company. `seedCompanyDefaults` selects one of these by slug. The pricing
+ * profile config `template` tag records which template stamped the company so
+ * it is traceable after the fact (see apps/api/src/onboarding.ts + markup.ts).
+ */
+export interface SeedTemplate {
+  /** Stable key used by the API/provision script to select the template. */
+  slug: string
+  /** Human label shown in onboarding docs / future wizard. */
+  name: string
+  divisions: DivisionTemplate[]
+  serviceItems: ServiceItemTemplate[]
+  /** Assembly starter pack to seed; empty for trade-neutral templates. */
+  assemblies: AssemblyTemplate[]
+}
+
+export const GENERIC_SEED_TEMPLATE: SeedTemplate = {
+  slug: GENERIC_CONSTRUCTION_TEMPLATE.slug,
+  name: GENERIC_CONSTRUCTION_TEMPLATE.name,
+  divisions: GENERIC_DIVISIONS,
+  serviceItems: GENERIC_SERVICE_ITEMS,
+  // Trade-neutral: no exterior-cladding assemblies (those are LA's stucco/EIFS
+  // pack and would seed a roofer with cladding it doesn't sell).
+  assemblies: [],
+}
+
+export const LA_SEED_TEMPLATE: SeedTemplate = {
+  slug: LA_TEMPLATE.slug,
+  name: LA_TEMPLATE.name,
+  divisions: LA_DIVISIONS,
+  serviceItems: LA_SERVICE_ITEMS,
+  assemblies: EXTERIOR_CLADDING_PACK,
+}
+
+/** Registry of seedable onboarding templates, keyed by slug. */
+export const SEED_TEMPLATES: Record<string, SeedTemplate> = {
+  [GENERIC_SEED_TEMPLATE.slug]: GENERIC_SEED_TEMPLATE,
+  [LA_SEED_TEMPLATE.slug]: LA_SEED_TEMPLATE,
+}
+
+/** The default template a brand-new tenant is seeded with (trade-neutral). */
+export const DEFAULT_SEED_TEMPLATE_SLUG = GENERIC_SEED_TEMPLATE.slug
+
+/**
+ * Resolve a seed template by slug, falling back to the generic construction
+ * template for an unknown/empty slug. Never throws — callers pass operator
+ * input here, and an unknown slug should produce a sane generic tenant rather
+ * than a 500. Returns the resolved template plus whether the requested slug
+ * was recognized (so the API can surface a soft warning).
+ */
+export function resolveSeedTemplate(slug?: string | null): { template: SeedTemplate; matched: boolean } {
+  const key = (slug ?? '').trim().toLowerCase()
+  const found = key ? SEED_TEMPLATES[key] : undefined
+  return found ? { template: found, matched: true } : { template: GENERIC_SEED_TEMPLATE, matched: false }
+}
+
 export const DEFAULT_BONUS_RULE = {
   basis: 'margin',
   threshold: 0.15,

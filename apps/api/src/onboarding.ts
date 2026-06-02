@@ -1,10 +1,39 @@
 import type { PoolClient } from 'pg'
-import { EXTERIOR_CLADDING_PACK, LA_DIVISIONS, LA_SERVICE_ITEMS } from '@sitelayer/domain'
+import {
+  DEFAULT_SEED_TEMPLATE_SLUG,
+  LA_SEED_TEMPLATE,
+  resolveSeedTemplate,
+  type AssemblyTemplate,
+  type SeedTemplate,
+} from '@sitelayer/domain'
 
 export const COMPANY_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/
 
 export type SeedOptions = {
   includeSampleCustomers?: boolean
+  /**
+   * Which onboarding seed template stamps this tenant's divisions / service
+   * items / pricing profile / assemblies. Accepts a template slug
+   * (`'generic-construction'`, `'la-operations'`) or a resolved `SeedTemplate`.
+   *
+   * DEFAULT — when omitted — is the **LA** template, NOT the generic default,
+   * so every legacy 2-arg caller (the scenario engine, golden replay test, and
+   * admin scenarios, which all invoke `seedCompanyDefaults(client, companyId)`)
+   * keeps seeding L&A Operations' original reference data unchanged. The
+   * multi-tenant onboarding paths (`POST /api/companies`,
+   * `scripts/provision-company.sh`) pass the GENERIC template explicitly so
+   * company #2..#N is NOT mis-seeded with LA's stucco/EIFS divisions. See
+   * `DEFAULT_SEED_TEMPLATE_SLUG` in @sitelayer/domain for the generic slug.
+   */
+  template?: string | SeedTemplate
+}
+
+/** Resolve a SeedOptions.template (slug or object) to a concrete SeedTemplate. */
+export function resolveTemplateOption(template?: string | SeedTemplate): SeedTemplate {
+  if (template && typeof template === 'object') return template
+  if (typeof template === 'string') return resolveSeedTemplate(template).template
+  // Omitted → backward-compatible LA seed (protects the legacy 2-arg callers).
+  return LA_SEED_TEMPLATE
 }
 
 export async function seedCompanyDefaults(
@@ -12,7 +41,9 @@ export async function seedCompanyDefaults(
   companyId: string,
   options: SeedOptions = {},
 ): Promise<void> {
-  for (const division of LA_DIVISIONS) {
+  const template = resolveTemplateOption(options.template)
+
+  for (const division of template.divisions) {
     await client.query(
       `insert into divisions (company_id, code, name, sort_order)
        values ($1, $2, $3, $4)
@@ -21,7 +52,7 @@ export async function seedCompanyDefaults(
     )
   }
 
-  for (const item of LA_SERVICE_ITEMS) {
+  for (const item of template.serviceItems) {
     await client.query(
       `insert into service_items (company_id, code, name, category, unit, default_rate)
        values ($1, $2, $3, $4, $5, $6)
@@ -40,14 +71,16 @@ export async function seedCompanyDefaults(
     )
   }
 
+  // Stamp the pricing profile's `template` tag with the slug that seeded it so
+  // the company's provenance is traceable after the fact (markup.ts reads it).
   await client.query(
     `insert into pricing_profiles (company_id, name, is_default, config)
-     select $1, 'Default', true, jsonb_build_object('template', 'la-operations')
+     select $1, 'Default', true, jsonb_build_object('template', $2::text)
      where not exists (
        select 1 from pricing_profiles
        where company_id = $1 and name = 'Default' and deleted_at is null
      )`,
-    [companyId],
+    [companyId, template.slug],
   )
 
   await client.query(
@@ -83,14 +116,15 @@ export async function seedCompanyDefaults(
     )
   }
 
-  // Seed the exterior-cladding starter pack last — assemblies reference
-  // service_item_codes, so the service_items loop above must run first.
-  await seedExteriorCladdingAssemblies(client, companyId)
+  // Seed the template's assembly starter pack last — assemblies reference
+  // service_item_codes, so the service_items loop above must run first. The
+  // generic template ships ZERO assemblies (its `assemblies` array is empty),
+  // so a fresh tenant is not seeded with LA's stucco/EIFS cladding pack.
+  await seedAssemblyTemplates(client, companyId, template.assemblies)
 }
 
 /**
- * Seed the PlanSwift Phase 2 exterior-cladding starter pack
- * (`EXTERIOR_CLADDING_PACK`) for a company: 6 per-sqft cladding assemblies, each
+ * Seed a list of assembly templates for a company: per-unit assemblies, each
  * with flat material/labor/sub components and per-component waste.
  *
  * Idempotent + tenant-scoped: each header is guarded by a `WHERE NOT EXISTS`
@@ -102,11 +136,16 @@ export async function seedCompanyDefaults(
  * (sum(quantity_per_unit * (1 + waste_pct/100) * unit_cost)) so no extra
  * recompute pass is needed.
  *
- * This shares one source of truth (`EXTERIOR_CLADDING_PACK` in
- * @sitelayer/domain) with the LA Operations backfill in migration 110.
+ * The LA seed template threads `EXTERIOR_CLADDING_PACK` (shared with the LA
+ * Operations backfill in migration 110); the generic template threads `[]`
+ * (no assemblies) so a fresh tenant is not seeded with another trade's pack.
  */
-export async function seedExteriorCladdingAssemblies(client: PoolClient, companyId: string): Promise<void> {
-  for (const assembly of EXTERIOR_CLADDING_PACK) {
+export async function seedAssemblyTemplates(
+  client: PoolClient,
+  companyId: string,
+  assemblies: ReadonlyArray<AssemblyTemplate>,
+): Promise<void> {
+  for (const assembly of assemblies) {
     const totalRate = assembly.components.reduce(
       (sum, c) => sum + c.quantityPerUnit * (1 + c.wastePct / 100) * c.unitCost,
       0,
@@ -150,4 +189,14 @@ export async function seedExteriorCladdingAssemblies(client: PoolClient, company
       sortOrder += 1
     }
   }
+}
+
+/**
+ * Backward-compatible alias: seed the LA Operations exterior-cladding pack
+ * (`EXTERIOR_CLADDING_PACK`). Retained so callers that imported the original
+ * name keep working; new code seeds whatever pack a template threads via
+ * `seedAssemblyTemplates`.
+ */
+export async function seedExteriorCladdingAssemblies(client: PoolClient, companyId: string): Promise<void> {
+  await seedAssemblyTemplates(client, companyId, LA_SEED_TEMPLATE.assemblies)
 }
