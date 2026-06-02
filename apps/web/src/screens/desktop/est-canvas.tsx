@@ -995,9 +995,7 @@ export function EstCanvas() {
       prev.quantity += Number(m.quantity) || 0
       counts.set(m.condition_id, prev)
     }
-    return conditions
-      .filter((c) => counts.has(c.id))
-      .map((c) => ({ condition: c, ...counts.get(c.id)! }))
+    return conditions.filter((c) => counts.has(c.id)).map((c) => ({ condition: c, ...counts.get(c.id)! }))
   }, [draftMeasurements, conditions])
 
   // --- Selection derivations for the edit popover + bulk-select toolbar -----
@@ -1168,7 +1166,7 @@ export function EstCanvas() {
       mode,
       delta: { dx: Number.isFinite(dx) ? dx : 0, dy: Number.isFinite(dy) ? dy : 0 },
       count,
-      mirror: copyMirror === 'none' ? undefined : copyMirror,
+      ...(copyMirror === 'none' ? {} : { mirror: copyMirror }),
       rotateDeg,
     }
   }
@@ -1194,7 +1192,7 @@ export function EstCanvas() {
             page_id: m.page_id ?? activePage?.id ?? null,
             service_item_code: m.service_item_code,
             unit: m.unit,
-            elevation: m.elevation ?? undefined,
+            elevation: m.elevation ?? null,
             geometry: dupe as MeasurementGeometry,
             is_deduction: m.is_deduction ?? false,
             draft_id: activeDraftId,

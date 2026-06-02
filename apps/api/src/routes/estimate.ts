@@ -304,7 +304,7 @@ export async function createEstimateFromMeasurements(
           divisionCode: effectiveDivisionCode,
           fallbackServiceItemCode: measurement.service_item_code,
           profileConfig,
-          drivers,
+          ...(drivers ? { drivers } : {}),
         })
         assemblyBreakdowns.push({
           assembly_id: attached.header.id,

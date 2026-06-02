@@ -290,8 +290,15 @@ export function explodeMeasurement(args: {
    */
   drivers?: MeasurementDrivers
 }): ExplodeResult {
-  const { assembly, measurementQuantity, measurementUnit, isDeduction, divisionCode, fallbackServiceItemCode, drivers } =
-    args
+  const {
+    assembly,
+    measurementQuantity,
+    measurementUnit,
+    isDeduction,
+    divisionCode,
+    fallbackServiceItemCode,
+    drivers,
+  } = args
 
   // M2: drop components whose include_when evaluates falsy BEFORE the formula +
   // cost passes, so a skipped component contributes no resolved quantity, no

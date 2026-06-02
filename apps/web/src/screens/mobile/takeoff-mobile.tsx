@@ -434,7 +434,7 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
       mode,
       delta: { dx: Number.isFinite(dx) ? dx : 0, dy: Number.isFinite(dy) ? dy : 0 },
       count,
-      mirror: copyMirror === 'none' ? undefined : copyMirror,
+      ...(copyMirror === 'none' ? {} : { mirror: copyMirror }),
       rotateDeg,
     }
   }
@@ -459,7 +459,7 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
             page_id: m.page_id,
             service_item_code: m.service_item_code,
             unit: m.unit,
-            elevation: m.elevation ?? undefined,
+            elevation: m.elevation ?? null,
             geometry: dupe as MeasurementGeometry,
             is_deduction: m.is_deduction ?? false,
             draft_id: activeDraftId,

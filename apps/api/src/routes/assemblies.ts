@@ -443,7 +443,7 @@ export async function handleAssemblyRoutes(
         assembly: loaded,
         measurementQuantity,
         measurementUnit,
-        drivers,
+        ...(drivers ? { drivers } : {}),
         isDeduction,
         divisionCode: null,
         fallbackServiceItemCode: headerRow.service_item_code,

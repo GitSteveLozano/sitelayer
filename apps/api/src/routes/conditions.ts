@@ -108,9 +108,7 @@ export async function handleConditionRoutes(
     }
 
     const measurementKind =
-      typeof body.measurement_kind === 'string' && body.measurement_kind.trim()
-        ? body.measurement_kind.trim()
-        : 'area'
+      typeof body.measurement_kind === 'string' && body.measurement_kind.trim() ? body.measurement_kind.trim() : 'area'
     if (!MEASUREMENT_KINDS.has(measurementKind)) {
       ctx.sendJson(400, { error: 'measurement_kind must be one of: area, linear, count, volume' })
       return true
