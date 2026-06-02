@@ -39,7 +39,7 @@ const STATE_LABELS: Record<LifecycleSnapshot['state'], string> = {
 // E2E_RUN=1 once those are merged.
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('admin walks project lifecycle through every state', async ({ adminPage }) => {
+runSpec('admin walks project lifecycle through every state', { tag: '@project' }, async ({ adminPage }) => {
   const projectId = FIXTURE_IDS.lifecycleProjectId
   const lifecyclePath = `/api/projects/${projectId}/lifecycle`
   const eventsPath = `${lifecyclePath}/events`

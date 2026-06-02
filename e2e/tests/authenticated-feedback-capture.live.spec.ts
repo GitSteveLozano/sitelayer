@@ -31,122 +31,130 @@ const DRAFT_ID = '00000000-0000-4000-8000-000000000354'
 
 test.setTimeout(60_000)
 
-liveTest('records authenticated feedback through the real capture API', async ({ adminPage: page }) => {
-  await installFakeMediaRecorder(page)
-  await openTakeoffCapturePage(page)
-  const canvas = page.locator('svg.cursor-crosshair').first()
-  await canvas.click({ position: { x: 80, y: 80 } })
-  await canvas.click({ position: { x: 220, y: 90 } })
-  await canvas.click({ position: { x: 190, y: 210 } })
-  await expect(page.getByRole('button', { name: 'Record feedback' })).toBeVisible({ timeout: 20_000 })
+liveTest(
+  'records authenticated feedback through the real capture API',
+  { tag: '@capture' },
+  async ({ adminPage: page }) => {
+    await installFakeMediaRecorder(page)
+    await openTakeoffCapturePage(page)
+    const canvas = page.locator('svg.cursor-crosshair').first()
+    await canvas.click({ position: { x: 80, y: 80 } })
+    await canvas.click({ position: { x: 220, y: 90 } })
+    await canvas.click({ position: { x: 190, y: 210 } })
+    await expect(page.getByRole('button', { name: 'Record feedback' })).toBeVisible({ timeout: 20_000 })
 
-  await page.getByRole('button', { name: 'Record feedback' }).click()
-  await page.getByPlaceholder('What happened?').fill('Authenticated browser smoke: Verify Scale did not respond.')
-  await page.getByRole('button', { name: 'Start' }).click()
+    await page.getByRole('button', { name: 'Record feedback' }).click()
+    await page.getByPlaceholder('What happened?').fill('Authenticated browser smoke: Verify Scale did not respond.')
+    await page.getByRole('button', { name: 'Start' }).click()
 
-  await expect(page.getByText('Recording feedback')).toBeVisible({ timeout: 10_000 })
-  const captureSessionId = await readCaptureSessionId(page)
-  expect(captureSessionId).toMatch(/^[0-9a-f-]{36}$/)
+    await expect(page.getByText('Recording feedback')).toBeVisible({ timeout: 10_000 })
+    const captureSessionId = await readCaptureSessionId(page)
+    expect(captureSessionId).toMatch(/^[0-9a-f-]{36}$/)
 
-  const uploadResponses: Response[] = []
-  const finalizeResponses: Response[] = []
-  const apiFailures: Array<{ method: string; url: string; status?: number; failure?: string }> = []
-  const onResponse = (response: Response) => {
-    const method = response.request().method()
-    const url = response.url()
-    if (method === 'POST' && matchesCapturePath(url, captureSessionId, '/artifacts/upload')) {
-      uploadResponses.push(response)
+    const uploadResponses: Response[] = []
+    const finalizeResponses: Response[] = []
+    const apiFailures: Array<{ method: string; url: string; status?: number; failure?: string }> = []
+    const onResponse = (response: Response) => {
+      const method = response.request().method()
+      const url = response.url()
+      if (method === 'POST' && matchesCapturePath(url, captureSessionId, '/artifacts/upload')) {
+        uploadResponses.push(response)
+      }
+      if (method === 'POST' && matchesCapturePath(url, captureSessionId, '/finalize')) {
+        finalizeResponses.push(response)
+      }
+      if (url.includes('/api/capture-sessions') && response.status() >= 400) {
+        apiFailures.push({ method, url, status: response.status() })
+      }
     }
-    if (method === 'POST' && matchesCapturePath(url, captureSessionId, '/finalize')) {
-      finalizeResponses.push(response)
+    const onRequestFailed = (request: Request) => {
+      const url = request.url()
+      if (url.includes('/api/capture-sessions')) {
+        apiFailures.push({
+          method: request.method(),
+          url,
+          failure: request.failure()?.errorText ?? 'request failed',
+        })
+      }
     }
-    if (url.includes('/api/capture-sessions') && response.status() >= 400) {
-      apiFailures.push({ method, url, status: response.status() })
-    }
-  }
-  const onRequestFailed = (request: Request) => {
-    const url = request.url()
-    if (url.includes('/api/capture-sessions')) {
-      apiFailures.push({
-        method: request.method(),
-        url,
-        failure: request.failure()?.errorText ?? 'request failed',
+    page.on('response', onResponse)
+    page.on('requestfailed', onRequestFailed)
+
+    await page.getByRole('button', { name: 'Stop' }).click()
+    await expectFeedbackTerminalState(page, apiFailures)
+    await expect
+      .poll(() => uploadResponses.length, {
+        timeout: 10_000,
+        message: `Expected audio and rrweb uploads. Capture API failures: ${JSON.stringify(apiFailures)}`,
       })
+      .toBeGreaterThanOrEqual(2)
+    await expect
+      .poll(() => finalizeResponses.length, {
+        timeout: 10_000,
+        message: `Expected capture finalize response. Capture API failures: ${JSON.stringify(apiFailures)}`,
+      })
+      .toBeGreaterThanOrEqual(1)
+    page.off('response', onResponse)
+    page.off('requestfailed', onRequestFailed)
+
+    const uploadJsons = (await Promise.all(uploadResponses.map((response) => response.json()))) as JsonRecord[]
+    const uploadKinds = uploadJsons
+      .map((body) => (body.artifact as JsonRecord | undefined)?.kind)
+      .filter((kind): kind is string => typeof kind === 'string')
+      .sort()
+    expect(uploadKinds).toEqual(expect.arrayContaining(['audio', 'canvas_geometry', 'rrweb']))
+    const finalizeResponse = finalizeResponses[0]
+    if (!finalizeResponse) throw new Error('Missing finalize response after polling completed.')
+    const finalizeJson = (await finalizeResponse.json()) as JsonRecord
+
+    const detailResponse = await page.request.get(`${API_BASE}/api/capture-sessions/${captureSessionId}`)
+    expect(detailResponse.ok()).toBe(true)
+    const detailJson = (await detailResponse.json()) as JsonRecord
+    expect(Number(detailJson.event_count ?? 0)).toBeGreaterThanOrEqual(3)
+    expect(Number(detailJson.artifact_count ?? 0)).toBeGreaterThanOrEqual(3)
+
+    const workItem = finalizeJson.work_item as JsonRecord | undefined
+    const supportPacket = finalizeJson.support_packet as JsonRecord | undefined
+    const result = {
+      capture_session_id: captureSessionId,
+      work_item_id: typeof workItem?.id === 'string' ? workItem.id : null,
+      support_packet_id: typeof supportPacket?.id === 'string' ? supportPacket.id : null,
+      upload_kinds: uploadKinds,
+      event_count: Number(detailJson.event_count ?? 0),
+      artifact_count: Number(detailJson.artifact_count ?? 0),
     }
-  }
-  page.on('response', onResponse)
-  page.on('requestfailed', onRequestFailed)
 
-  await page.getByRole('button', { name: 'Stop' }).click()
-  await expectFeedbackTerminalState(page, apiFailures)
-  await expect
-    .poll(() => uploadResponses.length, {
-      timeout: 10_000,
-      message: `Expected audio and rrweb uploads. Capture API failures: ${JSON.stringify(apiFailures)}`,
-    })
-    .toBeGreaterThanOrEqual(2)
-  await expect
-    .poll(() => finalizeResponses.length, {
-      timeout: 10_000,
-      message: `Expected capture finalize response. Capture API failures: ${JSON.stringify(apiFailures)}`,
-    })
-    .toBeGreaterThanOrEqual(1)
-  page.off('response', onResponse)
-  page.off('requestfailed', onRequestFailed)
+    if (process.env.AUTH_CAPTURE_SMOKE_OUT) {
+      await writeFile(process.env.AUTH_CAPTURE_SMOKE_OUT, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+    }
+  },
+)
 
-  const uploadJsons = (await Promise.all(uploadResponses.map((response) => response.json()))) as JsonRecord[]
-  const uploadKinds = uploadJsons
-    .map((body) => (body.artifact as JsonRecord | undefined)?.kind)
-    .filter((kind): kind is string => typeof kind === 'string')
-    .sort()
-  expect(uploadKinds).toEqual(expect.arrayContaining(['audio', 'canvas_geometry', 'rrweb']))
-  const finalizeResponse = finalizeResponses[0]
-  if (!finalizeResponse) throw new Error('Missing finalize response after polling completed.')
-  const finalizeJson = (await finalizeResponse.json()) as JsonRecord
+liveTest(
+  'discards authenticated feedback through the real capture API',
+  { tag: '@capture' },
+  async ({ adminPage: page }) => {
+    await installFakeMediaRecorder(page)
+    await openTakeoffCapturePage(page)
 
-  const detailResponse = await page.request.get(`${API_BASE}/api/capture-sessions/${captureSessionId}`)
-  expect(detailResponse.ok()).toBe(true)
-  const detailJson = (await detailResponse.json()) as JsonRecord
-  expect(Number(detailJson.event_count ?? 0)).toBeGreaterThanOrEqual(3)
-  expect(Number(detailJson.artifact_count ?? 0)).toBeGreaterThanOrEqual(3)
+    await page.getByRole('button', { name: 'Record feedback' }).click()
+    await page.getByPlaceholder('What happened?').fill('Authenticated browser discard smoke.')
+    await page.getByRole('button', { name: 'Start' }).click()
+    await expect(page.getByText('Recording feedback')).toBeVisible({ timeout: 10_000 })
 
-  const workItem = finalizeJson.work_item as JsonRecord | undefined
-  const supportPacket = finalizeJson.support_packet as JsonRecord | undefined
-  const result = {
-    capture_session_id: captureSessionId,
-    work_item_id: typeof workItem?.id === 'string' ? workItem.id : null,
-    support_packet_id: typeof supportPacket?.id === 'string' ? supportPacket.id : null,
-    upload_kinds: uploadKinds,
-    event_count: Number(detailJson.event_count ?? 0),
-    artifact_count: Number(detailJson.artifact_count ?? 0),
-  }
+    const captureSessionId = await readCaptureSessionId(page)
+    expect(captureSessionId).toMatch(/^[0-9a-f-]{36}$/)
 
-  if (process.env.AUTH_CAPTURE_SMOKE_OUT) {
-    await writeFile(process.env.AUTH_CAPTURE_SMOKE_OUT, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
-  }
-})
+    await page.getByRole('button', { name: 'Discard' }).click()
+    await expect(page.getByRole('button', { name: 'Record feedback' })).toBeVisible({ timeout: 10_000 })
 
-liveTest('discards authenticated feedback through the real capture API', async ({ adminPage: page }) => {
-  await installFakeMediaRecorder(page)
-  await openTakeoffCapturePage(page)
-
-  await page.getByRole('button', { name: 'Record feedback' }).click()
-  await page.getByPlaceholder('What happened?').fill('Authenticated browser discard smoke.')
-  await page.getByRole('button', { name: 'Start' }).click()
-  await expect(page.getByText('Recording feedback')).toBeVisible({ timeout: 10_000 })
-
-  const captureSessionId = await readCaptureSessionId(page)
-  expect(captureSessionId).toMatch(/^[0-9a-f-]{36}$/)
-
-  await page.getByRole('button', { name: 'Discard' }).click()
-  await expect(page.getByRole('button', { name: 'Record feedback' })).toBeVisible({ timeout: 10_000 })
-
-  const detailResponse = await page.request.get(`${API_BASE}/api/capture-sessions/${captureSessionId}`)
-  expect(detailResponse.ok()).toBe(true)
-  const detailJson = (await detailResponse.json()) as JsonRecord
-  expect((detailJson.capture_session as JsonRecord | undefined)?.status).toBe('discarded')
-  expect(Number(detailJson.artifact_count ?? 0)).toBe(0)
-})
+    const detailResponse = await page.request.get(`${API_BASE}/api/capture-sessions/${captureSessionId}`)
+    expect(detailResponse.ok()).toBe(true)
+    const detailJson = (await detailResponse.json()) as JsonRecord
+    expect((detailJson.capture_session as JsonRecord | undefined)?.status).toBe('discarded')
+    expect(Number(detailJson.artifact_count ?? 0)).toBe(0)
+  },
+)
 
 async function openTakeoffCapturePage(page: Page): Promise<void> {
   await installTakeoffCanvasMocks(page)

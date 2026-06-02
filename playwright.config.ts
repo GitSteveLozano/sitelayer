@@ -21,6 +21,13 @@ import { defineConfig, type PlaywrightTestConfig } from '@playwright/test'
  * (apps/web/vite.config.ts). The user-supplied spec mentioned 3000 for
  * the web port — overridden here to match the canonical Vite port so the
  * webserver block actually finds the running process.
+ *
+ * Area tags (Decomposition Seam 5): each spec is tagged by feature area via
+ * the Playwright `{ tag }` option so a PR lane can scope to the area it
+ * touched — e.g. `npm run test:e2e:tagged @rental`. Tags in use:
+ *   @rental @takeoff @payroll @estimate @project @foreman @capture
+ * The untagged default run (`npm run test:e2e`) still executes the FULL
+ * suite, which is what `push: main` runs as the merge gate. See e2e/README.md.
  */
 const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3100)
 const API_PORT = Number(process.env.E2E_API_PORT ?? 3001)

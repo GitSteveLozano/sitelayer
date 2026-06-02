@@ -13,6 +13,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decomposition Seam 4 — path-filtered PR lanes. This job computes which
+  # areas a change touches so the two heaviest, Postgres-backed jobs
+  # (`test-integration`, `e2e`) can scope themselves on pull requests.
+  #
+  # CRITICAL SAFETY INVARIANT: this scoping applies to PR lanes ONLY. On
+  # `push: main` (the merge gate) the downstream `if:` conditions short-circuit
+  # to `true` via `github.event_name != 'pull_request'`, so the FULL suite
+  # always runs before anything lands on main. Nothing is ever permanently
+  # skipped — a PR may skip a heavy job it does not need, but main re-runs it.
+  #
+  # The filters are intentionally broad: a heavy job runs unless the change is
+  # provably orthogonal to it (e.g. a docs-only PR skips `e2e`). When in doubt
+  # the predicate errs toward running.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Pull-request only — on push events the filter has no base to diff
+    # against and the downstream jobs already force-run via event_name.
+    if: github.event_name == 'pull_request'
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      worker: ${{ steps.filter.outputs.worker }}
+      packages: ${{ steps.filter.outputs.packages }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: filter
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.2
+        with:
+          filters: |
+            api:
+              - 'apps/api/**'
+            web:
+              - 'apps/web/**'
+            worker:
+              - 'apps/worker/**'
+            packages:
+              - 'packages/**'
+            migrations:
+              - 'migrations/**'
+              - 'scripts/migrate-db.sh'
+            e2e:
+              - 'e2e/**'
+              - 'playwright.config.ts'
+            ci:
+              - '.github/workflows/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'Dockerfile'
+              - 'scripts/**'
+
   # Lint, typecheck, prettier, bash syntax, and the migration immutability
   # guard. None of these need the package dist outputs, so they run in
   # parallel with `build`. Lint and typecheck are kicked off as background
@@ -160,6 +214,19 @@ jobs:
   test-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Seam 4 scope: ALWAYS runs on push:main (merge gate). On a PR it runs
+    # unless the change is provably orthogonal to the API/server boot path.
+    # `always()` keeps this job alive when the PR-only `changes` job is
+    # skipped (push events) so the merge gate is never accidentally gated out.
+    needs: changes
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+        needs.changes.outputs.api == 'true' ||
+        needs.changes.outputs.packages == 'true' ||
+        needs.changes.outputs.worker == 'true' ||
+        needs.changes.outputs.migrations == 'true' ||
+        needs.changes.outputs.ci == 'true')
     services:
       postgres:
         image: postgres:18-alpine
@@ -273,7 +340,25 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: test-integration
+    # Seam 4 scope: ALWAYS runs on push:main (merge gate). On a PR it runs
+    # unless the change is provably orthogonal to the app/e2e surface.
+    # `needs: [changes, test-integration]` is kept so e2e still runs after the
+    # integration gate when both run; `always()` + the explicit
+    # `test-integration` result check mean a *skipped* (not failed) upstream
+    # job does not cascade-skip e2e, while a real integration FAILURE still
+    # blocks it.
+    needs: [changes, test-integration]
+    if: >-
+      always() &&
+      needs.test-integration.result != 'failure' &&
+      needs.test-integration.result != 'cancelled' &&
+      (github.event_name != 'pull_request' ||
+        needs.changes.outputs.web == 'true' ||
+        needs.changes.outputs.api == 'true' ||
+        needs.changes.outputs.packages == 'true' ||
+        needs.changes.outputs.worker == 'true' ||
+        needs.changes.outputs.e2e == 'true' ||
+        needs.changes.outputs.ci == 'true')
     services:
       postgres:
         image: postgres:18-alpine

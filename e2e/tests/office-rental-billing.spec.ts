@@ -22,7 +22,7 @@ type RentalBillingSnapshot = {
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('office user approves and requests a rental billing post', async ({ officePage }) => {
+runSpec('office user approves and requests a rental billing post', { tag: '@rental' }, async ({ officePage }) => {
   const runId = FIXTURE_IDS.billingRunId
   const snapshotPath = `/api/rental-billing-runs/${runId}`
   const eventsPath = `${snapshotPath}/events`

@@ -33,7 +33,7 @@ type LaborPayrollSnapshot = {
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('admin approves time review then requests labor payroll post', async ({ adminPage }) => {
+runSpec('admin approves time review then requests labor payroll post', { tag: '@payroll' }, async ({ adminPage }) => {
   const timeReviewId = FIXTURE_IDS.timeReviewRunId
   const payrollId = FIXTURE_IDS.laborPayrollRunId
 

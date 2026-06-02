@@ -14,7 +14,7 @@ type PortalCaptureState = {
   discardCount: number
 }
 
-test('records invited portal feedback with mic audio and opt-in DOM replay', async ({ page }) => {
+test('records invited portal feedback with mic audio and opt-in DOM replay', { tag: '@capture' }, async ({ page }) => {
   const state: PortalCaptureState = {
     captureSessionId: null,
     startBodies: [],
