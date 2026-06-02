@@ -236,6 +236,57 @@ export interface AssemblyTemplate {
   components: AssemblyComponentTemplate[]
 }
 
+/**
+ * The typed geometry primitive a Condition measures against. Mirrors
+ * `takeoff_measurements.geometry_kind` but in Condition vocabulary — `area`
+ * is the canvas polygon/rect default. See migration `137_takeoff_conditions`.
+ */
+export type ConditionMeasurementKind = 'area' | 'linear' | 'count' | 'volume'
+
+export const CONDITION_MEASUREMENT_KINDS: readonly ConditionMeasurementKind[] = ['area', 'linear', 'count', 'volume']
+
+/**
+ * Condition layer (Takeoff Deep Dive H1) — a company-level, named/colored,
+ * *typed* reusable template. The keystone abstraction that turns a shape-first
+ * takeoff (draw a polygon, then attach scope) into a condition-first one (pick
+ * a typed template, draw against it). A Condition fixes the measurement kind +
+ * drivers (height / thickness / sides / slope) + an optional default assembly,
+ * and declares which of the up-to-three derivable results a drawn object emits
+ * (LF, single/both-side SF, CY). It is the future home for pitch math and
+ * trade-aware deductions.
+ *
+ * Additive: a measurement records its `condition_id`, but the existing
+ * tag-based model remains the fallback (no backfill — existing rows stay
+ * unlinked). Shape mirrors the API/DB snake_case row so api + web share it.
+ */
+export interface TakeoffCondition {
+  id: string
+  company_id: string
+  name: string
+  /** Hex color the canvas legend + drawn geometry render in (e.g. '#2f7d32'). */
+  color: string
+  measurement_kind: ConditionMeasurementKind
+  /**
+   * Drivers. All nullable — a Condition only fixes the drivers its
+   * measurement_kind + result emission need. height/thickness are world feet;
+   * sides is 1 or 2; slope is a rise:run ratio (rise over a run of 12; null =
+   * flat / 1.0).
+   */
+  height_value: number | null
+  thickness_value: number | null
+  sides: number | null
+  slope_value: number | null
+  /** Optional default assembly to attach to drawn measurements (null = flat-line). */
+  default_assembly_id: string | null
+  /** Result-emission flags: which derivable results a drawn object emits. */
+  emit_linear: boolean
+  emit_area: boolean
+  emit_volume: boolean
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export const EXTERIOR_CLADDING_PACK: AssemblyTemplate[] = [
   {
     serviceItemCode: 'EPS',

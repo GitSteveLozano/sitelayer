@@ -106,6 +106,12 @@ export interface TakeoffMeasurement {
    * lines instead of one flat line. NULL = flat-line behavior (the default).
    */
   assembly_id?: string | null
+  /**
+   * Condition layer (Takeoff Deep Dive H1): the reusable typed template this
+   * measurement was drawn against, or null for the legacy shape-first flow.
+   * Additive — the canvas legend groups by it; the tag flow stays the fallback.
+   */
+  condition_id?: string | null
   version: number
   created_at: string
 }
@@ -226,6 +232,8 @@ export interface CreateMeasurementInput {
   is_deduction?: boolean
   /** Phase A.2: route the measurement to a specific takeoff draft. When omitted, the API falls back to the project's default draft. */
   draft_id?: string | null
+  /** Condition layer (Deep Dive H1): the reusable typed template this measurement is drawn against. NULL/omitted = legacy shape-first flow (the tag fallback is unaffected). */
+  condition_id?: string | null
 }
 
 export type CreateMeasurementResult = TakeoffMeasurement | { queued: true }
