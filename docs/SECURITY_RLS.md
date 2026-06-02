@@ -8,11 +8,24 @@ landed in `085_rls_enable_phase_3.sql` (the ~65 tables from the 066
 policy sweep), `101_v2_rls.sql` (the v2 entity tables), and the
 per-table migrations that flip RLS in the same file that creates a new
 company-scoped table (e.g. `088`, `092`, `103`, `104`, `105`, `120`,
-`124`, `125`, `131`, and `145_asset_deployments_rls.sql`). The policy
-still permits NULL GUC (`app_current_company_id() IS NULL OR company_id =
-...`), so legacy/debug paths keep working, but every read inside a
-`withCompanyClient` / `withMutationTx` closure is filtered and every
-INSERT/UPDATE is checked under WITH CHECK.
+`124`, `125`, `131`, `145_asset_deployments_rls.sql`, and
+`146_rls_force_close_gaps.sql`). The policy still permits NULL GUC
+(`app_current_company_id() IS NULL OR company_id = ...`), so legacy/debug
+paths keep working, but every read inside a `withCompanyClient` /
+`withMutationTx` closure is filtered and every INSERT/UPDATE is checked
+under WITH CHECK.
+
+`146_rls_force_close_gaps.sql` closed the last batch of `KNOWN GAP`
+company-scoped tables the forced-coverage audit was tracking as
+exemptions: `company_pricing_overrides`, `customer_pricing_overrides`,
+`project_pricing_overrides`, `qbo_sync_runs`, `rental_rate_tiers`,
+`takeoff_capture_artifacts`, and `takeoff_drafts`. Each is `company_id
+NOT NULL` and genuinely per-tenant (verified against its create migration
+and every read/write path in `apps/api` + `apps/worker`), so the correct
+fix was the standard `company_isolation` policy + ENABLE + FORCE — not a
+different policy and not an exemption. They were removed from
+`RLS_FORCE_AUDIT_ALLOWLIST` in the same change so the gate now protects
+them.
 
 `asset_deployments` was the canonical gap: migration `118` created it
 with `company_id NOT NULL` AFTER the 085 flip but added no policy and
@@ -27,11 +40,13 @@ tables `audit_events`, `workflow_event_log`, `mutation_outbox`,
 `sync_events` are ENABLED but NOT FORCED, so `pg_dump` running as the
 table owner can still back them up (migration
 `078_rls_no_force_for_owner_dumps.sql`). The app role is a non-owner and
-stays filtered by the policy. A handful of company-scoped tables remain
-unforced as tracked follow-ups (nullable-`company_id` globals and known
-gaps); they are enumerated in `RLS_FORCE_AUDIT_ALLOWLIST` (see the gate
-section) so the gate stays green today while still blocking new
-offenders.
+stays filtered by the policy. The only other unforced entries are a small
+set of nullable-`company_id` globals / internal caches (e.g.
+`scaffold_manufacturers`, `tenant_provisions`, `company_bootstrap_state`);
+they are enumerated in `RLS_FORCE_AUDIT_ALLOWLIST` (see the gate section),
+each with a one-line reason, so the gate stays green while still blocking
+new offenders. There are no remaining `company_id NOT NULL` "known gap"
+tables — migration `146` closed the last batch.
 
 **Phase 1 — shadow mode (historical).** Migration `066_row_level_security.sql`
 defines `company_isolation` policies on every company-scoped table. The
@@ -196,13 +211,33 @@ in `apps/api/src/routes/rls-force-audit.ts` with a one-line reason instead.
 
 Do **not** edit migration 066; it is immutable per `CLAUDE.md` deploy rules.
 
+## The `companies` tenant root is gated by membership, not app.company_id
+
+`companies` is the tenant ROOT. It deliberately has **no** `company_id`
+column (its PK is `id`), so it is not part of the forced-coverage surface
+and must **not** carry an `app.company_id` RLS policy. The resolution
+order is why:
+
+- `getCompany()` in `apps/api/src/server.ts` looks up the `companies` row
+  by slug/id **before** any `app.company_id` GUC exists — resolving the
+  company is precisely what establishes which company the request is
+  scoped to. An `app.company_id` policy on `companies` would be circular
+  (you'd need the GUC to read the row that tells you the GUC).
+- Access is then gated by a `company_memberships` lookup
+  (`where company_id = $1 and clerk_user_id = $2`); no membership row →
+  `getCompany` returns `null` → 403. The **membership table** is the real
+  cross-tenant boundary for the root, and it is ENABLE+FORCE'd by
+  migration `085`.
+
+So `companies` is an intentional structural exemption (documented here),
+and it never appears in `RLS_FORCE_AUDIT_ALLOWLIST` because the audit only
+scans `company_id` tables. The unit test in
+`apps/api/src/routes/rls-force-close-gaps.test.ts` asserts neither
+`companies` nor `company_memberships` is allowlisted, anchoring this
+reasoning.
+
 ## Open work
 
-- Force RLS on the remaining `KNOWN GAP` tables in
-  `RLS_FORCE_AUDIT_ALLOWLIST` (the pricing-override tables,
-  `rental_rate_tiers`, `qbo_sync_runs`, `takeoff_drafts`,
-  `takeoff_capture_artifacts`) and delete each from the allowlist as it is
-  closed so the gate protects it.
 - Drop the `app_current_company_id() IS NULL OR ...` permissive clause
   once every read goes through a scoped client; tighten the policy to a
   strict equality check.

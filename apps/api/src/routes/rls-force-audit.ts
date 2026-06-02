@@ -64,25 +64,22 @@ export const RLS_FORCE_AUDIT_ALLOWLIST: Readonly<Record<string, string>> = {
   // --- Not strict per-tenant rows: company_id is nullable (global catalog /
   //     cross-company provisioning ledger) or an internal cache keyed by
   //     company. These are not part of the tenant-isolation surface the FORCE
-  //     gate protects.
+  //     gate protects. Each is INTENTIONALLY exempt for the documented reason —
+  //     this is the only legitimate kind of entry left in this allowlist.
   audit_escrow_entries: 'company_id nullable — append-only escrow ledger (migration 095)',
   scaffold_manufacturers: 'company_id nullable — global + per-company catalog (migration 058)',
   scaffold_systems: 'company_id nullable — global + per-company catalog (migration 058)',
   tenant_provisions: 'company_id nullable — provisioning ledger (migration 119)',
   company_bootstrap_state: 'internal bootstrap-token cache keyed by company_id (migration 014)',
 
-  // --- KNOWN pre-existing gaps (company_id NOT NULL, no forced RLS). These
-  //     predate this gate and are tracked for their own follow-up migration —
-  //     each is the SAME class as asset_deployments was. The gate snapshots
-  //     them here so it is green today and BLOCKS any NEW unlisted offender;
-  //     remove an entry the moment a migration forces it.
-  company_pricing_overrides: 'KNOWN GAP — pricing override, force in a follow-up migration (071)',
-  customer_pricing_overrides: 'KNOWN GAP — pricing override, force in a follow-up migration (071)',
-  project_pricing_overrides: 'KNOWN GAP — pricing override, force in a follow-up migration (071)',
-  qbo_sync_runs: 'KNOWN GAP — policy exists, ENABLE/FORCE pending follow-up (077/080)',
-  rental_rate_tiers: 'KNOWN GAP — rate tiers, force in a follow-up migration (067)',
-  takeoff_capture_artifacts: 'KNOWN GAP — capture artifacts, force in a follow-up migration (069)',
-  takeoff_drafts: 'KNOWN GAP — takeoff drafts, force in a follow-up migration (066)',
+  // NOTE: the former "KNOWN GAP" block (company_pricing_overrides,
+  // customer_pricing_overrides, project_pricing_overrides, qbo_sync_runs,
+  // rental_rate_tiers, takeoff_capture_artifacts, takeoff_drafts) was CLOSED by
+  // migration 146_rls_force_close_gaps.sql — each is now ENABLE + FORCE with the
+  // standard company_isolation policy, so the gate protects them. They were
+  // removed from this allowlist deliberately: if any regresses to unforced, the
+  // forced-coverage audit must fail rather than silently pass. Do not re-add a
+  // company-scoped table here — force it in a migration instead.
 }
 
 /**

@@ -73,6 +73,43 @@ describe('RLS_FORCE_AUDIT_ALLOWLIST', () => {
     expect(RLS_FORCE_AUDIT_ALLOWLIST).not.toHaveProperty('asset_deployments')
   })
 
+  it('does NOT allowlist the seven gap tables — migration 146 forces them, so the gate protects them', () => {
+    // The former "KNOWN GAP" block. Each is company_id NOT NULL + genuinely
+    // per-tenant, now ENABLE+FORCE via 146_rls_force_close_gaps.sql. They must
+    // be OFF the allowlist so a regression to unforced fails the gate.
+    for (const t of [
+      'company_pricing_overrides',
+      'customer_pricing_overrides',
+      'project_pricing_overrides',
+      'qbo_sync_runs',
+      'rental_rate_tiers',
+      'takeoff_capture_artifacts',
+      'takeoff_drafts',
+    ]) {
+      expect(RLS_FORCE_AUDIT_ALLOWLIST, `${t} must not be allowlisted (migration 146 forces it)`).not.toHaveProperty(t)
+    }
+  })
+
+  it('allowlists ONLY the documented intentional exemptions (no company-scoped table)', () => {
+    // After migration 146 the only legitimate exemptions are the 4 append-only
+    // no-force queue tables (pg_dump owner, migration 078) and the 5
+    // nullable/internal globals. A company-scoped (company_id NOT NULL) table
+    // must never sit here — it must be forced instead.
+    expect(new Set(Object.keys(RLS_FORCE_AUDIT_ALLOWLIST))).toEqual(
+      new Set([
+        'audit_events',
+        'mutation_outbox',
+        'sync_events',
+        'workflow_event_log',
+        'audit_escrow_entries',
+        'scaffold_manufacturers',
+        'scaffold_systems',
+        'tenant_provisions',
+        'company_bootstrap_state',
+      ]),
+    )
+  })
+
   it('keeps the no-force append-only tables exempt (migration 078)', () => {
     for (const t of ['audit_events', 'mutation_outbox', 'sync_events', 'workflow_event_log']) {
       expect(RLS_FORCE_AUDIT_ALLOWLIST).toHaveProperty(t)
