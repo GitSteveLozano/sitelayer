@@ -356,9 +356,15 @@ stage_integration() {
   done
 
   echo "  -> RUN_API_INTEGRATION=1 vitest (@sitelayer/api)"
+  # RLS_PHASE3_FAIL_ON_LEAK=1 turns the RLS audits into BLOCKING gates: the
+  # static route audit fails on any raw pool.query leak, and the live-schema
+  # forced-coverage audit (rls-force-audit.ts) fails when a company_id table
+  # ships without FORCE ROW LEVEL SECURITY and isn't allowlisted — the
+  # asset_deployments-style gap the deploy gate must catch.
   local int_rc=0
   DATABASE_URL="$db_url" \
   RUN_API_INTEGRATION=1 \
+  RLS_PHASE3_FAIL_ON_LEAK=1 \
   APP_TIER=local \
   ACTIVE_COMPANY_SLUG=la-operations \
   ACTIVE_USER_ID=demo-user \

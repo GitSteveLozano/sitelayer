@@ -5,42 +5,39 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 
+import { auditUnforcedCompanyTables, type RlsForceFinding } from './rls-force-audit.js'
+
 /**
- * RLS Phase 3 readiness audit.
+ * RLS Phase 3 audit — now a BLOCKING GATE.
  *
- * Phase 1 (migration 066) shipped RLS policies on every domain table; Phase 2
- * left them DISABLED in shadow mode so misconfigured routes wouldn't tank the
- * pilot. Phase 3 will FLIP RLS ENABLE/FORCE on the 77 domain tables. The
- * pre-condition for that flip is: every route either checks out a
- * `withCompanyClient(...)` / `withMutationTx(...)` client (which sets the
- * `app.company_id` GUC inside a tx), or its raw `pool.query(...)` calls go
- * away. A raw `pool.query` would silently leak rows across companies the
- * instant RLS is enabled because the pool's BYPASSRLS role bypasses the
- * policy, but the GUC never gets bound to the connection.
+ * Phase 1 (migration 066) shipped RLS policies on every domain table; Phase 3
+ * (migrations 085/101 + per-table follow-ups) ENABLED + FORCED RLS across the
+ * company-scoped surface. This audit guards that posture so it can't silently
+ * regress, and `scripts/verify-local.sh`'s integration stage sets
+ * `RLS_PHASE3_FAIL_ON_LEAK=1` so a regression FAILS the deploy gate.
  *
- * This file does two things:
+ * This file does three things:
  *
- *  1. **Static audit (always runs).** For every route under audit, read the
- *     handler source and assert that the file imports either `withCompanyClient`
- *     or `withMutationTx` from `../mutation-tx.js`. Flag any module that
- *     issues `pool.query(` or `client.query(` calls outside such a closure
- *     so the operator can see exactly which file is the leak risk. This
- *     audit prints a per-route summary in `afterAll` (the report Step 5 of
- *     the spec asks for).
+ *  1. **Static route audit (always runs; hard gate under RLS_PHASE3_FAIL_ON_LEAK).**
+ *     For every audited route, read the handler source and assert it reads/writes
+ *     through `withCompanyClient(...)` / `withMutationTx(...)` (which set the
+ *     `app.company_id` GUC inside a tx) and does not issue a raw `pool.query(`
+ *     outside such a closure. A raw `pool.query` leaks rows across companies the
+ *     instant FORCE RLS is on (the pool's role would need the GUC bound).
+ *     Documented cross-company admin reads (`rawQueryExemptReason`) are exempt.
  *
- *  2. **Runtime probe (gated by `CONSTRAINED_DB_URL`).** Connects to Postgres
- *     as a non-BYPASSRLS role, enables + forces RLS on the `projects` table,
- *     seeds one row per company, and verifies the policy actually scopes
- *     reads to the GUC value. Proves the mechanism the audit assumes is
- *     real before Phase 3 turns it on for the other 76 tables. Skips
- *     cleanly when the env var is unset — CI doesn't have a constrained
- *     role provisioned yet.
+ *  2. **Forced-coverage audit (live schema; hard gate under RLS_PHASE3_FAIL_ON_LEAK).**
+ *     Queries the post-migration Postgres for every `company_id` table lacking
+ *     FORCE ROW LEVEL SECURITY and flags any that aren't on the documented
+ *     allowlist. This is the "next asset_deployments gap" catcher — migration
+ *     118 shipped `asset_deployments` unforced and it slipped through; this gate
+ *     makes that class fail at verify time. See ./rls-force-audit.ts.
  *
- * Important: this file MUST NOT enable RLS on any non-test table. The Phase
- * 3 flip is the follow-up PR. Phase 1's `alter table … enable row level
- * security` lives on `audit_events`, `workflow_event_log`,
- * `mutation_outbox`, and `sync_events`; everything else stays in shadow
- * mode until that follow-up.
+ *  3. **Runtime probe (gated by `CONSTRAINED_DB_URL`).** Connects to Postgres as
+ *     a non-BYPASSRLS role, enables + forces RLS on the `projects` table, seeds
+ *     one row per company, and verifies the policy actually scopes reads to the
+ *     GUC value. Proves the mechanism the audits assume is real. Skips cleanly
+ *     when the env var is unset.
  *
  * ## Running the audit locally
  *
@@ -85,6 +82,16 @@ type AuditedRoute = {
   file: string
   /** Category — used to group the summary. */
   category: 'money' | 'bulk-read' | 'workflow'
+  /**
+   * Documented reason a module's raw `pool.query(` calls are NOT a leak risk
+   * even under Phase 3 FORCE. Set ONLY for handlers whose raw queries target the
+   * ENABLE-not-FORCE append-only/queue tables on the cross-company admin surface
+   * (the pg_dump owner exemption from migration 078), where the read is
+   * deliberately unscoped and filtered explicitly in SQL. When set, the static
+   * audit treats the module's mixed raw queries as expected rather than a
+   * failure (it still prints the call sites in the summary).
+   */
+  rawQueryExemptReason?: string
 }
 
 const AUDITED_ROUTES: readonly AuditedRoute[] = [
@@ -102,7 +109,18 @@ const AUDITED_ROUTES: readonly AuditedRoute[] = [
   // Bulk-read: these handlers fan out across many domain tables in one
   // request. A single missed `withCompanyClient` here can leak hundreds of
   // rows in one response.
-  { surface: '/api/bootstrap', file: 'system.ts', category: 'bulk-read' },
+  {
+    surface: '/api/bootstrap',
+    file: 'system.ts',
+    category: 'bulk-read',
+    // system.ts handles BOTH /api/bootstrap (which reads exclusively through
+    // withCompanyClient) AND /api/debug/traces/:id. The only raw pool.query
+    // calls in the file are in the debug-trace helpers, reading the
+    // ENABLE-not-FORCE append-only audit/queue tables (mutation_outbox,
+    // sync_events, audit_events) on the documented cross-company admin surface
+    // — they filter explicitly in SQL and are not a Phase 3 leak risk.
+    rawQueryExemptReason: 'debug-trace reads target ENABLE-not-FORCE append-only audit tables (migration 078)',
+  },
   { surface: '/api/projects', file: 'projects.ts', category: 'bulk-read' },
   { surface: '/api/customers', file: 'customers.ts', category: 'bulk-read' },
   { surface: '/api/workers', file: 'workers.ts', category: 'bulk-read' },
@@ -197,6 +215,14 @@ function auditRouteModule(route: AuditedRoute): AuditFinding {
     // operator can verify by hand.
     isSafe = true
     verdict = 'no direct queries (delegates to helpers)'
+  } else if (route.rawQueryExemptReason) {
+    // Module has raw pool.query calls, but they are a DOCUMENTED cross-company
+    // admin read against ENABLE-not-FORCE append-only tables — not a leak risk
+    // under Phase 3 FORCE. Report the call sites but treat as safe.
+    isSafe = true
+    verdict = `exempt — ${rawPoolQueryLines.length} raw pool.query call(s) at line(s) ${rawPoolQueryLines
+      .slice(0, 5)
+      .join(', ')}${rawPoolQueryLines.length > 5 ? '…' : ''} (${route.rawQueryExemptReason})`
   } else if (importsGucHelper) {
     // The module uses helpers somewhere but ALSO has raw pool.query calls.
     // Under Phase 3 those raw calls become leak risks unless every one of
@@ -226,14 +252,14 @@ function auditRouteModule(route: AuditedRoute): AuditFinding {
 // ---------------------------------------------------------------------------
 // Static audit — always runs, even without CONSTRAINED_DB_URL.
 //
-// IMPORTANT: the static audit is a *report*, not a fail-the-build gate. CI
-// runs without CONSTRAINED_DB_URL and Phase 3 has not flipped RLS yet, so
-// the existing mixed `pool.query`/`withCompanyClient` modules are
-// intentionally not failures today. They become failures the day Phase 3
-// flips RLS on; until then the printed summary is the operator's punch
-// list. Use the `RLS_PHASE3_FAIL_ON_LEAK=1` env var to convert the
-// summary into hard test failures — wire that up the same PR that
-// enables RLS so the audit becomes a blocking gate at the right time.
+// Phase 3 RLS is now ENABLED + FORCED across the company-scoped surface
+// (migrations 085/101 + the per-table follow-ups), and the integration stage
+// of scripts/verify-local.sh sets `RLS_PHASE3_FAIL_ON_LEAK=1`, so this audit is
+// a BLOCKING GATE: any audited route that issues a raw `pool.query(` outside a
+// withCompanyClient / withMutationTx closure (and is not a documented
+// cross-company admin read — see `rawQueryExemptReason`) fails the build. The
+// printed summary at the bottom still lists every route's status. Leave
+// `RLS_PHASE3_FAIL_ON_LEAK` unset for a report-only run during local iteration.
 // ---------------------------------------------------------------------------
 
 const findings: AuditFinding[] = AUDITED_ROUTES.map(auditRouteModule)
@@ -251,9 +277,9 @@ describe('RLS Phase 3 audit — static analysis', () => {
     }
   })
 
-  // Optional hard gate. Off by default so CI stays green while Phase 3 is
-  // still in shadow mode; flip RLS_PHASE3_FAIL_ON_LEAK=1 the same PR that
-  // enables RLS so any new offender breaks the build.
+  // Hard gate (active under RLS_PHASE3_FAIL_ON_LEAK=1 — set by verify-local.sh's
+  // integration stage). Any audited route that issues a raw pool.query outside a
+  // GUC-binding closure (and isn't a documented exemption) breaks the build.
   if (FAIL_ON_LEAK) {
     for (const finding of findings) {
       it(`${finding.surface} (${finding.file}) is ready for Phase 3 RLS`, () => {
@@ -268,6 +294,76 @@ describe('RLS Phase 3 audit — static analysis', () => {
       })
     }
   }
+})
+
+// ---------------------------------------------------------------------------
+// Forced-RLS coverage audit — the "next asset_deployments gap" catcher.
+//
+// Runs against the live (post-migration) integration Postgres. For every
+// `public` table that has a `company_id` column, it reads
+// `pg_class.relforcerowsecurity`; any table that is NOT forced AND NOT on the
+// documented allowlist (`RLS_FORCE_AUDIT_ALLOWLIST` in ./rls-force-audit.ts) is
+// a finding. asset_deployments was such a finding until migration 145 forced
+// it. Under RLS_PHASE3_FAIL_ON_LEAK=1 (set by verify-local.sh's integration
+// stage) a finding FAILS the build, so the next company-scoped table that ships
+// without forced RLS is caught at gate time. The probe only reads pg_catalog,
+// so the BYPASSRLS `sitelayer` integration role is fine — no constrained role
+// needed. Skips cleanly outside the integration suite.
+// ---------------------------------------------------------------------------
+
+const RUN_INTEGRATION = process.env.RUN_API_INTEGRATION === '1'
+const describeForceAudit = RUN_INTEGRATION ? describe : describe.skip
+const FORCE_AUDIT_DB_URL = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+
+describeForceAudit('RLS forced-coverage audit — live schema (company_id tables)', () => {
+  let pool: Pool
+  let forceFindings: RlsForceFinding[] = []
+  let inspectedCount = 0
+
+  it('every company_id table is FORCE RLS or explicitly allowlisted', async () => {
+    pool = new Pool({ connectionString: FORCE_AUDIT_DB_URL, max: 2 })
+    const { state, findings } = await auditUnforcedCompanyTables((sql) => pool.query(sql))
+    inspectedCount = state.length
+    forceFindings = findings
+
+    // Sanity: the audit must actually see the company-scoped surface — a query
+    // that returns nothing would silently pass. The domain has ~100 such tables.
+    expect(inspectedCount).toBeGreaterThan(50)
+
+    // asset_deployments specifically must be forced now (the slice's keystone).
+    const assetDeployments = state.find((s) => s.table === 'asset_deployments')
+    expect(assetDeployments, 'asset_deployments must exist in the audited surface').toBeDefined()
+    expect(assetDeployments?.forced, 'asset_deployments must have FORCE ROW LEVEL SECURITY (migration 145)').toBe(true)
+
+    if (FAIL_ON_LEAK) {
+      expect(
+        forceFindings,
+        forceFindings.length === 0
+          ? ''
+          : `Found company_id table(s) without FORCE ROW LEVEL SECURITY and not on the allowlist:\n` +
+              forceFindings.map((f) => `  - ${f.table}: ${f.reason}`).join('\n') +
+              `\n\nFix: add the per-table RLS in a NEW migration (mirror 101_v2_rls.sql / 145_asset_deployments_rls.sql),\n` +
+              `or, if the table is intentionally not tenant-isolated, add it to RLS_FORCE_AUDIT_ALLOWLIST\n` +
+              `in apps/api/src/routes/rls-force-audit.ts with a one-line reason.`,
+      ).toEqual([])
+    }
+  })
+
+  afterAll(async () => {
+    if (pool) await pool.end()
+    // Always print the coverage summary so the operator sees the punch-list
+    // even when the gate is off (report-only) or green.
+    const lines: string[] = ['', 'RLS forced-coverage audit:']
+    lines.push(`  inspected ${inspectedCount} company_id table(s).`)
+    if (forceFindings.length === 0) {
+      lines.push('  all company_id tables are FORCE RLS or explicitly allowlisted.')
+    } else {
+      lines.push(`  ${forceFindings.length} unforced + non-allowlisted table(s):`)
+      for (const f of forceFindings) lines.push(`    XX ${f.table} — ${f.reason}`)
+    }
+    lines.push('')
+    console.log(lines.join('\n'))
+  })
 })
 
 // ---------------------------------------------------------------------------
