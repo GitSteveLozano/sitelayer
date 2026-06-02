@@ -5,6 +5,12 @@ the runbook for collapsing the `docker/postgres/init/*.sql` history into a
 single `000_baseline.sql` during the learning phase, and the explicit rule for
 when that is no longer allowed.
 
+> **Context.** This is the operational procedure referenced by
+> [`ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §3.2–3.4:
+> how to periodically squash the numbered migration series into a single baseline
+> during the learning phase, and the one condition (the maturity trigger) under
+> which you must stop forever.
+
 > **One-line rule:** squash-baselining is allowed **only while prod holds no
 > irreplaceable customer data**. The moment it does, stop — the history goes
 > strictly forward-only, forever. See [§5 Maturity-curve gate](#5-maturity-curve-gate).
