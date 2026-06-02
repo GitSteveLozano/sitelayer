@@ -176,9 +176,7 @@ export function OwnerBudgetVariance() {
           }
         />
 
-        {data?.attribution ? (
-          <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{data.attribution}</div>
-        ) : null}
+        {data?.attribution ? <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{data.attribution}</div> : null}
       </div>
     </div>
   )

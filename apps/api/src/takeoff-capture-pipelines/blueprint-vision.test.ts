@@ -87,10 +87,7 @@ describe('captureBlueprintVisionDraft — per-symbol count (dry-run)', () => {
   })
 
   it('falls back to the whole-draft path when no symbol is chosen', async () => {
-    const { result } = await captureBlueprintVisionDraft(
-      { dryRun: true },
-      '33333333-3333-4333-8333-333333333333',
-    )
+    const { result } = await captureBlueprintVisionDraft({ dryRun: true }, '33333333-3333-4333-8333-333333333333')
     // Whole-draft EIFS demo has multiple quantities and no per-symbol objects.
     expect(result.quantities.length).toBeGreaterThan(1)
     expect(result.geometry?.objects ?? []).toHaveLength(0)

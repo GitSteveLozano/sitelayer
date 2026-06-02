@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import ExcelJS from 'exceljs'
-import {
-  CostLibraryImportError,
-  parseCsvPriceBook,
-  parsePriceBook,
-  parseXlsxPriceBook,
-} from './cost-library-import.js'
+import { CostLibraryImportError, parseCsvPriceBook, parsePriceBook, parseXlsxPriceBook } from './cost-library-import.js'
 
 describe('parseCsvPriceBook', () => {
   it('maps canonical columns and splits material/labor rates', () => {

@@ -175,11 +175,7 @@ const SNAPSHOT_COLUMNS = `id, company_id, project_id, version, frozen_at, frozen
  * bid, untouched. Additive: a project with no freeze simply has no snapshot,
  * and the variance view reports "not yet frozen".
  */
-export async function handleBudgetRoutes(
-  req: http.IncomingMessage,
-  url: URL,
-  ctx: BudgetRouteCtx,
-): Promise<boolean> {
+export async function handleBudgetRoutes(req: http.IncomingMessage, url: URL, ctx: BudgetRouteCtx): Promise<boolean> {
   const freezeMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/budget\/freeze$/)
   const varianceMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/budget\/variance$/)
   const listMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/budget$/)

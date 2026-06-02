@@ -169,7 +169,7 @@ function splitCsvLine(line: string): string[] {
 /** Parse CSV text into raw rows of string cells (header included). */
 function parseCsvCells(csv: string): string[][] {
   // Strip a UTF-8 BOM, normalize line endings, drop a trailing newline.
-  const text = csv.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
+  const text = csv.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
   const lines = text.split('\n')
   const rows: string[][] = []
   for (const line of lines) {

@@ -258,8 +258,8 @@ function ImportPriceBookModal({ onClose, onImported }: ImportModalProps) {
         </div>
         <p style={{ fontSize: 12, color: 'var(--m-ink-3)', margin: 0, lineHeight: 1.5 }}>
           Recognized columns: trade, code (or CSI / service_item_code), name, unit, material_rate, labor_rate (or a
-          single rate/cost), region, source. Re-importing the same code updates its rates in place. Regional
-          multipliers are a follow-up.
+          single rate/cost), region, source. Re-importing the same code updates its rates in place. Regional multipliers
+          are a follow-up.
         </p>
       </div>
     </DModal>

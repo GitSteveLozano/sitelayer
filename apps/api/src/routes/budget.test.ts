@@ -336,6 +336,7 @@ describe('handleBudgetRoutes — GET /api/projects/:id/budget/variance', () => {
       cost_codes: Array<{
         service_item_code: string
         budget_total_cents: number
+        actual_labor_cents: number
         actual_total_cents: number
         variance_cents: number
         confidence: string

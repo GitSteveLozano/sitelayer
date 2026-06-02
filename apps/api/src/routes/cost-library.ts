@@ -197,10 +197,7 @@ export async function handleCostLibraryRoutes(
 }
 
 /** Coerce a caller-supplied pre-parsed row into the canonical shape; null when no code. */
-function normalizePreParsedRow(
-  r: Record<string, unknown>,
-  defaultSource: string,
-): ParsedCostLibraryRow | null {
+function normalizePreParsedRow(r: Record<string, unknown>, defaultSource: string): ParsedCostLibraryRow | null {
   const code = optionalString(r.code, 128)
   if (!code) return null
   return {

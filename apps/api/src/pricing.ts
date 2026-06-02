@@ -279,7 +279,7 @@ export async function resolvePrices(args: {
         and code = any($4::text[])
         and deleted_at is null
     ),
-    -- Layer 6 (lowest): shared trade cost library. `distinct on (lower(code))`
+    -- Layer 6 (lowest): shared trade cost library. distinct on (lower(code))
     -- with the company-first ordering collapses any (company row, shared row)
     -- pair for the same code down to the company's own row before it competes
     -- with the higher layers. material_rate + labor_rate is the unit rate.

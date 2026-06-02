@@ -120,8 +120,7 @@ function buildPerSymbolCount(skeleton: TakeoffResult, scope: CountScope): Takeof
   // the rolled-up quantity is the mean instance confidence so the review floor
   // (applyReviewFloor) flags the count when the LOOSE/NORMAL tail dips low.
   const confidences = objects.map((_, i) => instanceConfidence(base, i, instanceCount))
-  const meanConfidence =
-    confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : base
+  const meanConfidence = confidences.length > 0 ? confidences.reduce((a, b) => a + b, 0) / confidences.length : base
 
   const sheetLabel = scope.sheets.length > 0 ? scope.sheets.join(', ') : 'all sheets'
   skeleton.quantities = [
