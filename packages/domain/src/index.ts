@@ -1569,6 +1569,21 @@ export {
   type ProjectRole,
 } from './roles.js'
 
+// Per-company settings helper — THE convention for per-company config (a new
+// toggle is a CODE change, not a migration). Backed by the generic
+// company_settings table (migration 152). See docs/MULTI_TENANCY.md.
+export {
+  getCompanySetting,
+  setCompanySetting,
+  deleteCompanySetting,
+  listCompanySettings,
+  getQboLiveEnabled,
+  getNotificationFrom,
+  LEGACY_COLUMN_SETTING_KEYS,
+  type SettingsExecutor,
+  type CompanySettingValue,
+} from './company-settings.js'
+
 export {
   PERMISSION_ACTIONS,
   BUILTIN_ROLES,

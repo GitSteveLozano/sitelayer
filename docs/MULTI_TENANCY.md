@@ -47,11 +47,15 @@ for remaining single-tenant assumptions after the worker went multi-company
 
 3. **Per-tenant config goes in the DB, not env.** If a setting can differ between
    two companies (feature flag, integration toggle, live/dry-run, sender identity,
-   rate cap, model key, bucket prefix), it belongs on a per-company row
-   (`companies.*` column / jsonb, or `integration_connections.*`), NOT a global
-   `process.env`. The ONLY legitimate env role for such a setting is a
+   rate cap, model key, bucket prefix), it belongs on a per-company row, NOT a
+   global `process.env`. The ONLY legitimate env role for such a setting is a
    **cluster-wide kill switch** that can force ALL companies off (the
    `QBO_LIVE_* = '1'` pattern): `effective = clusterKillSwitchOn AND perCompanyFlag`.
+
+   **A NEW per-company setting is a CODE change, not a migration — RULE 9.** Use
+   the `company_settings` key→jsonb store via `getCompanySetting` /
+   `setCompanySetting` (`@sitelayer/domain`). Do NOT add a new column +
+   migration for the 20th flag the way migrations 144 / 150 did for the first two.
 
 4. **The worker drains EVERY company.** New per-company runners take a `companyId`
    and are called from the per-company loop in `apps/worker/src/worker.ts`
@@ -80,6 +84,50 @@ for remaining single-tenant assumptions after the worker went multi-company
    numbered migration in `docker/postgres/init/` (never edit an applied one — the
    `schema_migrations` sha256 ledger rejects a checksum change). New code tolerates
    the old schema during rollout (catch `42703` undefined_column → safe default).
+
+9. **A new per-company setting is a CODE change, not a migration.** Per-company
+   config kept accreting as new COLUMNS — one migration per setting
+   (`integration_connections.qbo_live_enabled` mig 144,
+   `companies.notification_from_*` mig 150). On the only durable tier (DO Managed
+   Postgres) every migration is forward-only + immutable + checksum-ledgered, so
+   "add the 20th per-company flag" is a real DB change through the deploy gate.
+   The generic `company_settings` store (migration 152) ends that churn: a
+   `(company_id, key) → jsonb value` table read/written through the typed helper
+   in `@sitelayer/domain`. **THE convention for the next 20 settings:**
+
+   ```ts
+   import { getCompanySetting, setCompanySetting } from '@sitelayer/domain'
+
+   // READ (call-site default = the key's type + fallback; no migration):
+   const digestOn = await getCompanySetting(client, companyId, 'notifications.digest_enabled', false)
+   const invoiceCap = await getCompanySetting(client, companyId, 'billing.auto_invoice_cap', 0)
+
+   // WRITE (admin route / worker):
+   await setCompanySetting(client, companyId, 'notifications.digest_enabled', true)
+   ```
+
+   - `client` is any `{ query }` — a `Pool`, a `PoolClient`, or a
+     `withCompanyClient`-scoped client. The helper lives in `@sitelayer/domain`
+     (no `pg` dep — structural `SettingsExecutor`) so api AND worker share it.
+   - Every helper statement carries an explicit `where company_id = $1`, so
+     isolation holds even under the CI/dev `sitelayer` role that BYPASSes RLS. In
+     prod `company_settings` is RLS **ENABLE + FORCE**'d (migration 152) — the
+     same `app.company_id` policy every tenant child table has, and the
+     **forced-coverage audit** (`rls-force-audit.ts`) blocks the deploy gate if it
+     ever regresses (`company_settings` is deliberately NOT on the allowlist).
+   - A missing row → the call-site default. A stored value whose JSON type does
+     not match the default → the default (a corrupt/legacy value can't crash a
+     reader). A table that predates migration 152 (`42P01`) → the default on read.
+   - **Do NOT** widen the typed `companies.modules` feature-pack (migration 062)
+     for a new arbitrary setting, and do NOT add a new per-company column. `modules`
+     stays the typed boolean feature-pack it is; `company_settings` is everything
+     else.
+   - **Read-through for the two pre-existing columns.** `qbo_live_enabled` (144)
+     and `notification_from_*` (150) WORK and are tested — they are NOT ripped out.
+     The helper exposes `getQboLiveEnabled()` / `getNotificationFrom()` +
+     `LEGACY_COLUMN_SETTING_KEYS` so future code can read them through the same
+     vocabulary; those readers hit the real columns (no dual-write, no drift — the
+     column stays the source of truth). New settings must NOT add a reader here.
 
 ---
 
@@ -181,3 +229,14 @@ larger than this slice.
   numbered 150 to leave 146–149 for the sibling RLS
   slice; if both land, renumber whichever lands second (pure rename — additive
   content).
+- `docker/postgres/init/152_company_settings.sql` — adds the generic
+  `company_settings` `(company_id, key) → jsonb value` store (RULE 9), the
+  migration-free convention for the NEXT per-company settings. Company-scoped with
+  the standard `company_isolation` RLS **ENABLE + FORCE** (so the forced-coverage
+  audit protects it — `company_settings` is deliberately off
+  `RLS_FORCE_AUDIT_ALLOWLIST`). Additive / idempotent; no backfill — the existing
+  `qbo_live_enabled` (144) / `notification_from_*` (150) columns are untouched and
+  remain the source of truth (the helper offers a read-through, not a migration of
+  the data). **RENUMBER FLAG:** numbered 152 to clear the unused 151 gap and sit
+  above 150; renumber on collision (pure rename — additive content). Helper:
+  `packages/domain/src/company-settings.ts`.
