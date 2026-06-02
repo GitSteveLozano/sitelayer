@@ -125,6 +125,10 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
         `${label}.geometry must be a polygon (>=3 points), a lineal path (>=2 points), or a volume box with positive L/W/H`,
       )
     }
+    // Pitch (H2): `normalizeGeometry` validates+carries an optional `pitch`
+    // (rise:run) inside the geometry, and `calculateGeometryQuantity` applies
+    // `slopeFactor = √(rise²+run²)/run` to the scaled area/length. No column —
+    // pitch round-trips through the JSONB persisted below. Flat ⇒ factor 1.0.
     quantity = calculateGeometryQuantity(geometry)
     // Reject NaN/Infinity: a self-intersecting polygon or a pathological volume
     // box can produce NaN, and `n <= 0` is false for NaN so the trailing check

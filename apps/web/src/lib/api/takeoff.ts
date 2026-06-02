@@ -50,6 +50,14 @@ export interface MeasurementGeometry {
    */
   world_per_board_x?: number
   world_per_board_y?: number
+  /**
+   * Optional roof/slope pitch driver (rise:run, e.g. 6:12). When present the
+   * server multiplies the scaled area/length by `√(rise²+run²)/run` so sloped
+   * cladding/gables read true surface area. Stored inside this JSONB geometry —
+   * no column. Absent ⇒ flat/vertical ⇒ factor 1.0. See `@sitelayer/domain`
+   * `slopeFactor` / `calculateGeometryQuantity` (deep-dive H2).
+   */
+  pitch?: { rise: number; run: number }
 }
 
 /**

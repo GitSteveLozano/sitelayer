@@ -25,6 +25,8 @@ import {
   calculateLinealLengthScaled,
   calculatePolygonAreaScaled,
   calculatePolygonCentroid,
+  slopeFactor,
+  type PitchDriver,
   type TakeoffPoint,
 } from '@sitelayer/domain'
 import {
@@ -346,6 +348,13 @@ export function EstCanvas() {
   // service item. Sticky so several openings can be cut in a row.
   const [deduct, setDeduct] = useState(false)
 
+  // Pitch / slope driver (H2) for area + lineal takeoff. Empty ⇒ flat/vertical
+  // (slope factor 1.0, unchanged). When set to a valid rise:run the next saved
+  // measurement carries `pitch` inside its JSONB geometry and the server applies
+  // `√(rise²+run²)/run` to the scaled quantity. Sticky across saves like deduct.
+  const [pitchRise, setPitchRise] = useState('')
+  const [pitchRun, setPitchRun] = useState('12')
+
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
   // the "JUMPED FROM …" panel can offer a one-click RETURN. The callouts are
@@ -378,17 +387,36 @@ export function EstCanvas() {
     return a && b && c ? arcPolyline(a, b, c) : null
   }, [tool, draftPoints])
 
+  // Pitch / slope driver (H2). A valid rise:run yields a `PitchDriver`; an empty
+  // or non-positive run is treated as flat (null ⇒ slope factor 1.0). Pitch only
+  // applies to sloped-surface tools (area + lineal/arc), never to counts.
+  const activePitch = useMemo<PitchDriver | null>(() => {
+    const rise = Number(pitchRise)
+    const run = Number(pitchRun)
+    if (!Number.isFinite(rise) || !Number.isFinite(run)) return null
+    if (rise <= 0 || run <= 0) return null
+    return { rise, run }
+  }, [pitchRise, pitchRun])
+  const pitchAppliesToTool = tool === 'polygon' || tool === 'rect' || tool === 'lineal' || tool === 'arc'
+  const pitchFactor = pitchAppliesToTool ? slopeFactor(activePitch) : 1
+  // On-canvas audit suffix (deep-dive H2: "show the multiplier on the canvas
+  // label"). Only shown when pitch is actually multiplying the quantity (> 1).
+  const pitchLabel =
+    activePitch && pitchFactor > 1 ? ` ×${round2(pitchFactor)} (${activePitch.rise}:${activePitch.run})` : ''
+
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
     // Mirror the server's quantity math: when the page is calibrated, the live
-    // running quantity reads in real sqft/lf, not board-space units.
+    // running quantity reads in real sqft/lf, not board-space units. The optional
+    // pitch slope-factor is the 4th arg (default 1.0 ⇒ flat ⇒ legacy behavior).
     const wx = worldScale?.wx ?? 1
     const wy = worldScale?.wy ?? 1
-    if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy))
-    if (tool === 'lineal') return round2(calculateLinealLengthScaled(draftPoints, wx, wy))
-    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy)) : 0
+    if (tool === 'polygon' || tool === 'rect')
+      return round2(calculatePolygonAreaScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'lineal') return round2(calculateLinealLengthScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy, pitchFactor)) : 0
     return draftPoints.length
-  }, [tool, draftPoints, arcCurve, worldScale])
+  }, [tool, draftPoints, arcCurve, worldScale, pitchFactor])
 
   // Screen→board mapping uses the shared `screenToBoardPoint` CTM transform
   // (`@/lib/takeoff/canvas-math`), the same one the mobile + projects canvases use.
@@ -718,11 +746,15 @@ export function EstCanvas() {
         worldScale && (tool === 'polygon' || tool === 'rect' || tool === 'arc' || tool === 'lineal')
           ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
           : {}
+      // Pitch (H2): stamp the rise:run driver inside the JSONB geometry (no
+      // column) for sloped-surface tools when a valid pitch is set. The server's
+      // `calculateGeometryQuantity` applies the slope factor; flat ⇒ omitted.
+      const pitch = pitchAppliesToTool && activePitch ? { pitch: activePitch } : {}
       // RECT produces a polygon; ARC tessellates its 3 control points into a
       // lineal polyline. Both reuse the existing geometry kinds — no new model.
-      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale }
-      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints, ...scale }
-      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints, ...scale }
+      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale, ...pitch }
+      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints, ...scale, ...pitch }
+      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints, ...scale, ...pitch }
       else geometry = { kind: 'count', points: draftPoints }
       const res = await create.mutateAsync({
         blueprint_document_id: activeBlueprint?.id ?? null,
@@ -1555,6 +1587,7 @@ export function EstCanvas() {
                     >
                       {deduct ? '−' : ''}
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -1573,6 +1606,7 @@ export function EstCanvas() {
                       pointerEvents="none"
                     >
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -1591,6 +1625,7 @@ export function EstCanvas() {
                       pointerEvents="none"
                     >
                       {formatQty(draftQuantity)} {unitForItem}
+                      {pitchLabel}
                     </text>
                   ) : null
                 })()
@@ -2140,6 +2175,53 @@ export function EstCanvas() {
               </button>
             ) : null}
           </div>
+
+          {/* Pitch / slope driver (H2). Rise:run drives the slope factor
+              √(rise²+run²)/run applied to the scaled area/length so sloped
+              cladding/gables read true surface area. Blank/0 ⇒ flat ⇒ ×1.0. */}
+          {pitchAppliesToTool ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'var(--m-ink-3)',
+              }}
+            >
+              <span title="Roof/slope pitch — rise in run (e.g. 6 in 12). Blank = flat.">PITCH</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                value={pitchRise}
+                onChange={(e) => setPitchRise(e.target.value)}
+                placeholder="rise"
+                aria-label="Pitch rise"
+                style={pitchInputStyle}
+              />
+              <span style={{ color: 'var(--m-ink)' }}>:</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={pitchRun}
+                onChange={(e) => setPitchRun(e.target.value)}
+                placeholder="run"
+                aria-label="Pitch run"
+                style={pitchInputStyle}
+              />
+              <span style={{ color: activePitch && pitchFactor > 1 ? 'var(--m-amber)' : 'var(--m-ink-3)' }}>
+                ×{round2(pitchFactor)}
+              </span>
+            </div>
+          ) : null}
 
           <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
             {create.isPending
@@ -2782,6 +2864,19 @@ function ghostChip(disabled: boolean): React.CSSProperties {
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.4 : 1,
   }
+}
+
+// Compact numeric input for the pitch rise:run driver (H2).
+const pitchInputStyle: React.CSSProperties = {
+  width: 44,
+  padding: '4px 6px',
+  background: 'transparent',
+  color: 'var(--m-ink)',
+  border: '2px solid var(--m-ink)',
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  textAlign: 'center',
 }
 
 /**
