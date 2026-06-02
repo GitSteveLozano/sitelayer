@@ -6,7 +6,7 @@ const BLUEPRINT_ID = '00000000-0000-4000-8000-000000000302'
 const PAGE_ID = '00000000-0000-4000-8000-000000000303'
 const DRAFT_ID = '00000000-0000-4000-8000-000000000304'
 
-test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', async ({ page }) => {
+test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', { tag: '@takeoff' }, async ({ page }) => {
   const mockState = { sawDraftScopedMeasurements: false, sawAuthenticatedPageFileFetch: false }
   await installApiMocks(page, mockState)
   await page.addInitScript(() => {
@@ -42,7 +42,7 @@ test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', asy
   expectImageHasSignal(png)
 })
 
-test('renders the public demo fixture switcher and export payload', async ({ page }) => {
+test('renders the public demo fixture switcher and export payload', { tag: '@takeoff' }, async ({ page }) => {
   await page.goto('/demo/takeoff-preview-3d')
 
   await expect(page.getByRole('heading', { name: '3D takeoff demo' })).toBeVisible()

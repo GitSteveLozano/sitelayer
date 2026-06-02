@@ -37,6 +37,7 @@
     "probe:estimate-push:smoke": "playwright test -c e2e/probe-estimate-push-smoke.config.ts",
     "takeoff-preview:smoke": "playwright test -c e2e/takeoff-preview-smoke.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:tagged": "playwright test --grep",
     "test:e2e:ui": "playwright test --ui",
     "typecheck": "npm run typecheck --workspaces && npm run typecheck:e2e",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",

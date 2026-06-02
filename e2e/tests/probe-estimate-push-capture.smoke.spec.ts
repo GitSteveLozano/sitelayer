@@ -63,61 +63,71 @@ type CaptureSmoke = {
   deploy?: unknown
 }
 
-test('captures estimate-push Probe payload from the real financial route', async ({ page }) => {
-  await installApiMocks(page)
+test(
+  'captures estimate-push Probe payload from the real financial route',
+  { tag: ['@estimate', '@capture'] },
+  async ({ page }) => {
+    await installApiMocks(page)
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
-    window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
-    window.localStorage.setItem(
-      'sitelayer.probe.acting-as',
-      JSON.stringify({ role: 'admin', company_slug: 'e2e-fixtures', note: 'local Probe smoke' }),
-    )
-  })
+    await page.addInitScript(() => {
+      window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
+      window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
+      window.localStorage.setItem(
+        'sitelayer.probe.acting-as',
+        JSON.stringify({ role: 'admin', company_slug: 'e2e-fixtures', note: 'local Probe smoke' }),
+      )
+    })
 
-  const captureJson = waitForCaptureJson(page)
+    const captureJson = waitForCaptureJson(page)
 
-  await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
-  await expect(page.getByText('approved', { exact: true })).toBeVisible()
-  await expect(page.getByText('Frame scaffold bay')).toBeVisible()
-  await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
-  await page.getByRole('button', { name: 'Inspect Capture (dev)' }).click()
+    await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
+    await expect(page.getByText('approved', { exact: true })).toBeVisible()
+    await expect(page.getByText('Frame scaffold bay')).toBeVisible()
+    await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
+    await page.getByRole('button', { name: 'Inspect Capture (dev)' }).click()
 
-  const capture = await captureJson
-  expectEstimatePushCapture(capture)
-})
+    const capture = await captureJson
+    expectEstimatePushCapture(capture)
+  },
+)
 
-test('exposes estimate-push Probe payload through the gated browser diagnostic surface', async ({ page }) => {
-  await installApiMocks(page)
+test(
+  'exposes estimate-push Probe payload through the gated browser diagnostic surface',
+  {
+    tag: ['@estimate', '@capture'],
+  },
+  async ({ page }) => {
+    await installApiMocks(page)
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
-    window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
-    window.localStorage.setItem('sitelayer.probe.diagnostics', '1')
-    window.localStorage.setItem(
-      'sitelayer.probe.acting-as',
-      JSON.stringify({ role: 'admin', company_slug: 'e2e-fixtures', note: 'local Probe smoke' }),
-    )
-  })
+    await page.addInitScript(() => {
+      window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
+      window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
+      window.localStorage.setItem('sitelayer.probe.diagnostics', '1')
+      window.localStorage.setItem(
+        'sitelayer.probe.acting-as',
+        JSON.stringify({ role: 'admin', company_slug: 'e2e-fixtures', note: 'local Probe smoke' }),
+      )
+    })
 
-  await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
-  await expect(page.getByText('approved', { exact: true })).toBeVisible()
-  await expect(page.getByText('Frame scaffold bay')).toBeVisible()
-  await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
+    await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
+    await expect(page.getByText('approved', { exact: true })).toBeVisible()
+    await expect(page.getByText('Frame scaffold bay')).toBeVisible()
+    await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
 
-  await expect
-    .poll(
-      async () => {
-        const capture = await readDiagnosticCapture(page)
-        return Array.isArray(capture.path?.workflow_event_log_tail) ? capture.path.workflow_event_log_tail.length : 0
-      },
-      { timeout: 5_000 },
-    )
-    .toBe(1)
+    await expect
+      .poll(
+        async () => {
+          const capture = await readDiagnosticCapture(page)
+          return Array.isArray(capture.path?.workflow_event_log_tail) ? capture.path.workflow_event_log_tail.length : 0
+        },
+        { timeout: 5_000 },
+      )
+      .toBe(1)
 
-  const capture = await readDiagnosticCapture(page)
-  expectEstimatePushCapture(capture)
-})
+    const capture = await readDiagnosticCapture(page)
+    expectEstimatePushCapture(capture)
+  },
+)
 
 function expectEstimatePushCapture(capture: CaptureSmoke): void {
   const path = capture.path

@@ -29,7 +29,7 @@ type EstimatePushSnapshot = {
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('admin requests an estimate push through the QBO handoff', async ({ adminPage }) => {
+runSpec('admin requests an estimate push through the QBO handoff', { tag: '@estimate' }, async ({ adminPage }) => {
   const pushId = FIXTURE_IDS.estimatePushId
   const snapshotPath = `/api/estimate-pushes/${pushId}`
   const eventsPath = `${snapshotPath}/events`

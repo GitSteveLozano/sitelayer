@@ -27,7 +27,7 @@ type FieldEventSnapshot = {
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('foreman resolves a worker-flagged blocker', async ({ foremanPage }) => {
+runSpec('foreman resolves a worker-flagged blocker', { tag: '@foreman' }, async ({ foremanPage }) => {
   const issueId = FIXTURE_IDS.fieldEventIssueId
   const issuePath = `/api/worker-issues/${issueId}`
 
