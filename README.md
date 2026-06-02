@@ -167,6 +167,7 @@ Env files loaded from cwd upward: `.env` -> `.env.local` -> `.env.sentry.local` 
 
 - `DEVELOPMENT.md` — Local development loop and routes
 - `docs/ONBOARDING_DEVELOPER.md` — Mac collaborator setup (clone → local stack → first PR)
+- `docs/SHARING_AND_DEPLOY.md` — Sharing the app + deploy: the four tiers, who to send which URL, how deploy works now (local-fleet, no Actions), and a pre-share checklist
 - `DEPLOYMENT.md` — Production deploy, tiers, caching, backups
 - `docs/RELEASE_GATES.md` — CI/release requirements
 - `docs/PREVIEW_DEPLOYMENTS.md` — Preview droplet and PR preview flow
