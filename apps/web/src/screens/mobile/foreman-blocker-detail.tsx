@@ -508,13 +508,14 @@ function FieldEventClosedStrip({
   onReopen: () => void
 }) {
   const tone = state === 'resolved' ? 'var(--m-green)' : state === 'escalated' ? 'var(--m-amber)' : 'var(--m-ink-3)'
-  const label = state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'
+  const label = state === 'resolved' ? 'Resolved' : state === 'escalated' ? 'Escalated to estimator' : 'Dismissed'
   const when =
     state === 'resolved' ? ctx?.resolved_at : state === 'escalated' ? ctx?.escalated_to_estimator_at : ctx?.dismissed_at
   return (
     <div style={{ marginTop: 8 }}>
       <div className="m-topbar-eyebrow" style={{ padding: '16px', color: tone, textAlign: 'center', fontWeight: 800 }}>
-        ● {label} {when ? shortAgo(when).toUpperCase() : ''}
+        {label}
+        {when ? ` ${shortAgo(when)}` : ''}
       </div>
       {state === 'escalated' && ctx?.escalation_reason ? (
         <div style={{ padding: '0 16px 8px', color: 'var(--m-ink-3)', fontSize: 14, lineHeight: 1.5 }}>
