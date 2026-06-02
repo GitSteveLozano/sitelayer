@@ -19,6 +19,7 @@ import { handleDailyLogRoutes } from './daily-logs.js'
 import { handleLaborBurdenRoutes } from './labor-burden.js'
 import { handleEstimateRoutes } from './estimate.js'
 import { handleEstimatePushRoutes } from './estimate-pushes.js'
+import { handleBudgetRoutes } from './budget.js'
 import { handleLaborEntryRoutes } from './labor-entries.js'
 import { handleMaterialBillRoutes } from './material-bills.js'
 import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
@@ -44,6 +45,7 @@ import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
+import { handleCostLibraryRoutes } from './cost-library.js'
 import { handleCaptureSessionRoutes } from './capture-sessions.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
@@ -481,6 +483,20 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+      }),
+
+    // Shared cost library (Takeoff Deep Dive M5) — company + shared-catalog
+    // list/search, single create, and CSV/.xlsx price-book import. Additive:
+    // the pricing resolver consults this only as the lowest-priority fallback
+    // (pricing.ts layer 6), so an empty library changes nothing.
+    () =>
+      handleCostLibraryRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
       }),
 
     // Project mutations (POST/PATCH/closeout/summary)
@@ -1075,6 +1091,22 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Estimate-push workflow snapshots/events
     () =>
       handleEstimatePushRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Budget freeze + per-cost-code variance (Deep Dive §4 — bid/budget/actuals).
+    // Explicit operator freeze of the live estimate_lines into an immutable
+    // budget_snapshots row (change orders mint a new version), plus BUDGET vs
+    // ACTUALS (material_bills + labor_entries) rolled by service_item_code.
+    // estimate_lines stays the live bid. Mounted near the estimate family; its
+    // /api/projects/:id/budget* paths don't overlap the project CRUD matchers.
+    () =>
+      handleBudgetRoutes(req, url, {
         pool,
         company,
         currentUserId,

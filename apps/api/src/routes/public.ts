@@ -150,6 +150,14 @@ export type PublicRouteCtx = {
   features: {
     flags: Iterable<string>
     ribbon: unknown
+    /**
+     * Whether the live blueprint AI sheet-read path is available on this API
+     * (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY). The SPA gates whether
+     * to stream a multipart PDF for a real Claude-vision read on this; when
+     * false it stays on the dry-run/demo capture path. Optional so an older
+     * server.ts that doesn't resolve it still type-checks (defaults to false).
+     */
+    blueprintVisionLive?: boolean
   }
   /** Resolved CORS allow-origin for the current request. */
   getCorsOrigin: () => string
@@ -260,6 +268,10 @@ export async function handlePublicRoutes(
       tier: ctx.tier,
       flags: Array.from(ctx.features.flags).sort(),
       ribbon: ctx.features.ribbon,
+      // Live blueprint AI sheet-read availability (C1 follow-up). Additive —
+      // the SPA reads this to decide whether to stream a multipart PDF for a
+      // real Claude-vision read vs. the dry-run/demo path.
+      blueprint_vision_live: ctx.features.blueprintVisionLive ?? false,
     })
     return true
   }

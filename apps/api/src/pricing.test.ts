@@ -20,6 +20,10 @@ interface ChainSeed {
   company?: Record<string, ChainSeedRow>
   qbo?: Record<string, ChainSeedRow>
   fallback?: Record<string, ChainSeedRow>
+  // Layer 6 (lowest): shared trade cost library (migration 140, Deep Dive M5).
+  // Seeded with a `rate` already representing material_rate + labor_rate — the
+  // SQL coalesce-sum is exercised by the integration path, not this unit fake.
+  cost_library?: Record<string, ChainSeedRow>
 }
 
 const LAYER_PRIORITY: Record<string, number> = {
@@ -28,6 +32,7 @@ const LAYER_PRIORITY: Record<string, number> = {
   company: 3,
   qbo: 4,
   fallback: 5,
+  cost_library: 6,
 }
 
 function buildPool(seed: ChainSeed): PricingQueryRunner {
@@ -40,7 +45,7 @@ function buildPool(seed: ChainSeed): PricingQueryRunner {
       const codes = Array.isArray(codeParam) ? (codeParam as string[]) : [String(codeParam)]
       const isBatch = Array.isArray(codeParam) || sql.includes('row_number()')
 
-      const layers: Array<keyof ChainSeed> = ['project', 'customer', 'company', 'qbo', 'fallback']
+      const layers: Array<keyof ChainSeed> = ['project', 'customer', 'company', 'qbo', 'fallback', 'cost_library']
       const rows: Array<{
         service_item_code: string
         source: string
@@ -197,6 +202,57 @@ describe('resolvePrice', () => {
     expect(result).toEqual({ price: 0, unit: 'job', source: 'fallback', source_id: 'svc-co' })
   })
 
+  it('falls back to the cost library only when no service_item layer matches (Deep Dive M5)', async () => {
+    // A code that exists ONLY in the shared cost library (no service_item, no
+    // override) resolves via the new lowest-priority layer rather than throwing.
+    const pool = buildPool({
+      cost_library: { 'CLAD-FC': { service_item_code: 'CLAD-FC', rate: 4.75, unit: 'sqft', source_id: 'lib-1' } },
+    })
+    const result = await resolvePrice({
+      pool,
+      company_id: companyId,
+      project_id: projectId,
+      customer_id: customerId,
+      service_item_code: 'CLAD-FC',
+    })
+    expect(result).toEqual({ price: 4.75, unit: 'sqft', source: 'cost_library', source_id: 'lib-1' })
+  })
+
+  it('service_items.default_rate (fallback) still beats the cost library', async () => {
+    // The cost library sits BELOW the existing chain — when a code has both a
+    // service_item fallback AND a library row, the service_item wins so an
+    // existing company's pricing is unchanged by the library.
+    const pool = buildPool({
+      fallback: { EPS: { service_item_code: 'EPS', rate: 2, unit: 'sqft', source_id: 'svc-eps' } },
+      cost_library: { EPS: { service_item_code: 'EPS', rate: 9, unit: 'sqft', source_id: 'lib-eps' } },
+    })
+    const result = await resolvePrice({
+      pool,
+      company_id: companyId,
+      project_id: projectId,
+      customer_id: customerId,
+      service_item_code: 'EPS',
+    })
+    expect(result.source).toBe('fallback')
+    expect(result.price).toBe(2)
+  })
+
+  it('every higher layer still beats the cost library', async () => {
+    const pool = buildPool({
+      company: { EPS: { service_item_code: 'EPS', rate: 4, unit: 'sqft', source_id: 'co-1' } },
+      cost_library: { EPS: { service_item_code: 'EPS', rate: 9, unit: 'sqft', source_id: 'lib-eps' } },
+    })
+    const result = await resolvePrice({
+      pool,
+      company_id: companyId,
+      project_id: projectId,
+      customer_id: customerId,
+      service_item_code: 'EPS',
+    })
+    expect(result.source).toBe('company')
+    expect(result.price).toBe(4)
+  })
+
   it('throws PricingError when no layer matches', async () => {
     const pool = buildPool({})
     await expect(
@@ -252,6 +308,30 @@ describe('resolvePrices (batched)', () => {
     expect(map.get('Flashing')?.source).toBe('fallback')
     expect(map.get('Flashing')?.price).toBe(8)
     expect(pool.query).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves a library-only code and keeps fallback above the library per-code (Deep Dive M5)', async () => {
+    // Mixed batch: one code lives only in the cost library (resolves via layer
+    // 6), another has both a service_item fallback and a library row (fallback
+    // wins). Proves the library is strictly the lowest layer in the batched path.
+    const pool = buildPool({
+      fallback: { EPS: { service_item_code: 'EPS', rate: 2, unit: 'sqft', source_id: 'svc-eps' } },
+      cost_library: {
+        EPS: { service_item_code: 'EPS', rate: 9, unit: 'sqft', source_id: 'lib-eps' },
+        'CLAD-FC': { service_item_code: 'CLAD-FC', rate: 4.75, unit: 'sqft', source_id: 'lib-clad' },
+      },
+    })
+    const map = await resolvePrices({
+      pool,
+      company_id: companyId,
+      project_id: projectId,
+      customer_id: customerId,
+      service_item_codes: ['EPS', 'CLAD-FC'],
+    })
+    expect(map.get('EPS')?.source).toBe('fallback')
+    expect(map.get('EPS')?.price).toBe(2)
+    expect(map.get('CLAD-FC')?.source).toBe('cost_library')
+    expect(map.get('CLAD-FC')?.price).toBe(4.75)
   })
 
   it('skips the round-trip and returns an empty map when given no codes', async () => {

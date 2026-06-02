@@ -74,6 +74,7 @@ import { OwnerApprovals } from './owner-approvals'
 import { OwnerClients } from './owner-clients'
 import { OwnerMoney } from './owner-money'
 import { OwnerJobCosts } from './est-actuals'
+import { OwnerBudgetVariance } from './budget-variance'
 import { FmConfirmDay } from './fm-confirm-day'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
@@ -85,6 +86,7 @@ import { OwnerProjectDetail } from './owner-project-detail'
 import { EstTakeoffProjects } from './est-takeoff-projects'
 import { EstAiQueue } from './est-ai-queue'
 import { EstItemLibrary } from './est-item-library'
+import { EstCostLibrary } from './est-cost-library'
 import { EstAssemblies } from './est-assemblies'
 import { EstClientProfile } from './est-client-profile'
 import { EstQuantities } from './est-quantities'
@@ -139,6 +141,7 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/takeoff', label: 'Takeoff', icon: asIcon(Layers) },
       { to: '/desktop/ai-queue', label: 'AI Queue', icon: asIcon(Sparkles) },
       { to: '/desktop/item-library', label: 'Item Library', icon: asIcon(Library) },
+      { to: '/desktop/cost-library', label: 'Cost Library', icon: asIcon(Library) },
       { to: '/desktop/assemblies', label: 'Assemblies', icon: asIcon(Package) },
     ],
   },
@@ -176,6 +179,7 @@ const CRUMB: Record<string, string> = {
   '/desktop/takeoff': 'Takeoff',
   '/desktop/ai-queue': 'AI Queue',
   '/desktop/item-library': 'Item Library',
+  '/desktop/cost-library': 'Cost Library',
   '/desktop/assemblies': 'Assemblies',
   '/desktop/fm/today': 'Foreman · Today',
   '/desktop/fm/crew': 'Foreman · Crew',
@@ -298,7 +302,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   // the switch menu can show a selected indicator (design: TOPBAR ROLE SWITCHER).
   const activeHat = location.pathname.startsWith('/desktop/fm')
     ? 'foreman'
-    : /\/desktop\/(takeoff|ai-queue|item-library|assemblies|estimate|scale|ingest|canvas)/.test(location.pathname)
+    : /\/desktop\/(takeoff|ai-queue|item-library|cost-library|assemblies|estimate|scale|ingest|canvas)/.test(
+          location.pathname,
+        )
       ? 'estimator'
       : 'owner'
   const goHat = (to: string) => {
@@ -447,6 +453,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         { id: 'go-money', label: 'Money', to: '/desktop/money' },
         { id: 'go-schedule', label: 'Schedule', to: '/desktop/schedule' },
         { id: 'go-takeoff', label: 'Takeoff', to: '/desktop/takeoff' },
+        { id: 'go-cost-library', label: 'Cost Library', to: '/desktop/cost-library' },
         { id: 'go-settings', label: 'Settings', to: '/desktop/settings' },
       ]
         .filter((i) => has(i.label))
@@ -809,9 +816,11 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="takeoff" element={<EstTakeoffProjects bootstrap={bootstrap} />} />
           <Route path="ai-queue" element={<EstAiQueue bootstrap={bootstrap} />} />
           <Route path="item-library" element={<EstItemLibrary />} />
+          <Route path="cost-library" element={<EstCostLibrary />} />
           <Route path="assemblies" element={<EstAssemblies />} />
           <Route path="clients/:clientId" element={<EstClientProfile />} />
           <Route path="estimate/:projectId" element={<EstQuantities />} />
+          <Route path="budget/:projectId" element={<OwnerBudgetVariance />} />
           <Route path="ingest/:projectId" element={<EstPlanIngest />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />

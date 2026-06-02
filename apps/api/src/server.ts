@@ -18,6 +18,7 @@ import { handleCompanyRoutes } from './routes/companies.js'
 import { handleInviteRoutes } from './routes/invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
+import { resolveBlueprintVisionMode } from './takeoff-capture-pipelines/blueprint-vision.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
@@ -762,7 +763,16 @@ const server = http.createServer(async (req, res) => {
                 clerkWebhookSecret,
                 qboWebhookVerifier,
                 pgHealthProbeTimeoutMs,
-                features: { flags: appConfig.flags, ribbon: appConfig.ribbon },
+                features: {
+                  flags: appConfig.flags,
+                  ribbon: appConfig.ribbon,
+                  // Live blueprint AI sheet-read availability (C1 follow-up).
+                  // Read from the same env gate the capture pipeline uses
+                  // (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY); the SPA
+                  // only streams a multipart PDF for a real read when this is
+                  // true, otherwise it stays on the dry-run/demo path.
+                  blueprintVisionLive: resolveBlueprintVisionMode() === 'live',
+                },
                 getCorsOrigin: () => getCorsOrigin(req),
                 sendJson: (status, body) => sendJson(res, status, body, req),
                 readRawBody: () => readRawBody(req),

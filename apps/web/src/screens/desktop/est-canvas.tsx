@@ -2811,7 +2811,9 @@ export function EstCanvas() {
         <EstAiTakeoffSetupPanel
           projectId={projectId}
           onClose={() => setMode('draw')}
-          onReviewDraft={(id) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id } })}
+          onReviewDraft={(id, captureMode) =>
+            navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id, mode: captureMode } })
+          }
         />
       ) : null}
 
