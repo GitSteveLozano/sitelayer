@@ -44,6 +44,7 @@ import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
+import { handleCostLibraryRoutes } from './cost-library.js'
 import { handleCaptureSessionRoutes } from './capture-sessions.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
@@ -481,6 +482,20 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+      }),
+
+    // Shared cost library (Takeoff Deep Dive M5) — company + shared-catalog
+    // list/search, single create, and CSV/.xlsx price-book import. Additive:
+    // the pricing resolver consults this only as the lowest-priority fallback
+    // (pricing.ts layer 6), so an empty library changes nothing.
+    () =>
+      handleCostLibraryRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
       }),
 
     // Project mutations (POST/PATCH/closeout/summary)
