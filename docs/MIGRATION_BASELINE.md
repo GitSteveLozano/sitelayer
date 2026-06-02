@@ -1,9 +1,20 @@
 # Migration baseline (squash) — build, verify, and per-environment cutover
 
-**Status:** tool + verification shipped; **cutover NOT executed**. This doc is
-the runbook for collapsing the `docker/postgres/init/*.sql` history into a
-single `000_baseline.sql` during the learning phase, and the explicit rule for
-when that is no longer allowed.
+**Status (2026-06-02):** tool + verification shipped; **squash EXECUTED for the
+repo + disposable tiers** (boundary = migration 152; `docker/postgres/init/` now
+holds only `000_baseline.sql`). The baseline captures **schema AND seed data**
+(the tool dumps seed rows as idempotent INSERTs — `pg_dump --data-only --inserts
+--on-conflict-do-nothing --disable-triggers`, excluding the `schema_migrations`
+ledger — and the equivalence proof now checks per-table row counts in addition to
+the schema diff). dev + demo were rebuilt fresh from the baseline (clean ledger =
+1 row, seed data intact). **PROD ledger reconcile is the one remaining step and is
+DEFERRED to the next prod deploy** (§3.3/§3.4): prod still runs the pre-squash SHA
+`bc5735f1`, so reconciling its ledger now would break rollback to that SHA; the
+next `scripts/deploy.sh prod` will apply the idempotent baseline (safe) and the
+reconcile rides that deploy's `pg_dump` backup. This doc is the runbook for
+collapsing the `docker/postgres/init/*.sql` history into a single
+`000_baseline.sql` during the learning phase, and the explicit rule for when that
+is no longer allowed.
 
 > **Context.** This is the operational procedure referenced by
 > [`ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §3.2–3.4:
