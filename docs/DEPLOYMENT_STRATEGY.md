@@ -13,10 +13,13 @@
 > fleet Postgres — roughly $10k/mo to rent the equivalent). The cloud-migration
 > and handoff drivers are **developer coordination, shared/non-personal control,
 > and clean ownership transfer — not capacity.** The only genuine product-hosting
-> _sizing_ item is the deliberately-tiny customer-facing DO managed Postgres
-> (`db-s-1vcpu-1gb`, ~$15/mo to bump), which is a cost choice decoupled from the
-> fleet's capacity. Multi-tenancy invariants now live in
-> [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md).
+> _sizing_ item is the small customer-facing DO managed Postgres
+> (`db-s-1vcpu-2gb`, ~47 max connections; prod reaches it through the
+> `sitelayer-prod-pool` transaction pool, size 11), which is a cost choice
+> decoupled from the fleet's capacity. Multi-tenancy invariants now live in
+> [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md); the durable environments +
+> migration-churn design lives in
+> [`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md).
 
 ---
 
@@ -37,6 +40,11 @@ is **done** in this batch vs. what is **groundwork** the operator still provisio
 | Single-tenant sweep (no `ACTIVE_COMPANY_SLUG`)    | ✅ done        | worker drains all companies; slug is now an optional override only                         |
 | Generic / multi-company onboarding                | 🟡 in progress | `apps/api/src/routes/companies.ts` (admin-gated create), `routes/invites.ts` invites       |
 | Multi-tenancy invariants reference                | ✅ done        | `docs/MULTI_TENANCY.md` (RLS GUC, membership boundary, per-company operation/billing)      |
+| Environments + migration-churn design (durable)   | ✅ done        | `docs/ENVIRONMENTS_AND_MIGRATIONS.md` + `docs/MIGRATION_BASELINE.md`                       |
+| DB split (managed = prod-only; non-prod = Docker) | 🟡 in progress | tier guard `isLocalHost` exemption in `packages/config/src/index.ts`; cutover per env      |
+| Migration-churn model (mutable-until-`main`)      | ✅ done        | `scripts/migrate-db.sh` checksum ledger; `docs/ENVIRONMENTS_AND_MIGRATIONS.md` §3          |
+| Multi-company config migration-FREE               | ✅ done        | `companies.modules` JSONB (mig `062`), `PATCH /api/companies/:id/modules`                  |
+| demo deployed from `main` (not a code branch)     | 🟡 in progress | `BRANCH_ENVIRONMENT_AUDIT_2026-06-01.md`; `docs/ENVIRONMENTS_AND_MIGRATIONS.md` §5         |
 | Pre-push governance hook                          | ✅ done        | `.githooks/pre-push`, `scripts/install-git-hooks.sh`                                       |
 | Post-deploy smoke (tier-aware)                    | ✅ done        | `scripts/smoke-tier.sh`, `npm run smoke:dev/demo`                                          |
 | Company-create gate (platform-admin by default)   | ✅ done        | `apps/api/src/routes/companies.ts`                                                         |
@@ -168,7 +176,13 @@ stand alone without it).
   capacity limit — any fleet node (or a small shared VM) can host it; the reason to
   _move_ it is access/ownership, not compute (§6, §7).
 - **DigitalOcean hosts, stores, routes.** 2 droplets run the containers; managed
-  Postgres 18 cluster `sitelayer-db` (`db-s-1vcpu-1gb`) stores all 4 tier databases;
+  Postgres 18 cluster `sitelayer-db` (`db-s-1vcpu-2gb`, ~47 max connections) hosts
+  **prod** (`sitelayer_prod`, reached via the `sitelayer-prod-pool` transaction
+  pool, size 11). The non-prod tier DBs (`sitelayer_dev`/`demo`/`preview`) still
+  sit on this cluster today but are moving to **Docker Postgres on the preview
+  droplet** so the managed cluster becomes **prod-only** (the db-split — see
+  [`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §2 and
+  §5 below).
   DO Container Registry `sitelayer` holds prod images; DO Spaces
   `sitelayer-blueprints-prod` holds blueprint PDFs. Caddy (prod) / Traefik (preview)
   run _on the droplets_; DO only supplies the network and reserved IPs. DNS is
@@ -183,10 +197,18 @@ stand alone without it).
 | **demo**    | `demo.preview.sitelayer.sandolab.xyz` | preview `566806040` | `sitelayer_demo` (public schema)                         | Traefik | Watch-mode + idempotent `seed:demo` each deploy; tracks `origin/dev`   |
 | **preview** | `pr-N.preview.sitelayer.sandolab.xyz` | preview `566806040` | `sitelayer_preview` (per-slug schema `sitelayer_<slug>`) | Traefik | Watch-mode, ephemeral, self-reaping (`deploy-preview.sh`) — **manual** |
 
-Both dev and demo track `origin/dev` (`AUTODEPLOY_DEFAULT_BRANCH=dev`). PR previews
-isolate per-slug via `PGOPTIONS` search_path and self-reap on PR close. The single
-preview droplet (2 vCPU/4 GB, Traefik on one router) hosts **dev + demo + every PR
-preview** and is also the off-host backup target (`10.118.0.2`).
+Both dev and demo track `origin/dev` (`AUTODEPLOY_DEFAULT_BRANCH=dev`) today; the
+promotion model (demo from `main`) is in
+[`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §5. PR
+previews isolate per-slug via `PGOPTIONS` search_path and self-reap on PR close. The
+single preview droplet (2 vCPU/4 GB, Traefik on one router) hosts **dev + demo +
+every PR preview** and is also the off-host backup target (`10.118.0.2`).
+
+> **Durable DB-home target.** The "Database" column above is **current state** —
+> all four tier DBs physically live on the managed cluster. The durable design
+> makes the managed cluster **prod-only** and moves the non-prod DBs to **Docker
+> Postgres on the preview droplet** (the db-split). See
+> [`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §§1–2.
 
 ### 2.3 Builds
 
@@ -213,9 +235,14 @@ m-chunk) runs inside the build stage. dev/demo/preview do **no image build** —
 mesh control plane, the browser-bridge, and other fleet workloads, which steals
 CPU/scheduling from Playwright. It is deterministic on any **quieter fleet node**.
 This is the central testing gap (§4) — a placement problem, not a hardware one.
-Migrations are **forward-only, immutable, checksum-ledgered**
-(`migrate-db.sh`: editing an applied migration aborts the next deploy with exit 3);
-they live in `docker/postgres/init/` (147 files, numbered to `143_*`).
+Migrations are **forward-only, immutable, checksum-ledgered** _at the prod
+boundary_ (`migrate-db.sh`: editing an applied migration aborts the next deploy with
+exit 3); they live in `docker/postgres/init/` (151 files, numbered to `150_*`).
+Against the **disposable** non-prod DBs the same files are **mutable-until-`main`**,
+which is what makes migration churn free — see the durable model in
+[`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §3 and the
+baseline-squash runbook in
+[`docs/MIGRATION_BASELINE.md`](./MIGRATION_BASELINE.md).
 
 ### 2.5 The push / auto-deploy model (and where the gate actually runs)
 
@@ -367,21 +394,27 @@ item is the deliberately-tiny customer-facing DB — a cost choice, not a fleet 
 
 ### Capacity & cost trajectory
 
-The one genuine sizing item is the **deliberately-tiny customer-facing
-`db-s-1vcpu-1gb` managed Postgres (~22 usable connections)** holding prod + dev +
-preview + demo on **one node**. Prod API pool = 16 + worker = 4 ≈ 20 — already at
-budget _before_ non-prod connections from the same cluster compete. This is a
-**cost choice on the product-hosting footprint**, fully decoupled from the fleet's
-capacity: the build/verify/e2e plane runs on the multi-machine fleet, which can host
-the prod image build, multiple environments, and the async e2e runner with room to
-spare. Bumping the customer DB is cheap and on-demand; nothing here is a fleet limit.
+The one genuine sizing item is the customer-facing **`db-s-1vcpu-2gb` managed
+Postgres (~47 max connections)** on **one node**. **prod reaches it through the
+managed `sitelayer-prod-pool` transaction pool (size 11)** — so prod's footprint
+against the raw cluster is bounded by 11, not by the API/worker connection count
+behind it. The current pressure is **co-tenancy**: dev + preview + demo connect
+**directly** (no pool) to the _same_ cluster and compete for the remaining raw
+~47 connections. **The db-split (§ table below, `docs/ENVIRONMENTS_AND_MIGRATIONS.md`
+§2) removes that entirely by moving non-prod to Docker Postgres on the preview
+droplet — after which prod owns the whole ~47-connection node behind its size-11
+pool.** This is a **cost choice on the product-hosting footprint**, fully decoupled
+from the fleet's capacity: the build/verify/e2e plane runs on the multi-machine
+fleet, which can host the prod image build, multiple environments, and the async
+e2e runner with room to spare. Bumping the customer DB (e.g. to `db-s-2vcpu-4gb`)
+is cheap and on-demand; nothing here is a fleet limit.
 
-| Tenant count     | Action                                                                                                                                                      | Cost    |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| **1–3 light**    | Fine today once dev/preview/demo are moved off the prod DB (worker is already multi-tenant)                                                                 | —       |
-| **~5–15 active** | Resize the customer DB to `db-s-2vcpu-4gb` (≈97 conns) at `> 18` used / `> 70%` CPU sustained 1h; add PgBouncer transaction-mode pooler                     | +$15/mo |
-| **~15–40**       | 4 GB+ customer DB; consider a 2nd / per-tenant worker; Clerk Pro (`>80` orgs / `>40k` MAU)                                                                  | +$25/mo |
-| **~50+**         | The single-droplet + single-DB **product hosting** topology benefits from a managed cloud service (horizontal API, dedicated worker, pooled/partitioned DB) |
+| Tenant count     | Action                                                                                                                                                                                           | Cost    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| **1–3 light**    | Fine today once dev/preview/demo move off the cluster to Docker Postgres on the preview droplet (worker is already multi-tenant). prod then owns the whole ~47-conn node behind its size-11 pool | —       |
+| **~5–15 active** | Resize the customer DB to `db-s-2vcpu-4gb` (≈97 max conns) at `> 35` raw conns used / `> 70%` CPU sustained 1h, and/or grow `sitelayer-prod-pool` past size 11                                   | +$15/mo |
+| **~15–40**       | 4 GB+ customer DB; consider a 2nd / per-tenant worker; Clerk Pro (`>80` orgs / `>40k` MAU)                                                                                                       | +$25/mo |
+| **~50+**         | The single-droplet + single-DB **product hosting** topology benefits from a managed cloud service (horizontal API, dedicated worker, pooled/partitioned DB)                                      |
 
 **Also before scale:** per-company rate limits now exist (`rate-limit.ts`); still add
 a Spaces **retention/quota** policy (blueprints are retained indefinitely in one
@@ -455,10 +488,11 @@ reproducible stand-up and a disaster-rebuild path that today is tribal knowledge
 ### Observability / on-call / backup gaps
 
 - **DB / RPO conflict:** `DR_RESTORE.md` and `COST_AND_LIMITS.md` claim "7-day PITR on
-  every plan," but DO does **not** allow a standby on `db-s-1vcpu-1gb`; the real
+  every plan," but DO does **not** allow a standby on `db-s-1vcpu-2gb`; the real
   recovery path is daily logical `pg_dump` ≈ **24h RPO**. Either upsize to a plan that
   supports a standby + true PITR (+$15/mo) **or correct the docs** so on-call isn't
-  misled. Split prod off the shared cluster regardless.
+  misled. Make the cluster prod-only regardless (the db-split — non-prod to Docker
+  Postgres on the preview droplet).
 - **Backup co-location:** off-host dumps go to the preview droplet (same DO account,
   same `tor1` region). The only off-region copy is an optional daily
   `pg_dump → Spaces(nyc3)` timer that is **not auto-enabled**. Provision it.
@@ -538,9 +572,13 @@ dependency with a **shared, transferable** one.
 
 1. ✅ **Per-company QBO live flag** (mig `144`, off the global env) so #2 can run
    dry-run while #1 is live — _done this batch_.
-2. **Move dev/preview/demo off the prod DB**; resize the **customer DB** to
-   `db-s-2vcpu-4gb` (+$15, a product-hosting cost choice — not a fleet limit) at `>18`
-   conns / `>70%` CPU; add a PgBouncer transaction-mode pooler.
+2. **Move dev/preview/demo off the managed cluster** onto Docker Postgres on the
+   preview droplet (the db-split — see
+   [`docs/ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §2), so
+   the cluster is prod-only and prod owns the whole ~47-conn node behind its size-11
+   pool; resize the **customer DB** to `db-s-2vcpu-4gb` (+$15, a product-hosting cost
+   choice — not a fleet limit) at `>35` raw conns / `>70%` CPU, and/or grow
+   `sitelayer-prod-pool` past size 11.
 3. ✅ **RLS gaps closed:** `asset_deployments` policy + ENABLE/FORCE (mig `145`); RLS
    forced-coverage audit is a **blocking gate** (`rls-force-audit.ts`,
    `RLS_PHASE3_FAIL_ON_LEAK=1` + allowlist ratchet) — _done this batch_; invariants in
