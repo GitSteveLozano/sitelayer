@@ -22,7 +22,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict AifUTOhIr5PzRIODeId1c2MBhK1BVTm0jwFwOkF6dfo9e3MScwlaObDimc5bU7X
+\restrict 4VjMpzgdLolw8f9YHBt36wQYcplTqNxogDaCuImgbth7h6har7uaVZ7RGxZIkHj
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -1122,6 +1122,43 @@ CREATE TABLE IF NOT EXISTS public.company_pricing_overrides (
 );
 
 ALTER TABLE ONLY public.company_pricing_overrides FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: company_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS public.company_settings (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    company_id uuid NOT NULL,
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+ALTER TABLE ONLY public.company_settings FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE company_settings; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.company_settings IS 'Generic per-company (key -> jsonb value) settings store. THE convention for per-company config: a new toggle is a new key + a call-site default (getCompanySetting / setCompanySetting in @sitelayer/domain), NOT a new column + migration. company_id-scoped, RLS ENABLE+FORCE like every other tenant child table. Does not replace the typed companies.modules feature-pack (migration 062) nor the existing qbo_live_enabled (144) / notification_from_* (150) columns — it is the path forward for the NEXT settings.';
+
+
+--
+-- Name: COLUMN company_settings.key; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.company_settings.key IS 'Dotted/namespaced setting key (e.g. "notifications.digest_enabled", "billing.auto_invoice_cap"). Unique per company. Defined as a constant in packages/domain/src/company-settings.ts so the key + its default + its type live together in code.';
+
+
+--
+-- Name: COLUMN company_settings.value; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.company_settings.value IS 'jsonb-encoded setting value (bool / string / number / small object). The helper validates/parses it against the call-site default''s type; a value whose type does not match the default falls back to the default.';
 
 
 --
@@ -3973,6 +4010,28 @@ END $baseline_con$;
 DO $baseline_con$ BEGIN
   ALTER TABLE ONLY public.company_pricing_overrides
       ADD CONSTRAINT company_pricing_overrides_pkey PRIMARY KEY (id);
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
+-- Name: company_settings company_settings_company_key_uniq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.company_settings
+      ADD CONSTRAINT company_settings_company_key_uniq UNIQUE (company_id, key);
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
+-- Name: company_settings company_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.company_settings
+      ADD CONSTRAINT company_settings_pkey PRIMARY KEY (id);
 EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
 END $baseline_con$;
 
@@ -8158,6 +8217,17 @@ END $baseline_con$;
 
 
 --
+-- Name: company_settings company_settings_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.company_settings
+      ADD CONSTRAINT company_settings_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
 -- Name: company_usage_log company_usage_log_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10679,6 +10749,14 @@ CREATE POLICY company_isolation ON public.company_pricing_overrides USING (((pub
 
 
 --
+-- Name: company_settings company_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+DROP POLICY IF EXISTS company_isolation ON public.company_settings;
+CREATE POLICY company_isolation ON public.company_settings USING (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id()))) WITH CHECK (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id())));
+
+
+--
 -- Name: companycam_photo_imports company_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -11307,6 +11385,12 @@ ALTER TABLE public.company_memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_pricing_overrides ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: company_settings; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_settings ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: company_usage_log; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -11814,5 +11898,1372 @@ ALTER TABLE public.workflow_event_log ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict AifUTOhIr5PzRIODeId1c2MBhK1BVTm0jwFwOkF6dfo9e3MScwlaObDimc5bU7X
+\unrestrict 4VjMpzgdLolw8f9YHBt36wQYcplTqNxogDaCuImgbth7h6har7uaVZ7RGxZIkHj
 
+
+
+-- ============================ SEED DATA (idempotent) ============================
+-- Migration-inserted reference/seed rows, captured so a fresh DB built from this
+-- baseline matches the full-history DB in DATA as well as schema. Generated with
+-- pg_dump --data-only --inserts --on-conflict-do-nothing; the schema_migrations
+-- ledger is EXCLUDED (the per-environment cutover manages that row). Idempotent:
+-- ON CONFLICT DO NOTHING makes a re-apply / mark-applied a no-op.
+
+--
+-- PostgreSQL database dump
+--
+
+\restrict 9Cv0g5aIzGsbU1k4a1CgTrg3IiZaefJJOFY3yoXxsV4fnSgVLJ5CNJN4zrmK6K4
+
+-- Dumped from database version 18.3
+-- Dumped by pg_dump version 18.3
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Data for Name: companies; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+SET SESSION AUTHORIZATION DEFAULT;
+
+ALTER TABLE public.companies DISABLE TRIGGER ALL;
+
+INSERT INTO public.companies VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'la-operations', 'L&A Operations', '2026-06-02 23:30:09.403861+00', '{"takeoff": true, "estimating": true, "rental_ops": true, "field_labor": true, "scaffold_bom": false, "customer_portal": true, "payroll_exports": true, "scaffold_design": false, "scaffold_inspections": false}', '{"show_photos": true, "show_invoices": false, "show_estimates": true, "show_inspections": false}', NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.companies VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'beta-build', 'Beta Build', '2026-06-02 23:30:09.405882+00', '{"takeoff": true, "estimating": true, "rental_ops": true, "field_labor": true, "scaffold_bom": false, "customer_portal": true, "payroll_exports": true, "scaffold_design": false, "scaffold_inspections": false}', '{"show_photos": true, "show_invoices": false, "show_estimates": true, "show_inspections": false}', NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.companies VALUES ('8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-fixtures', 'E2E Fixtures', '2026-06-02 23:30:14.215336+00', '{"takeoff": true, "estimating": true, "rental_ops": true, "field_labor": true, "scaffold_bom": false, "customer_portal": true, "payroll_exports": true, "scaffold_design": false, "scaffold_inspections": false}', '{"show_photos": true, "show_invoices": false, "show_estimates": true, "show_inspections": false}', NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.companies ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: ai_insights; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.ai_insights DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.ai_insights ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: branches; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.branches DISABLE TRIGGER ALL;
+
+INSERT INTO public.branches VALUES ('8b33f2f7-0abc-4e7f-9c10-086c507a50a9', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'main', 'Main Branch', NULL, true, 1, NULL, '2026-06-02 23:30:12.933762+00', '2026-06-02 23:30:12.933762+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.branches VALUES ('2d9e0c10-439b-4b5b-8c52-c2db1b4cac0c', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'main', 'Main Branch', NULL, true, 1, NULL, '2026-06-02 23:30:12.933762+00', '2026-06-02 23:30:12.933762+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.branches ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: customers; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.customers DISABLE TRIGGER ALL;
+
+INSERT INTO public.customers VALUES ('cd2b60a8-e8cf-4daf-bee8-8a2908f7de6d', '32e8cd05-cc08-4623-8515-d8eecc6041d6', NULL, 'Foxridge Homes', 'seed', 1, NULL, '2026-06-02 23:30:09.421109+00', '2026-06-02 23:30:09.421109+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.customers VALUES ('89b4a4c4-2115-42c5-b5cf-6c5e3e10bec5', '82de95b5-6b78-49b3-a132-bd5892558d0b', NULL, 'Foxridge Homes', 'seed', 1, NULL, '2026-06-02 23:30:09.421109+00', '2026-06-02 23:30:09.421109+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.customers VALUES ('f1fb3cc3-4076-4ae6-8713-1c8cf349f6e5', '32e8cd05-cc08-4623-8515-d8eecc6041d6', NULL, 'Streetside Developments', 'seed', 1, NULL, '2026-06-02 23:30:09.422651+00', '2026-06-02 23:30:09.422651+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.customers VALUES ('6468c48c-957b-4424-8daf-6c62b4ce7684', '82de95b5-6b78-49b3-a132-bd5892558d0b', NULL, 'Streetside Developments', 'seed', 1, NULL, '2026-06-02 23:30:09.422651+00', '2026-06-02 23:30:09.422651+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.customers ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: inventory_items; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.inventory_items DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.inventory_items ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: projects; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.projects DISABLE TRIGGER ALL;
+
+INSERT INTO public.projects VALUES ('c235176e-eb7b-4e19-9818-1ec94ae5fb50', '32e8cd05-cc08-4623-8515-d8eecc6041d6', NULL, '215 Cinnamon Teal', 'Foxridge Homes', 'D4', 'lead', 19267.50, 38.00, 4.73, 5000.00, NULL, NULL, 1, NULL, '2026-06-02 23:30:09.424689+00', '2026-06-02 23:30:09.424689+00', NULL, NULL, NULL, 100, 1, NULL, 'postgres', NULL, true, 300, 120, 0, 'draft', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.projects VALUES ('33c27845-0ae0-44b5-9b8a-0a4b7f72a4c1', '82de95b5-6b78-49b3-a132-bd5892558d0b', NULL, 'Beta Townhomes', 'Foxridge Homes', 'D4', 'lead', 19267.50, 38.00, 4.73, 5000.00, NULL, NULL, 1, NULL, '2026-06-02 23:30:09.424689+00', '2026-06-02 23:30:09.424689+00', NULL, NULL, NULL, 100, 1, NULL, 'postgres', NULL, true, 300, 120, 0, 'draft', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.projects ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: inventory_locations; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.inventory_locations DISABLE TRIGGER ALL;
+
+INSERT INTO public.inventory_locations VALUES ('2e9e29fc-8734-49eb-b0c6-217fcafd2f98', '32e8cd05-cc08-4623-8515-d8eecc6041d6', NULL, 'Main Yard', 'yard', true, 1, NULL, '2026-06-02 23:30:10.362695+00', '2026-06-02 23:30:10.362695+00', '8b33f2f7-0abc-4e7f-9c10-086c507a50a9') ON CONFLICT DO NOTHING;
+INSERT INTO public.inventory_locations VALUES ('752cdb56-c4ed-4996-9b6b-10a81b5eca76', '82de95b5-6b78-49b3-a132-bd5892558d0b', NULL, 'Main Yard', 'yard', true, 1, NULL, '2026-06-02 23:30:10.362695+00', '2026-06-02 23:30:10.362695+00', '2d9e0c10-439b-4b5b-8c52-c2db1b4cac0c') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.inventory_locations ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: workers; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.workers DISABLE TRIGGER ALL;
+
+INSERT INTO public.workers VALUES ('46e545e2-9ebd-442f-b687-1675e162ca82', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Crew Lead', 'foreman', 1, NULL, '2026-06-02 23:30:09.419072+00', 0, 20.00, 8.00, 50.00) ON CONFLICT DO NOTHING;
+INSERT INTO public.workers VALUES ('1ee28978-ff93-461a-bdd7-6450d5ead5c9', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Crew Lead', 'foreman', 1, NULL, '2026-06-02 23:30:09.419072+00', 0, 20.00, 8.00, 50.00) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.workers ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: inventory_movements; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.inventory_movements DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.inventory_movements ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: asset_deployments; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.asset_deployments DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.asset_deployments ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: audit_escrow_keys; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.audit_escrow_keys DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.audit_escrow_keys ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: audit_escrow_entries; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.audit_escrow_entries DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.audit_escrow_entries ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: audit_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.audit_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.audit_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: blueprint_documents; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.blueprint_documents DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.blueprint_documents ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: blueprint_pages; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.blueprint_pages DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.blueprint_pages ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: blueprint_page_diffs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.blueprint_page_diffs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.blueprint_page_diffs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: boms; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.boms DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.boms ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: scaffold_manufacturers; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scaffold_manufacturers DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.scaffold_manufacturers ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: scaffold_systems; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scaffold_systems DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.scaffold_systems ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: catalog_parts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.catalog_parts DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.catalog_parts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: bom_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bom_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.bom_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: bonus_rules; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bonus_rules DISABLE TRIGGER ALL;
+
+INSERT INTO public.bonus_rules VALUES ('bef74075-30ea-4634-8b65-9e4b23214f5d', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Default Margin Bonus', '{"basis": "margin", "threshold": 0.15}', true, 1, NULL, '2026-06-02 23:30:09.417387+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.bonus_rules VALUES ('8a81fdd8-4b5f-4375-b375-d7b216bbdc70', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Default Margin Bonus', '{"basis": "margin", "threshold": 0.15}', true, 1, NULL, '2026-06-02 23:30:09.417387+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.bonus_rules ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: broadcasts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.broadcasts DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.broadcasts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: budget_snapshots; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.budget_snapshots DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.budget_snapshots ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: budget_snapshot_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.budget_snapshot_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.budget_snapshot_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: capture_sessions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.capture_sessions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.capture_sessions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: capture_artifacts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.capture_artifacts DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.capture_artifacts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: capture_session_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.capture_session_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.capture_session_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: change_orders; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.change_orders DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.change_orders ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: clerk_users; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.clerk_users DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.clerk_users ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: clock_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.clock_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.clock_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_bootstrap_state; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_bootstrap_state DISABLE TRIGGER ALL;
+
+INSERT INTO public.company_bootstrap_state VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', '5a93cef9-f0ee-4206-9d1b-bf8a850285ee', '2026-06-02 23:30:10.248777+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.company_bootstrap_state VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', '9627d586-b29c-461b-b52a-5beaee973d77', '2026-06-02 23:30:10.248777+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.company_bootstrap_state ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_invites; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_invites DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.company_invites ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: custom_roles; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.custom_roles DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.custom_roles ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_memberships; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_memberships DISABLE TRIGGER ALL;
+
+INSERT INTO public.company_memberships VALUES ('a5ac1876-0a88-45b0-b95b-ce642b52d75a', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'demo-user', 'admin', '2026-06-02 23:30:09.406992+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('782b928d-25fb-4837-b2d6-bda4338bba98', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'demo-user', 'admin', '2026-06-02 23:30:09.409117+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('42ca835e-e056-4f5e-bf4b-e0ab3cc13ced', '8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-admin', 'admin', '2026-06-02 23:30:14.217841+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('4cfb5211-7623-4600-af61-8a31afd307a9', '8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-foreman', 'foreman', '2026-06-02 23:30:14.219617+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('22c7dbe4-457c-4c4a-af01-d9be8c5c072a', '8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-office', 'office', '2026-06-02 23:30:14.221295+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('f794f35f-f631-43c5-a4d5-d56683ede78c', '8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-member', 'member', '2026-06-02 23:30:14.222542+00', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.company_memberships VALUES ('c150ee2d-db06-43ac-b8b6-fa0e91021e7e', '8440c0ad-d8d3-49dd-80c7-e0516427f981', 'e2e-bookkeeper', 'bookkeeper', '2026-06-02 23:30:14.224176+00', NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.company_memberships ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_pricing_overrides; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_pricing_overrides DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.company_pricing_overrides ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_settings; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_settings DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.company_settings ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: company_usage_log; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.company_usage_log DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.company_usage_log ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: daily_logs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.daily_logs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.daily_logs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: daily_log_photos; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.daily_log_photos DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.daily_log_photos ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: companycam_photo_imports; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.companycam_photo_imports DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.companycam_photo_imports ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: support_debug_packets; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_debug_packets DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.support_debug_packets ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: context_work_items; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.context_work_items DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.context_work_items ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: context_handoff_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.context_handoff_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.context_handoff_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: cost_library_items; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cost_library_items DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.cost_library_items ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: service_item_assemblies; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.service_item_assemblies DISABLE TRIGGER ALL;
+
+INSERT INTO public.service_item_assemblies VALUES ('7a5d6751-9c78-4dca-adaf-e32c66db9284', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Air Barrier', 'Paper & Wire Envelope', 'Weather-resistive paper and self-furring wire-lath envelope — the prep layer under stucco or stone, plus scaffolding access (subbed).', 2.9730, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assemblies VALUES ('b1b7fca9-1587-4ba7-a784-46fc11224f21', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Basecoat', '3-Coat Stucco (Scratch / Brown / Finish)', 'Traditional three-coat Portland-cement stucco over lath: scratch coat, brown coat, and finish coat.', 5.9780, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assemblies VALUES ('61c19070-6c19-4f8b-8e2b-1341158a7ef8', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'EPS', 'EIFS Complete (EPS + Base + Finish)', 'Full exterior insulation finish system: EPS board, adhesive, base coat with mesh, and acrylic finish, installed over a prepared substrate.', 5.9065, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assemblies VALUES ('d2746fc0-0403-4fd3-a37f-9e923f19d97a', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cementboard', 'Cementboard + Battens (Modern Farmhouse)', 'Fiber-cement board-and-batten siding over weather barrier with fasteners and painted finish.', 6.5795, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assemblies VALUES ('ee3c7fd5-2ab5-497c-b623-56acb98f7464', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cultured Stone', 'Cultured Stone Veneer', 'Manufactured stone veneer over scratch coat with mortar setting bed and grouted joints.', 15.2420, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assemblies VALUES ('d3dfa086-75c3-47dd-bf9b-1a0e03d2feb7', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Finish Coat', 'EIFS Integral-Color Finish (Recoat)', 'Integral-color acrylic EIFS finish recoat over an existing prepared base coat — cosmetic refresh without re-boarding.', 3.4260, 'sqft', NULL, NULL, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.service_item_assemblies ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: takeoff_conditions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.takeoff_conditions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.takeoff_conditions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: takeoff_drafts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.takeoff_drafts DISABLE TRIGGER ALL;
+
+INSERT INTO public.takeoff_drafts VALUES ('4c708b2d-b794-4c4d-83a8-036d422ac0db', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'c235176e-eb7b-4e19-9818-1ec94ae5fb50', 'Default', 'measurement', 'active', 1, NULL, '2026-06-02 23:30:13.65521+00', '2026-06-02 23:30:13.65521+00', 'manual', NULL, false, NULL, NULL, 'takeoff', NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.takeoff_drafts VALUES ('c0888490-9f3a-4ff3-a2c2-44e781f2eda4', '82de95b5-6b78-49b3-a132-bd5892558d0b', '33c27845-0ae0-44b5-9b8a-0a4b7f72a4c1', 'Default', 'measurement', 'active', 1, NULL, '2026-06-02 23:30:13.65521+00', '2026-06-02 23:30:13.65521+00', 'manual', NULL, false, NULL, NULL, 'takeoff', NULL, NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.takeoff_drafts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: takeoff_measurements; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.takeoff_measurements DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.takeoff_measurements ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: crew_schedules; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.crew_schedules DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.crew_schedules ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: custom_role_grants; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.custom_role_grants DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.custom_role_grants ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: customer_portal_links; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.customer_portal_links DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.customer_portal_links ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: customer_pricing_overrides; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.customer_pricing_overrides DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.customer_pricing_overrides ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: shipments; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.shipments DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.shipments ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: shipment_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.shipment_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.shipment_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: damage_charges; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.damage_charges DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.damage_charges ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: dispatch_lanes; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.dispatch_lanes DISABLE TRIGGER ALL;
+
+INSERT INTO public.dispatch_lanes VALUES ('estimate_push', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('rental_billing_push', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('labor_payroll_push', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('damage_charges', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('notifications', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('context_work_dispatch', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('rental_invoice', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('lock_labor_entries', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('field_events', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('crew_schedule_confirm', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('takeoff_to_bid', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('voice_to_log', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('companycam_poll', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('welcome_email', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('blueprint_storage_gc', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('capture_artifact_analysis', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('capture_artifact_retention_gc', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('work_request_stale', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('queue_prune', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('stuck_workflow_alerts', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.604878+00', '{}', '2026-06-02 23:30:15.604878+00', '2026-06-02 23:30:15.604878+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('audit_escrow_tick', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:15.698693+00', '{}', '2026-06-02 23:30:15.698693+00', '2026-06-02 23:30:15.698693+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.dispatch_lanes VALUES ('qbo_pull', 'active', '', NULL, NULL, 'system:seed', '2026-06-02 23:30:18.241904+00', '{}', '2026-06-02 23:30:18.241904+00', '2026-06-02 23:30:18.241904+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.dispatch_lanes ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: dispatch_lane_decisions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.dispatch_lane_decisions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.dispatch_lane_decisions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: divisions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.divisions DISABLE TRIGGER ALL;
+
+INSERT INTO public.divisions VALUES ('0f5c4a5c-1bd5-481e-800d-fef28b0a9a04', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D1', 'Stucco', 1, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('0b7e75a0-44a9-41b1-ab7c-4b6449b7034e', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D1', 'Stucco', 1, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('5c8787c5-27f0-487d-84d6-fe28eec45af5', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D2', 'Masonry', 2, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('7c213adb-ecef-4fd9-89d9-ad67a45c0b5a', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D2', 'Masonry', 2, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('069a3548-c0f2-4625-883c-143cfd635f9c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D3', 'Siding', 3, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('1ea71e12-d819-4fb3-a92a-a29868a9dc57', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D3', 'Siding', 3, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('2d6bd3ba-ae85-48da-b617-d93f4b1e55fb', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D4', 'EIFS', 4, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('51242310-1eb1-42f9-a864-377ab1b76d7c', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D4', 'EIFS', 4, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('2bac45a8-aba0-4c98-b0b3-2a2981c40edd', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D5', 'Paper and Wire', 5, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('fdca5376-7d51-4ba4-91de-5c4aedfe6d64', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D5', 'Paper and Wire', 5, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('003cba53-9442-494e-9fff-5ab736d49353', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D6', 'Snow Removal', 6, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('1b615b9a-18f3-4f53-bdef-4cba4c4d9c8b', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D6', 'Snow Removal', 6, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('7a583437-2481-4cd8-969c-13767ba2a81c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D7', 'Warranty', 7, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('335ec892-48fb-4ee8-9d76-27f6eedb5fc7', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D7', 'Warranty', 7, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('a224951f-bf6b-4187-ab84-b118a7ca96e4', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D8', 'Overhead', 8, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('51f34ead-2563-408f-8213-8a6e16fa8279', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D8', 'Overhead', 8, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('ad14befa-0f7b-4a3b-8b65-8568f8e14b4b', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'D9', 'Scaffolding', 9, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.divisions VALUES ('c607a665-f794-4be1-8ecd-c9550023735f', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'D9', 'Scaffolding', 9, '2026-06-02 23:30:09.410286+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.divisions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: estimate_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.estimate_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.estimate_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: estimate_pushes; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.estimate_pushes DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.estimate_pushes ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: estimate_push_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.estimate_push_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.estimate_push_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: estimate_share_links; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.estimate_share_links DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.estimate_share_links ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_vendors; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_vendors DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_vendors ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: external_rentals; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.external_rentals DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.external_rentals ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: guardrails; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.guardrails DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.guardrails ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: impersonation_sessions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.impersonation_sessions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.impersonation_sessions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: integration_circuit_state; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integration_circuit_state DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.integration_circuit_state ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: integration_connections; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integration_connections DISABLE TRIGGER ALL;
+
+INSERT INTO public.integration_connections VALUES ('2c0e6567-5836-4890-9bd7-16558f50c560', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'qbo', 'sandbox-la', NULL, NULL, NULL, NULL, NULL, '{}', '{}', 'connected', 1, NULL, '2026-06-02 23:30:09.426372+00', NULL, false) ON CONFLICT DO NOTHING;
+INSERT INTO public.integration_connections VALUES ('3e2c3d68-4ae6-4f69-aba1-45826af376dd', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'qbo', 'sandbox-beta', NULL, NULL, NULL, NULL, NULL, '{}', '{}', 'connected', 1, NULL, '2026-06-02 23:30:09.426372+00', NULL, false) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.integration_connections ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: integration_mappings; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.integration_mappings DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.integration_mappings ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: inventory_movement_photos; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.inventory_movement_photos DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.inventory_movement_photos ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: inventory_service_tickets; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.inventory_service_tickets DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.inventory_service_tickets ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: job_rental_contracts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.job_rental_contracts DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.job_rental_contracts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: job_rental_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.job_rental_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.job_rental_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: time_review_runs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.time_review_runs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.time_review_runs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: labor_payroll_runs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.labor_payroll_runs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.labor_payroll_runs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: labor_entries; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.labor_entries DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.labor_entries ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: material_bills; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.material_bills DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.material_bills ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: mesh_trace_forward_state; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.mesh_trace_forward_state DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.mesh_trace_forward_state ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: message_reads; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.message_reads DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.message_reads ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: mutation_outbox; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.mutation_outbox DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.mutation_outbox ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: notification_preferences; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.notification_preferences DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.notification_preferences ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: notifications; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.notifications DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.notifications ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: payroll_exports; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.payroll_exports DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.payroll_exports ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: platform_admins; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.platform_admins DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.platform_admins ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: pricing_profiles; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.pricing_profiles DISABLE TRIGGER ALL;
+
+INSERT INTO public.pricing_profiles VALUES ('29992810-bdf7-4038-8d08-5331ea50567a', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Default', true, '{"template": "la-operations"}', 1, NULL, '2026-06-02 23:30:09.414741+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.pricing_profiles VALUES ('ec3fedd3-5917-4086-ba93-1aca3ae5d0c2', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Beta Default', true, '{"template": "beta-build"}', 1, NULL, '2026-06-02 23:30:09.414741+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.pricing_profiles ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_assignments; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_assignments DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_assignments ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_billing_milestones; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_billing_milestones DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_billing_milestones ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_briefs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_briefs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_briefs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_lost_reasons; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_lost_reasons DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_lost_reasons ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_messages; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_messages DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_messages ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: project_pricing_overrides; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_pricing_overrides DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.project_pricing_overrides ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: push_subscriptions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.push_subscriptions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.push_subscriptions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: qbo_custom_field_mappings; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.qbo_custom_field_mappings DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.qbo_custom_field_mappings ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: qbo_sync_runs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.qbo_sync_runs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.qbo_sync_runs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_billing_runs; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_billing_runs DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_billing_runs ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_billing_run_lines; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_billing_run_lines DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_billing_run_lines ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_rate_tiers; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_rate_tiers DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_rate_tiers ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_share_links; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_share_links DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_share_links ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rentals; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rentals DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rentals ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: rental_requests; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rental_requests DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.rental_requests ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: scaffold_tags; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scaffold_tags DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.scaffold_tags ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: scaffold_inspections; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scaffold_inspections DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.scaffold_inspections ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: service_item_assembly_components; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.service_item_assembly_components DISABLE TRIGGER ALL;
+
+INSERT INTO public.service_item_assembly_components VALUES ('670929f5-2e4d-45e1-8333-a91016f8cf31', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '61c19070-6c19-4f8b-8e2b-1341158a7ef8', 'material', 'EPS board 2"', 1.0000, 'sqft', 0.8500, 8.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('d05edae8-60ea-401c-aa67-abec65b691c4', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '61c19070-6c19-4f8b-8e2b-1341158a7ef8', 'material', 'EIFS adhesive', 1.0000, 'sqft', 0.3500, 5.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('37bcd764-626d-4599-bc41-398439e2f45c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '61c19070-6c19-4f8b-8e2b-1341158a7ef8', 'material', 'Base coat + reinforcing mesh', 1.0000, 'sqft', 0.6500, 10.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('7f5b6547-d3fb-4174-96e0-72c6ed82bb5c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '61c19070-6c19-4f8b-8e2b-1341158a7ef8', 'material', 'Acrylic finish coat', 1.0000, 'sqft', 0.9500, 8.00, 3, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('22e25b8c-5534-407c-aeec-2d2854d1645f', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '61c19070-6c19-4f8b-8e2b-1341158a7ef8', 'labor', 'EIFS installation crew', 0.0600, 'hr', 48.0000, 0.00, 4, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('f1ab2085-e9e8-49b4-8d9b-3ecd3e1efbe5', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'b1b7fca9-1587-4ba7-a784-46fc11224f21', 'material', 'Cement / sand scratch + brown', 1.0000, 'sqft', 0.5500, 12.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('ab3a61b6-15ba-49d4-82df-cadf37eb902e', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'b1b7fca9-1587-4ba7-a784-46fc11224f21', 'material', 'Stucco finish coat', 1.0000, 'sqft', 0.7000, 10.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('0a3f95a6-1841-4070-b88c-7370b3a33723', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'b1b7fca9-1587-4ba7-a784-46fc11224f21', 'material', 'Metal lath + fasteners', 1.0000, 'sqft', 0.4000, 8.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('fc43cece-8d36-4f44-adec-828a30bea6d9', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'b1b7fca9-1587-4ba7-a784-46fc11224f21', 'labor', 'Plasterer crew', 0.0800, 'hr', 52.0000, 0.00, 3, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('31dac4ca-34d6-4cd7-b182-e3b49930d64a', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'ee3c7fd5-2ab5-497c-b623-56acb98f7464', 'material', 'Cultured stone units', 1.0000, 'sqft', 6.5000, 10.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('29e4392b-5937-4180-8624-b74252fb5456', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'ee3c7fd5-2ab5-497c-b623-56acb98f7464', 'material', 'Type-S mortar + bonding', 1.0000, 'sqft', 0.8500, 12.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('ef31ecfd-a97c-4781-b860-ad964dad1bef', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'ee3c7fd5-2ab5-497c-b623-56acb98f7464', 'material', 'Lath + weather-resistive barrier', 1.0000, 'sqft', 0.5000, 8.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('ff54d89b-48df-436f-a8bd-dba9fd1356d3', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'ee3c7fd5-2ab5-497c-b623-56acb98f7464', 'labor', 'Mason crew', 0.1200, 'hr', 55.0000, 0.00, 3, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('068a9055-6640-4906-bcd1-87aab1b6ba73', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd2746fc0-0403-4fd3-a37f-9e923f19d97a', 'material', 'Fiber-cement panel', 1.0000, 'sqft', 1.9500, 10.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('71a3f851-9ff9-4c3c-b42e-127071c746a0', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd2746fc0-0403-4fd3-a37f-9e923f19d97a', 'material', 'Battens + trim', 1.0000, 'sqft', 0.6000, 12.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('c4fa1266-6c6a-41c6-872e-6a6fff65f515', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd2746fc0-0403-4fd3-a37f-9e923f19d97a', 'material', 'Fasteners + sealant', 1.0000, 'sqft', 0.2500, 5.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('fc3df639-fe5a-47d2-8254-e668702ba5b0', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd2746fc0-0403-4fd3-a37f-9e923f19d97a', 'labor', 'Siding crew', 0.0500, 'hr', 46.0000, 0.00, 3, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('fe0f444b-7c61-4ddb-b8f1-704f2ce74d6c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd2746fc0-0403-4fd3-a37f-9e923f19d97a', 'labor', 'Paint + caulk finish', 0.0300, 'hr', 40.0000, 0.00, 4, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('c43114c6-6319-451a-858b-da3b0c53e366', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd3dfa086-75c3-47dd-bf9b-1a0e03d2feb7', 'material', 'Primer', 1.0000, 'sqft', 0.3000, 6.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('96b2c3e0-529b-431b-ac9f-4b1c8111eeab', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd3dfa086-75c3-47dd-bf9b-1a0e03d2feb7', 'material', 'Integral-color acrylic finish', 1.0000, 'sqft', 1.1000, 8.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('64d25732-36f9-4712-8d19-ba51a7ab57e4', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'd3dfa086-75c3-47dd-bf9b-1a0e03d2feb7', 'labor', 'Finish applicator', 0.0400, 'hr', 48.0000, 0.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('879eba4e-4b1e-48b7-a864-2430dfab39a1', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '7a5d6751-9c78-4dca-adaf-e32c66db9284', 'material', 'Building paper (2 layers)', 2.0000, 'sqft', 0.1200, 15.00, 0, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('3bd17fc9-3448-428d-91ba-d7148caf922c', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '7a5d6751-9c78-4dca-adaf-e32c66db9284', 'material', 'Self-furring wire lath', 1.0000, 'sqft', 0.4500, 10.00, 1, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('a8de21bb-ab6b-4473-968a-ef4a7938ffbc', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '7a5d6751-9c78-4dca-adaf-e32c66db9284', 'material', 'Lath fasteners', 1.0000, 'sqft', 0.1500, 8.00, 2, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('e240570e-842c-4872-8796-2a6bdb85c6fd', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '7a5d6751-9c78-4dca-adaf-e32c66db9284', 'labor', 'Lath crew', 0.0350, 'hr', 44.0000, 0.00, 3, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_assembly_components VALUES ('8d5c69d6-8404-4f61-ab09-71b2a3e5a2ab', '32e8cd05-cc08-4623-8515-d8eecc6041d6', '7a5d6751-9c78-4dca-adaf-e32c66db9284', 'sub', 'Scaffolding access (subbed)', 1.0000, 'sqft', 0.5000, 0.00, 4, '2026-06-02 23:30:16.639619+00', '2026-06-02 23:30:16.639619+00', NULL, NULL, NULL, NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.service_item_assembly_components ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: service_items; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.service_items DISABLE TRIGGER ALL;
+
+INSERT INTO public.service_items VALUES ('19e923f0-56e0-4b0b-b811-149d9b74c36e', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'EPS', 'EPS', 'measurable', 'sqft', 4.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('5b5a3adf-16c7-4f39-99d1-d2cfa4a8b7c7', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'EPS', 'EPS', 'measurable', 'sqft', 4.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('0092efc7-997c-4fab-b475-24dc3007303a', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Basecoat', 'Basecoat', 'measurable', 'sqft', 2.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('4cfbb487-192e-4275-9c97-9c15bcc079eb', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Basecoat', 'Basecoat', 'measurable', 'sqft', 2.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('68a6ecfb-ba9b-48c8-af9e-92fc0d42a566', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Finish Coat', 'Finish Coat', 'measurable', 'sqft', 3.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('e896edc7-942c-4c85-b123-62ecc2f8eb41', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Finish Coat', 'Finish Coat', 'measurable', 'sqft', 3.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('252cf407-6eb8-469b-ae7c-f50cd59f94f6', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Air Barrier', 'Air Barrier', 'measurable', 'sqft', 1.80, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('b38df6fe-37ad-401e-8b9c-5ef0a3aee9fe', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Air Barrier', 'Air Barrier', 'measurable', 'sqft', 1.80, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('eda5efee-1cb6-418c-96b9-bc8c115cd390', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Envelope Seal', 'Envelope Seal', 'measurable', 'lf', 2.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('04bcdaf0-2fed-47e2-9d14-40155128c0c3', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Envelope Seal', 'Envelope Seal', 'measurable', 'lf', 2.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('15b331a2-d846-4e55-8cce-958a5dd8db33', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cementboard', 'Cementboard', 'measurable', 'sqft', 3.25, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('f47dfb71-e8bd-4ae9-a8aa-743872ba3157', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Cementboard', 'Cementboard', 'measurable', 'sqft', 3.25, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('913a70f9-ba6e-4eb7-b80d-e22be1dde417', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cultured Stone', 'Cultured Stone', 'measurable', 'sqft', 12.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('9ff4dd24-9933-48ff-8663-b6f17bd9b702', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Cultured Stone', 'Cultured Stone', 'measurable', 'sqft', 12.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('0f2de1fa-33d4-42b3-9639-1e976eaf891d', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Caulking', 'Caulking', 'measurable', 'lf', 4.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('ee2e25a1-a4a8-416a-855d-2e1dce06c6f5', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Caulking', 'Caulking', 'measurable', 'lf', 4.50, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('b1fc0fbe-0095-4162-8898-52fac03aa4b5', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Flashing', 'Flashing', 'measurable', 'lf', 8.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('4525b5b9-1ebd-4cb2-bb10-1d8ea62c8fdf', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Flashing', 'Flashing', 'measurable', 'lf', 8.00, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('c94b6014-146f-4c29-b7a5-493fbf7b8264', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Change Order', 'Change Order', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('3dfb7126-b894-4f36-b585-0bdc61cf9429', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Change Order', 'Change Order', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('b5fa5f06-dde6-43c5-bb81-b8a40d04bab9', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Deposit', 'Deposit', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('50d4b0ba-d109-4cfc-95c2-71bbd880868e', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Deposit', 'Deposit', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('4a624598-b1a8-42b6-b119-e277be3e2110', '32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Holdback', 'Holdback', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+INSERT INTO public.service_items VALUES ('2eaec80a-20c4-4463-bd4e-62c25e5884ae', '82de95b5-6b78-49b3-a132-bd5892558d0b', 'Holdback', 'Holdback', 'accounting', 'job', NULL, 'manual', 1, NULL, '2026-06-02 23:30:09.412724+00', '2026-06-02 23:30:09.412724+00', 1.000, 'active', NULL) ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.service_items ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: service_item_divisions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.service_item_divisions DISABLE TRIGGER ALL;
+
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'EPS', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'EPS', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Basecoat', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Basecoat', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Finish Coat', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Finish Coat', 'D4', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Air Barrier', 'D5', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Air Barrier', 'D5', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Envelope Seal', 'D5', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Envelope Seal', 'D5', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cementboard', 'D3', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Cementboard', 'D3', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Cultured Stone', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Cultured Stone', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Caulking', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Caulking', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Flashing', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Flashing', 'D2', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Change Order', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Change Order', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Deposit', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Deposit', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('32e8cd05-cc08-4623-8515-d8eecc6041d6', 'Holdback', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+INSERT INTO public.service_item_divisions VALUES ('82de95b5-6b78-49b3-a132-bd5892558d0b', 'Holdback', 'D8', '2026-06-02 23:30:10.070483+00') ON CONFLICT DO NOTHING;
+
+
+ALTER TABLE public.service_item_divisions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: service_item_rate_history; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.service_item_rate_history DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.service_item_rate_history ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: shipment_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.shipment_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.shipment_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: support_packet_access_log; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.support_packet_access_log DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.support_packet_access_log ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: sync_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.sync_events DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.sync_events ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: takeoff_capture_artifacts; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.takeoff_capture_artifacts DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.takeoff_capture_artifacts ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: takeoff_measurement_tags; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.takeoff_measurement_tags DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.takeoff_measurement_tags ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: tenant_provisions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.tenant_provisions DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.tenant_provisions ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: worker_issues; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.worker_issues DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.worker_issues ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: worker_issue_attachments; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.worker_issue_attachments DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.worker_issue_attachments ENABLE TRIGGER ALL;
+
+--
+-- Data for Name: workflow_event_log; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+ALTER TABLE public.workflow_event_log DISABLE TRIGGER ALL;
+
+
+
+ALTER TABLE public.workflow_event_log ENABLE TRIGGER ALL;
+
+--
+-- Name: audit_escrow_entries_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+--
+
+SELECT pg_catalog.setval('public.audit_escrow_entries_id_seq', 1, false);
+
+
+--
+-- Name: dispatch_lane_decisions_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+--
+
+SELECT pg_catalog.setval('public.dispatch_lane_decisions_id_seq', 1, false);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 9Cv0g5aIzGsbU1k4a1CgTrg3IiZaefJJOFY3yoXxsV4fnSgVLJ5CNJN4zrmK6K4
+
+
+-- Restore default search_path (pg_dump left it empty for qualified DDL/DML).
+SELECT pg_catalog.set_config('search_path', 'public', false);

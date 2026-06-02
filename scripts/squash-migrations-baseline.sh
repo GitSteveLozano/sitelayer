@@ -24,11 +24,20 @@
 #      migrate-db.sh on the next deploy, and the squash cutover must be a
 #      deliberate operator step (see docs/MIGRATION_BASELINE.md), never an
 #      accidental side effect of running this tool.
+#   2b. Appends the migration-inserted SEED DATA (reference rows from migrations
+#      like 094_dispatch_lanes, 001 core data, 110 cladding assemblies, 072 e2e
+#      fixtures) as idempotent INSERTs (pg_dump --data-only --inserts
+#      --on-conflict-do-nothing; the schema_migrations LEDGER is excluded — the
+#      per-environment cutover manages that). Without this a fresh DB built from
+#      the baseline would have the tables but none of the seeded rows, a silent
+#      loss the schema-only diff cannot see.
 #   3. PROVES equivalence: builds a SECOND throwaway DB from ONLY the candidate
 #      000_baseline.sql, dumps its schema the same way, and diffs the two
-#      normalized dumps. The diff MUST be empty. The result is printed.
+#      normalized dumps (MUST be empty), THEN compares per-table row counts
+#      between the history DB and the baseline DB (MUST be identical) to prove
+#      seed-data equivalence. The result is printed.
 #   4. Re-runs the candidate baseline against the already-built "history" DB to
-#      prove idempotency (a second apply must not error).
+#      prove idempotency (a second apply must not error; data ON CONFLICT no-ops).
 #
 # It writes the candidate file as an ARTIFACT for the operator to review, OUTSIDE
 # the auto-applied init directory. It does NOT delete the 151 history files, does
@@ -182,6 +191,21 @@ dump_schema_from() {
     --no-privileges \
     --schema=public \
     -U sitelayer -d sitelayer
+}
+
+# table_counts_from <container-name>
+# Emits sorted "tablename|rowcount" for every public base table EXCEPT the
+# migration ledger (schema_migrations, which the baseline deliberately omits).
+# Used to PROVE seed-data equivalence: the history DB and the baseline-built DB
+# must have identical per-table row counts. This catches both data LOSS (a
+# seeded table the baseline forgot) and NON-idempotency (a re-apply that
+# duplicated rows in a table lacking a unique constraint).
+table_counts_from() {
+  local name="$1"
+  local gen
+  gen="$("$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAc \
+    "SELECT coalesce(string_agg(format('SELECT %L AS t, count(*) AS c FROM %I.%I', tablename, schemaname, tablename), ' UNION ALL '), 'SELECT NULL::text AS t, 0 AS c WHERE false') FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'")"
+  "$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAF '|' -c "$gen ORDER BY 1" | sed '/^$/d' | sort
 }
 
 # normalize_dump
@@ -366,8 +390,57 @@ build_baseline() {
   mkdir -p "$(dirname "$BASELINE_OUT")"
   build_idempotent_baseline "$raw" "$BASELINE_OUT"
 
+  log "appending idempotent seed-data section (migration-inserted reference rows)"
+  append_seed_data_from "$HISTORY_CONTAINER" "$BASELINE_OUT"
+
   rm -f "$raw"
   log "candidate baseline written ($(wc -l <"$BASELINE_OUT") lines)"
+}
+
+# append_seed_data_from <container-name> <out-path>
+# The schema-only baseline above reproduces tables/indexes/constraints/etc. but
+# NOT the rows that data-seeding migrations INSERT (e.g. 094_dispatch_lanes,
+# 001 reference data, 110 cladding assemblies, 072 e2e fixtures). Without this a
+# fresh DB built from the baseline would have empty seed tables — a silent data
+# loss the schema-only equivalence proof cannot see. So append every seeded row
+# as an idempotent INSERT:
+#   --data-only --inserts            one INSERT per row (diff/idempotency friendly)
+#   --on-conflict-do-nothing         re-apply is a no-op (mark-applied / 2nd run safe)
+#   --exclude-table-data=schema_migrations  the migration LEDGER is managed by the
+#                                    per-environment cutover, NOT carried in the baseline.
+# pg_dump emits the rows in FK-dependency order, so a fresh apply is safe.
+append_seed_data_from() {
+  local name="$1" out="$2"
+  {
+    printf '\n\n'
+    cat <<'DATAHDR'
+-- ============================ SEED DATA (idempotent) ============================
+-- Migration-inserted reference/seed rows, captured so a fresh DB built from this
+-- baseline matches the full-history DB in DATA as well as schema. Generated with
+-- pg_dump --data-only --inserts --on-conflict-do-nothing; the schema_migrations
+-- ledger is EXCLUDED (the per-environment cutover manages that row). Idempotent:
+-- ON CONFLICT DO NOTHING makes a re-apply / mark-applied a no-op.
+DATAHDR
+    printf '\n'
+    "$DOCKER" exec "$name" pg_dump \
+      --data-only \
+      --inserts \
+      --on-conflict-do-nothing \
+      --disable-triggers \
+      --no-owner \
+      --no-privileges \
+      --schema=public \
+      --exclude-table-data=schema_migrations \
+      -U sitelayer -d sitelayer
+    # pg_dump emits `set_config('search_path', '', false)` so its fully-qualified
+    # statements run with an empty search_path. That setting LEAKS past the
+    # \i 000_baseline.sql in scripts/migrate-db.sh's wrapper, whose next line
+    # references the UNQUALIFIED schema_migrations ledger -> "relation does not
+    # exist". Restore the default search_path as the final statement so the
+    # runner (and any caller that sources this file) is left in a sane state.
+    printf '\n-- Restore default search_path (pg_dump left it empty for qualified DDL/DML).\n'
+    printf "SELECT pg_catalog.set_config('search_path', 'public', false);\n"
+  } >>"$out"
 }
 
 # ============================================================================
@@ -418,30 +491,52 @@ verify_baseline() {
 
   log "diffing history-built schema vs baseline-built schema"
   local diff_out
-  if diff_out="$(diff -u "$hist_norm" "$base_norm")"; then
-    rm -f "$hist_raw" "$hist_norm" "$base_raw" "$base_norm"
+  if ! diff_out="$(diff -u "$hist_norm" "$base_norm")"; then
     printf '\n'
-    log "===================== EQUIVALENCE PROOF ====================="
-    log "DIFF RESULT: EMPTY — the baseline-built schema is IDENTICAL to the"
-    log "full-history schema (tables, columns, indexes, constraints, RLS"
-    log "policies + FORCE flags, functions, sequences, types)."
-    log "Idempotency: PROVEN (2nd apply to fresh DB + apply over migrated DB)."
-    log "============================================================"
-    log "Candidate baseline is an ARTIFACT at: $BASELINE_OUT"
-    log "Review it and follow docs/MIGRATION_BASELINE.md to cut each"
-    log "environment over. This tool did NOT execute the collapse."
-    return 0
+    warn "===================== EQUIVALENCE FAILED ===================="
+    warn "DIFF RESULT: NON-EMPTY — the baseline does NOT reproduce the schema."
+    warn "Lines with '-' are in the full-history schema only; '+' are in the"
+    warn "baseline-only schema. Do NOT adopt this baseline."
+    warn "============================================================"
+    printf '%s\n' "$diff_out" >&2
+    rm -f "$hist_raw" "$hist_norm" "$base_raw" "$base_norm"
+    return 1
+  fi
+  rm -f "$hist_raw" "$hist_norm" "$base_raw" "$base_norm"
+
+  # ---- Data equivalence: per-table row counts must match exactly. -----------
+  # The baseline carries seed data as idempotent INSERTs; the baseline container
+  # has had the baseline applied TWICE (the idempotency check above), so any
+  # non-idempotent / duplicated row OR any dropped seed row shows up here as a
+  # count mismatch against the full-history DB.
+  log "comparing seed-data row counts (history vs baseline)"
+  local hist_counts base_counts data_diff
+  hist_counts="$(table_counts_from "$HISTORY_CONTAINER")"
+  base_counts="$(table_counts_from "$BASELINE_CONTAINER")"
+  if ! data_diff="$(diff <(printf '%s\n' "$hist_counts") <(printf '%s\n' "$base_counts"))"; then
+    printf '\n'
+    warn "===================== DATA EQUIVALENCE FAILED ===================="
+    warn "Per-table row counts differ between the full-history DB and a DB built"
+    warn "from ONLY the baseline. '<' = history, '>' = baseline. A missing seed"
+    warn "table means data loss; a higher baseline count means a non-idempotent"
+    warn "INSERT. Do NOT adopt this baseline."
+    warn "================================================================"
+    printf '%s\n' "$data_diff" >&2
+    return 1
   fi
 
   printf '\n'
-  warn "===================== EQUIVALENCE FAILED ===================="
-  warn "DIFF RESULT: NON-EMPTY — the baseline does NOT reproduce the schema."
-  warn "Lines with '-' are in the full-history schema only; '+' are in the"
-  warn "baseline-only schema. Do NOT adopt this baseline."
-  warn "============================================================"
-  printf '%s\n' "$diff_out" >&2
-  rm -f "$hist_raw" "$hist_norm" "$base_raw" "$base_norm"
-  return 1
+  log "===================== EQUIVALENCE PROOF ====================="
+  log "SCHEMA DIFF: EMPTY — baseline schema IDENTICAL to full history (tables,"
+  log "columns, indexes, constraints, RLS policies + FORCE, functions, sequences)."
+  log "DATA COUNTS: IDENTICAL across all $(printf '%s\n' "$hist_counts" | grep -c . ) seeded public tables (excl. schema_migrations)."
+  log "Idempotency: PROVEN (2nd apply to fresh DB + apply over migrated DB; data"
+  log "uses ON CONFLICT DO NOTHING)."
+  log "============================================================"
+  log "Candidate baseline is an ARTIFACT at: $BASELINE_OUT"
+  log "Review it and follow docs/MIGRATION_BASELINE.md to cut each"
+  log "environment over. This tool did NOT execute the collapse."
+  return 0
 }
 
 # ============================================================================
