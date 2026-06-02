@@ -11,6 +11,7 @@ import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateLineAssembly } from './estimate-line-assembly'
 import { EstimateMarkupBreakdown } from './estimate-markup-breakdown'
 import { EstimateShareSheet } from './estimate-share-sheet'
+import { EstimateStalenessBanner } from './estimate-staleness-banner'
 import { PricingProfilePicker } from './pricing-profile-picker'
 
 /**
@@ -153,6 +154,16 @@ export function EstimateBuilderScreen() {
           </MobileButton>
         </div>
       </div>
+
+      {/* H4 persistent staleness banner — shown whenever a measurement /
+          assembly / rate changed after the last recompute. Renders nothing
+          when the estimate is fresh. */}
+      <EstimateStalenessBanner
+        snapshot={builder.snapshot}
+        onRecompute={() => builder.recompute()}
+        recomputing={builder.isRecomputing}
+        className="mx-0 mt-0 mb-3"
+      />
 
       {builder.error ? (
         <Card tight className="mb-3">

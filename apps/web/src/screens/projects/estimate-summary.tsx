@@ -3,6 +3,7 @@ import { Card, MobileButton, Pill, Row, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
   estimatePdfUrl,
+  recomputeEstimate,
   useProjectTimeline,
   useScopeVsBid,
   type BidVsScopeStatus,
@@ -10,6 +11,7 @@ import {
   type ProjectTimelineEvent,
 } from '@/lib/api'
 import { EstimateShareSheet } from './estimate-share-sheet'
+import { EstimateStalenessBanner } from './estimate-staleness-banner'
 
 /**
  * `est-summary` — Estimate draft for a project. Renders the
@@ -29,6 +31,19 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
   const scope = useScopeVsBid(projectId)
   const [shareOpen, setShareOpen] = useState(false)
   const [clientShareOpen, setClientShareOpen] = useState(false)
+  // H4 inline recompute from the staleness banner. est-summary is read-mostly
+  // (no estimate-builder machine), so it calls the recompute endpoint directly
+  // then refetches the snapshot to clear the stale flag.
+  const [recomputing, setRecomputing] = useState(false)
+  const handleRecompute = async () => {
+    setRecomputing(true)
+    try {
+      await recomputeEstimate(projectId)
+      await scope.refetch()
+    } finally {
+      setRecomputing(false)
+    }
+  }
 
   if (scope.isPending) {
     return (
@@ -51,6 +66,15 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
   const data = scope.data
   return (
     <div className="space-y-3">
+      {/* H4 persistent staleness banner — renders only when the estimate is out
+          of date vs the takeoff inputs. */}
+      <EstimateStalenessBanner
+        snapshot={data}
+        onRecompute={() => void handleRecompute()}
+        recomputing={recomputing}
+        className="mx-0 my-0"
+      />
+
       {/* Bid vs scope pill row. */}
       <Card>
         <div className="flex items-baseline justify-between mb-1">

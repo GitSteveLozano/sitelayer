@@ -19,13 +19,14 @@ import {
   estimatePdfUrl,
   estimateReportUrl,
   estimateXlsxUrl,
+  isEstimateStale,
   repriceEstimateMargin,
   ESTIMATE_REPORTS,
   type EstimateLine,
   type EstimateReportKind,
 } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
-import { MButton, MPill, MSelect } from '@/components/m'
+import { MBanner, MButton, MPill, MSelect } from '@/components/m'
 import { PdfPreviewModal, SendModal } from './project-drawers'
 import { ProjectRatesModal } from './est-project-rates'
 import { formatMoney } from '../mobile/format.js'
@@ -221,6 +222,10 @@ export function EstQuantities() {
     })
   }
   const rows: QtyRow[] = useMemo(() => buildGroupedRows(lines, expanded), [lines, expanded])
+  // H4 staleness: true when a measurement / assembly / rate changed after the
+  // last recompute (server-derived flag on the scope-vs-bid snapshot). Drives
+  // the persistent "out of date" banner above the quantities table.
+  const isStale = isEstimateStale(builder.snapshot)
   // Whether any line came from an assembly explosion — drives the "Assembly"
   // column visibility so flat-only estimates keep their original 6-col layout.
   const hasAssemblies = useMemo(() => lines.some((l) => Boolean(l.assembly_id)), [lines])
@@ -459,6 +464,27 @@ export function EstQuantities() {
         <div className="d-split">
           {/* MAIN — quantities table from the estimate lines/scope. */}
           <div style={{ display: 'grid', gap: 12 }}>
+            {/* H4 persistent staleness banner — a measurement / assembly / rate
+                changed after the last recompute, so these quantities are out of
+                date until recomputed. Renders nothing when the estimate is
+                fresh. */}
+            {isStale ? (
+              <MBanner
+                tone="warn"
+                title="Estimate out of date"
+                body="A measurement, assembly, or rate changed after this estimate was last computed. Recompute from the takeoff before sending."
+                action={
+                  <MButton
+                    variant="ghost"
+                    size="sm"
+                    disabled={builder.isRecomputing}
+                    onClick={() => builder.recompute()}
+                  >
+                    {builder.isRecomputing ? 'Recomputing…' : 'Recompute'}
+                  </MButton>
+                }
+              />
+            ) : null}
             {/* Status eyebrow above the table (design: "NN SHEETS · ALL
                 VERIFIED ✓"). Only shown once there are priced lines. */}
             {lines.length > 0 ? (

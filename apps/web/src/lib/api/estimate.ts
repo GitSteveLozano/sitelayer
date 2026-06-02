@@ -70,7 +70,35 @@ export interface ScopeVsBidResponse {
   status: BidVsScopeStatus
   /** Phase A.4: which takeoff draft the response is scoped to. Null when no draft exists for the project. */
   draft_id: string | null
+  /**
+   * H4 staleness signal (additive). `recomputed_at` is the timestamp the
+   * estimate was last rebuilt from the takeoff (the newest estimate_line, which
+   * the recompute path re-creates wholesale). `source_updated_at` is the newest
+   * mutation across the inputs the estimate is derived from (the draft's
+   * measurements + any attached assemblies/components). Both are ISO strings or
+   * null when there is nothing to compare. `is_stale` is the server-derived
+   * `source_updated_at > recomputed_at` — true when a measurement/assembly/rate
+   * changed after the last recompute, so the estimate is out of date.
+   */
+  recomputed_at?: string | null
+  source_updated_at?: string | null
+  is_stale?: boolean
   lines: EstimateLine[]
+}
+
+/**
+ * Client-side staleness check (H4). Prefers the server-derived `is_stale`
+ * flag; falls back to comparing the two timestamps if only those are present.
+ * Returns false when the snapshot is missing or the timestamps aren't both
+ * available, so an absent signal never falsely warns the estimator.
+ */
+export function isEstimateStale(snapshot: ScopeVsBidResponse | null | undefined): boolean {
+  if (!snapshot) return false
+  if (typeof snapshot.is_stale === 'boolean') return snapshot.is_stale
+  const recomputedAt = snapshot.recomputed_at
+  const sourceUpdatedAt = snapshot.source_updated_at
+  if (!recomputedAt || !sourceUpdatedAt) return false
+  return sourceUpdatedAt > recomputedAt
 }
 
 const KEYS = {
@@ -84,6 +112,20 @@ export const estimateQueryKeys = KEYS
 export function fetchScopeVsBid(projectId: string, draftId: string | null = null): Promise<ScopeVsBidResponse> {
   const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
   return request<ScopeVsBidResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/scope-vs-bid${qs}`)
+}
+
+/**
+ * POST /api/projects/:id/estimate/recompute — rebuild the estimate lines from
+ * the current takeoff (measurements + attached assemblies/rates). Returns the
+ * refreshed scope-vs-bid snapshot. Used by the H4 staleness banner's inline
+ * "Recompute" action on read-mostly screens (est-summary) that don't carry the
+ * estimate-builder machine.
+ */
+export function recomputeEstimate(projectId: string): Promise<ScopeVsBidResponse> {
+  return request<{ scope_vs_bid: ScopeVsBidResponse }>(
+    `/api/projects/${encodeURIComponent(projectId)}/estimate/recompute`,
+    { method: 'POST', json: {} },
+  ).then((res) => res.scope_vs_bid)
 }
 
 export interface RepriceMarginResponse {

@@ -148,6 +148,12 @@ class FakePool {
       return { rows, rowCount: rows.length }
     }
 
+    // getScopeVsBid: H4 staleness source-timestamp roll-up. No measurements
+    // seeded in this test → null source_updated_at → not stale.
+    if (/source_updated_at/i.test(sql)) {
+      return { rows: [{ source_updated_at: null }], rowCount: 1 }
+    }
+
     if (/^insert into sync_events/i.test(sql)) {
       this.syncEvents.push({ params })
       return { rows: [], rowCount: 1 }
