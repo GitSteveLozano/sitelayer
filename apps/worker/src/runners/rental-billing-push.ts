@@ -10,6 +10,7 @@ import {
 import { observeWorkflowEvent } from '../metrics.js'
 import { createQboRentalInvoicePush } from '../qbo-invoice-push.js'
 import { withRowTrace } from '../trace.js'
+import { resolveCompanyQboLive } from '../qbo-live.js'
 
 const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
   // Deterministic synthetic id: same runId → same stub invoice id, so replay
@@ -20,30 +21,34 @@ const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId 
 export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger; qboCircuit: CircuitBreaker }) {
   const { pool, logger, qboCircuit } = deps
 
-  // Rental billing invoice push fn selection.
+  // Rental billing invoice push fn selection — PER COMPANY (multi-tenant).
   //
-  // Stub mode (default): returns a synthetic invoice id so the deterministic
-  // plumbing (route → outbox → worker → POST_SUCCEEDED → state=posted) can
-  // be exercised end-to-end without QBO. Useful for dev/preview tiers and
-  // for fixtures.
+  // Stub mode (default for every company): returns a synthetic invoice id so
+  // the deterministic plumbing (route → outbox → worker → POST_SUCCEEDED →
+  // state=posted) can be exercised end-to-end without QBO. Useful for
+  // dev/preview tiers and for fixtures.
   //
-  // Live mode (QBO_LIVE_RENTAL_INVOICE=1): builds the real push fn that
-  // queries integration_connections + integration_mappings via the same tx
-  // client, POSTs /invoice to QBO, and returns the new Invoice.Id. See
-  // apps/worker/src/qbo-invoice-push.ts.
-  const liveRentalBillingInvoicePushEnabled = process.env.QBO_LIVE_RENTAL_INVOICE === '1'
-  const rentalBillingInvoiceBasePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
-    ? createQboRentalInvoicePush()
-    : stubRentalBillingInvoicePush
-  // Continue the originating API trace into the QBO call. See
-  // estimate-push.ts for the matching pattern and rationale.
-  const rentalBillingInvoicePush: RentalBillingInvoicePushFn = (input) =>
-    withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => rentalBillingInvoiceBasePush(input)))
+  // Live mode: the real push fn queries integration_connections +
+  // integration_mappings via the same tx client, POSTs /invoice to QBO, and
+  // returns the new Invoice.Id (apps/worker/src/qbo-invoice-push.ts). A
+  // company runs live ONLY when the cluster-wide kill switch
+  // (QBO_LIVE_RENTAL_INVOICE=1) AND that company's
+  // integration_connections.qbo_live_enabled are BOTH true. The decision is
+  // resolved per drain so company #2 stays dry-run while company #1 is live.
+  const liveBase = createQboRentalInvoicePush()
+  const buildRentalBillingInvoicePush = (live: boolean): RentalBillingInvoicePushFn => {
+    const base: RentalBillingInvoicePushFn = live ? liveBase : stubRentalBillingInvoicePush
+    // Continue the originating API trace into the QBO call. See
+    // estimate-push.ts for the matching pattern and rationale.
+    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => base(input)))
+  }
 
-  if (liveRentalBillingInvoicePushEnabled) {
-    logger.info('[rental-billing] live QBO invoice push enabled')
+  if (process.env.QBO_LIVE_RENTAL_INVOICE === '1') {
+    logger.info(
+      '[rental-billing] QBO_LIVE_RENTAL_INVOICE kill switch ON — live per company where qbo_live_enabled=true',
+    )
   } else {
-    logger.info('[rental-billing] stub QBO invoice push (set QBO_LIVE_RENTAL_INVOICE=1 to go live)')
+    logger.info('[rental-billing] QBO_LIVE_RENTAL_INVOICE kill switch OFF — every company stub/dry-run')
   }
 
   return async function drainRentalBillingInvoicePushes(companyId: string): Promise<RentalBillingInvoicePushSummary> {
@@ -53,6 +58,8 @@ export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger
     // the 5-minute lease. We just hand it a connection.
     const client = await pool.connect()
     try {
+      const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_RENTAL_INVOICE')
+      const rentalBillingInvoicePush = buildRentalBillingInvoicePush(live)
       const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
       // Mirror POST_SUCCEEDED / POST_FAILED rows into the worker-side
       // counter. `skipped` is the idempotent-replay case (run already

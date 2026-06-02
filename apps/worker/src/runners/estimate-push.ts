@@ -10,6 +10,7 @@ import {
 import { observeWorkflowEvent } from '../metrics.js'
 import { createQboEstimatePush } from '../qbo-estimate-push.js'
 import { withRowTrace } from '../trace.js'
+import { resolveCompanyQboLive } from '../qbo-live.js'
 
 const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
   return { qbo_estimate_id: `STUB-EST-${pushId.slice(0, 8)}-${Date.now()}` }
@@ -18,24 +19,31 @@ const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
 export function createEstimatePushRunner(deps: { pool: Pool; logger: Logger; qboCircuit: CircuitBreaker }) {
   const { pool, logger, qboCircuit } = deps
 
-  const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
-  const estimatePushBase: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
-  // Wrap the QBO push (and the circuit breaker around it) inside the row's
-  // originating Sentry trace. The pusher loop in @sitelayer/queue passes
-  // sentry_trace + sentry_baggage from the claimed mutation_outbox row into
-  // the EstimatePushInput; withRowTrace continues the trace if those fields
-  // are present so the external HTTP call inherits the originating API
-  // request's trace_id. Without this, the worker generated a fresh trace
-  // per row and the API→DB→worker handoff visible in audit_events looked
-  // like two disconnected traces. See apps/api/src/trace-ingress.ts for the
-  // matching API-ingress side.
-  const estimatePush: EstimatePushFn = (input) =>
-    withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input)))
+  // PER-COMPANY live gating (multi-tenant). The QBO_LIVE_ESTIMATE_PUSH env is
+  // now a CLUSTER-WIDE KILL SWITCH; the actual live decision is resolved PER
+  // COMPANY at drain time (global-env-on AND the company's
+  // integration_connections.qbo_live_enabled). Both push fns are built once
+  // at boot; the per-drain resolver selects between them so company #2 stays
+  // dry-run while company #1 is live. DEFAULT is dry-run for every company.
+  const liveBase = createQboEstimatePush()
+  const buildEstimatePush = (live: boolean): EstimatePushFn => {
+    const base: EstimatePushFn = live ? liveBase : stubEstimatePush
+    // Wrap the QBO push (and the circuit breaker around it) inside the row's
+    // originating Sentry trace. The pusher loop in @sitelayer/queue passes
+    // sentry_trace + sentry_baggage from the claimed mutation_outbox row into
+    // the EstimatePushInput; withRowTrace continues the trace if those fields
+    // are present so the external HTTP call inherits the originating API
+    // request's trace_id. Without this, the worker generated a fresh trace
+    // per row and the API→DB→worker handoff visible in audit_events looked
+    // like two disconnected traces. See apps/api/src/trace-ingress.ts for the
+    // matching API-ingress side.
+    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => base(input)))
+  }
 
-  if (liveEstimatePushEnabled) {
-    logger.info('[estimate-push] live QBO estimate push enabled')
+  if (process.env.QBO_LIVE_ESTIMATE_PUSH === '1') {
+    logger.info('[estimate-push] QBO_LIVE_ESTIMATE_PUSH kill switch ON — live per company where qbo_live_enabled=true')
   } else {
-    logger.info('[estimate-push] stub QBO estimate push (set QBO_LIVE_ESTIMATE_PUSH=1 to go live)')
+    logger.info('[estimate-push] QBO_LIVE_ESTIMATE_PUSH kill switch OFF — every company stub/dry-run')
   }
 
   return async function drainEstimatePushes(companyId: string): Promise<EstimatePushSummary> {
@@ -43,6 +51,8 @@ export function createEstimatePushRunner(deps: { pool: Pool; logger: Logger; qbo
     // contract.
     const client = await pool.connect()
     try {
+      const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_ESTIMATE_PUSH')
+      const estimatePush = buildEstimatePush(live)
       const summary = await processEstimatePush(client, companyId, estimatePush, 5)
       // Workflow lifecycle counters. POST_SUCCEEDED / POST_FAILED rows
       // are emitted inside processEstimatePush; mirror them into the

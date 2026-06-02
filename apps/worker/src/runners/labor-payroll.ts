@@ -5,10 +5,12 @@ import { observeWorkflowEvent } from '../metrics.js'
 import {
   processLaborPayrollPush,
   processGenerateLaborPayrollRun,
-  selectLaborPayrollPush,
+  createQboLaborPayrollPush,
+  stubLaborPayrollPush,
 } from '../labor-payroll-push.js'
 import { processLaborPayrollAutoPost } from '../labor-payroll-auto-post.js'
 import { setCompanyGuc } from '../runner-utils.js'
+import { resolveCompanyQboLive } from '../qbo-live.js'
 
 export interface LaborPayrollRunner {
   drainPushes(companyId: string): Promise<Awaited<ReturnType<typeof processLaborPayrollPush>>>
@@ -23,19 +25,27 @@ export function createLaborPayrollRunner(deps: {
 }): LaborPayrollRunner {
   const { pool, logger, qboCircuit } = deps
 
-  const liveLaborPayrollPushEnabled = process.env.QBO_LIVE_LABOR_PAYROLL === '1'
-  const laborPayrollPushBase = selectLaborPayrollPush()
-  const laborPayrollPush: typeof laborPayrollPushBase = (input) =>
-    withCircuitBreaker(qboCircuit, 'qbo', () => laborPayrollPushBase(input))
-  if (liveLaborPayrollPushEnabled) {
-    logger.info('[labor-payroll] live QBO TimeActivity push enabled')
+  // PER-COMPANY live gating (multi-tenant). QBO_LIVE_LABOR_PAYROLL is now a
+  // cluster-wide kill switch; the live decision is resolved per company at
+  // drain time (global-env-on AND integration_connections.qbo_live_enabled).
+  // Both push fns are built once at boot; the per-drain resolver selects
+  // between them so company #2 stays dry-run while company #1 is live.
+  const liveBase = createQboLaborPayrollPush()
+  const buildLaborPayrollPush = (live: boolean): typeof liveBase => {
+    const base = live ? liveBase : stubLaborPayrollPush
+    return (input) => withCircuitBreaker(qboCircuit, 'qbo', () => base(input))
+  }
+  if (process.env.QBO_LIVE_LABOR_PAYROLL === '1') {
+    logger.info('[labor-payroll] QBO_LIVE_LABOR_PAYROLL kill switch ON — live per company where qbo_live_enabled=true')
   } else {
-    logger.info('[labor-payroll] stub QBO TimeActivity push (set QBO_LIVE_LABOR_PAYROLL=1 to go live)')
+    logger.info('[labor-payroll] QBO_LIVE_LABOR_PAYROLL kill switch OFF — every company stub/dry-run')
   }
 
   async function drainLaborPayrollPushes(companyId: string) {
     const client = await pool.connect()
     try {
+      const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_LABOR_PAYROLL')
+      const laborPayrollPush = buildLaborPayrollPush(live)
       const summary = await processLaborPayrollPush(client, companyId, laborPayrollPush, 5)
       // POST_SUCCEEDED / POST_FAILED counters. `skipped` rows are
       // idempotent replays (run already had qbo_payroll_batch_ref) —

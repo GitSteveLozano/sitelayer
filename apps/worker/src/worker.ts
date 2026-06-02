@@ -33,6 +33,7 @@ import { runIfLaneActive } from './dispatch-lanes.js'
 import { createAuditEscrowTickRunner } from './runners/audit-escrow-tick.js'
 import { startMeshTraceForwarder } from './runners/mesh-trace-forward.js'
 import type { AgentDrainSummary } from './runner-utils.js'
+import { listActiveCompanies, type ActiveCompany } from './companies.js'
 
 const logger = createLogger('worker')
 
@@ -49,7 +50,11 @@ try {
 
 const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
-const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
+// MULTI-TENANT: the worker drains ALL companies by default. ACTIVE_COMPANY_SLUG
+// is now an OPTIONAL single-company override (e.g. targeted reprocessing or a
+// single-tenant deployment) — when unset the worker iterates every company,
+// mirroring the cross-tenant notification drain. A blank/unset value means "all".
+const activeCompanySlugOverride = (process.env.ACTIVE_COMPANY_SLUG ?? '').trim() || null
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
 const maxPollIntervalMs = Number(process.env.WORKER_POLL_MAX_INTERVAL_MS ?? 60_000)
 
@@ -58,13 +63,6 @@ const pool = buildPool({
   appConfig,
   rejectUnauthorized: databaseSslRejectUnauthorized,
 })
-
-async function getCompanyId(): Promise<string | null> {
-  const result = await pool.query<{ id: string }>('select id from companies where slug = $1 limit 1', [
-    activeCompanySlug,
-  ])
-  return result.rows[0]?.id ?? null
-}
 
 const { qboCircuit, qboCircuitCooldownMs } = createQboCircuit({ pool, logger })
 
@@ -135,9 +133,10 @@ const auditEscrowTickRunner = createAuditEscrowTickRunner({ pool, logger })
 
 // Startup-time check: env-state and lane-state should agree. A
 // QBO_LIVE_ESTIMATE_PUSH=0 worker with an `active` estimate_push lane is
-// a configuration drift — the env still forces stub-mode, but operators
-// looking at the lane row would conclude live pushes are flowing. Log
-// loudly so the next operator notices.
+// a configuration drift — the env is now the CLUSTER-WIDE kill switch, so
+// with it off NO company goes live (regardless of any per-company
+// qbo_live_enabled flag), yet operators looking at the lane row would
+// conclude live pushes are flowing. Log loudly so the next operator notices.
 void (async () => {
   const liveEnv = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
   try {
@@ -150,7 +149,7 @@ void (async () => {
     if (!liveEnv && lane.state === 'active') {
       logger.warn(
         { lane: 'estimate_push', lane_state: lane.state, qbo_live_estimate_push: '0' },
-        '[lane-startup] estimate_push lane is active but QBO_LIVE_ESTIMATE_PUSH=0 — env forces stub-mode; lane row is misleading',
+        '[lane-startup] estimate_push lane is active but QBO_LIVE_ESTIMATE_PUSH=0 — kill switch off forces stub-mode for EVERY company; lane row is misleading',
       )
     }
     if (liveEnv && lane.state === 'paused') {
@@ -164,20 +163,26 @@ void (async () => {
   }
 })()
 
-async function heartbeat(): Promise<{ idle: boolean }> {
-  const companyId = await getCompanyId()
-  if (!companyId) {
-    logger.info({ company_slug: activeCompanySlug }, '[worker] waiting for company slug')
-    return { idle: true }
-  }
+// ---------------------------------------------------------------------------
+// Per-company drain. MULTI-TENANT: this runs once for EACH active company in a
+// heartbeat. Every drain inside stays scoped to `companyId` exactly as before
+// (the runners bind the RLS GUC per claimed row / filter `where company_id =
+// $1`), so there is NO cross-tenant leakage — company A's rows never process
+// under company B's scope. la-operations behavior is preserved exactly: when
+// it is the only company (or ACTIVE_COMPANY_SLUG=la-operations), this function
+// does precisely what the old single-company heartbeat did.
+//
+// Company-agnostic work (notification drain, queue prune, lane-health keeper)
+// is intentionally NOT here — it runs once per heartbeat in `heartbeat()`.
+// ---------------------------------------------------------------------------
+async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> {
+  const companyId = company.id
+  const companySlug = company.slug
 
   await heartbeatPrelude.sweepDeadLetters(companyId)
   await heartbeatPrelude.deferQboOutboxIfCircuitOpen(companyId)
 
-  // Run queue polling and notification draining in parallel. Notifications are
-  // company-agnostic (worker pulls across all tenants) so they don't depend on
-  // the active company slug.
-  const [outboxResult, syncResult, notifications] = await Promise.all([
+  const [outboxResult, syncResult] = await Promise.all([
     pool.query<{ pending_count: number }>(
       `select count(*)::int as pending_count from mutation_outbox where company_id = $1 and status in ('pending', 'processing')`,
       [companyId],
@@ -185,22 +190,6 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     pool.query<{ pending_count: number }>(
       `select count(*)::int as pending_count from sync_events where company_id = $1 and status in ('pending', 'processing')`,
       [companyId],
-    ),
-    runIfLaneActive(
-      pool,
-      logger,
-      'notifications',
-      () =>
-        notificationRunner.drain().catch((error) => {
-          logger.error({ err: error }, '[worker] notification drain failed')
-          captureWithEntityContext(error, {
-            scope: 'notification_drain',
-            entity_type: 'notification',
-            company_id: companyId,
-          })
-          return { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 }
-        }),
-      { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 },
     ),
   ])
 
@@ -604,17 +593,6 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     auditEscrowFallback,
   )
 
-  // Daily prune of long-applied mutation_outbox / sync_events rows.
-  // Gated by a process-local lastRunAt; safe to invoke every heartbeat.
-  const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
-    logger.error({ err: error }, '[worker] queue_prune failed')
-    captureWithEntityContext(error, {
-      scope: 'queue_prune',
-      company_id: companyId,
-    })
-    return { ran: false, mutation_outbox: 0, sync_events: 0 }
-  })
-
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
   // the threshold means the worker crashed mid-push or QBO succeeded
   // silently and the worker missed the response. Surface to Sentry so
@@ -635,30 +613,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     { rentalBillingStuck: 0, estimatePushStuck: 0 },
   )
 
-  // Lane health keeper: every heartbeat (gated by its own 30s interval
-  // internally) evaluates QBO circuit + outbox backlog and flips lane
-  // states accordingly. Doesn't drain any queue; just maintains the
-  // dispatch_lanes table.
-  const laneHealthSummary = await laneHealthKeeper.maybeRun().catch((error) => {
-    logger.error({ err: error }, '[worker] lane-health-keeper failed')
-    captureWithEntityContext(error, { scope: 'lane_health_keeper', company_id: companyId })
-    return { ran: false, qbo_state: 'error', outbox_pending: 0, sync_pending: 0, changes: [] }
-  })
-  if (laneHealthSummary.ran && laneHealthSummary.changes.length > 0) {
-    logger.info(
-      { changes: laneHealthSummary.changes, qbo_state: laneHealthSummary.qbo_state },
-      '[lane-health-keeper] flipped lane states',
-    )
-  }
-
   // Shared payload for both the active `[worker] tick` and the
   // `[worker] background tick` log messages. Key insertion order is
-  // preserved via this object literal so the JSON output is byte-
-  // identical to the prior inline payloads.
+  // preserved via this object literal so the per-company JSON output is
+  // stable. Notification / queue-prune / lane-health counters are NOT here —
+  // they are company-agnostic and logged once per heartbeat in `heartbeat()`.
   const tickSummaryFields = {
-    notifications_processed: notifications.processed,
-    notifications_sent: notifications.sent,
-    notifications_failed: notifications.failed,
     rentals_processed: rentalSummary.processed,
     rentals_billed: rentalSummary.billed,
     rentals_skipped: rentalSummary.skipped,
@@ -706,9 +666,6 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
     work_request_stale_sweep_updated: workRequestStaleSummary.updated,
     work_request_stale_sweep_failed: workRequestStaleSummary.failed,
-    queue_prune_ran: queuePruneSummary.ran,
-    queue_prune_mutation_outbox: queuePruneSummary.mutation_outbox,
-    queue_prune_sync_events: queuePruneSummary.sync_events,
     rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
     estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
     audit_escrow_ran: auditEscrowSummary.ran,
@@ -723,7 +680,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     const processed = await processQueue(companyId)
     logger.info(
       {
-        company_slug: activeCompanySlug,
+        company_slug: companySlug,
         pending_outbox: pendingOutbox,
         pending_sync_events: pendingSyncEvents,
         processed_outbox: processed.processedOutbox,
@@ -736,7 +693,6 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   }
 
   if (
-    notifications.processed > 0 ||
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
@@ -752,12 +708,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     captureArtifactAnalysisSummary.analyzed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
     workRequestStaleSummary.ran ||
-    queuePruneSummary.ran ||
     auditEscrowSummary.ran
   ) {
     logger.info(
       {
-        company_slug: activeCompanySlug,
+        company_slug: companySlug,
         ...tickSummaryFields,
       },
       '[worker] background tick',
@@ -767,13 +722,103 @@ async function heartbeat(): Promise<{ idle: boolean }> {
 
   logger.debug(
     {
-      company_slug: activeCompanySlug,
+      company_slug: companySlug,
       pending_outbox: pendingOutbox,
       pending_sync_events: pendingSyncEvents,
     },
     '[worker] idle',
   )
   return { idle: true }
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat: company-agnostic work once, then drain EVERY active company.
+//
+// MULTI-TENANT entry point. The notification drain, the queue prune, and the
+// lane-health keeper are company-agnostic (they pull across all tenants /
+// maintain global tables) so they run ONCE per heartbeat. Then we iterate the
+// active-company list and drain each in turn — sequentially, so the worker's
+// connection-pool pressure and ordering guarantees are unchanged from the old
+// single-company heartbeat. A drain failure for one company is isolated (each
+// runner already swallows its own errors) and never blocks the others.
+//
+// `idle` is true only when NO company did work AND the company-agnostic work
+// was idle too, so the lifecycle backoff still ramps the poll interval on a
+// fully-quiet cluster.
+// ---------------------------------------------------------------------------
+async function heartbeat(): Promise<{ idle: boolean }> {
+  const companies = await listActiveCompanies(pool, activeCompanySlugOverride)
+  if (companies.length === 0) {
+    logger.info({ company_slug: activeCompanySlugOverride ?? '(all)' }, '[worker] waiting for company slug')
+    return { idle: true }
+  }
+
+  // Company-agnostic notification drain — once per heartbeat. The worker pulls
+  // notifications across ALL tenants in a single batch, so this must NOT run
+  // per company.
+  const notifications = await runIfLaneActive(
+    pool,
+    logger,
+    'notifications',
+    () =>
+      notificationRunner.drain().catch((error) => {
+        logger.error({ err: error }, '[worker] notification drain failed')
+        captureWithEntityContext(error, {
+          scope: 'notification_drain',
+          entity_type: 'notification',
+        })
+        return { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 }
+      }),
+    { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 },
+  )
+
+  // Drain every active company. Sequential to keep pool pressure bounded.
+  let anyCompanyBusy = false
+  for (const company of companies) {
+    const result = await drainCompany(company)
+    if (!result.idle) anyCompanyBusy = true
+  }
+
+  // Daily prune of long-applied mutation_outbox / sync_events rows (process-
+  // local cadence gate, company-agnostic). Once per heartbeat.
+  const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
+    logger.error({ err: error }, '[worker] queue_prune failed')
+    captureWithEntityContext(error, { scope: 'queue_prune' })
+    return { ran: false, mutation_outbox: 0, sync_events: 0 }
+  })
+
+  // Lane health keeper: every heartbeat (gated by its own 30s interval
+  // internally) evaluates QBO circuit + outbox backlog and flips lane states.
+  // Maintains the global dispatch_lanes table; company-agnostic, runs once.
+  const laneHealthSummary = await laneHealthKeeper.maybeRun().catch((error) => {
+    logger.error({ err: error }, '[worker] lane-health-keeper failed')
+    captureWithEntityContext(error, { scope: 'lane_health_keeper' })
+    return { ran: false, qbo_state: 'error', outbox_pending: 0, sync_pending: 0, changes: [] }
+  })
+  if (laneHealthSummary.ran && laneHealthSummary.changes.length > 0) {
+    logger.info(
+      { changes: laneHealthSummary.changes, qbo_state: laneHealthSummary.qbo_state },
+      '[lane-health-keeper] flipped lane states',
+    )
+  }
+
+  if (notifications.processed > 0 || queuePruneSummary.ran) {
+    logger.info(
+      {
+        companies: companies.length,
+        notifications_processed: notifications.processed,
+        notifications_sent: notifications.sent,
+        notifications_failed: notifications.failed,
+        queue_prune_ran: queuePruneSummary.ran,
+        queue_prune_mutation_outbox: queuePruneSummary.mutation_outbox,
+        queue_prune_sync_events: queuePruneSummary.sync_events,
+      },
+      '[worker] cross-tenant tick',
+    )
+  }
+
+  const idle = !anyCompanyBusy && notifications.processed === 0 && !queuePruneSummary.ran
+  return { idle }
 }
 
 const lifecycle = createLifecycle({ pool, logger, pollIntervalMs, maxPollIntervalMs, heartbeat })
