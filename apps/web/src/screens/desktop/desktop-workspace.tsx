@@ -810,6 +810,12 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Suspense fallback={null}>
           <AuthenticatedFeedbackDock companySlug={companySlug ?? ''} />
         </Suspense>
+        {/* Command-center route table. Phase D mounts this shell as the
+            `/desktop` section of the unified AppShell (screens/app-shell.tsx) —
+            ONE shell resolves identity once and dispatches here for the command
+            center, or to the field shell otherwise. The table stays inline (and
+            this whole file stays its own lazy chunk) so the owner/estimator
+            command-center code never weighs on the field bundle. */}
         <Routes>
           <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
           <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
