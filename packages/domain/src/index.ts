@@ -52,6 +52,30 @@ export interface TakeoffPoint {
   y: number
 }
 
+/**
+ * Real-world DRIVER scalars derived from (or explicitly attached to) a
+ * measurement so an assembly component's `quantity_formula` / `include_when`
+ * can reference them — the parent→child propagation PlanSwift exposes as
+ * `[..\Height]`, `[..\Width]`, etc. (docs/TAKEOFF_DEEP_DIVE_2026-06-01.md §5.3
+ * M2). Every field is optional; an absent driver is bound to `0` in the
+ * formula context so a referencing formula stays defined rather than erroring
+ * on an undefined variable.
+ *
+ * Until the Condition layer (a separate P1 slice) lands, these come from the
+ * drawn geometry: a polygon yields its scaled bounding-box width/height,
+ * scaled perimeter, and vertex count (`sides`); a lineal yields its scaled run
+ * length as `perimeter`/`width` and its segment count; a volume yields its
+ * stored width/height/length. A measurement (or future condition) may also
+ * carry an explicit `drivers` override which, when present, wins per-field.
+ */
+export interface MeasurementDrivers {
+  height?: number
+  width?: number
+  thickness?: number
+  perimeter?: number
+  sides?: number
+}
+
 export interface PolygonGeometry {
   kind: 'polygon'
   points: TakeoffPoint[]
@@ -67,6 +91,12 @@ export interface PolygonGeometry {
    */
   world_per_board_x?: number | null
   world_per_board_y?: number | null
+  /**
+   * Optional explicit driver overrides (e.g. a typed wall height, or values a
+   * future Condition stamps on the measurement). When present, each field wins
+   * over the value `deriveMeasurementDrivers` would compute from the geometry.
+   */
+  drivers?: MeasurementDrivers | null
 }
 
 export interface LinealGeometry {
@@ -78,6 +108,8 @@ export interface LinealGeometry {
   /** See PolygonGeometry.world_per_board_x — per-axis real-world scale. */
   world_per_board_x?: number | null
   world_per_board_y?: number | null
+  /** See PolygonGeometry.drivers — explicit per-field driver overrides. */
+  drivers?: MeasurementDrivers | null
 }
 
 export interface VolumeGeometry {
@@ -86,6 +118,8 @@ export interface VolumeGeometry {
   width: number
   height: number
   unit?: string | null
+  /** See PolygonGeometry.drivers — explicit per-field driver overrides. */
+  drivers?: MeasurementDrivers | null
 }
 
 export type TakeoffGeometry = PolygonGeometry | LinealGeometry | VolumeGeometry
@@ -742,6 +776,9 @@ export function normalizePolygonGeometry(input: unknown): PolygonGeometry | null
   if (worldX !== null) geometry.world_per_board_x = worldX
   if (worldY !== null) geometry.world_per_board_y = worldY
 
+  const drivers = normalizeDrivers(input.drivers)
+  if (drivers) geometry.drivers = drivers
+
   return geometry
 }
 
@@ -758,6 +795,23 @@ function positiveNumberOrNull(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Coerce a raw `drivers` blob into a clean {@link MeasurementDrivers}. Only the
+ * five known fields are kept, each only when it parses to a finite, non-negative
+ * number (negative drivers are meaningless geometry). Returns `null` when no
+ * usable field survives so callers can omit the key entirely.
+ */
+function normalizeDrivers(input: unknown): MeasurementDrivers | null {
+  if (!isRecord(input)) return null
+  const out: MeasurementDrivers = {}
+  const keys: (keyof MeasurementDrivers)[] = ['height', 'width', 'thickness', 'perimeter', 'sides']
+  for (const key of keys) {
+    const parsed = Number(input[key])
+    if (Number.isFinite(parsed) && parsed >= 0) out[key] = roundMeasurement(parsed)
+  }
+  return Object.keys(out).length > 0 ? out : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -791,6 +845,9 @@ export function normalizeLinealGeometry(input: unknown): LinealGeometry | null {
   if (worldX !== null) geometry.world_per_board_x = worldX
   if (worldY !== null) geometry.world_per_board_y = worldY
 
+  const drivers = normalizeDrivers(input.drivers)
+  if (drivers) geometry.drivers = drivers
+
   return geometry
 }
 
@@ -813,6 +870,9 @@ export function normalizeVolumeGeometry(input: unknown): VolumeGeometry | null {
   }
   const unit = typeof input.unit === 'string' ? input.unit.trim() : ''
   if (unit) geometry.unit = unit.slice(0, 32)
+
+  const drivers = normalizeDrivers(input.drivers)
+  if (drivers) geometry.drivers = drivers
 
   return geometry
 }
@@ -900,6 +960,84 @@ export function calculateGeometryQuantity(geometry: TakeoffGeometry): number {
     return roundMeasurement(calculateLinealLengthScaled(geometry.points, wx, wy))
   }
   return calculateVolumeQuantity(geometry)
+}
+
+/** Scaled perimeter of a closed polygon (Σ edge length, last vertex → first). */
+function calculatePolygonPerimeterScaled(points: readonly TakeoffPoint[], wx: number, wy: number): number {
+  if (points.length < 2) return 0
+  let total = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    if (!current || !next) continue
+    const dx = (next.x - current.x) * wx
+    const dy = (next.y - current.y) * wy
+    total += Math.sqrt(dx * dx + dy * dy)
+  }
+  return total
+}
+
+/**
+ * Derive the real-world measurement DRIVERS (height/width/thickness/perimeter/
+ * sides) an assembly formula or `include_when` expression can reference, so one
+ * drawn object drives plate-LF from its run, stud-count from its height, and
+ * sheet-count from its area (docs/TAKEOFF_DEEP_DIVE_2026-06-01.md §5.3 M2).
+ *
+ * Source of truth, per field, is:
+ *   1. an explicit `geometry.drivers` override (a typed wall height, or values a
+ *      future Condition stamps on the measurement) — wins when finite; else
+ *   2. a value computed from the drawn geometry under the per-axis world scale:
+ *        - polygon  → scaled bounding-box width/height, scaled perimeter,
+ *                     vertex count as `sides`. thickness has no geometric source.
+ *        - lineal   → scaled run length as both `perimeter` and `width`, the
+ *                     segment count as `sides`. No height/thickness source.
+ *        - volume   → stored width/height as `width`/`height`, stored length as
+ *                     `perimeter`, and `thickness` = the smaller of width/height
+ *                     (the depth proxy).
+ *
+ * Every returned field is a finite, non-negative number; a field with no source
+ * is simply omitted (the explode path then binds it to `0`). Pure — no I/O.
+ */
+export function deriveMeasurementDrivers(geometry: TakeoffGeometry): MeasurementDrivers {
+  const computed: MeasurementDrivers = {}
+
+  if (geometry.kind === 'polygon') {
+    const { wx, wy } = resolveWorldScale(geometry)
+    const { points } = geometry
+    if (points.length > 0) {
+      const xs = points.map((p) => p.x)
+      const ys = points.map((p) => p.y)
+      computed.width = roundMeasurement((Math.max(...xs) - Math.min(...xs)) * wx)
+      computed.height = roundMeasurement((Math.max(...ys) - Math.min(...ys)) * wy)
+      computed.perimeter = roundMeasurement(calculatePolygonPerimeterScaled(points, wx, wy))
+      computed.sides = points.length
+    }
+  } else if (geometry.kind === 'lineal') {
+    const { wx, wy } = resolveWorldScale(geometry)
+    const length = roundMeasurement(calculateLinealLengthScaled(geometry.points, wx, wy))
+    computed.perimeter = length
+    computed.width = length
+    computed.sides = Math.max(geometry.points.length - 1, 0)
+  } else {
+    // volume
+    computed.width = roundMeasurement(geometry.width)
+    computed.height = roundMeasurement(geometry.height)
+    computed.perimeter = roundMeasurement(geometry.length)
+    computed.thickness = roundMeasurement(Math.min(geometry.width, geometry.height))
+  }
+
+  // Explicit per-field overrides win over the geometry-derived value.
+  const override = geometry.drivers
+  if (override) {
+    for (const key of ['height', 'width', 'thickness', 'perimeter', 'sides'] as const) {
+      const value = override[key]
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        computed[key] = roundMeasurement(value)
+      }
+    }
+  }
+
+  return computed
 }
 
 export function computeProductivity(input: { entries: readonly ProductivitySample[] }): ProductivityResult {

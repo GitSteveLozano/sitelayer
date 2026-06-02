@@ -4,6 +4,7 @@ import {
   parseFormula,
   evaluateFormula,
   evaluateFormulaUnsafe,
+  evaluateBooleanFormulaUnsafe,
   validateFormula,
   MAX_FORMULA_LENGTH,
   type FormulaContext,
@@ -114,6 +115,87 @@ describe('undefined variables', () => {
     expect(r.error?.message).toContain('a')
     expect(r.error?.message).toContain('b')
     expect(r.error?.message).toContain('c')
+  })
+})
+
+describe('measurement drivers in context (M2)', () => {
+  it('binds height/width/perimeter/sides like any other variable', () => {
+    const r = evaluateFormulaUnsafe('perimeter + height * 2', {
+      measurement_quantity: 0,
+      measurement_unit: 'sqft',
+      perimeter: 60,
+      height: 10,
+      width: 20,
+      thickness: 0,
+      sides: 4,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.value).toBe(80)
+  })
+
+  it('an explicit `undefined` driver is dropped, not rejected', () => {
+    // A context may carry a driver key set to undefined (the type now permits
+    // it). It must be treated as "not supplied" rather than failing the whole
+    // context — only an actually-referenced missing var errors.
+    const ok = evaluateFormulaUnsafe('measurement_quantity * 2', {
+      measurement_quantity: 5,
+      measurement_unit: 'sqft',
+      height: undefined,
+    })
+    expect(ok.ok).toBe(true)
+    expect(ok.value).toBe(10)
+
+    const missing = evaluateFormulaUnsafe('height + 1', {
+      measurement_quantity: 5,
+      measurement_unit: 'sqft',
+      height: undefined,
+    })
+    expect(missing.ok).toBe(false)
+    expect(missing.error?.code).toBe('UNDEFINED_VARIABLE')
+  })
+})
+
+describe('evaluateBooleanFormulaUnsafe (include_when, M2)', () => {
+  const dctx = (extra: Record<string, number | string> = {}): FormulaContext => ({
+    measurement_quantity: 0,
+    measurement_unit: 'sqft',
+    height: 0,
+    width: 0,
+    thickness: 0,
+    perimeter: 0,
+    sides: 0,
+    ...extra,
+  })
+
+  it('returns a boolean for a bare comparison', () => {
+    const yes = evaluateBooleanFormulaUnsafe('height > 8', dctx({ height: 10 }))
+    expect(yes.ok).toBe(true)
+    expect(yes.value).toBe(true)
+    const no = evaluateBooleanFormulaUnsafe('height > 8', dctx({ height: 6 }))
+    expect(no.ok).toBe(true)
+    expect(no.value).toBe(false)
+  })
+
+  it('reduces a numeric result to truthiness (0 → false, non-zero → true)', () => {
+    expect(evaluateBooleanFormulaUnsafe('sides', dctx({ sides: 4 })).value).toBe(true)
+    expect(evaluateBooleanFormulaUnsafe('sides', dctx({ sides: 0 })).value).toBe(false)
+  })
+
+  it('supports compound boolean expressions', () => {
+    const r = evaluateBooleanFormulaUnsafe('height >= 8 and width > 0', dctx({ height: 8, width: 20 }))
+    expect(r.ok).toBe(true)
+    expect(r.value).toBe(true)
+  })
+
+  it('errors on an undefined variable instead of silently skipping', () => {
+    const r = evaluateBooleanFormulaUnsafe('mystery > 1', dctx())
+    expect(r.ok).toBe(false)
+    expect(r.error?.code).toBe('UNDEFINED_VARIABLE')
+  })
+
+  it('keeps the sandbox hardening (member access blocked)', () => {
+    const r = evaluateBooleanFormulaUnsafe('height.constructor', dctx({ height: 1 }))
+    expect(r.ok).toBe(false)
   })
 })
 
