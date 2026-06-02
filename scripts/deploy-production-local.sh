@@ -62,44 +62,36 @@ fi
 
 # --- local Quality gate (NHL model: the fleet is the deploy authority) -------
 # GitHub Actions is NOT the deploy authority. Prod ships ONLY a SHA that passes
-# the Quality suite RIGHT HERE, locally, BEFORE the expensive build/push — no
-# `gh api` / GitHub-CI dependency. This replaces the old "is Quality green on
-# GitHub Actions" check: deploys went fully local-fleet (NHL-style), so both
-# the Actions deploy workflows and the CI green-gate coupling are gone.
+# the FULL local Quality suite RIGHT HERE, locally, BEFORE the expensive
+# build/push — no `gh api` / GitHub-CI dependency.
 #
-# Runs the fast, deterministic half of quality.yml (shell syntax, migration
-# immutability, prettier, lint, typecheck, unit tests, dockerfile-import guard).
-# Integration/e2e (need a live DB + API) stay in PR CI; runtime correctness is
-# verified post-deploy by the droplet health check + verify-prod-deploy.sh
-# below. web:bundle-budget runs after the build (it checks the built bundle).
+# The gate definition lives in ONE place: scripts/verify-local.sh. This used to
+# carry an inline copy of the stages (shell, migrations, format, lint,
+# typecheck, unit, dockerfile-import) — that duplication is now deleted in
+# favour of `verify-local.sh --full`, which is the single authority that
+# replaces .github/workflows/quality.yml (it also runs the DB-backed
+# integration suite and the docker-compose Playwright e2e suite — the heavy
+# jobs that previously stayed in PR CI).
 #
-# Break-glass: FORCE_DEPLOY_UNCHECKED=1 skips the gate (loud warning).
-if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ]; then
+# web:bundle-budget runs inside verify-local's build stage; the redundant
+# post-build invocation below is kept harmless but the gate already covers it.
+#
+# Break-glass: FORCE_DEPLOY_UNCHECKED=1 (mapped to SKIP_VERIFY) skips the gate
+# entirely with a loud warning.
+if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ] || [ "${SKIP_VERIFY:-0}" = "1" ]; then
   echo "############################################################"
   echo "## WARNING: FORCE_DEPLOY_UNCHECKED=1 — local Quality gate SKIPPED."
   echo "## Shipping UNVERIFIED SHA $FULL_SHA ($GIT_SHA) to prod."
-  echo "## Lint/typecheck/tests may be red for this commit."
+  echo "## Lint/typecheck/tests/integration/e2e may be red for this commit."
   echo "############################################################"
 else
-  echo "==> Running local Quality gate for $GIT_SHA (shell, migrations, format, lint, typecheck, test)..."
-  if ! bash -n scripts/*.sh; then
-    echo "ERROR: shell syntax check failed for $GIT_SHA."
-    echo "       Fix it, or set FORCE_DEPLOY_UNCHECKED=1 to override."
-    exit 1
-  fi
-  if ! (
-    bash scripts/check-migrations-immutable.sh &&
-    npm run format &&
-    npm run lint &&
-    npm run typecheck &&
-    npm run test &&
-    npm run check:dockerfile-imports
-  ); then
-    echo "ERROR: local Quality gate FAILED for $GIT_SHA."
+  echo "==> Running FULL local verification gate for $GIT_SHA (scripts/verify-local.sh --full)..."
+  if ! bash scripts/verify-local.sh --full; then
+    echo "ERROR: local verification gate FAILED for $GIT_SHA."
     echo "       Fix the failures and redeploy, or set FORCE_DEPLOY_UNCHECKED=1 to override."
     exit 1
   fi
-  echo "==> Local Quality gate passed for $GIT_SHA."
+  echo "==> Local verification gate passed for $GIT_SHA."
 fi
 
 echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"

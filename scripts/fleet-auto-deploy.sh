@@ -13,6 +13,16 @@
 #   3. If they differ, checks out the desired SHA in the dedicated repo and runs
 #      `scripts/deploy.sh <tier>` from there.
 #
+# LOCAL QUALITY GATE (2026-06-02): auto-deploys are now LOCALLY GATED. Because
+# this watcher calls `scripts/deploy.sh <tier>`, and deploy.sh now runs
+# `scripts/verify-local.sh` on the deploy SHA before shipping, every
+# auto-deploy passes through the single local verification authority that
+# replaced quality.yml — no GitHub Actions CI in the path. dev/demo default to
+# VERIFY_LEVEL=fast (static+build+unit) to keep the ~2min watch loop quick; set
+# `Environment=VERIFY_LEVEL=full` in ops/systemd/sitelayer-auto-deploy.service
+# (or export VERIFY_LEVEL before invoking) to also run the integration + e2e
+# stages. Break-glass per deploy: SKIP_VERIFY=1.
+#
 # SAFETY MODEL (read before changing anything):
 #   - NEVER deploys prod. A tier literally named 'prod' is refused.
 #   - Kill switch: `~/.cache/sitelayer-autodeploy/PAUSED` (or AUTODEPLOY_PAUSED=1)

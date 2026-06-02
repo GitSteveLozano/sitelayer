@@ -51,6 +51,28 @@ else
   SLUG=demo; HOST=demo.preview.sitelayer.sandolab.xyz; SHARED=/app/previews/.env.demo.shared
 fi
 
+# --- local verification gate (NHL model: the fleet is the deploy authority) --
+# Every deploy runs scripts/verify-local.sh on the SHA being deployed BEFORE
+# we ship it — the same single gate that scripts/deploy-production-local.sh
+# (prod, --full) uses. dev/demo default to VERIFY_LEVEL=fast (static+build+unit)
+# so watch-mode iteration stays quick; set VERIFY_LEVEL=full to run the
+# integration + e2e stages too. Break-glass: SKIP_VERIFY=1 (loud warning).
+if [ "${SKIP_VERIFY:-0}" = "1" ]; then
+  echo "############################################################"
+  echo "## WARNING: SKIP_VERIFY=1 — local verification gate SKIPPED."
+  echo "## Shipping UNVERIFIED SHA $GIT_SHA to $TIER ($HOST)."
+  echo "############################################################"
+else
+  DEPLOY_VERIFY_LEVEL="${VERIFY_LEVEL:-fast}"
+  echo "==> Running local verification gate for $GIT_SHA (level=$DEPLOY_VERIFY_LEVEL) before $TIER deploy..."
+  if ! VERIFY_LEVEL="$DEPLOY_VERIFY_LEVEL" bash scripts/verify-local.sh; then
+    echo "ERROR: local verification gate FAILED for $GIT_SHA — not deploying $TIER."
+    echo "       Fix the failures and redeploy, or set SKIP_VERIFY=1 to override."
+    exit 1
+  fi
+  echo "==> Local verification gate passed for $GIT_SHA."
+fi
+
 echo "==> Deploying $GIT_SHA -> $TIER ($HOST) via preview droplet $PREVIEW_BOX"
 START=$(date +%s)
 
