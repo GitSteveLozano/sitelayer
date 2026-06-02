@@ -91,7 +91,9 @@ import { EstAssemblies } from './est-assemblies'
 import { EstClientProfile } from './est-client-profile'
 import { EstQuantities } from './est-quantities'
 import { EstScaleVerify } from './est-scale-verify'
-import { EstPlanIngest } from './est-plan-ingest'
+// Plan ingest is now ONE responsive screen (Phase B merge); the desktop layout
+// renders at the `lg:` breakpoint inside the canonical mobile file.
+import { TakeoffIngest } from '../mobile/takeoff-ingest'
 import { FmToday } from './fm-today'
 import { FmCrew } from './fm-crew'
 import { EstCanvas } from './est-canvas'
@@ -821,7 +823,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="clients/:clientId" element={<EstClientProfile />} />
           <Route path="estimate/:projectId" element={<EstQuantities />} />
           <Route path="budget/:projectId" element={<OwnerBudgetVariance />} />
-          <Route path="ingest/:projectId" element={<EstPlanIngest />} />
+          <Route path="ingest/:projectId" element={<TakeoffIngest />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />
           <Route path="fm/today" element={<FmToday bootstrap={bootstrap} companySlug={companySlug ?? ''} />} />
