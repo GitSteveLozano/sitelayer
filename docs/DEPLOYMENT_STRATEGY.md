@@ -180,10 +180,14 @@ stand alone without it).
 | ----------- | ------------------------------------- | ------------------- | -------------------------------------------------------- | ------- | ---------------------------------------------------------------------- |
 | **prod**    | `sitelayer.sandolab.xyz`              | prod `566798325`    | `sitelayer_prod` (public schema)                         | Caddy   | **Immutable image**, manual `deploy.sh prod`, flock-locked SSH swap    |
 | **dev**     | `dev.sitelayer.sandolab.xyz`          | preview `566806040` | `sitelayer_dev` (public schema)                          | Traefik | Source-mounted watch-mode; manual `deploy.sh dev` **or** auto-watcher  |
-| **demo**    | `demo.preview.sitelayer.sandolab.xyz` | preview `566806040` | `sitelayer_demo` (public schema)                         | Traefik | Watch-mode + idempotent `seed:demo` each deploy; tracks `origin/dev`   |
+| **demo**    | `demo.preview.sitelayer.sandolab.xyz` | preview `566806040` | `sitelayer_demo` (public schema)                         | Traefik | Watch-mode + idempotent `seed:demo` each deploy; tracks `origin/main`  |
 | **preview** | `pr-N.preview.sitelayer.sandolab.xyz` | preview `566806040` | `sitelayer_preview` (per-slug schema `sitelayer_<slug>`) | Traefik | Watch-mode, ephemeral, self-reaping (`deploy-preview.sh`) — **manual** |
 
-Both dev and demo track `origin/dev` (`AUTODEPLOY_DEFAULT_BRANCH=dev`). PR previews
+dev tracks `origin/dev` (the agent churn / integration line,
+`AUTODEPLOY_DEFAULT_BRANCH=dev`); demo tracks `origin/main` (the promoted / stable
+line, `AUTODEPLOY_BRANCH_DEMO=main`) so prospects stay off the raw churn — the
+`dev → main` promotion is a deliberate gated step (see `docs/AUTO_DEPLOY.md` →
+"The promotion model" and `docs/RELEASE_GATES.md`). PR previews
 isolate per-slug via `PGOPTIONS` search_path and self-reap on PR close. The single
 preview droplet (2 vCPU/4 GB, Traefik on one router) hosts **dev + demo + every PR
 preview** and is also the off-host backup target (`10.118.0.2`).

@@ -20,13 +20,13 @@ the agent/scratch `dev` tier and the ephemeral per-PR previews:
 
 ## Hierarchy
 
-| URL                                           | Tier      | Database             | Lifecycle                        |
-| --------------------------------------------- | --------- | -------------------- | -------------------------------- |
-| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.       |
-| `https://demo.preview.sitelayer.sandolab.xyz` | `demo`    | `sitelayer_demo`     | Permanent. Tracks `demo` branch. |
-| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` branch.  |
-| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`.  |
-| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.        |
+| URL                                           | Tier      | Database             | Lifecycle                                 |
+| --------------------------------------------- | --------- | -------------------- | ----------------------------------------- |
+| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.                |
+| `https://demo.preview.sitelayer.sandolab.xyz` | `demo`    | `sitelayer_demo`     | Permanent. Tracks `main` (promoted line). |
+| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` (churn line).     |
+| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`.           |
+| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.                 |
 
 † Each preview slug owns an isolated schema `sitelayer_<slug>` inside the shared DB.
 
@@ -66,7 +66,10 @@ resolver, and the health check at `https://demo.preview.sitelayer.sandolab.xyz/h
 The Traefik router rule resolves to `Host(\`demo.preview.sitelayer.sandolab.xyz\`)`because that host is supplied as`PREVIEW_HOST`. No DNS change is needed: the
 hostname already resolves via the existing `\*.preview.sitelayer.sandolab.xyz`wildcard pointed at the preview droplet`159.203.53.218`.
 
-**Auto-deploy:** a fleet-side timer fast-follows the tracked ref (`dev` today) onto this tier (~2min, never prod) — see `docs/AUTO_DEPLOY.md`.
+**Auto-deploy:** a fleet-side timer fast-follows `main` (the PROMOTED / stable
+line) onto this tier (~2min, never prod), so prospects see the gated line and not
+raw agent churn — `dev` still tracks `dev`. See `docs/AUTO_DEPLOY.md` →
+"The promotion model".
 
 ## Database story
 
@@ -327,8 +330,12 @@ Web app should load and display the "DEMO - sample data, public showcase" ribbon
 
 ## What's intentionally NOT here
 
-- **Promotion workflow.** There's no `demo → main` auto-promote. The `demo`
-  branch is a showcase lane, not a release candidate.
+- **Auto-promotion of the demo tier.** demo is a _consumer_ of the promoted
+  line — it fast-follows `main`. It does NOT itself promote anything: there is no
+  `demo → main` auto-promote and no dedicated `demo` code branch. The only
+  promotion is the deliberate, gated `dev → main` step (see `docs/AUTO_DEPLOY.md`
+  → "The promotion model" and `docs/RELEASE_GATES.md`); demo simply rides `main`
+  once that promotion happens.
 - **Backup retention.** Treat `sitelayer_demo` as destructible; no off-host
   logical copy is taken for it.
 - **Cleanup workflow.** The demo stack is not auto-torn-down. To wind it down:

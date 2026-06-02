@@ -8,10 +8,24 @@
 #
 #   1. Refreshes a DEDICATED deploy checkout (never the operator's working tree).
 #   2. For each managed tier (default: dev demo), compares the remote tip of that
-#      tier's tracked branch (default: dev) against the tier's LIVE build_sha
-#      reported by GET https://<host>/api/version.
+#      tier's tracked branch (dev->`dev`, demo->`main`) against the tier's LIVE
+#      build_sha reported by GET https://<host>/api/version.
 #   3. If they differ, checks out the desired SHA in the dedicated repo and runs
 #      `scripts/deploy.sh <tier>` from there.
+#
+# DEMO TRACKS MAIN (2026-06-02): demo is the PROSPECT-FACING line and now
+# fast-follows `main` (the promoted/stable line), NOT `dev` (the agent
+# churn/integration line). dev still tracks `dev`. This keeps prospects off the
+# raw churn. See AUTODEPLOY_BRANCH_DEMO below + docs/AUTO_DEPLOY.md /
+# docs/RELEASE_GATES.md for the full promotion model.
+#
+# INSTALLED-COPY NOTE: this committed script is the SOURCE OF TRUTH. The systemd
+# unit runs it directly from the operator's checkout
+# (~/projects/sitelayer/scripts/fleet-auto-deploy.sh). If the operator ALSO keeps
+# a convenience copy on $PATH (e.g. ~/.local/bin/fleet-auto-deploy.sh), that copy
+# is a stale snapshot and must be RE-COPIED after this change so the installed
+# copy also tracks `main` for demo:
+#   cp scripts/fleet-auto-deploy.sh ~/.local/bin/fleet-auto-deploy.sh
 #
 # LOCAL QUALITY GATE (2026-06-02): the single verification authority is
 # `scripts/verify-local.sh` (`npm run verify`), which replaced quality.yml — no
@@ -65,9 +79,30 @@ AUTODEPLOY_REMOTE_URL="${AUTODEPLOY_REMOTE_URL:-https://github.com/GitSteveLozan
 # Tiers this watcher manages (space-separated). prod is rejected by design.
 AUTODEPLOY_TIERS="${AUTODEPLOY_TIERS:-dev demo}"
 
-# Per-tier tracked branch. Both dev and demo track the dev branch today; override
-# per tier with AUTODEPLOY_BRANCH_<TIER> (e.g. AUTODEPLOY_BRANCH_DEMO=main).
+# Per-tier tracked branch. dev tracks the `dev` branch (the agent churn /
+# integration line); demo tracks `main` (the PROMOTED / stable line) so
+# prospects never see raw agent churn — the dev->main promotion is a deliberate
+# gated step (pre-push standard gate + post-deploy smoke). See the PROMOTION
+# MODEL note below and docs/AUTO_DEPLOY.md / docs/RELEASE_GATES.md.
+#
+# The default branch (for any tier WITHOUT an explicit override) stays `dev`.
+# Each tier may override with AUTODEPLOY_BRANCH_<TIER>; demo's default is `main`.
 AUTODEPLOY_DEFAULT_BRANCH="${AUTODEPLOY_DEFAULT_BRANCH:-dev}"
+
+# Per-tier tracked-branch defaults (overridable). demo fast-follows `main` (the
+# promoted/stable line), NOT `dev` (the churn line). Override with
+# AUTODEPLOY_BRANCH_DEMO=<branch> if you ever need demo to track something else.
+#
+# PROMOTION MODEL:
+#   dev  = agent churn / integration line: auto-everything, ephemeral previews,
+#          a free playground. dev tracks `dev`.
+#   main = the PROMOTED line: gated by the pre-push standard gate
+#          (.githooks/pre-push -> `npm run verify`) at land time and confirmed by
+#          the post-deploy smoke. The dev->main promotion is a deliberate gated
+#          step (the operator / the gate promotes when dev is good).
+#   demo + prod deploy from `main`, so prospects + customers stay OFF the raw
+#   churn while dev remains a free playground.
+AUTODEPLOY_BRANCH_DEMO="${AUTODEPLOY_BRANCH_DEMO:-main}"
 
 # Per-tier live host. Override with AUTODEPLOY_HOST_<TIER> if a host moves.
 AUTODEPLOY_HOST_DEV="${AUTODEPLOY_HOST_DEV:-dev.sitelayer.sandolab.xyz}"

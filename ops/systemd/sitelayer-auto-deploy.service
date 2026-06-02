@@ -1,5 +1,5 @@
 [Unit]
-Description=Sitelayer fleet-side auto-deploy watcher (dev+demo on origin/dev advance, never prod)
+Description=Sitelayer fleet-side auto-deploy watcher (dev fast-follows origin/dev, demo fast-follows origin/main, never prod)
 Documentation=https://github.com/GitSteveLozano/sitelayer/blob/main/docs/AUTO_DEPLOY.md
 After=network-online.target
 Wants=network-online.target
