@@ -16,13 +16,24 @@
  * the aggregate stats. No new API calls are invented — lifetime value is the
  * Σ of project bid totals, win rate is the won/closed ratio.
  */
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useCustomers, type Customer } from '@/lib/api/customers'
+import { useCustomers, useCreateCustomer, type Customer } from '@/lib/api/customers'
 import { useProjects, type ProjectListRow } from '@/lib/api/projects'
 import {
+  DataTable,
+  DEmptyState,
+  DEyebrow,
+  DH1,
+  DKpi,
+  DKpiStrip,
+  DModal,
+  type DColumn,
+} from '../../components/d/index.js'
+import {
   MBody,
+  MButton,
   MChip,
   MChipRow,
   MI,
@@ -34,6 +45,7 @@ import {
   MStatStrip,
   MTopBar,
 } from '../../components/m/index.js'
+import { useIsDesktop } from '../../lib/use-is-desktop.js'
 import { formatMoney, formatStatusLabel, statusTone } from './format.js'
 
 // --- shared project classification ------------------------------------
@@ -112,7 +124,25 @@ const FILTER_LABEL: Record<FilterKey, string> = {
   prospect: 'Prospects',
 }
 
+/**
+ * Responsive clients list. Mounts the dense desktop roster table at >=1024px
+ * and the mobile filtered list below it; only one mounts at a time so neither
+ * twin's data hooks run on the wrong surface.
+ *
+ * Phase B consolidation of the desktop↔mobile clients twins (was
+ * screens/desktop/owner-clients.tsx + this file). Both read the SAME hooks
+ * (useCustomers / useProjects) and the same lifetime-value / win-rate math.
+ */
 export function MobileClientsList() {
+  const isDesktop = useIsDesktop()
+  return isDesktop ? <OwnerClientsDesktop /> : <MobileClientsListMobile />
+}
+
+/** Desktop-route alias — kept so screens/desktop/desktop-workspace.tsx can
+ *  keep importing `OwnerClients` after the desktop twin file was deleted. */
+export const OwnerClients = MobileClientsList
+
+function MobileClientsListMobile() {
   const navigate = useNavigate()
   const customersQuery = useCustomers()
   const projectsQuery = useProjects()
@@ -548,5 +578,287 @@ function ProjectHistoryRow({ project, onOpen }: { project: ProjectListRow; onOpe
       }
       badge={<MPill tone={tone}>{formatStatusLabel(project.status)}</MPill>}
     />
+  )
+}
+
+// ===========================================================================
+// DESKTOP — dense client roster table (Desktop v2). Same lifetime-value /
+// win-rate math as the mobile list; adds an "Org" column, a "HOT" pill on the
+// top-value / actively-working clients, the CLIENTS · EMPTY STATE, and an
+// "Add client" modal (useCreateCustomer). Reuses the shared `components/d`
+// primitives.
+// ===========================================================================
+
+// `progress|active` status → an actively-working client (drives the HOT pill).
+const isActiveStatus = (s: string) => /progress|active/i.test(s)
+
+type DesktopClientRow = {
+  id: string
+  name: string
+  org: string
+  projectCount: number
+  lifetimeValue: number
+  wins: number
+  decided: number
+  activeProjects: number
+  hot: boolean
+}
+
+function OwnerClientsDesktop() {
+  const navigate = useNavigate()
+  const customersQuery = useCustomers()
+  const projectsQuery = useProjects()
+  const [modalOpen, setModalOpen] = useState(false)
+
+  const customers = useMemo(
+    () => (customersQuery.data?.customers ?? []).filter((c) => !c.deleted_at),
+    [customersQuery.data?.customers],
+  )
+  const projects = useMemo(() => projectsQuery.data?.projects ?? [], [projectsQuery.data?.projects])
+
+  const { rows, totalLifetime, totalWins, totalDecided, activeCount } = useMemo(() => {
+    const byCustomer = new Map<string, ProjectListRow[]>()
+    for (const p of projects) {
+      if (!p.customer_id) continue
+      const arr = byCustomer.get(p.customer_id)
+      if (arr) arr.push(p)
+      else byCustomer.set(p.customer_id, [p])
+    }
+
+    let totalLifetime = 0
+    let totalWins = 0
+    let totalDecided = 0
+    let activeCount = 0
+
+    const rows: DesktopClientRow[] = customers.map((c) => {
+      const ps = byCustomer.get(c.id) ?? []
+      let lifetimeValue = 0
+      let wins = 0
+      let decided = 0
+      let activeProjects = 0
+      for (const p of ps) {
+        lifetimeValue += Number(p.bid_total) || 0
+        if (isWon(p.status)) {
+          wins += 1
+          decided += 1
+        } else if (isLost(p.status)) {
+          decided += 1
+        }
+        if (isActiveStatus(p.status)) activeProjects += 1
+      }
+      totalLifetime += lifetimeValue
+      totalWins += wins
+      totalDecided += decided
+      if (ps.length > 0) activeCount += 1
+      // Org column = roster origin (QBO-matched vs Sitelayer-native) — the
+      // only org-shaped real field on the customer record. external_id
+      // present means it's mapped to a QBO customer.
+      const org = c.external_id ? 'QuickBooks' : c.source && c.source !== 'sitelayer' ? c.source : 'Sitelayer'
+      return {
+        id: c.id,
+        name: c.name,
+        org,
+        projectCount: ps.length,
+        lifetimeValue,
+        wins,
+        decided,
+        activeProjects,
+        hot: false, // filled in below once the value threshold is known
+      }
+    })
+
+    // HOT pill — a client with active work AND top-quartile lifetime value
+    // among clients with any value. Cheap, derived, no new data.
+    const valued = rows
+      .map((r) => r.lifetimeValue)
+      .filter((v) => v > 0)
+      .sort((a, b) => b - a)
+    const hotThreshold = valued.length > 0 ? valued[Math.floor(valued.length * 0.25)]! : Infinity
+    for (const r of rows) {
+      r.hot = r.activeProjects > 0 && r.lifetimeValue >= hotThreshold && r.lifetimeValue > 0
+    }
+
+    rows.sort((a, b) => b.lifetimeValue - a.lifetimeValue)
+    return { rows, totalLifetime, totalWins, totalDecided, activeCount }
+  }, [customers, projects])
+
+  const overallWinRate = totalDecided > 0 ? Math.round((totalWins / totalDecided) * 100) : null
+
+  const columns: Array<DColumn<DesktopClientRow>> = [
+    {
+      key: 'name',
+      header: 'Client',
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="d-table-cell-strong">{r.name}</span>
+          {r.hot ? <MPill tone="accent">HOT</MPill> : null}
+        </span>
+      ),
+    },
+    // ORG renders as plain descriptive copy (not a status pill) per dsg__37.
+    { key: 'org', header: 'Org', render: (r) => r.org },
+    { key: 'projects', header: 'Projects', numeric: true, render: (r) => r.projectCount },
+    {
+      key: 'winRate',
+      header: 'Win rate',
+      numeric: true,
+      render: (r) => (r.decided > 0 ? `${Math.round((r.wins / r.decided) * 100)}%` : '—'),
+    },
+    { key: 'lifetime', header: 'Lifetime $', numeric: true, render: (r) => formatMoney(r.lifetimeValue) },
+  ]
+
+  const addClientButton = (
+    <MButton size="sm" variant="primary" onClick={() => setModalOpen(true)}>
+      Add client
+    </MButton>
+  )
+
+  return (
+    <div className="d-content">
+      <div className="d-stack">
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <DEyebrow>Owner · Clients</DEyebrow>
+            <DH1>
+              {customers.length} {customers.length === 1 ? 'client' : 'clients'}.
+            </DH1>
+          </div>
+          {addClientButton}
+        </div>
+
+        <DKpiStrip>
+          <DKpi label="Total clients" value={String(customers.length)} meta={`${activeCount} with projects`} />
+          <DKpi label="Lifetime value" value={formatMoney(totalLifetime)} meta="All projects" />
+          <DKpi
+            label="Win rate"
+            value={overallWinRate === null ? '—' : `${overallWinRate}%`}
+            tone="accent"
+            meta={totalDecided > 0 ? `${totalWins}/${totalDecided} decided` : 'No decided bids'}
+          />
+          <DKpi label="Active" value={String(activeCount)} meta="Clients with work" />
+        </DKpiStrip>
+
+        {customers.length === 0 ? (
+          // CLIENTS · EMPTY STATE — DEmptyState + ADD CLIENT (design DClientsEmpty).
+          <DEmptyState
+            title="No clients yet"
+            body="Add your first client, or they'll appear here automatically when you create a project or send a bid."
+            action={addClientButton}
+          />
+        ) : (
+          <DataTable<DesktopClientRow>
+            title="Client roster"
+            action={addClientButton}
+            columns={columns}
+            rows={rows}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => navigate(`/desktop/clients/${r.id}`)}
+            empty="No clients yet. New accounts land here once they're added."
+          />
+        )}
+      </div>
+
+      <AddClientModal open={modalOpen} onClose={() => setModalOpen(false)} />
+    </div>
+  )
+}
+
+/**
+ * ADD CLIENT modal — a minimal functional `DModal` form. There is no
+ * pre-built client modal in project-drawers.tsx (its modals are
+ * project/send/assignment surfaces only), so this is a small native form
+ * that reuses the existing `useCreateCustomer` hook. On success the
+ * customer list invalidates (TanStack) and the modal closes. No new
+ * endpoints.
+ */
+function AddClientModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const createCustomer = useCreateCustomer()
+  const nameId = useId()
+
+  const [name, setName] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const nameError = touched && name.trim().length === 0 ? 'Client name is required.' : null
+  const busy = createCustomer.isPending
+  const canSubmit = name.trim().length > 0 && !busy
+
+  const handleClose = () => {
+    setName('')
+    setTouched(false)
+    setError(null)
+    onClose()
+  }
+
+  const handleSubmit = async () => {
+    setTouched(true)
+    if (!canSubmit) return
+    setError(null)
+    try {
+      await createCustomer.mutateAsync({ name: name.trim() })
+      handleClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const sectionLabel: React.CSSProperties = {
+    fontFamily: 'var(--m-num)',
+    fontSize: 10,
+    fontWeight: 700,
+    color: 'var(--m-ink-3)',
+    letterSpacing: '0.06em',
+    marginBottom: 6,
+  }
+
+  return (
+    <DModal
+      open={open}
+      onClose={handleClose}
+      width={480}
+      title={
+        <span
+          className="num"
+          style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+        >
+          ADD CLIENT
+        </span>
+      }
+      footer={
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <MButton variant="ghost" onClick={handleClose}>
+            Cancel
+          </MButton>
+          <MButton variant="primary" onClick={handleSubmit} disabled={!canSubmit}>
+            {busy ? 'Adding…' : 'Add client'}
+          </MButton>
+        </div>
+      }
+    >
+      <label htmlFor={nameId} style={{ display: 'block' }}>
+        <span style={sectionLabel}>CLIENT NAME</span>
+        <MInput
+          id={nameId}
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          placeholder="Foxridge Homes"
+          aria-invalid={nameError ? true : undefined}
+          autoFocus
+          style={{ width: '100%' }}
+        />
+        {nameError ? (
+          <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>{nameError}</p>
+        ) : null}
+      </label>
+      {error ? <div style={{ color: 'var(--m-red)', fontSize: 13, marginTop: 14 }}>{error}</div> : null}
+    </DModal>
   )
 }

@@ -71,11 +71,11 @@ import { MButton } from '@/components/m'
 // (est-ai-takeoff.tsx / est-ai-count.tsx) were deleted.
 import { TakeoffAiTakeoffSetup, TakeoffAiTakeoffReview } from '../mobile/takeoff-ai-takeoff'
 import { TakeoffAiCountSetup, TakeoffAiCountReview } from '../mobile/takeoff-ai-count'
-import { OwnerDashboard } from './owner-dashboard'
+import { OwnerDashboard } from '../mobile/admin-home'
 import { OwnerProjects } from './owner-projects'
 import { OwnerTeam } from './owner-team'
 import { OwnerApprovals } from './owner-approvals'
-import { OwnerClients } from './owner-clients'
+import { OwnerClients } from '../mobile/clients'
 import { OwnerMoney } from './owner-money'
 import { OwnerJobCosts } from './est-actuals'
 import { OwnerBudgetVariance } from './budget-variance'
@@ -89,7 +89,7 @@ import { FmToday } from '../mobile/foreman-today'
 import { FmCrew } from '../mobile/foreman-crew'
 import { FmTime } from '../mobile/foreman-time-entry'
 import { FmBrief } from '../mobile/foreman-brief'
-import { FmBlockerDetail } from './fm-blocker-detail'
+import { FmBlockerDetail } from '../mobile/foreman-blocker-detail'
 import { FmLog } from '../mobile/foreman-log'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
@@ -113,10 +113,16 @@ import { TakeoffIngest } from '../mobile/takeoff-ingest'
 import { EstCanvas } from './est-canvas'
 import { FmSchedule } from './fm-schedule'
 import { OwnerRentalsUtilization } from './owner-rentals-utilization'
-import { OwnerNewProject } from './owner-new-project'
+import { OwnerNewProject } from '../mobile/project-new'
 import { OwnerMessages } from './owner-messages'
-import { OwnerActivity } from './owner-activity'
-import { OwnerBroadcast } from './owner-broadcast'
+// Phase B responsive consolidation: the owner desktop↔mobile twin pairs
+// (clients, broadcast, activity, new-project, dashboard) were merged into one
+// responsive screen each (canonical file = the mobile one). The desktop
+// command center imports the desktop render via the preserved `Owner*`
+// aliases re-exported from those merged mobile files; the standalone
+// screens/desktop/owner-*.tsx twins were deleted.
+import { OwnerActivity } from '../mobile/activity-log'
+import { OwnerBroadcast } from '../mobile/broadcast'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
