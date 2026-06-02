@@ -1,6 +1,9 @@
 /* Mobile design tokens — v2 brutalist (Steve's v2, 2026-05-28).
- * This :root MIRRORS styles/tokens.css; main.tsx loads m.css AFTER globals.css,
- * so this block wins for shared vars. Keep the two in byte-sync. */
+ * This :root MIRRORS styles/tokens.css (the single source of truth); main.tsx
+ * loads m.css AFTER globals.css, so this block wins for shared vars. The two
+ * are byte-identical today — keep them in sync. Deduping this into an
+ * `@import './tokens.css'` is deferred (load-order/@import-hoist-sensitive,
+ * needs a green build to verify); see the header note in tokens.css. */
 :root {
   --m-sand: #ede7da;
   --m-sand-2: #e0d8c5;

@@ -47,12 +47,14 @@ module.exports = {
       },
       // Mobile-first PWA — system stack matches the design handoff
       // (§typography: "do NOT substitute Inter or Geist"). Tailwind's
-      // `font-sans`/`font-display`/`font-mono` mirror the --m-font*
-      // CSS custom properties in tokens.css.
+      // `font-sans`/`font-display`/`font-mono` now READ the --m-font* CSS
+      // custom properties from tokens.css (the single source) the same way
+      // colors/radii/shadows above do, instead of hardcoding a third copy of
+      // the stacks. A font change in tokens.css now propagates here for free.
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
-        display: ['Inter Tight', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
+        sans: 'var(--m-font)',
+        display: 'var(--m-font-display)',
+        mono: 'var(--m-num)',
       },
     },
   },
