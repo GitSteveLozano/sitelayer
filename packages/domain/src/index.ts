@@ -54,10 +54,10 @@ export interface BonusTier {
 
 // Takeoff geometry primitives + math live in ./geometry.ts (Blocker 2 split).
 // The barrel re-export at the bottom of this file keeps `TakeoffPoint`,
-// `PolygonGeometry`, `LinealGeometry`, `VolumeGeometry`, `TakeoffGeometry`,
-// `PitchDriver` and the calc/normalize helpers on the public `@sitelayer/domain`
-// surface unchanged. `roundMeasurement` is imported below because
-// `computeProductivity` (still in this file) calls it.
+// `MeasurementDrivers`, `PolygonGeometry`, `LinealGeometry`, `VolumeGeometry`,
+// `TakeoffGeometry`, `PitchDriver` and the calc/normalize/driver helpers on the
+// public `@sitelayer/domain` surface unchanged. `roundMeasurement` is imported
+// below because `computeProductivity` (still in this file) calls it.
 
 export interface ProductivitySample {
   quantity: number
@@ -639,9 +639,9 @@ export function roundPercent(value: number): number {
   return Math.round(value * 10000) / 10000
 }
 
-// Takeoff geometry math (area/length/centroid/normalizers/scale + pitch)
-// moved to ./geometry.ts (Blocker 2 split). Re-exported from the barrel at
-// the bottom of this file — public surface unchanged.
+// Takeoff geometry math (area/length/centroid/normalizers/scale + pitch +
+// measurement drivers) moved to ./geometry.ts (Blocker 2 split). Re-exported
+// from the barrel at the bottom of this file — public surface unchanged.
 
 export function computeProductivity(input: { entries: readonly ProductivitySample[] }): ProductivityResult {
   const validRatios: number[] = []
@@ -1292,12 +1292,14 @@ export {
   calculatePolygonAreaScaled,
   calculateLinealLengthScaled,
   calculateGeometryQuantity,
+  deriveMeasurementDrivers,
   normalizePolygonGeometry,
   normalizeLinealGeometry,
   normalizeVolumeGeometry,
   normalizeGeometry,
   type TakeoffPoint,
   type PitchDriver,
+  type MeasurementDrivers,
   type PolygonGeometry,
   type LinealGeometry,
   type VolumeGeometry,
