@@ -1424,6 +1424,28 @@ export {
   type EffectivePermissionMap,
 } from './permissions.js'
 
+// Typed unit-of-measure + conversion + dimensional-guard layer
+// (docs/TAKEOFF_DEEP_DIVE_2026-06-01.md §4 "Units"). Additive: sits ABOVE the
+// pervasive free-text `unit` columns; normalizeUnit returns null for unknown
+// free text so existing rows are tolerated. The typed `unit_canonical` column +
+// expand/backfill/contract migration of the free text is a flagged follow-up.
+export {
+  UNIT_DIMENSIONS,
+  UNIT_REGISTRY,
+  CANONICAL_UNITS,
+  UnitDimensionError,
+  normalizeUnit,
+  unitDef,
+  unitDimension,
+  areCompatible,
+  assertCompatible,
+  convert,
+  type UnitDimension,
+  type CanonicalUnit,
+  type UnitDef,
+  type CompatibilityResult,
+} from './uom.js'
+
 // ---------------------------------------------------------------------------
 // v2 entities (Steve's v2 design — see docker/postgres/init/097-099). Shared
 // across api routes, workflow reducers, and the web UI.

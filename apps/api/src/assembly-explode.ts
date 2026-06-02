@@ -22,6 +22,7 @@
 
 import {
   applyMarkup,
+  assertCompatible,
   resolveAssembly,
   type AssemblyComponent,
   type AssemblyHeader,
@@ -240,6 +241,18 @@ export interface ExplodedLine {
   assembly_id: string
   assembly_component_id: string
   kind: AssemblyKind
+  /**
+   * NON-FATAL dimensional guard (docs/TAKEOFF_DEEP_DIVE_2026-06-01.md §4
+   * "Units"). Populated ONLY when BOTH the measurement's unit AND this
+   * component's unit normalize to a recognised canonical unit AND they are in
+   * different physical dimensions (e.g. a sqft measurement driving a per-LF
+   * component — a dimensionally-incorrect, silently-wrong line). Absent for
+   * compatible pairs and for any pair where either unit is free text we can't
+   * type (the additive, free-text-tolerant default — we do NOT reject existing
+   * rows). The recompute/preview surfaces this so the estimator can see the
+   * mismatch instead of it being silent; it does NOT block the explosion.
+   */
+  unit_warning?: string
 }
 
 export interface ExplodeResult {
@@ -339,6 +352,15 @@ export function explodeMeasurement(args: {
     // quantity (already includes per-component waste_pct).
     const bakedRate = round4(line.unit_cost * km * profitMultiplier)
     const bakedAmount = round2(line.amount * km * profitMultiplier)
+    // §4 NON-FATAL dimensional guard: only fires when BOTH units are recognised
+    // and dimensionally incompatible (e.g. a sqft measurement exploding through
+    // a per-LF component). Unknown free text on either side -> ok=true,
+    // recognized=false -> no warning (the additive, tolerant default).
+    const compat = assertCompatible(measurementUnit, line.unit)
+    const unitWarning =
+      !compat.ok && compat.recognized
+        ? `Component "${line.name}" is ${compat.b} (${compat.toDimension}) but the measurement is ${compat.a} (${compat.fromDimension}); the exploded quantity may be dimensionally incorrect.`
+        : undefined
     lines.push({
       service_item_code: fallbackServiceItemCode,
       quantity: sign * line.quantity,
@@ -349,6 +371,9 @@ export function explodeMeasurement(args: {
       assembly_id: assembly.header.id,
       assembly_component_id: line.component_id,
       kind: line.kind,
+      // exactOptionalPropertyTypes: spread the field only when present so we
+      // never assign `undefined` to an optional property.
+      ...(unitWarning !== undefined ? { unit_warning: unitWarning } : {}),
     })
   }
 
