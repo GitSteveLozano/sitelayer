@@ -213,6 +213,35 @@ scripts/rollback-droplet.sh` on the droplet — never edit a migration to
    land as a new file (next sequential prefix). `002_tier_origin.sql` is
    the precedent — additive, never destructive.
 
+   **Immutability binds only ONCE the file lands on `main`.** While a
+   migration is _in flight_ on a feature branch and has NOT yet been applied
+   to any environment, it is still mutable — the immutability gate
+   (`scripts/check-migrations-immutable.sh`) compares against
+   `origin/main`'s merge-base, so a brand-new file you add on your branch is
+   status `A` (allowed to change). Use `dev` /
+   [`scripts/reset-dev-db.sh`](scripts/reset-dev-db.sh) to iterate a
+   migration against a clean DB before it ever reaches `main`.
+
+2a. **One feature → ONE migration file. Edit it in place until it lands;
+do NOT stack add/drop/re-add migrations.** _Why:_ during a feature it is
+tempting to add `131_add_col.sql`, realize it's wrong, then
+`132_drop_col.sql`, then `133_add_col_again.sql`. That churn is permanent
+noise in the immutable history (and grows the count that
+`docs/MIGRATION_BASELINE.md` exists to manage). The history should read as
+the _intended_ schema evolution, not the editing session. _How to apply:_
+while a feature branch is open, keep a SINGLE `NNN_feature.sql` and rewrite
+it in place — it's mutable until it lands on `main` (see rule 2 above), and
+`reset-dev-db.sh` rebuilds a clean DB from the rewritten file each
+iteration. Only split into a second numbered file when a change is a
+genuinely separate, later concern. The immutability gate binds the moment
+it merges; everything before that is one editable file.
+**Agent note:** if you find yourself adding a migration that undoes or
+amends an UNMERGED migration from earlier in the same feature, you are
+stacking — go edit the original file instead. (Squashing migrations that
+have _already_ merged is a different, gated operation —
+[`docs/MIGRATION_BASELINE.md`](docs/MIGRATION_BASELINE.md) — allowed only
+while prod has no irreplaceable customer data.)
+
 3. **When restarting a single container, re-export `GIT_SHA` /
    `APP_BUILD_SHA` first; otherwise re-run `scripts/deploy.sh prod`.**
    _Why:_ `docker compose -f docker-compose.prod.yml restart api` loses the
