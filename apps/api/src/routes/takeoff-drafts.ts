@@ -650,12 +650,21 @@ export async function handleTakeoffDraftRoutes(
       return row
     })
 
+    // Explicit live/dry-run discriminator (C1 follow-up). The client uses
+    // this to flip the AI-takeoff demo badge: only a real Anthropic sheet
+    // read (multipart PDF + BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY)
+    // reports mode='live'; every stub/Gemini-fallback/dry-run path stays
+    // 'dry-run' and keeps the "demo data" affordance. Additive — older
+    // clients that don't read it keep the prior (always-demo) behaviour.
+    const captureMode: 'live' | 'dry-run' = usedBlueprintVisionLive ? 'live' : 'dry-run'
+
     ctx.sendJson(201, {
       draft: created,
       result_summary: {
         quantities_count: takeoffResult.quantities.length,
         review_required: reviewRequired,
         capture_source: takeoffResult.source,
+        mode: captureMode,
         geometry: {
           rooms: takeoffResult.geometry?.rooms?.length ?? 0,
           surfaces: takeoffResult.geometry?.surfaces?.length ?? 0,

@@ -660,6 +660,10 @@ export {
 } from './conditions'
 
 export {
+  captureBlueprintVisionLive,
+  fetchBlueprintFile,
+  useBlueprintVisionLiveAvailable,
+  useCaptureBlueprintVisionLive,
   useCaptureTakeoffDraft,
   useCreateTakeoffDraft,
   useDeleteTakeoffDraft,
@@ -668,6 +672,7 @@ export {
   useTakeoffDrafts,
   useTakeoffDraftResult,
   useUpdateTakeoffDraft,
+  type CaptureLiveInput,
   type CapturedQuantity,
   type CapturedTakeoffResult,
   type CaptureKind,

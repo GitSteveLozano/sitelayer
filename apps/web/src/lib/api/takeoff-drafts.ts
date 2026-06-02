@@ -2,7 +2,7 @@
 // Backed by the routes added in apps/api/src/routes/takeoff-drafts.ts.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { request } from './client'
+import { ApiError, API_URL, buildAuthHeaders, request, requestBlob } from './client'
 
 export interface TakeoffDraft {
   id: string
@@ -50,6 +50,15 @@ export interface CaptureResultSummary {
   quantities_count: number
   review_required: boolean
   capture_source: string
+  /**
+   * Live/dry-run discriminator (C1 follow-up). 'live' means the API actually
+   * ran the Anthropic Claude-vision sheet read against the streamed multipart
+   * PDF (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY). 'dry-run' covers
+   * every stub/demo/fallback path. Optional so an older API build that predates
+   * the field still type-checks — the review UI treats absent as 'dry-run' and
+   * keeps the demo badge.
+   */
+  mode?: 'live' | 'dry-run'
   geometry: { rooms: number; surfaces: number; objects: number }
   pipeline_version: string
 }
@@ -298,6 +307,121 @@ export function useCaptureTakeoffDraft(projectId: string) {
         method: 'POST',
         json: input,
       }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['takeoff-drafts', 'by-project', projectId] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Live blueprint AI sheet-read (C1 follow-up).
+// The dry-run capture above posts JSON ({ dryRun:true }) and never reaches
+// `blueprint-vision.ts`'s live path. The live path needs a streamed
+// `blueprint_file` multipart part PLUS the API reporting live mode is
+// available (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY). When both hold
+// AND the project actually has a blueprint document, the setup screen streams
+// the project's blueprint PDF here for a real Claude-vision read; otherwise it
+// falls back to `useCaptureTakeoffDraft` (dry-run + demo badge).
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the API reports the live blueprint AI sheet-read path is available.
+ * Reads the public `/api/features` snapshot (`blueprint_vision_live`). Cached
+ * for the page lifetime — the env gate doesn't change without a redeploy
+ * (which restarts the SPA via the stale-chunk boundary). Absent/false ⇒ the
+ * setup screen stays on the dry-run/demo path.
+ */
+export function useBlueprintVisionLiveAvailable() {
+  return useQuery<{ blueprint_vision_live: boolean }, Error, boolean>({
+    queryKey: ['features', 'blueprint-vision-live'],
+    queryFn: () =>
+      request<{ blueprint_vision_live?: boolean }>('/api/features', { skipAuth: true }).then((res) => ({
+        blueprint_vision_live: res.blueprint_vision_live === true,
+      })),
+    select: (data) => data.blueprint_vision_live,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export interface CaptureLiveInput {
+  /** The project's blueprint PDF bytes, streamed as the `blueprint_file` part. */
+  file: File
+  name?: string
+  /** Review-routing discriminator persisted on the draft (migration 122). */
+  draftKind?: 'takeoff' | 'count'
+  /**
+   * Optional pipeline knobs smuggled as a JSON `payload` field on the
+   * multipart body (the API re-parses it). knownDimensionFt / wallHeightFt /
+   * model are honoured by the live Anthropic path.
+   */
+  payload?: Record<string, unknown>
+}
+
+/**
+ * Stream the project's blueprint PDF to the capture endpoint as
+ * multipart/form-data so the API runs the live Claude-vision sheet read.
+ * Mirrors `uploadBlueprint` / `uploadDailyLogPhoto` — FormData body, auth
+ * headers from `buildAuthHeaders`, and the browser owns the multipart
+ * boundary (we must NOT set content-type). The server infers
+ * kind='blueprint_vision' from the multipart branch; we still send `kind`
+ * + `draft_kind` explicitly to stay symmetric with the JSON path.
+ */
+export async function captureBlueprintVisionLive(projectId: string, input: CaptureLiveInput): Promise<CaptureResponse> {
+  const formData = new FormData()
+  formData.append('blueprint_file', input.file, input.file.name || 'blueprint.pdf')
+  formData.append('kind', 'blueprint_vision')
+  formData.append('draft_kind', input.draftKind ?? 'takeoff')
+  if (input.name) formData.append('name', input.name)
+  // The multipart branch defaults payload to {}; only attach one when the
+  // caller supplied pipeline knobs so we don't send an empty JSON string.
+  if (input.payload && Object.keys(input.payload).length > 0) {
+    formData.append('payload', JSON.stringify(input.payload))
+  }
+
+  const headers = await buildAuthHeaders()
+  const path = `/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/capture`
+  const response = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const requestId = response.headers.get('x-request-id')
+    let body: unknown
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      body = ct.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      body = null
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId, body })
+  }
+  return (await response.json()) as CaptureResponse
+}
+
+/**
+ * Download a stored blueprint document's bytes and wrap them in a `File` so
+ * the live capture path can re-stream them as the `blueprint_file` multipart
+ * part. The bytes come back through the authenticated `/api/blueprints/:id/file`
+ * route (which serves the PDF inline or 302s to a presigned URL — fetch follows
+ * both). `fileName` keeps the original name + extension so the API infers the
+ * right mime type.
+ */
+export async function fetchBlueprintFile(blueprintId: string, fileName: string): Promise<File> {
+  const blob = await requestBlob(`/api/blueprints/${encodeURIComponent(blueprintId)}/file`)
+  const safeName = fileName.trim() || 'blueprint.pdf'
+  const type = blob.type || 'application/pdf'
+  return new File([blob], safeName, { type })
+}
+
+/**
+ * Mutation wrapping `captureBlueprintVisionLive`. Invalidates the project's
+ * draft list on success just like `useCaptureTakeoffDraft`.
+ */
+export function useCaptureBlueprintVisionLive(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<CaptureResponse, Error, CaptureLiveInput>({
+    mutationFn: (input) => captureBlueprintVisionLive(projectId, input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['takeoff-drafts', 'by-project', projectId] })
     },

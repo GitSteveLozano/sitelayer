@@ -12,11 +12,21 @@
  *     "ACCEPT DRAFT". OK rows are kept; review/flag rows get a Review action.
  *
  * WIRED to the real capture pipeline. Setup RUN posts to the takeoff-drafts
- * capture endpoint (kind=blueprint_vision, dry-run-safe JSON payload — no
- * Anthropic spend unless BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY are set
- * on the API) and routes to REVIEW carrying the real draft id. REVIEW reads the
- * draft's stored TakeoffResult and promotes the kept quantities to committed
- * `takeoff_measurements` via .../:draftId/promote.
+ * capture endpoint and routes to REVIEW carrying the real draft id + the
+ * resolved capture mode. There are two RUN paths (C1 follow-up):
+ *   - LIVE: when the API reports live mode is available
+ *     (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY, surfaced via
+ *     /api/features) AND the project has a blueprint document, the screen
+ *     downloads that blueprint PDF and streams it as multipart/form-data so the
+ *     API runs the real Claude-vision sheet read. The response carries
+ *     result_summary.mode='live'.
+ *   - DRY-RUN: otherwise (no blueprint, live mode off, or any live-path error)
+ *     it posts the dry-run JSON payload as before — deterministic demo
+ *     quantities, no Anthropic spend, and keeps the demo badge.
+ * REVIEW reads the draft's stored TakeoffResult and promotes the kept
+ * quantities to committed `takeoff_measurements` via .../:draftId/promote; it
+ * shows the demo badge only for dry-run drafts and an "AI read · review
+ * required" affordance for live ones.
  *
  * The symbol→item target toggles + sheet scope stay presentational — the
  * capture endpoint takes no per-target/per-sheet selection (GAP LIST). They
@@ -27,26 +37,43 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DLoadingState, type DColumn } from '@/components/d'
 import { MAiStripe, MBanner, MButton, MI, MPill } from '@/components/m'
 import {
+  fetchBlueprintFile,
+  useBlueprintVisionLiveAvailable,
+  useCaptureBlueprintVisionLive,
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
   useTakeoffDraftResult,
   useTakeoffDrafts,
   type CapturedQuantity,
 } from '@/lib/api/takeoff-drafts'
+import { useProjectBlueprints } from '@/lib/api/takeoff'
 
 // ---------------------------------------------------------------------------
 // Demo-data notice (C1, takeoff deep-dive 2026-06-01).
-// The Run button below posts `payload: { dryRun: true }` with a JSON body and
-// never streams a multipart PDF, so the capture endpoint ALWAYS returns the
-// deterministic demo/stub quantities — never a real AI sheet read — regardless
-// of the API's BLUEPRINT_VISION_MODE. The review surface this feeds therefore
-// always carries an explicit demo banner so a stub draft can never be mistaken
-// for a real read and submitted in a bid. Follow-up: wire the live multipart
-// Claude-vision path (out of scope here, intentionally riskier).
+// The Run button has two paths now (C1 follow-up). The DRY-RUN path posts
+// `payload: { dryRun: true }` with a JSON body and never streams a PDF, so the
+// capture endpoint returns deterministic demo/stub quantities — that draft
+// always carries the demo banner below so a stub can never be mistaken for a
+// real read and submitted in a bid. The LIVE path streams the project's
+// blueprint PDF as multipart/form-data when the API reports live mode is
+// available (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY) AND the project
+// has a blueprint document; that draft carries result_summary.mode='live' and
+// the review surface shows an "AI read · review required" affordance instead.
 // ---------------------------------------------------------------------------
 const DEMO_BADGE_TITLE = 'DEMO DATA · NOT A REAL AI SHEET READ'
 const DEMO_BADGE_BODY =
   'These quantities are placeholder demo numbers, not measured from your blueprint. Do not submit them in a bid — verify every line against the real drawing first.'
+
+// Live-read review notice — shown when the draft came from a real Claude-vision
+// sheet read. Not a "this is correct" claim: AI takeoffs still demand a human
+// pass before they go into a bid, so the copy stays review-forward.
+const LIVE_BADGE_TITLE = 'AI READ · REVIEW REQUIRED'
+const LIVE_BADGE_BODY =
+  'These quantities were measured from your blueprint by the AI sheet read. They are a starting point, not a final takeoff — verify every line against the drawing before you accept it into a bid.'
+
+// Capture mode discriminator carried setup → review (via navigation state) and
+// returned on result_summary.mode. Absent ⇒ treated as 'dry-run' (demo badge).
+export type CaptureMode = 'live' | 'dry-run'
 
 // ---------------------------------------------------------------------------
 // Shared blueprint backdrop + floating-palette chrome (translated from the
@@ -122,12 +149,27 @@ export function EstAiTakeoffSetupPanel({
 }: {
   projectId: string
   onClose: () => void
-  onReviewDraft: (draftId: string) => void
+  onReviewDraft: (draftId: string, mode: CaptureMode) => void
 }) {
   // Target toggles stay presentational (the capture endpoint takes no
   // per-target selection — GAP). They still gate RUN (≥1 target).
   const [targets, setTargets] = useState<TakeoffTarget[]>(SETUP_TARGETS)
   const capture = useCaptureTakeoffDraft(projectId)
+  const captureLive = useCaptureBlueprintVisionLive(projectId)
+
+  // Live-path gates: the API must report live mode is available AND the project
+  // must actually have a blueprint document to read. Either missing ⇒ dry-run.
+  const liveAvailable = useBlueprintVisionLiveAvailable()
+  const blueprints = useProjectBlueprints(projectId)
+  const firstBlueprint = (blueprints.data?.blueprints ?? []).find((b) => !b.deleted_at) ?? null
+  const canRunLive = liveAvailable.data === true && firstBlueprint != null
+
+  // A live-path failure (download / multipart / API error) should not strand
+  // the estimator — surface it and let them fall through to the dry-run path.
+  const [liveError, setLiveError] = useState<string | null>(null)
+
+  const isPending = capture.isPending || captureLive.isPending
+  const errorMessage = liveError ?? capture.error?.message ?? captureLive.error?.message ?? null
 
   const toggleTarget = (index: number) => {
     setTargets((prev) => prev.map((t, i) => (i === index ? { ...t, on: !t.on } : t)))
@@ -135,20 +177,48 @@ export function EstAiTakeoffSetupPanel({
 
   const enabledCount = targets.filter((t) => t.on).length
 
-  const runTakeoff = () => {
-    if (!projectId || capture.isPending) return
-    // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
-    // Anthropic spend). Carries the real draft id into the review lane.
+  // draft_kind='takeoff' tags the draft so the company AI queue routes its
+  // "Review draft →" back to this takeoff reviewer (migration 122). It is also
+  // the API default, but we send it explicitly to keep the two AI flows
+  // symmetric with est-ai-count.tsx.
+  const runDryRun = () => {
     capture.mutate(
-      // draft_kind='takeoff' tags the draft so the company AI queue routes its
-      // "Review draft →" back to this takeoff reviewer (migration 122). It is
-      // also the API default, but we send it explicitly to keep the two AI
-      // flows symmetric with est-ai-count.tsx.
       { kind: 'blueprint_vision', draft_kind: 'takeoff', name: 'AI auto-takeoff', payload: { dryRun: true } },
       {
-        onSuccess: (res) => onReviewDraft(res.draft.id),
+        onSuccess: (res) => onReviewDraft(res.draft.id, res.result_summary.mode ?? 'dry-run'),
       },
     )
+  }
+
+  const runTakeoff = () => {
+    if (!projectId || isPending) return
+    setLiveError(null)
+
+    // LIVE path: download the project's blueprint PDF and stream it as
+    // multipart/form-data so the API runs the real Claude-vision sheet read.
+    // Any failure (storage read, network, API error) falls back to dry-run so
+    // the estimator always lands on a reviewable draft.
+    if (canRunLive && firstBlueprint) {
+      void fetchBlueprintFile(firstBlueprint.id, firstBlueprint.file_name)
+        .then((file) =>
+          captureLive.mutateAsync({ file, draftKind: 'takeoff', name: 'AI auto-takeoff' }).then((res) => {
+            // Trust the server's discriminator: even on the live path the API
+            // returns mode='dry-run' if its env gate isn't actually live.
+            onReviewDraft(res.draft.id, res.result_summary.mode ?? 'dry-run')
+          }),
+        )
+        .catch((err: unknown) => {
+          setLiveError(
+            `Live AI read failed (${err instanceof Error ? err.message : 'unknown error'}) — falling back to demo data.`,
+          )
+          runDryRun()
+        })
+      return
+    }
+
+    // DRY-RUN path: JSON body → deterministic stub on the API; no Anthropic
+    // spend. Carries the real draft id + mode into the review lane.
+    runDryRun()
   }
 
   return (
@@ -165,7 +235,7 @@ export function EstAiTakeoffSetupPanel({
       }}
     >
       <div style={{ ...floatHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>● AI · Draft the whole takeoff · DEMO</span>
+        <span>● AI · Draft the whole takeoff · {canRunLive ? 'LIVE' : 'DEMO'}</span>
         <button
           type="button"
           onClick={onClose}
@@ -288,12 +358,20 @@ export function EstAiTakeoffSetupPanel({
             letterSpacing: '0.04em',
           }}
         >
-          DEMO · {enabledCount} TARGETS · STUB QUANTITIES · NOT A REAL SHEET READ
+          {canRunLive
+            ? `LIVE · ${enabledCount} TARGETS · AI READS YOUR BLUEPRINT · REVIEW EVERY LINE`
+            : `DEMO · ${enabledCount} TARGETS · STUB QUANTITIES · NOT A REAL SHEET READ`}
         </div>
-        <MButton variant="primary" onClick={runTakeoff} disabled={capture.isPending || enabledCount === 0}>
-          {capture.isPending ? 'Drafting…' : 'Run demo auto-takeoff →'}
+        <MButton variant="primary" onClick={runTakeoff} disabled={isPending || enabledCount === 0}>
+          {isPending
+            ? canRunLive
+              ? 'Reading blueprint…'
+              : 'Drafting…'
+            : canRunLive
+              ? 'Run AI auto-takeoff →'
+              : 'Run demo auto-takeoff →'}
         </MButton>
-        {capture.isError ? (
+        {errorMessage ? (
           <div
             style={{
               marginTop: 10,
@@ -303,7 +381,7 @@ export function EstAiTakeoffSetupPanel({
               color: 'var(--m-red)',
             }}
           >
-            ● {capture.error.message || 'Capture failed — try again.'}
+            ● {errorMessage}
           </div>
         ) : null}
       </div>
@@ -331,7 +409,9 @@ export function EstAiTakeoffSetup() {
       <EstAiTakeoffSetupPanel
         projectId={projectId}
         onClose={() => navigate(projectId ? `/desktop/canvas/${projectId}` : '/desktop/ai-queue')}
-        onReviewDraft={(id) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id } })}
+        onReviewDraft={(id, mode) =>
+          navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id, mode } })
+        }
       />
     </div>
   )
@@ -402,6 +482,21 @@ function useTakeoffReviewDraftId(projectId: string): string | null {
   return latestCapture?.id ?? null
 }
 
+/**
+ * Resolve the capture mode the setup screen handed over via navigation state.
+ * Defaults to 'dry-run' so a deep-link / refresh (no nav state) keeps the
+ * conservative demo badge — a draft is never silently presented as a real AI
+ * read without an explicit 'live' signal from the producing run.
+ */
+function useTakeoffReviewMode(): CaptureMode {
+  const location = useLocation()
+  const stateMode =
+    location.state && typeof location.state === 'object' && 'mode' in location.state
+      ? String((location.state as { mode?: unknown }).mode ?? '')
+      : ''
+  return stateMode === 'live' ? 'live' : 'dry-run'
+}
+
 // Status accent bar color — the amber/review tone maps to the accent token.
 function statusBar(status: TakeoffStatus): string {
   return status === 'ok' ? 'var(--m-green)' : status === 'review' ? 'var(--m-accent)' : 'var(--m-red)'
@@ -421,6 +516,8 @@ export function EstAiTakeoffReview() {
   const projectId = params.projectId ?? ''
 
   const draftId = useTakeoffReviewDraftId(projectId)
+  const mode = useTakeoffReviewMode()
+  const isLive = mode === 'live'
   const resultQuery = useTakeoffDraftResult(draftId)
   const promote = usePromoteCapturedQuantities(projectId, draftId)
 
@@ -526,8 +623,8 @@ export function EstAiTakeoffReview() {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
           <div>
             <DEyebrow>
-              {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} · {rows.length}{' '}
-              items
+              {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} ·{' '}
+              {isLive ? 'AI read' : 'Demo'} · {rows.length} items
             </DEyebrow>
             <DH1>Review draft</DH1>
           </div>
@@ -542,18 +639,35 @@ export function EstAiTakeoffReview() {
           </div>
         ) : null}
 
-        <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
+        {isLive ? (
+          <MBanner tone="attention" icon={<MI.FileText size={18} />} title={LIVE_BADGE_TITLE} body={LIVE_BADGE_BODY} />
+        ) : (
+          <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
+        )}
 
-        <MAiStripe
-          tone="warn"
-          eyebrow="AI auto-takeoff · DEMO"
-          title="Demo quantities — not a real AI sheet read"
-          attribution="Demo data · stub · review required"
-        >
-          This draft is demo/stub output — the live sheet-reading path is not wired yet, so these rows are placeholder
-          quantities, not measured from your blueprint. The confidence buckets below are illustrative only. Nothing is
-          committed until you accept the draft; do not accept demo data into a real bid.
-        </MAiStripe>
+        {isLive ? (
+          <MAiStripe
+            tone="good"
+            eyebrow="AI auto-takeoff · LIVE"
+            title="AI-read quantities — review before you bid"
+            attribution="AI sheet read · review required"
+          >
+            These rows were measured from your blueprint by the AI sheet read — a starting point, not a finished
+            takeoff. The confidence buckets below flag where the AI was unsure. Nothing is committed until you accept
+            the draft; verify every line against the drawing first.
+          </MAiStripe>
+        ) : (
+          <MAiStripe
+            tone="warn"
+            eyebrow="AI auto-takeoff · DEMO"
+            title="Demo quantities — not a real AI sheet read"
+            attribution="Demo data · stub · review required"
+          >
+            This draft is demo/stub output — these rows are placeholder quantities, not measured from your blueprint.
+            The confidence buckets below are illustrative only. Nothing is committed until you accept the draft; do not
+            accept demo data into a real bid.
+          </MAiStripe>
+        )}
 
         {/* AI confidence triage (design dsg__54: OK / REVIEW / FLAGGED), driven by
             the per-row status. The live keep/pending/reject decision tally is
