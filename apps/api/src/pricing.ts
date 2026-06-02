@@ -21,6 +21,18 @@ import type { Pool, PoolClient } from 'pg'
  *                                     `fallback` so callers see a clean
  *                                     "no rate configured" without
  *                                     crashing.
+ *   6. cost_library (NEW, lowest)   — the shared trade cost library
+ *                                     (`cost_library_items`, migration 140,
+ *                                     Deep Dive M5). Matched on `code`,
+ *                                     preferring the company's own imported
+ *                                     rows over shared (NULL-company) catalog
+ *                                     rows; the rate is the sum of
+ *                                     material_rate + labor_rate. This sits
+ *                                     strictly BELOW the existing chain so it
+ *                                     only supplies a price for a code with no
+ *                                     override and no `service_items` row at
+ *                                     all — when the library is empty (and on
+ *                                     every existing company) nothing changes.
  *
  * The chain is computed in a single SQL round-trip with a CTE per layer
  * so a batch of N measurements pays N×1 query cost, not N×5.
@@ -30,7 +42,7 @@ import type { Pool, PoolClient } from 'pg'
  * (`estimate_lines.rate`, `service_items.default_rate`, etc.).
  */
 
-export type PriceSource = 'project' | 'customer' | 'company' | 'qbo' | 'fallback'
+export type PriceSource = 'project' | 'customer' | 'company' | 'qbo' | 'fallback' | 'cost_library'
 
 export interface PriceResolution {
   price: number
@@ -143,6 +155,21 @@ export async function resolvePrice(args: ResolveArgs): Promise<PriceResolution> 
         and code = $4
         and deleted_at is null
       limit 1
+    ),
+    -- Layer 6 (lowest): shared trade cost library. Matched on code,
+    -- preferring the company's own imported rows over shared (NULL-company)
+    -- catalog rows. The rate is material_rate + labor_rate (either may be
+    -- null → coalesced to 0). Only reached when no service_item / override
+    -- exists for the code, so it never changes an existing resolution.
+    cost_library_layer as (
+      select 6 as priority, 'cost_library'::text as source, id::text as source_id,
+             (coalesce(material_rate, 0) + coalesce(labor_rate, 0)) as rate, unit
+      from cost_library_items
+      where (company_id = $1 or company_id is null)
+        and code = $4
+        and deleted_at is null
+      order by (company_id is null) asc, updated_at desc
+      limit 1
     )
     select priority, source, source_id, rate, unit from project_layer
     union all
@@ -153,6 +180,8 @@ export async function resolvePrice(args: ResolveArgs): Promise<PriceResolution> 
     select priority, source, source_id, rate, unit from qbo_layer
     union all
     select priority, source, source_id, rate, unit from fallback_layer
+    union all
+    select priority, source, source_id, rate, unit from cost_library_layer
     order by priority asc
     limit 1
     `,
@@ -250,12 +279,27 @@ export async function resolvePrices(args: {
         and code = any($4::text[])
         and deleted_at is null
     ),
+    -- Layer 6 (lowest): shared trade cost library. `distinct on (lower(code))`
+    -- with the company-first ordering collapses any (company row, shared row)
+    -- pair for the same code down to the company's own row before it competes
+    -- with the higher layers. material_rate + labor_rate is the unit rate.
+    cost_library_layer as (
+      select distinct on (lower(code))
+             6 as priority, 'cost_library'::text as source, id::text as source_id,
+             (coalesce(material_rate, 0) + coalesce(labor_rate, 0)) as rate, unit, code as service_item_code
+      from cost_library_items
+      where (company_id = $1 or company_id is null)
+        and code = any($4::text[])
+        and deleted_at is null
+      order by lower(code), (company_id is null) asc, updated_at desc
+    ),
     all_layers as (
       select * from project_layer
       union all select * from customer_layer
       union all select * from company_layer
       union all select * from qbo_layer
       union all select * from fallback_layer
+      union all select * from cost_library_layer
     ),
     ranked as (
       select service_item_code, source, source_id, rate, unit, priority,
