@@ -23,6 +23,21 @@
 # `npm ci` in AUTODEPLOY_REPO_DIR (ensure node/npm on the unit PATH) and drop the
 # SKIP_VERIFY=1.
 #
+# LAND-TIME GATING IS NOW ENFORCED (2026-06-02): the SKIP_VERIFY=1 premise above
+# — "the SHA was already gated at land time" — is no longer an unenforced
+# assumption. The repo-tracked pre-push hook (`.githooks/pre-push`, installed via
+# `scripts/install-git-hooks.sh` → core.hooksPath) runs the STANDARD gate
+# (`npm run verify`) and BLOCKS any push to dev/main that fails it (bypass: the
+# standard `git push --no-verify`). So the SHA this watcher picks up off
+# origin/dev has actually passed the deterministic gate at land time.
+#
+# POST-DEPLOY SMOKE (detection, NOT a gate): after a SUCCESSFUL dev/demo deploy
+# this watcher runs `scripts/smoke-tier.sh <host> <sha>` against the live host to
+# confirm the freshly shipped SHA is actually serving (/health, /api/version SHA
+# match, /api/session, /api/bootstrap, and the demo sign-in-link mint). A smoke
+# FAILURE is logged LOUDLY and recorded, but does NOT crash the watcher or mark
+# the deploy failed — the deploy already happened; the smoke only surfaces drift.
+#
 # SAFETY MODEL (read before changing anything):
 #   - NEVER deploys prod. A tier literally named 'prod' is refused.
 #   - Kill switch: `~/.cache/sitelayer-autodeploy/PAUSED` (or AUTODEPLOY_PAUSED=1)
@@ -61,6 +76,15 @@ AUTODEPLOY_HOST_DEMO="${AUTODEPLOY_HOST_DEMO:-demo.preview.sitelayer.sandolab.xy
 CURL_MAX_TIME="${AUTODEPLOY_CURL_MAX_TIME:-15}"
 # How many hex chars to compare on (short-sha prefix). git's default short is 7+.
 SHA_COMPARE_LEN="${AUTODEPLOY_SHA_COMPARE_LEN:-7}"
+
+# Post-deploy smoke. Run after a SUCCESSFUL dev/demo deploy to confirm the
+# shipped SHA is actually serving. AUTODEPLOY_SMOKE=0 disables it; AUTODEPLOY_
+# SMOKE_SCRIPT overrides the smoke entrypoint (defaults to the one shipped in
+# this checkout). DEMO smoke can mint a sign-in-link when AUTODEPLOY_DEMO_ACCESS
+# _CODE is set (otherwise that one check skips gracefully).
+AUTODEPLOY_SMOKE="${AUTODEPLOY_SMOKE:-1}"
+AUTODEPLOY_SMOKE_SCRIPT="${AUTODEPLOY_SMOKE_SCRIPT:-$AUTODEPLOY_REPO_DIR/scripts/smoke-tier.sh}"
+AUTODEPLOY_DEMO_ACCESS_CODE="${AUTODEPLOY_DEMO_ACCESS_CODE:-${DEMO_ACCESS_CODE:-}}"
 
 # ---- Logging ----------------------------------------------------------------
 # Structured, timestamped lines to both the log file and stdout (journald).
@@ -167,6 +191,55 @@ desired_sha_for_branch() {
 
 short() { printf '%s' "${1:0:$SHA_COMPARE_LEN}"; }
 
+# ---- Post-deploy smoke (detection only; never crashes the watcher) ----------
+# Runs scripts/smoke-tier.sh against the live host after a successful deploy.
+# A smoke failure is logged LOUDLY and recorded as a smoke-failure marker, but
+# returns 0 so the caller never treats it as a deploy failure (the deploy
+# already happened — this only surfaces drift). Best-effort throughout.
+run_post_deploy_smoke() {
+  local tier="$1" host="$2" sha="$3"
+
+  if [ "$AUTODEPLOY_SMOKE" != "1" ]; then
+    log "SMOKE-SKIP tier=$tier (AUTODEPLOY_SMOKE=$AUTODEPLOY_SMOKE)"
+    return 0
+  fi
+  if [ ! -f "$AUTODEPLOY_SMOKE_SCRIPT" ]; then
+    log "SMOKE-SKIP tier=$tier smoke script not found at $AUTODEPLOY_SMOKE_SCRIPT"
+    return 0
+  fi
+
+  log "SMOKE tier=$tier host=$host sha=$(short "$sha") — running post-deploy smoke"
+  if ( DEMO_ACCESS_CODE="$AUTODEPLOY_DEMO_ACCESS_CODE" SMOKE_CURL_MAX_TIME="$CURL_MAX_TIME" \
+       SMOKE_SHA_COMPARE_LEN="$SHA_COMPARE_LEN" \
+       bash "$AUTODEPLOY_SMOKE_SCRIPT" "$host" "$sha" ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
+    log "SMOKE-OK tier=$tier host=$host sha=$(short "$sha")"
+  else
+    # LOUD, but non-fatal: the deploy already shipped. Record a smoke marker so
+    # the failure is visible in state without blocking future deploys.
+    log "############################################################"
+    log "## SMOKE-FAILED tier=$tier host=$host sha=$(short "$sha")"
+    log "## The deploy SHIPPED but post-deploy smoke did NOT pass."
+    log "## This is DETECTION — investigate $host (see $AUTODEPLOY_LOG_FILE)."
+    log "############################################################"
+    set_smoke_failure "$tier" "$sha"
+  fi
+  return 0
+}
+
+# Record a per-tier smoke-failure marker in the state file (separate namespace
+# from the deploy failed-sha lines: "<tier>:smoke <sha>"). Best-effort; a write
+# failure here must never break the watcher.
+set_smoke_failure() {
+  local tier="$1" sha="$2" key tmp
+  key="${tier}:smoke"
+  tmp="$(mktemp "${AUTODEPLOY_STATE_FILE}.XXXXXX")" || return 0
+  if [ -f "$AUTODEPLOY_STATE_FILE" ]; then
+    awk -v k="$key" '$1 != k' "$AUTODEPLOY_STATE_FILE" >"$tmp" 2>/dev/null || true
+  fi
+  printf '%s %s\n' "$key" "$sha" >>"$tmp"
+  mv -f "$tmp" "$AUTODEPLOY_STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+}
+
 # ---- Deploy one tier --------------------------------------------------------
 deploy_tier() {
   local tier="$1"
@@ -221,6 +294,9 @@ deploy_tier() {
   if ( cd "$AUTODEPLOY_REPO_DIR" && SKIP_VERIFY=1 bash scripts/deploy.sh "$tier" ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
     log "SUCCESS tier=$tier deployed $(short "$desired")"
     clear_failed_sha "$tier"
+    # Post-deploy smoke: confirm the shipped SHA is actually serving. Detection
+    # only — never crashes the watcher or re-marks the deploy failed.
+    run_post_deploy_smoke "$tier" "$host" "$desired"
   else
     log "FAILED tier=$tier deploy of $(short "$desired") returned non-zero; recording failed-sha (will skip until remote advances)"
     set_failed_sha "$tier" "$desired"
