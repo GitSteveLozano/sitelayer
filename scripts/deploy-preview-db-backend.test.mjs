@@ -136,7 +136,12 @@ test('preview tier defaults to the local backend (ephemeral per-stack Postgres)'
   const { result, renderedEnv } = runDeploy({ tier: 'preview', backend: undefined, slug: 'pr-77' })
   assert.equal(result.status, 0, `script failed: ${result.stderr}`)
   assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'local')
-  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer')
+  // The local DB name is tier-matched so the APP_TIER guard accepts it.
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_NAME'), 'sitelayer_preview')
+  assert.equal(
+    envValue(renderedEnv, 'DATABASE_URL'),
+    'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer_preview',
+  )
   // Local backend uses `public` — no per-slug schema / search_path lines.
   assert.equal(envValue(renderedEnv, 'PREVIEW_DB_SCHEMA'), undefined)
   assert.equal(envValue(renderedEnv, 'PGOPTIONS'), undefined)
@@ -165,7 +170,16 @@ test('dev tier opts in to the local backend when the flag is flipped', () => {
   const { result, renderedEnv } = runDeploy({ tier: 'dev', backend: 'local', slug: 'dev' })
   assert.equal(result.status, 0, `script failed: ${result.stderr}`)
   assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'local')
-  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer')
+  // sitelayer_dev so APP_TIER=dev's guard (expects "sitelayer_dev") accepts it.
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_NAME'), 'sitelayer_dev')
+  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer_dev')
+})
+
+test('demo tier local backend uses the demo-matched DB name', () => {
+  const { result, renderedEnv } = runDeploy({ tier: 'demo', backend: 'local', slug: 'demo' })
+  assert.equal(result.status, 0, `script failed: ${result.stderr}`)
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_NAME'), 'sitelayer_demo')
+  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer_demo')
 })
 
 test('dev tier honors PREVIEW_DB_BACKEND=local persisted in the shared env (durable cutover)', () => {
@@ -175,7 +189,8 @@ test('dev tier honors PREVIEW_DB_BACKEND=local persisted in the shared env (dura
   const { result, renderedEnv } = runDeploy({ tier: 'dev', backend: undefined, slug: 'dev', sharedBackend: 'local' })
   assert.equal(result.status, 0, `script failed: ${result.stderr}`)
   assert.equal(envValue(renderedEnv, 'PREVIEW_DB_BACKEND'), 'local')
-  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer')
+  assert.equal(envValue(renderedEnv, 'PREVIEW_DB_NAME'), 'sitelayer_dev')
+  assert.equal(envValue(renderedEnv, 'DATABASE_URL'), 'postgres://sitelayer:sitelayer@preview-db:5432/sitelayer_dev')
 })
 
 test('an explicit env-var backend overrides a conflicting shared-env value', () => {

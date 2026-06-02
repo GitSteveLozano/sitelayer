@@ -17,15 +17,22 @@
 #     (scripts/reset-tier-db.sh).
 #
 # DATABASE_URL is rewritten by deploy-preview.sh to
-#   postgres://sitelayer:sitelayer@preview-db:5432/sitelayer
+#   postgres://sitelayer:sitelayer@preview-db:5432/${PREVIEW_DB_NAME}
 # so the app talks to THIS container instead of the managed cluster. The
 # container has no TLS, so the rendered URL carries no sslmode and
 # DATABASE_SSL_REJECT_UNAUTHORIZED is irrelevant here.
+#
+# PREVIEW_DB_NAME is the per-tier database name (sitelayer_dev / sitelayer_demo /
+# sitelayer_preview) that deploy-preview.sh writes into the rendered .env. It
+# MUST match the tier so the APP_TIER startup guard (packages/config:
+# assertDatabaseMatchesTier) accepts the local backend — the guard requires the
+# DATABASE_URL db name to contain sitelayer_<tier>. Defaults to plain `sitelayer`
+# for any caller that does not set it.
 services:
   preview-db:
     image: postgres:18-alpine
     environment:
-      POSTGRES_DB: sitelayer
+      POSTGRES_DB: ${PREVIEW_DB_NAME:-sitelayer}
       POSTGRES_USER: sitelayer
       POSTGRES_PASSWORD: sitelayer
     # pg18 stores data under a major-version subdir of /var/lib/postgresql, so
@@ -38,7 +45,7 @@ services:
       - app
     restart: unless-stopped
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U sitelayer -d sitelayer']
+      test: ['CMD-SHELL', 'pg_isready -U sitelayer -d ${PREVIEW_DB_NAME:-sitelayer}']
       interval: 5s
       timeout: 5s
       retries: 12

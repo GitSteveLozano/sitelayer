@@ -102,8 +102,21 @@ esac
 # Local-backend connection facts. The db service (docker-compose.preview-db.yml)
 # is named `preview-db` and listens on the project's `app` network. The container
 # has no TLS, so the URL carries no sslmode.
+#
+# The local DB is named per-tier (sitelayer_dev / sitelayer_demo /
+# sitelayer_preview) so it satisfies the load-bearing APP_TIER startup guard
+# (packages/config: assertDatabaseMatchesTier), which requires the DATABASE_URL
+# db name to contain sitelayer_<tier> or it refuses to boot. A bare `sitelayer`
+# tripped that guard (APP_TIER=dev expected "sitelayer_dev"). PREVIEW_DB_NAME is
+# also written into the rendered .env so the docker-compose.preview-db.yml
+# overlay creates the matching POSTGRES_DB.
 LOCAL_DB_SERVICE="preview-db"
-LOCAL_DB_URL="postgres://sitelayer:sitelayer@${LOCAL_DB_SERVICE}:5432/sitelayer"
+case "$PREVIEW_TIER" in
+  dev)  LOCAL_DB_NAME="sitelayer_dev" ;;
+  demo) LOCAL_DB_NAME="sitelayer_demo" ;;
+  *)    LOCAL_DB_NAME="sitelayer_preview" ;;
+esac
+LOCAL_DB_URL="postgres://sitelayer:sitelayer@${LOCAL_DB_SERVICE}:5432/${LOCAL_DB_NAME}"
 local_db_compose="docker-compose.preview-db.yml"
 
 raw_slug="${PREVIEW_SLUG:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-manual}}}"
@@ -234,7 +247,10 @@ rsync -az --delete \
     # Local backend: the app talks to the per-stack Postgres container instead
     # of the managed cluster. This DATABASE_URL line comes AFTER the shared env
     # (which may carry a managed URL), so it wins. No sslmode (no TLS on the
-    # container); the search_path stays at the default `public`.
+    # container); the search_path stays at the default `public`. PREVIEW_DB_NAME
+    # drives the overlay's POSTGRES_DB so the container's db name matches the
+    # tier (and the DATABASE_URL above), satisfying the APP_TIER guard.
+    printf 'PREVIEW_DB_NAME=%s\n' "$LOCAL_DB_NAME"
     printf 'DATABASE_URL=%s\n' "$LOCAL_DB_URL"
   elif [ "$PREVIEW_TIER" = "preview" ]; then
     printf 'PREVIEW_DB_SCHEMA=%s\n' "$preview_db_schema"
