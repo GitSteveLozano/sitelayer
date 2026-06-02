@@ -20,6 +20,7 @@ import { capturePhotogrammetryDraft } from '../takeoff-capture-pipelines/photogr
 import { captureDroneDraft } from '../takeoff-capture-pipelines/drone.js'
 import {
   captureBlueprintVisionDraft,
+  parseCountScope,
   resolveBlueprintVisionMode,
   resolveBlueprintVisionProvider,
   type BlueprintLiveInputs,
@@ -78,7 +79,7 @@ function countBlueprintPages(takeoffResult: unknown): number {
   const pages = (pdfMeta as { pages?: unknown }).pages
   return typeof pages === 'number' && Number.isFinite(pages) && pages > 0 ? Math.floor(pages) : 0
 }
-const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
+const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status, source, takeoff_result_blob_uri, review_required, pipeline_version, count_scope_json, version, deleted_at, created_at, updated_at`
 
 // Draft `kind` values the capture endpoint accepts. Orthogonal to `source`
 // (which pipeline produced the geometry): `kind` says how the operator should
@@ -517,6 +518,13 @@ export async function handleTakeoffDraftRoutes(
     }
     const draftKind = draftKindRaw || 'takeoff'
 
+    // Per-symbol AI count scope (M1). When the count setup screen passes a
+    // `payload.count_scope` (tapped symbol + sheets + sensitivity) the pipeline
+    // returns a per-symbol count instead of a whole-draft takeoff. Persist the
+    // validated scope on the draft for audit/traceability — null for the
+    // whole-draft default so existing callers are unaffected.
+    const countScope = parseCountScope(payload)
+
     // Verify project tenancy before kicking the pipeline so a foreign
     // projectId doesn't waste a Claude/Luma call on the way to a 404.
     const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
@@ -597,9 +605,9 @@ export async function handleTakeoffDraftRoutes(
       const insertResult = await client.query(
         `insert into takeoff_drafts (
             company_id, project_id, name, type, kind, status,
-            source, takeoff_result_json, review_required, pipeline_version
+            source, takeoff_result_json, review_required, pipeline_version, count_scope_json
           )
-          values ($1, $2, $3, 'measurement', $4, 'active', $5, $6::jsonb, $7, $8)
+          values ($1, $2, $3, 'measurement', $4, 'active', $5, $6::jsonb, $7, $8, $9::jsonb)
           returning ${RETURNING_COLUMNS}`,
         [
           ctx.company.id,
@@ -610,6 +618,7 @@ export async function handleTakeoffDraftRoutes(
           JSON.stringify(takeoffResult),
           reviewRequired,
           pipelineVersion,
+          countScope ? JSON.stringify(countScope) : null,
         ],
       )
       const row = insertResult.rows[0]

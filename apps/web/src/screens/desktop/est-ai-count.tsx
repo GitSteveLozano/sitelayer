@@ -16,17 +16,27 @@
  * the draft's stored TakeoffResult and promotes the kept quantities to
  * committed `takeoff_measurements` via .../:draftId/promote.
  *
- * GAP: the pipeline returns whole-draft quantities, not a per-symbol count
- * keyed to the clicked symbol. The symbol/sensitivity/sheet-scope controls
- * stay presentational; REVIEW lists the captured quantities in the keep/reject
- * lane. A dedicated single-symbol auto-count endpoint is a GAP. The board
- * marker overlay is decorative.
+ * M1 (per-symbol count): the symbol / sensitivity / sheet-scope controls are no
+ * longer presentational — RUN threads them into the capture payload as a
+ * `count_scope`, and the pipeline returns a per-symbol count of the chosen
+ * symbol scoped to the selected sheets at the chosen sensitivity (instance
+ * count + one marker coordinate per instance). REVIEW renders the real instance
+ * markers from the result's geometry.objects[]. When no symbol is chosen the
+ * pipeline falls back to the whole-draft path (unchanged).
+ *
+ * FOLLOW-UP (flagged in the PR): the live single-symbol VISION detector. This
+ * slice honors the scope deterministically in the dry-run only; reading the
+ * chosen sheets and detecting just the tapped symbol with Claude/Gemini is a
+ * separate slice. The symbol identity itself is still the mockup's hardcoded
+ * "Diffuser — 24\" round" until a canvas symbol-pick sets it.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DEyebrow } from '@/components/d'
 import { MBanner, MButton, MI, MPill } from '@/components/m'
 import {
+  countMarkersFromResult,
+  countScopePayload,
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
   useTakeoffDraftResult,
@@ -105,6 +115,10 @@ export function EstAiCountSetupPanel({
   onReviewDraft: (draftId: string) => void
 }) {
   const sheets = ['M-101', 'M-102', 'M-103', 'M-104']
+  // The tapped symbol the count is scoped to. Hardcoded to the mockup's clicked
+  // symbol for now (the canvas symbol-pick that sets this is a separate slice);
+  // it threads through to the capture payload so the pipeline counts THIS symbol.
+  const countSymbol = { label: 'Diffuser — 24" round', sheet: 'A-104' }
   const [sensitivity, setSensitivity] = useState<Sensitivity>('NORMAL')
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(sheets.map((s) => [s, true])),
@@ -122,8 +136,18 @@ export function EstAiCountSetupPanel({
     // Anthropic spend). Carries the real draft id into the review lane.
     // draft_kind='count' tags the draft so the company AI queue routes its
     // "Review draft →" back to this count reviewer (migration 122).
+    //
+    // M1: thread the chosen symbol / selected sheets / sensitivity into the
+    // capture payload as a `count_scope` so the pipeline returns a per-symbol
+    // count of THIS symbol scoped to the selected sheets — not a whole draft.
+    const scopedSheets = sheets.filter((s) => selected[s])
     capture.mutate(
-      { kind: 'blueprint_vision', draft_kind: 'count', name: 'AI auto-count', payload: { dryRun: true } },
+      {
+        kind: 'blueprint_vision',
+        draft_kind: 'count',
+        name: `AI count · ${countSymbol.label}`,
+        payload: countScopePayload({ symbol: countSymbol, sheets: scopedSheets, sensitivity }),
+      },
       {
         onSuccess: (res) => onReviewDraft(res.draft.id),
       },
@@ -413,6 +437,13 @@ export function EstAiCountReview() {
     [resultQuery.data],
   )
 
+  // M1: per-symbol count markers (one per detected instance) carried on the
+  // result's geometry.objects[]. Falls back to the decorative MARKERS layout for
+  // whole-draft results that don't emit instance objects.
+  const realMarkers = useMemo(() => countMarkersFromResult(resultQuery.data?.takeoff_result), [resultQuery.data])
+  const markers: Array<[number, number, boolean]> =
+    realMarkers.length > 0 ? realMarkers.map((m): [number, number, boolean] => [m.x, m.y, m.low]) : MARKERS
+
   // Default the active row to the first flagged detection so the estimator
   // lands on the one that needs a decision, not row 0.
   const firstFlagged = useMemo(() => {
@@ -509,7 +540,7 @@ export function EstAiCountReview() {
             </defs>
             <rect width="900" height="836" fill="url(#ai-count-review-grid)" />
             <rect x="80" y="120" width="740" height="560" fill="none" stroke="var(--m-ink)" strokeWidth="3" />
-            {MARKERS.map(([x, y, low], i) => (
+            {markers.map(([x, y, low], i) => (
               <g key={i}>
                 <circle
                   cx={x}

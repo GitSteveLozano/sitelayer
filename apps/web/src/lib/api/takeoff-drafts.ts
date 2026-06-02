@@ -33,6 +33,20 @@ export interface TakeoffDraft {
 
 export type CaptureKind = 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
 
+export type CountSensitivity = 'STRICT' | 'NORMAL' | 'LOOSE'
+
+/**
+ * Per-symbol AI count scope (M1). Passed inside the capture `payload` as
+ * `count_scope`; the blueprint_vision pipeline honors it (returns a per-symbol
+ * count scoped to `sheets` at `sensitivity`) instead of a whole-draft takeoff.
+ * Omit it (no symbol chosen) to keep the existing whole-draft behavior.
+ */
+export interface CaptureCountScope {
+  symbol: { label: string; sheet?: string }
+  sheets: string[]
+  sensitivity: CountSensitivity
+}
+
 export interface CaptureRequestBody {
   /** Which capture pipeline to run (how the geometry is produced). */
   kind: CaptureKind
@@ -44,6 +58,15 @@ export interface CaptureRequestBody {
   draft_kind?: 'takeoff' | 'count'
   name?: string
   payload: Record<string, unknown>
+}
+
+/**
+ * Build a capture payload for a per-symbol count run. Defaults `payload`'s
+ * `dryRun` (deterministic stub — no Anthropic spend) and nests the validated
+ * count scope under `count_scope`. Pass it as `payload` to `useCaptureTakeoffDraft`.
+ */
+export function countScopePayload(scope: CaptureCountScope): Record<string, unknown> {
+  return { dryRun: true, count_scope: scope }
 }
 
 export interface CaptureResultSummary {
@@ -214,6 +237,16 @@ export interface CapturedQuantity {
   geometryRefs?: string[]
 }
 
+/** One synthesized symbol instance from a per-symbol count (M1). The pipeline
+ *  emits these into `geometry.objects[]` (schema-valid home for symbol
+ *  instances); each carries a `bbox` whose origin is the marker coordinate the
+ *  review canvas overlays. `category` is the counted symbol's label. */
+export interface CapturedGeometryObject {
+  id: string
+  category: string
+  bbox?: number[]
+}
+
 export interface CapturedTakeoffResult {
   schemaVersion: string
   takeoffId: string
@@ -222,6 +255,44 @@ export interface CapturedTakeoffResult {
   pipelineVersion: string
   quantities: CapturedQuantity[]
   reviewRequired?: boolean
+  /** Cross-pipeline geometry. For a per-symbol count, `objects[]` holds one
+   *  entry per detected instance (M1). Optional — absent for whole-draft results. */
+  geometry?: { objects?: CapturedGeometryObject[] }
+}
+
+/** A per-symbol count marker for the review canvas: the (x, y) origin of an
+ *  instance's bbox plus a `low` flag for instances below the review floor. */
+export interface CountMarker {
+  id: string
+  x: number
+  y: number
+  low: boolean
+}
+
+/**
+ * Extract per-symbol count markers from a captured result. Reads the
+ * synthesized `geometry.objects[]` (one per instance) and pairs each with the
+ * count quantity's confidence to flag low-confidence marks. Returns an empty
+ * array for whole-draft results (no objects), so callers can fall back to their
+ * decorative marker layout.
+ */
+export function countMarkersFromResult(result: CapturedTakeoffResult | undefined): CountMarker[] {
+  const objects = result?.geometry?.objects
+  if (!Array.isArray(objects) || objects.length === 0) return []
+  // The per-symbol count emits a single rolled-up quantity; treat its
+  // confidence as the floor signal for the whole set. (A future live detector
+  // can attach per-instance confidence; this stays additive when it does.)
+  const countConfidence = result?.quantities?.[0]?.confidence ?? 1
+  const low = countConfidence < 0.7
+  const markers: CountMarker[] = []
+  for (const o of objects) {
+    if (!o || !Array.isArray(o.bbox) || o.bbox.length < 2) continue
+    const x = o.bbox[0]
+    const y = o.bbox[1]
+    if (typeof x !== 'number' || typeof y !== 'number') continue
+    markers.push({ id: o.id, x, y, low })
+  }
+  return markers
 }
 
 export interface DraftResultResponse {
