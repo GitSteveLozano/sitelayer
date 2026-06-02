@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle, Mic, Square, X } from 'lucide-react'
-import { isAudioCaptureSupported } from '@/lib/capture-recorder'
+import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import {
   clearLocalCaptureSession,
   currentCaptureRoutePath,
@@ -108,7 +108,7 @@ async function appendFeedbackEvent(
 export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedbackDockProps) {
   const enabled = authenticatedFeedbackEnabled()
   const replayEnabled = captureReplayEnabled()
-  const audioSupported = isAudioCaptureSupported()
+  const audioSupported = resolveCaptureCapabilities().audio
   const backend = useMemo(() => authenticatedBackend(), [])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
   const [state, setState] = useState<CaptureState>('idle')
