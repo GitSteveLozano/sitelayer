@@ -63,6 +63,8 @@ resolver, and the health check at `https://demo.preview.sitelayer.sandolab.xyz/h
 The Traefik router rule resolves to `Host(\`demo.preview.sitelayer.sandolab.xyz\`)`because that host is supplied as`PREVIEW_HOST`. No DNS change is needed: the
 hostname already resolves via the existing `\*.preview.sitelayer.sandolab.xyz`wildcard pointed at the preview droplet`159.203.53.218`.
 
+**Auto-deploy:** a fleet-side timer fast-follows the tracked ref (`dev` today) onto this tier (~2min, never prod) — see `docs/AUTO_DEPLOY.md`.
+
 ## Database story
 
 - **Dedicated database:** `sitelayer_demo` on the existing managed cluster

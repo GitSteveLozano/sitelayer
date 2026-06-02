@@ -47,6 +47,8 @@ The deploy script, when `PREVIEW_TIER=dev`:
 
 Everything else — rsync to `/app/previews/dev/`, env-file merge from the shared file, container restart, health check at `https://dev.sitelayer.sandolab.xyz/health` — is identical to the preview path.
 
+**Auto-deploy:** a fleet-side timer fast-follows `origin/dev` onto this tier (~2min, never prod) — see `docs/AUTO_DEPLOY.md`.
+
 ## Database story
 
 - **Dedicated database:** `sitelayer_dev` on the existing managed cluster `sitelayer-db`. Already provisioned (see CLAUDE.md infrastructure snapshot).
