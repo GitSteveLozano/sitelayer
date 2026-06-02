@@ -99,8 +99,14 @@ const ForemanCrew = lazy(() => import('./mobile/foreman-crew.js').then((m) => ({
 const ForemanMap = lazy(() => import('./mobile/foreman-map.js').then((m) => ({ default: m.ForemanMap })))
 const ForemanBrief = lazy(() => import('./mobile/foreman-brief.js').then((m) => ({ default: m.ForemanBrief })))
 const ForemanLog = lazy(() => import('./mobile/foreman-log.js').then((m) => ({ default: m.ForemanLog })))
+// The mobile shell IS the field/mobile form factor, so it mounts the mobile
+// composition directly — mirroring how desktop-workspace mounts the desktop
+// `FmBlockerDetail`. The viewport-switching `ForemanBlockerDetail` wrapper would
+// otherwise render desktop chrome inside the mobile shell at >=1024px (and
+// break the foreman-field-event e2e, which drives this route in a 1280px
+// Chromium viewport).
 const ForemanBlockerDetail = lazy(() =>
-  import('./mobile/foreman-blocker-detail.js').then((m) => ({ default: m.ForemanBlockerDetail })),
+  import('./mobile/foreman-blocker-detail.js').then((m) => ({ default: m.ForemanBlockerDetailMobile })),
 )
 const MobileRentals = lazy(() => import('./mobile/rentals.js').then((m) => ({ default: m.MobileRentals })))
 const MobileRentalDispatch = lazy(() =>

@@ -93,7 +93,7 @@ export function ForemanBlockerDetail(props: { bootstrap: BootstrapResponse | nul
   )
 }
 
-function ForemanBlockerDetailMobile({
+export function ForemanBlockerDetailMobile({
   bootstrap,
   companySlug,
 }: {
