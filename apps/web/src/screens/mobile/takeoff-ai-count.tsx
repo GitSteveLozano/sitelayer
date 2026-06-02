@@ -15,15 +15,21 @@
  * stored TakeoffResult and promotes the kept quantities to committed
  * `takeoff_measurements`.
  *
- * GAP: the pipeline produces whole-draft quantities, not a per-symbol count
- * keyed to the tapped symbol. The symbol/sensitivity/sheet-scope controls stay
- * presentational; REVIEW shows the captured quantities as the "found" set with
- * a keep/reject lane. A dedicated single-symbol auto-count endpoint is a GAP.
+ * M1 (per-symbol count): the symbol / sensitivity / sheet-scope controls are no
+ * longer presentational — RUN threads them into the capture payload as a
+ * `count_scope`, and the pipeline returns a per-symbol count of the tapped
+ * symbol scoped to the selected sheets at the chosen sensitivity. When no symbol
+ * is chosen the pipeline falls back to the whole-draft path (unchanged).
+ *
+ * FOLLOW-UP (flagged in the PR): the live single-symbol VISION detector — this
+ * slice honors the scope deterministically in the dry-run only. The symbol
+ * identity is still the mockup's hardcoded one until a canvas symbol-pick sets it.
  */
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MBanner, MButton, MI, MPill, Spark } from '../../components/m/index.js'
 import {
+  countScopePayload,
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
   useTakeoffDraftResult,
@@ -94,6 +100,10 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
 
+  // The tapped symbol the count is scoped to. Hardcoded to the mockup's tapped
+  // symbol for now (the canvas symbol-pick that sets this is a separate slice);
+  // it threads through to the capture payload so the pipeline counts THIS symbol.
+  const countSymbol = { label: 'Diffuser — 24" round', sheet: 'A-104' }
   const [sensitivity, setSensitivity] = useState<Sensitivity>('NORMAL')
   const [sheets, setSheets] = useState<ScanSheet[]>(SCAN_SHEETS)
   const capture = useCaptureTakeoffDraft(projectId)
@@ -106,8 +116,20 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
     if (!projectId || capture.isPending) return
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no
     // live Anthropic spend). Carries the real draft id into the review lane.
+    //
+    // M1: thread the tapped symbol / selected sheets / sensitivity into the
+    // capture payload as a `count_scope` so the pipeline returns a per-symbol
+    // count of THIS symbol scoped to the selected sheets — not a whole draft.
+    // draft_kind='count' tags the draft so the company AI queue routes review
+    // to the count reviewer (migration 122).
+    const scopedSheets = sheets.filter((s) => s.on).map((s) => s.code)
     capture.mutate(
-      { kind: 'blueprint_vision', name: 'AI auto-count', payload: { dryRun: true } },
+      {
+        kind: 'blueprint_vision',
+        draft_kind: 'count',
+        name: `AI count · ${countSymbol.label}`,
+        payload: countScopePayload({ symbol: countSymbol, sheets: scopedSheets, sensitivity }),
+      },
       {
         onSuccess: (res) =>
           navigate(`/projects/${projectId}/takeoff-ai/count/review`, { state: { draftId: res.draft.id } }),
