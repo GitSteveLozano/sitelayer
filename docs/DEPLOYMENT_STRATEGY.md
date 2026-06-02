@@ -1,9 +1,22 @@
 # Sitelayer Deployment Strategy
 
 > Status: living strategy + handoff artifact. Last verified against the repo on
-> 2026-06-02 at `main == dev == 98be2519`, 0 open PRs, 0 GitHub Actions.
+> 2026-06-02 at `main == dev == d3d870e1`, 0 open PRs, 0 GitHub Actions.
 > This document is decisive on purpose: it names the mechanism, size, and cost
 > for each recommendation so a successor can act without re-deriving the system.
+>
+> **Framing correction (this revision).** An earlier draft implied the control
+> plane is "one personal laptop" and partly justified the cloud move on
+> _resource limits_. Both are wrong and are corrected throughout: the control
+> plane runs on a **real multi-machine Tailscale fleet** with serious compute
+> (off-site authority `mesh-hetzner` plus ~6 local machines, a healthy 66.5 GB
+> fleet Postgres — roughly $10k/mo to rent the equivalent). The cloud-migration
+> and handoff drivers are **developer coordination, shared/non-personal control,
+> and clean ownership transfer — not capacity.** The only genuine product-hosting
+> _sizing_ item is the deliberately-tiny customer-facing DO managed Postgres
+> (`db-s-1vcpu-1gb`, ~$15/mo to bump), which is a cost choice decoupled from the
+> fleet's capacity. Multi-tenancy invariants now live in
+> [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md).
 
 ---
 
@@ -14,21 +27,25 @@ this strategy: it fixes the single biggest risk in §1 (single-tenant worker) an
 the surrounding scale/security/governance hardening. The table below records what
 is **done** in this batch vs. what is **groundwork** the operator still provisions.
 
-| Item                                              | Status        | Where                                                                             |
-| ------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
-| Worker multi-tenant drain (all companies)         | ✅ done       | `apps/worker/src/{companies,worker}.ts`                                           |
-| Per-company QBO-live flag (fail-safe dry-run)     | ✅ done       | migration `144_company_qbo_live.sql`, `apps/worker/src/qbo-live.ts`               |
-| `asset_deployments` RLS (ENABLE + FORCE + policy) | ✅ done       | migration `145_asset_deployments_rls.sql`                                         |
-| RLS forced-coverage blocking audit gate           | ✅ done       | `apps/api/src/routes/rls-force-audit.ts` (`RLS_PHASE3_FAIL_ON_LEAK`)              |
-| Pre-push governance hook                          | ✅ done       | `.githooks/pre-push`, `scripts/install-git-hooks.sh`                              |
-| Post-deploy smoke (tier-aware)                    | ✅ done       | `scripts/smoke-tier.sh`, `npm run smoke:dev/demo`                                 |
-| Company-create gate (platform-admin by default)   | ✅ done       | `apps/api/src/routes/companies.ts`                                                |
-| Per-company rate limit                            | ✅ done       | `apps/api/src/rate-limit.ts`                                                      |
-| Mesh AI-chat feature flag (off unless configured) | ✅ done       | `apps/api/src/mesh-dispatcher.ts`, `routes/ai-chat.ts`                            |
-| Doc reconcile (e2e/README, PITR/DR, UptimeRobot)  | ✅ done       | `e2e/README.md`, `docs/DR_RESTORE.md`, `docs/UPTIME_ROBOT_MONITORS.md`            |
-| Terraform IaC skeleton                            | ⏳ groundwork | `infra/terraform/*` — operator runs `terraform import` + `apply`                  |
-| E2E runner (script + systemd unit)                | ⏳ groundwork | `scripts/e2e-runner.sh`, `ops/systemd/sitelayer-e2e-runner.*` — needs a quiet box |
-| Ops-VM migration runbook                          | ⏳ groundwork | `docs/OPS_VM_MIGRATION.md` — operator executes the cutover                        |
+| Item                                              | Status         | Where                                                                                      |
+| ------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------ |
+| Worker multi-tenant drain (single-tenant sweep)   | ✅ done        | `apps/worker/src/{companies,worker}.ts`                                                    |
+| Per-company QBO-live flag (fail-safe dry-run)     | ✅ done        | migration `144_company_qbo_live.sql`, `apps/worker/src/qbo-live.ts`                        |
+| `asset_deployments` RLS (ENABLE + FORCE + policy) | ✅ done        | migration `145_asset_deployments_rls.sql`                                                  |
+| RLS forced-coverage blocking audit gate           | ✅ done        | `apps/api/src/routes/rls-force-audit.ts` (`RLS_PHASE3_FAIL_ON_LEAK`)                       |
+| RLS gap closure (forced-coverage + allowlist)     | ✅ done        | mig `145` + `rls-force-audit.ts` ratchet — see `docs/MULTI_TENANCY.md`                     |
+| Single-tenant sweep (no `ACTIVE_COMPANY_SLUG`)    | ✅ done        | worker drains all companies; slug is now an optional override only                         |
+| Generic / multi-company onboarding                | 🟡 in progress | `apps/api/src/routes/companies.ts` (admin-gated create), `routes/invites.ts` invites       |
+| Multi-tenancy invariants reference                | ✅ done        | `docs/MULTI_TENANCY.md` (RLS GUC, membership boundary, per-company operation/billing)      |
+| Pre-push governance hook                          | ✅ done        | `.githooks/pre-push`, `scripts/install-git-hooks.sh`                                       |
+| Post-deploy smoke (tier-aware)                    | ✅ done        | `scripts/smoke-tier.sh`, `npm run smoke:dev/demo`                                          |
+| Company-create gate (platform-admin by default)   | ✅ done        | `apps/api/src/routes/companies.ts`                                                         |
+| Per-company rate limit                            | ✅ done        | `apps/api/src/rate-limit.ts`                                                               |
+| Mesh AI-chat feature flag (off unless configured) | ✅ done        | `apps/api/src/mesh-dispatcher.ts`, `routes/ai-chat.ts`                                     |
+| Doc reconcile (e2e/README, PITR/DR, UptimeRobot)  | ✅ done        | `e2e/README.md`, `docs/DR_RESTORE.md`, `docs/UPTIME_ROBOT_MONITORS.md`                     |
+| Terraform IaC skeleton                            | ⏳ groundwork  | `infra/terraform/*` — operator runs `terraform import` + `apply`                           |
+| E2E runner (script + systemd unit)                | ⏳ groundwork  | `scripts/e2e-runner.sh`, `ops/systemd/sitelayer-e2e-runner.*` — runs on a quiet fleet node |
+| Ops-VM migration runbook                          | ⏳ groundwork  | `docs/OPS_VM_MIGRATION.md` — operator executes the cutover                                 |
 
 ### ⚠️ Operator actions required at PROD deploy
 
@@ -56,28 +73,44 @@ qbo_live_enabled=true`; either off keeps the company in dry-run. This is
 **What we have.** Sitelayer is a multi-tenant construction SaaS on DigitalOcean
 (2 droplets, 1 _tiny_ managed Postgres cluster, Spaces, Container Registry, with
 Cloudflare DNS and Clerk auth). It runs a 4-tier ladder — **prod / dev / demo /
-PR-preview** — but the entire build, verification, and deploy plane lives on **one
-personal Linux workstation, `taylor-pc`**. There are **zero GitHub Actions**
-(`quality.yml` deleted; deploy workflows removed in `70b9584b`). The single quality
-authority is `scripts/verify-local.sh`, run locally by the deploy path. Prod ships
-via an immutable image (BuildKit → DO Container Registry → flock-locked SSH →
-`pg_dump` backup → checksummed migrations → health check → rollback markers);
-dev/demo/preview run source-mounted watch-mode on a shared 2 vCPU/4 GB droplet.
+PR-preview**. The build, verification, and deploy plane runs today on **the
+operator's private Tailscale fleet** — a real multi-machine control plane (an
+off-site authority `mesh-hetzner` plus ~6 local machines: `taylor-pc`,
+`minisforum`, `system76`, `alienware`, `beelink`, …), with serious compute
+(~$10k/mo to rent the equivalent) and a healthy 66.5 GB fleet Postgres. It is
+**not** a resource constraint. The deploy commands run from `taylor-pc` today,
+but that is a _placement_ choice on a private network, not a capacity ceiling.
+There are **zero GitHub Actions** (`quality.yml` deleted; deploy workflows removed
+in `70b9584b`). The single quality authority is `scripts/verify-local.sh`, run
+locally by the deploy path. Prod ships via an immutable image (BuildKit → DO
+Container Registry → flock-locked SSH → `pg_dump` backup → checksummed migrations →
+health check → rollback markers); dev/demo/preview run source-mounted watch-mode on
+a shared 2 vCPU/4 GB droplet.
 
 **Where it's going.** Three forces converge: (a) prove the product with **many
-construction companies** (multi-tenant), (b) move to a **proper cloud service** in a
-couple months, (c) **hand off** to a new owner (the repo is already
-`GitSteveLozano/sitelayer`). All three are blocked by the same root fact: the
-control plane and several product features depend on Taylor-personal infrastructure.
+construction companies** (multi-tenant), (b) move the control point to a **shared,
+non-personal home** so a team can operate it, (c) **hand off** to a new owner (the
+repo is already `GitSteveLozano/sitelayer`). The blocker is **not** compute and
+**not** the fleet's capacity — it is **access, ownership, and coordination**:
+multiple developers cannot all join the operator's private Tailnet and SSH the
+fleet to deploy, and a new owner cannot inherit personal machines. The fix is to
+put the deploy authority on a **shared, non-personal control point** — that can be
+**another fleet node or a small cloud VM**; the point is "not one person's personal
+box," not "more power."
 
-**The single biggest risk to fix first.** Not the deploy box, not the DB — it is the
-**single-tenant background worker**. `apps/worker/src/worker.ts:52` hardwires
-`ACTIVE_COMPANY_SLUG ?? 'la-operations'` and every drain runs
-`where company_id = $1` for that one company. **Selling to a second company today
-ships a product whose entire money-movement path (QBO sync, rental invoicing,
-estimate push, payroll) is silently dead for them** — rows queue in `mutation_outbox`
-and never drain. Tenant _data_ isolation (RLS) is solid; tenant _operation_ is not.
-This must be fixed before company #2, ahead of every infra concern.
+**The single biggest risk — now closed.** The historical top risk was the
+**single-tenant background worker**: it hardwired `ACTIVE_COMPANY_SLUG ?? 'la-operations'`
+and every drain ran `where company_id = $1` for that one company, so selling to a
+second company would have left their entire money-movement path (QBO sync, rental
+invoicing, estimate push, payroll) silently dead — rows queued in `mutation_outbox`
+and never drained. **This batch landed the single-tenant sweep:** the worker now
+drains **all** companies (`apps/worker/src/companies.ts` → per-company GUC drain),
+the QBO-live gate is **per-company** (mig `144`), `asset_deployments` RLS is
+enabled-and-forced (mig `145`), and the RLS forced-coverage audit is a **blocking
+gate**. Tenant _data_ isolation (RLS) was already solid; tenant _operation_ now is
+too. The
+remaining multi-company work is onboarding/billing polish (§5), not a correctness
+hole. See [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md) for the invariants.
 
 ---
 
@@ -85,13 +118,20 @@ This must be fixed before company #2, ahead of every infra concern.
 
 ### 2.1 The fleet ↔ DigitalOcean boundary
 
-- **Fleet (`taylor-pc`) owns the control plane.** It (a) **builds** the prod image
-  (host compile of `npm run build`, then `docker buildx --target runtime --push`,
+- **The fleet owns the control plane.** The control plane is the operator's
+  multi-machine Tailscale fleet — `mesh-hetzner` (off-site authority) plus ~6 local
+  machines (`taylor-pc`, `minisforum`, `system76`, `alienware`, `beelink`, …),
+  serious compute and a 66.5 GB fleet Postgres. The Sitelayer deploy commands run
+  from **`taylor-pc` today** (one node of that fleet): it (a) **builds** the prod
+  image (host compile of `npm run build`, then `docker buildx --target runtime --push`,
   `deploy-production-local.sh`), (b) runs the **verification gate**
-  (`scripts/verify-local.sh`), (c) is the **only deploy initiator** — manual
+  (`scripts/verify-local.sh`), (c) is the current **deploy initiator** — manual
   `scripts/deploy.sh` plus a **user-level systemd timer** for dev/demo only
   (`ops/systemd/sitelayer-auto-deploy.timer`, every 2 min; prod is _refused_,
   `fleet-auto-deploy.sh:174`), and (d) holds the doctl creds + SSH keys + build cache.
+  Running this on `taylor-pc` is incidental placement on a private network, not a
+  capacity limit — any fleet node (or a small shared VM) can host it; the reason to
+  _move_ it is access/ownership, not compute (§6, §7).
 - **DigitalOcean hosts, stores, routes.** 2 droplets run the containers; managed
   Postgres 18 cluster `sitelayer-db` (`db-s-1vcpu-1gb`) stores all 4 tier databases;
   DO Container Registry `sitelayer` holds prod images; DO Spaces
@@ -133,9 +173,12 @@ m-chunk) runs inside the build stage. dev/demo/preview do **no image build** —
   Deterministic and reliable.
 - **full** — standard **+ Playwright e2e** (full app stack + real browser).
 
-**e2e is opt-in** because it flakes (`browser/page-closed`) on a loaded shared box;
-it is deterministic only on a clean/idle runner. This is the central testing gap
-(§4). Migrations are **forward-only, immutable, checksum-ledgered**
+**e2e is opt-in** because it flakes (`browser/page-closed`) when it runs on
+`taylor-pc` — not because that box is weak, but because it is **busy** running the
+mesh control plane, the browser-bridge, and other fleet workloads, which steals
+CPU/scheduling from Playwright. It is deterministic on any **quieter fleet node**.
+This is the central testing gap (§4) — a placement problem, not a hardware one.
+Migrations are **forward-only, immutable, checksum-ledgered**
 (`migrate-db.sh`: editing an applied migration aborts the next deploy with exit 3);
 they live in `docker/postgres/init/` (147 files, numbered to `143_*`).
 
@@ -218,11 +261,15 @@ suite "executes via the local gate's e2e step" — that invariant is now false.
 
 Stand up an `install-e2e-runner-systemd.sh` timer (mirror the proven
 `install-replay-sweep-systemd.sh` pattern — the fleet already runs 7 such timers) on a
-**quiet box that does not flake** — the **preview droplet off-hours**, or a
-**$6/mo throwaway DO droplet** that exists only for the run. It checks out
-`origin/dev` (and `origin/main`), runs `npm run verify:full` (e2e is deterministic on
-an idle box), and on failure emits to **Sentry + the existing Pushover route**.
-Cadence: hourly or per-`dev`-advance.
+**quiet box that does not flake**. The fleet has the capacity already: pick a
+**quieter fleet node** (one of `minisforum` / `system76` / `alienware` / `beelink`
+— anything that is _not_ `taylor-pc`, which is busy with the mesh control plane and
+browser-bridge). A rented droplet (the preview droplet off-hours, or a $6/mo
+throwaway) is a fine fallback but **not required** — this is about giving Playwright
+an idle scheduler, which the fleet already has in spades. It checks out `origin/dev`
+(and `origin/main`), runs `npm run verify:full` (e2e is deterministic on an idle
+box), and on failure emits to **Sentry + the existing Pushover route**. Cadence:
+hourly or per-`dev`-advance.
 
 **Why A is the primary:** it restores _exactly_ the net CI used to run, but
 **decouples flakiness from the deploy gate** so e2e can never block a ship. It uses an
@@ -248,7 +295,8 @@ get a post-deploy smoke. No gate is ever blocked by browser flake.
 
 ## 5. Scaling to many construction companies
 
-**Data isolation = ready. Operation = single-tenant. Capacity = the tiny DB.**
+**Data isolation = ready. Operation = multi-tenant (this batch). The only sizing
+item is the deliberately-tiny customer-facing DB — a cost choice, not a fleet limit.**
 
 ### What's solid
 
@@ -261,74 +309,101 @@ get a post-deploy smoke. No gate is ever blocked by browser flake.
   structurally prod-disabled. Cross-tenant access needs both a valid identity **and** a
   membership in the target company.
 
-### The blockers (fix before multi-company sales)
+### The blockers (status — the correctness holes are closed this batch)
 
-1. **#1 — the worker is single-tenant** (`worker.ts:52`, `ACTIVE_COMPANY_SLUG`).
-   **Fix first:** make the drain iterate all companies (`SELECT id FROM companies`,
-   set the GUC per claimed row's `company_id`) — exactly how the notification drain
-   already works cross-tenant. Until this lands, every company beyond `la-operations`
-   has dead QBO/billing/payroll queues.
-2. **#2 — QBO live is global, not per-company.** `QBO_LIVE_*` are process env vars
-   (`worker.ts:142`, `labor-payroll-push.ts`, `damage-charge-push.ts:64`). You **cannot
-   stage company #2 in dry-run while #1 is live** — flipping is all-companies-at-once.
-   Move the gate to a per-company flag (`integration_connections` column or
-   `company_modules`); per-company circuit state already exists.
-3. **Latent RLS gaps.** (a) `asset_deployments` (`118_asset_deployments.sql`) is
-   `company_id NOT NULL` but has **no policy and RLS is never enabled** — it shipped
-   after the `101` sweep and every later RLS migration missed it. Add a `company_
-isolation` policy + ENABLE/FORCE in a new forward migration. (b) The RLS policy is
-   permissive-when-NULL: a bare `pool.query` that forgets the GUC returns cross-tenant
-   rows. Convert `routes/rls-phase3-audit.test.ts` into a **blocking gate**
-   (`RLS_PHASE3_FAIL_ON_LEAK=1` in `verify-local.sh`). Refresh stale `SECURITY_RLS.md`.
+1. **#1 — single-tenant worker → ✅ closed (single-tenant sweep).** The drain now
+   iterates **all** companies (`apps/worker/src/companies.ts`'s `listActiveCompanies`,
+   GUC set per claimed row's `company_id`) — exactly how the notification drain already
+   works cross-tenant. `ACTIVE_COMPANY_SLUG` survives only as an **optional override**
+   for single-company deploys. Companies beyond `la-operations` now drain their
+   QBO/billing/payroll queues.
+2. **#2 — per-company QBO live → ✅ closed.** The go-live gate moved off the global
+   `QBO_LIVE_*` process env onto a **per-company** flag
+   (`integration_connections.qbo_live_enabled`, migration `144`); live now requires
+   `QBO_LIVE_*=1 AND qbo_live_enabled=true` so you **can** stage company #2 in dry-run
+   while #1 is live. The cluster-wide `QBO_LIVE_*` remains as a kill switch.
+3. **RLS gaps → ✅ closed.** (a) `asset_deployments` now has a `company_isolation`
+   policy + ENABLE/FORCE (migration `145_asset_deployments_rls.sql`). (b) The
+   permissive-when-NULL hazard (a bare `pool.query` that forgets the GUC) is now caught
+   by a **blocking gate**: `apps/api/src/routes/rls-force-audit.ts` runs in the
+   `verify-local.sh` integration stage with `RLS_PHASE3_FAIL_ON_LEAK=1` and an
+   **allowlist ratchet** — any new forced-coverage leak fails the deploy. Invariants and
+   the ratchet are documented in [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md).
 
 ### Capacity & cost trajectory
 
-The ceiling is the **shared `db-s-1vcpu-1gb` Postgres (~22 usable connections)**
-holding prod + dev + preview + demo on **one node**. Prod API pool = 16 + worker = 4
-≈ 20 — already at budget _before_ non-prod connections from the same cluster compete.
+The one genuine sizing item is the **deliberately-tiny customer-facing
+`db-s-1vcpu-1gb` managed Postgres (~22 usable connections)** holding prod + dev +
+preview + demo on **one node**. Prod API pool = 16 + worker = 4 ≈ 20 — already at
+budget _before_ non-prod connections from the same cluster compete. This is a
+**cost choice on the product-hosting footprint**, fully decoupled from the fleet's
+capacity: the build/verify/e2e plane runs on the multi-machine fleet, which can host
+the prod image build, multiple environments, and the async e2e runner with room to
+spare. Bumping the customer DB is cheap and on-demand; nothing here is a fleet limit.
 
-| Tenant count     | Action                                                                                                                                                           | Cost    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| **1–3 light**    | Survive today **only if** the worker is fixed **and** dev/preview/demo are moved off the prod DB                                                                 | —       |
-| **~5–15 active** | Resize to `db-s-2vcpu-4gb` (≈97 conns) at `> 18` used / `> 70%` CPU sustained 1h; add PgBouncer transaction-mode pooler                                          | +$15/mo |
-| **~15–40**       | 4 GB+ DB; consider a 2nd / per-tenant worker; Clerk Pro (`>80` orgs / `>40k` MAU)                                                                                | +$25/mo |
-| **~50+**         | The single-droplet + single-worker + single-DB topology needs the move to a proper cloud service (horizontal API, dedicated worker fleet, pooled/partitioned DB) |
+| Tenant count     | Action                                                                                                                                                      | Cost    |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| **1–3 light**    | Fine today once dev/preview/demo are moved off the prod DB (worker is already multi-tenant)                                                                 | —       |
+| **~5–15 active** | Resize the customer DB to `db-s-2vcpu-4gb` (≈97 conns) at `> 18` used / `> 70%` CPU sustained 1h; add PgBouncer transaction-mode pooler                     | +$15/mo |
+| **~15–40**       | 4 GB+ customer DB; consider a 2nd / per-tenant worker; Clerk Pro (`>80` orgs / `>40k` MAU)                                                                  | +$25/mo |
+| **~50+**         | The single-droplet + single-DB **product hosting** topology benefits from a managed cloud service (horizontal API, dedicated worker, pooled/partitioned DB) |
 
-**Also before scale:** add **per-company** rate limits (rate-limit is per-user/per-IP
-today, `rate-limit.ts`) and a Spaces **retention/quota** policy (blueprints are
-retained indefinitely in one bucket; 250 GB included). Onboarding is **self-serve and
-ungated** — `POST /api/companies` lets any authed user create a company + become admin;
-gate it behind `platform_admins` (`130` exists) or a billing step before opening
-signups. Email-token invites (`134_company_invites`, `routes/invites.ts`) make crew
-onboarding low-friction (email, not Clerk user_id).
+**Also before scale:** per-company rate limits now exist (`rate-limit.ts`); still add
+a Spaces **retention/quota** policy (blueprints are retained indefinitely in one
+bucket; 250 GB included). **Onboarding (in progress):** `POST /api/companies` is now
+**platform-admin gated by default** (`platform_admins` / `PLATFORM_SUPERADMIN_CLERK_IDS`,
+with an `ALLOW_OPEN_COMPANY_SIGNUP=1` escape hatch) — the self-serve "any authed user
+becomes admin" hole is closed. The remaining work is a **generic, repeatable
+multi-company onboarding flow** (admin-driven company create + email-token invites
+via `134_company_invites` / `routes/invites.ts`, which already make crew onboarding
+low-friction by email, not Clerk user_id) so each new construction company is a
+turn-key, documented step rather than a bespoke one.
 
 ---
 
 ## 6. Cloud migration (couple-months horizon)
 
+> **The driver is developer coordination + clean handoff — not compute.** The fleet
+> has ample capacity (§1, §2.1, §5). What it does **not** have is a way for multiple
+> developers to operate it without each joining the operator's private Tailnet and
+> SSH-ing personal machines, or a way for a new owner to inherit it. The move is about
+> a **shared, non-personal control point** and an auditable, access-controlled deploy
+> surface — _not_ "more power."
+
 ### Move the deploy authority OFF `taylor-pc` — the concrete near-term target
 
-**Recommendation: a small dedicated always-on "deploy/ops" VM** — a $6–12/mo DO
-droplet in the **same account and region** — running `scripts/deploy.sh`,
-`scripts/verify-local.sh`, and the auto-deploy systemd timer, with a **dedicated deploy
-SSH key + dedicated git deploy token** (not Taylor's personal creds).
+This is the **deploy-authority-off-`taylor-pc`** move, and it is about a **shared,
+non-personal control point**, not capacity. The target can be **another fleet node**
+or a **small cloud VM** — the requirement is "not one person's personal box that a
+teammate can't reach and a successor can't inherit," not "a bigger machine."
+
+**Recommendation: a small dedicated always-on "deploy/ops" control point** — either a
+quieter **fleet node** dedicated to this role, or a $6–12/mo DO droplet in the **same
+account and region** — running `scripts/deploy.sh`, `scripts/verify-local.sh`, and the
+auto-deploy systemd timer, with a **dedicated deploy SSH key + dedicated git deploy
+token** (not Taylor's personal creds). A small cloud VM is often the cleaner pick
+**because it is reachable and inheritable without the private Tailnet**, which is the
+whole point — not because it is faster.
 
 **Why this and not the alternatives:**
 
-- It **breaks the personal-laptop dependency immediately with zero rewrite** — the
-  scripts already run unprivileged via SSH + doctl. Smallest reversible step.
+- It **breaks the personal-machine + private-network dependency immediately with zero
+  rewrite** — the scripts already run unprivileged via SSH + doctl. Smallest
+  reversible step. (Reachability/ownership win, not a performance win.)
 - **Not** managed PaaS (App Platform / Render / Fly) as the _first_ move: it would
   require re-platforming the multi-container Caddy + api + web + worker stack, the
   on-droplet migrate/backup/health choreography, and the per-tier preview-schema model
   — too large for the couple-months horizon. It is a legitimate _end-state_ once the
   product stabilizes.
 - **On "no GitHub Actions":** that decision was about not depending on GitHub's deploy
-  **orchestration**, not a blanket ban on any hosted runner. The cleanest _handoff_
-  form is a **minimal** Actions workflow (`checkout → npm ci → npm run verify →
-deploy.sh`, secrets in GitHub Environments) so the new owner controls the deploy
-  authority via the repo they already own (`GitSteveLozano/sitelayer`), with audit
-  history and **no machine to inherit**. Frame this to the operator as
-  orchestrator-choice, keeping `verify-local.sh` as the single gate _definition_.
+  **orchestration**, not a blanket ban on any hosted runner. For a **team and a
+  handoff**, the cleanest form is a **minimal** Actions workflow (`checkout → npm ci →
+npm run verify → deploy.sh`, secrets in GitHub Environments) so every developer
+  deploys through the **same shared, access-controlled surface** — and the new owner
+  controls the deploy authority via the repo they already own
+  (`GitSteveLozano/sitelayer`), with audit history and **no personal machine to
+  inherit**. This is the coordination/ownership win, not a compute one; keep
+  `verify-local.sh` as the single gate _definition_ regardless of where it runs.
 
 ### IaC / reproducibility
 
@@ -359,12 +434,18 @@ reproducible stand-up and a disaster-rebuild path that today is tribal knowledge
 ## 7. Handoff plan — de-risk every Taylor-personal dependency
 
 Ordered checklist. The product is `GitSteveLozano/sitelayer` already — **the repo
-owner (Steve) ≠ the infra owner (Taylor)**, which is itself the core hazard.
+owner (Steve) ≠ the infra owner (Taylor)**, which is itself the core hazard. The
+hazard is **access and ownership, not capacity**: the fleet is powerful, but it is
+_personal_ — a teammate can't reach it without joining the private Tailnet, and a
+successor can't inherit personal machines. Every item below replaces a Taylor-personal
+dependency with a **shared, transferable** one.
 
 **P0 — break the personal-machine and personal-network dependencies:**
 
 1. Move the **deploy authority + auto-deploy watcher** off `taylor-pc` onto the
-   dedicated ops VM (§6) with dedicated keys/tokens.
+   **shared, non-personal control point** (§6 — a dedicated fleet node or a small cloud
+   VM, whichever is more reachable/inheritable for the team) with dedicated keys/tokens.
+   This is about reachability and ownership, not a faster box.
 2. **Decouple the in-app AI chat from private mesh.** `apps/api/src/mesh-dispatcher.ts`
    - `routes/ai-chat.ts` read `MESH_API_URL` (`http://mesh-hetzner:8713`, reachable
      only inside Taylor's Tailnet) + `SITELAYER_CHAT_WEBHOOK_TOKEN`. Without them the
@@ -398,36 +479,48 @@ owner (Steve) ≠ the infra owner (Taylor)**, which is itself the core hazard.
 
 ## 8. Phased roadmap
 
-> **#1 priority across the whole roadmap: fix the single-tenant worker (§5 blocker
-> #1).** It is the one item that makes "sell to a second company" possible at all, and
-> it is a code change, not an infra project. Everything else is parallelizable around
-> it.
+> **The former #1 priority — fix the single-tenant worker (§5 blocker #1) — is
+> ✅ done this batch** (single-tenant sweep: the worker drains all companies). That
+> was the one item gating "sell to a second company," and it was a code change, not an
+> infra project. The remaining roadmap is parallelizable; none of it is blocked on
+> fleet capacity.
 
 ### NOW (this week — solo, ~1–2 days of work)
 
-1. **Fix the worker** to iterate all companies (`worker.ts:52` loop). _(#1 priority.)_
+1. ✅ **Worker drains all companies** (single-tenant sweep) — _done this batch_;
+   `ACTIVE_COMPANY_SLUG` is now an optional override only.
 2. **Pre-push hook** running `npm run verify` standard on `dev`/`main` pushes
    (`core.hooksPath`, `--no-verify` bypass) — makes land-time gating real.
 3. **Post-deploy smoke** at the tail of `fleet-auto-deploy.sh` for dev/demo + the new
    `demo:smoke` script; **provision the 3 UptimeRobot monitors** and fix that doc.
-4. **Stand up the dedicated quiet e2e runner** (Option A) on the preview droplet
-   off-hours or a $6/mo throwaway VM; nightly `verify:full` → Sentry + Pushover.
+4. **Stand up the dedicated quiet e2e runner** (Option A) on a **quieter fleet node**
+   (not `taylor-pc`); a rented droplet is an optional fallback, not required. Nightly
+   `verify:full` → Sentry + Pushover.
 
 ### SCALE (multi-company — weeks)
 
-1. **Per-company QBO live flag** (off global env) so #2 can run dry-run while #1 is live.
-2. **Move dev/preview/demo off the prod DB**; resize to `db-s-2vcpu-4gb` (+$15) at
-   `>18` conns / `>70%` CPU; add a PgBouncer transaction-mode pooler.
-3. **Close RLS gaps:** add `asset_deployments` policy/enable; make the RLS audit a
-   blocking gate; refresh `SECURITY_RLS.md`.
-4. **Per-company rate limits** + a **Spaces retention/quota** policy.
-5. **Gate `POST /api/companies`** behind `platform_admins` or a billing step;
-   standardize on email-invite onboarding.
+1. ✅ **Per-company QBO live flag** (mig `144`, off the global env) so #2 can run
+   dry-run while #1 is live — _done this batch_.
+2. **Move dev/preview/demo off the prod DB**; resize the **customer DB** to
+   `db-s-2vcpu-4gb` (+$15, a product-hosting cost choice — not a fleet limit) at `>18`
+   conns / `>70%` CPU; add a PgBouncer transaction-mode pooler.
+3. ✅ **RLS gaps closed:** `asset_deployments` policy + ENABLE/FORCE (mig `145`); RLS
+   forced-coverage audit is a **blocking gate** (`rls-force-audit.ts`,
+   `RLS_PHASE3_FAIL_ON_LEAK=1` + allowlist ratchet) — _done this batch_; invariants in
+   `docs/MULTI_TENANCY.md`.
+4. ✅ **Per-company rate limits** (`rate-limit.ts`) — _done_; still add a **Spaces
+   retention/quota** policy.
+5. ✅ **`POST /api/companies` gated** behind `platform_admins` (escape hatch
+   `ALLOW_OPEN_COMPANY_SIGNUP=1`) — _done_. **In progress:** the generic, repeatable
+   multi-company onboarding flow (admin-create + email-invite, `routes/invites.ts`).
 
-### CLOUD (couple months)
+### CLOUD (couple months) — driver: developer coordination + clean handoff, not compute
 
-1. **Move the deploy authority + watcher onto the dedicated ops VM** (or a minimal
-   GitHub Actions deploy workflow, secrets in GitHub Environments) — off `taylor-pc`.
+1. **Move the deploy authority + watcher onto the shared, non-personal control point**
+   (a quieter fleet node or a small cloud VM — whichever is most reachable/inheritable
+   for the team) **or** a minimal GitHub Actions deploy workflow (secrets in GitHub
+   Environments) — off `taylor-pc`. The reason is access/ownership for a team, not more
+   power.
 2. **Terraform the DO + Cloudflare footprint** + `make bootstrap` one-command stand-up.
 3. **Reconcile the PITR claim:** upsize to a standby-capable plan **or** correct the
    docs to the true ~24h RPO; auto-enable the off-region Spaces backup.
@@ -437,8 +530,9 @@ owner (Steve) ≠ the infra owner (Taylor)**, which is itself the core hazard.
 
 ### HANDOFF
 
-1. Execute the §7 checklist in order: **P0** (ops VM + mesh-chat decouple + DO account
-   transfer) → **P1** (Clerk/Sentry re-home, rotate all secrets, product domain) →
-   **P2** (GitHub admin/CODEOWNERS, the OWNERSHIP & HANDOFF doc).
+1. Execute the §7 checklist in order: **P0** (shared control point + mesh-chat
+   decouple + DO account transfer) → **P1** (Clerk/Sentry re-home, rotate all secrets,
+   product domain) → **P2** (GitHub admin/CODEOWNERS, the OWNERSHIP & HANDOFF doc).
 2. Confirm a successor can **deploy prod and run the full gate without `taylor-pc` and
-   without Taylor's Tailnet** — that is the definition of "handed off."
+   without Taylor's private Tailnet** — that is the definition of "handed off." The
+   blocker was always access/ownership, never the fleet's capacity.
