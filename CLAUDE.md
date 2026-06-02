@@ -180,6 +180,14 @@ dev|demo`) runs it for the dev/demo tiers. GitHub Actions is NOT the deploy
 > requirement, and is no longer enforced by any status check. `demo` is an
 > `APP_TIER=demo` environment deployed from a chosen ref (currently `dev`,
 > later `main` or a release tag), not a long-lived code branch.
+>
+> **Land-time gating is enforced by the repo-tracked pre-push hook**
+> (`.githooks/pre-push`, install once per clone via
+> `scripts/install-git-hooks.sh` / `npm run hooks:install`): pushing to
+> `dev`/`main` runs the standard `npm run verify` gate and blocks on failure
+> (bypass: `git push --no-verify`); after a dev/demo deploy the watcher runs
+> `scripts/smoke-tier.sh` as detection. Details in
+> [`docs/RELEASE_GATES.md`](./docs/RELEASE_GATES.md).
 
 1. **The deploy path is `scripts/deploy.sh <prod|dev|demo>` from the
    fleet — no GitHub Actions, no ad-hoc SSH `docker compose up -d`.**
