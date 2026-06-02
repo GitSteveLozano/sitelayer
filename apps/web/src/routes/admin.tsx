@@ -316,8 +316,8 @@ function ScenariosTab() {
             </ol>
             <div style={{ marginTop: 12, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
               <p style={{ ...styles.muted, marginBottom: 6 }}>
-                Apply (or reset) to the dev/demo DB (optionally as a fresh company). Blocked in prod. Reset
-                idempotently re-asserts the curated fixture (additive reseed — see PR notes).
+                Apply (or reset) to the dev/demo DB (optionally as a fresh company). Blocked in prod. Reset idempotently
+                re-asserts the curated fixture (additive reseed — see PR notes).
               </p>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input
