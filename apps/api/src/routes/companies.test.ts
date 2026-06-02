@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
-import { handleCompanyRoutes, type CompanyRouteCtx } from './companies.js'
+import {
+  handleCompanyRoutes,
+  loadCompanyCreateGateConfig,
+  requireCompanyCreate,
+  type CompanyCreateGateConfig,
+  type CompanyRouteCtx,
+} from './companies.js'
+import type { Identity } from '../auth.js'
 
 // Route-level coverage for the per-company QBO overtime mapping
 // (PATCH /api/companies/:id/settings). The endpoint backs the
@@ -191,10 +198,20 @@ class FakePool {
   }
 }
 
+// Default gate for the create-flow tests that aren't ABOUT the gate (slug
+// collision, welcome-email): open-signup so the historical self-serve path is
+// exercised unchanged. The dedicated gate tests below pass an explicit
+// createGate to drive the platform-admin branches.
+const OPEN_SIGNUP_GATE: CompanyRouteCtx['createGate'] = {
+  identity: { userId: 'user_admin', source: 'default' },
+  config: { allowOpenSignup: true, superadminEnvIds: new Set<string>() },
+}
+
 function makeCtx(
   pool: FakePool,
   userId = 'user_admin',
   body: Record<string, unknown> = {},
+  createGate: CompanyRouteCtx['createGate'] = OPEN_SIGNUP_GATE,
 ): {
   ctx: CompanyRouteCtx
   responses: Array<{ status: number; body: unknown }>
@@ -205,6 +222,9 @@ function makeCtx(
     ctx: {
       pool: pool as unknown as Pool,
       userId,
+      // Conditional spread keeps `createGate` ABSENT (not `undefined`) when the
+      // caller passes undefined, satisfying exactOptionalPropertyTypes.
+      ...(createGate ? { createGate } : {}),
       sendJson: (status, b) => {
         responses.push({ status, body: b })
       },
@@ -311,6 +331,8 @@ describe('PATCH /api/companies/:id/settings — ot_service_item_code', () => {
 class CreateCompanyFakePool {
   companies: Array<{ id: string; slug: string; name: string; created_at: string }> = []
   memberships: Array<{ id: string; company_id: string; clerk_user_id: string; role: string }> = []
+  /** Clerk subs present in the platform_admins table (the gate's DB lookup). */
+  platformAdmins: Set<string> = new Set()
   audit: Array<{ entityType: string; action: string }> = []
   outbox: Array<{
     company_id: string
@@ -339,6 +361,12 @@ class CreateCompanyFakePool {
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') {
       return { rows: [], rowCount: 0 }
     }
+    // Company-creation gate: isSuperadmin() probes the platform_admins table.
+    if (/^select 1 from platform_admins where clerk_user_id = \$1/i.test(sql)) {
+      const [sub] = params as [string]
+      const hit = this.platformAdmins.has(sub)
+      return { rows: hit ? [{ '?column?': 1 }] : [], rowCount: hit ? 1 : 0 }
+    }
     if (/^select id from companies where slug = \$1/i.test(sql)) {
       const [slug] = params as [string]
       const found = this.companies.find((c) => c.slug === slug)
@@ -356,8 +384,11 @@ class CreateCompanyFakePool {
       return { rows: [row], rowCount: 1 }
     }
     if (/^insert into company_memberships/i.test(sql)) {
-      const [companyId, userId, role] = params as [string, string, string]
-      const row = { id: `m-${this.nextId++}`, company_id: companyId, clerk_user_id: userId, role }
+      // The create-company route binds the owner role as a SQL literal
+      // (`values ($1, $2, 'admin')`), so params carries only company_id + user.
+      // Default to 'admin' to mirror that literal.
+      const [companyId, userId, role] = params as [string, string, string | undefined]
+      const row = { id: `m-${this.nextId++}`, company_id: companyId, clerk_user_id: userId, role: role ?? 'admin' }
       this.memberships.push(row)
       return { rows: [row], rowCount: 1 }
     }
@@ -541,6 +572,146 @@ describe('POST /api/companies — welcome_email outbox enqueue', () => {
     await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.outbox.filter((row) => row.mutation_type === 'welcome_email')).toHaveLength(0)
+  })
+})
+
+// ---- Company self-creation gate (scale hygiene) ----------------------------
+// POST /api/companies is platform-admin-only by default; ALLOW_OPEN_COMPANY_SIGNUP=1
+// re-opens the historical self-serve pilot flow.
+
+describe('requireCompanyCreate (pure gate decision)', () => {
+  const clerk = (userId: string): Identity => ({ userId, source: 'clerk' })
+  const gated: CompanyCreateGateConfig = { allowOpenSignup: false, superadminEnvIds: new Set<string>() }
+  const open: CompanyCreateGateConfig = { allowOpenSignup: true, superadminEnvIds: new Set<string>() }
+
+  it('allows anyone when ALLOW_OPEN_COMPANY_SIGNUP is set (even a non-admin, non-Clerk caller)', () => {
+    expect(requireCompanyCreate({ userId: 'u', source: 'default' }, false, open)).toEqual({ ok: true })
+    expect(requireCompanyCreate(clerk('u'), false, open)).toEqual({ ok: true })
+  })
+
+  it('rejects non-Clerk identities with 403 when gated (no act-as / header / default escalation)', () => {
+    for (const source of ['internal', 'header', 'default'] as const) {
+      const gate = requireCompanyCreate({ userId: 'x', source }, true, gated)
+      expect(gate).toMatchObject({ ok: false, status: 403 })
+    }
+  })
+
+  it('rejects a verified-but-non-admin Clerk identity with 403 when gated', () => {
+    expect(requireCompanyCreate(clerk('u'), false, gated)).toMatchObject({ ok: false, status: 403 })
+  })
+
+  it('admits a Clerk platform admin when gated', () => {
+    expect(requireCompanyCreate(clerk('u'), true, gated)).toEqual({ ok: true })
+  })
+})
+
+describe('loadCompanyCreateGateConfig', () => {
+  it('defaults to gated (closed) when the flag is unset', () => {
+    const cfg = loadCompanyCreateGateConfig({} as NodeJS.ProcessEnv)
+    expect(cfg.allowOpenSignup).toBe(false)
+  })
+
+  it('re-opens self-serve for "1" or "true"', () => {
+    expect(loadCompanyCreateGateConfig({ ALLOW_OPEN_COMPANY_SIGNUP: '1' } as never).allowOpenSignup).toBe(true)
+    expect(loadCompanyCreateGateConfig({ ALLOW_OPEN_COMPANY_SIGNUP: 'true' } as never).allowOpenSignup).toBe(true)
+  })
+
+  it('stays gated for any other value', () => {
+    expect(loadCompanyCreateGateConfig({ ALLOW_OPEN_COMPANY_SIGNUP: '0' } as never).allowOpenSignup).toBe(false)
+    expect(loadCompanyCreateGateConfig({ ALLOW_OPEN_COMPANY_SIGNUP: 'yes' } as never).allowOpenSignup).toBe(false)
+  })
+
+  it('parses the superadmin allowlist from PLATFORM_SUPERADMIN_CLERK_IDS', () => {
+    const cfg = loadCompanyCreateGateConfig({ PLATFORM_SUPERADMIN_CLERK_IDS: 'user_a, user_b' } as never)
+    expect([...cfg.superadminEnvIds].sort()).toEqual(['user_a', 'user_b'])
+  })
+})
+
+describe('POST /api/companies — self-creation gate (end-to-end through handleCompanyRoutes)', () => {
+  const gatedConfig: CompanyCreateGateConfig = { allowOpenSignup: false, superadminEnvIds: new Set<string>() }
+  const body = { slug: 'gated-co', name: 'Gated Co', seed_defaults: false }
+
+  it('admits a Clerk platform admin (in the env allowlist) and creates the company', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'admin_user', body, {
+      identity: { userId: 'admin_user', source: 'clerk' },
+      config: { allowOpenSignup: false, superadminEnvIds: new Set(['admin_user']) },
+    })
+
+    const handled = await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(201)
+    expect((responses[0]?.body as { company: { slug: string } }).company.slug).toBe('gated-co')
+  })
+
+  it('admits a Clerk platform admin (present in the platform_admins table)', async () => {
+    const pool = new CreateCompanyFakePool()
+    pool.platformAdmins.add('db_admin')
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'db_admin', body, {
+      identity: { userId: 'db_admin', source: 'clerk' },
+      config: gatedConfig,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(201)
+  })
+
+  it('rejects a verified-but-non-admin Clerk caller with 403 and creates nothing', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'regular_user', body, {
+      identity: { userId: 'regular_user', source: 'clerk' },
+      config: gatedConfig,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(pool.companies).toHaveLength(0)
+    expect(pool.memberships).toHaveLength(0)
+  })
+
+  it('rejects a non-Clerk (header/default/act-as) caller with 403 when gated', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'header_user', body, {
+      identity: { userId: 'header_user', source: 'header' },
+      config: gatedConfig,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(pool.companies).toHaveLength(0)
+  })
+
+  it('fails CLOSED when no gate context is supplied (mis-wired caller cannot re-open self-serve)', async () => {
+    const pool = new CreateCompanyFakePool()
+    const responses: Array<{ status: number; body: unknown }> = []
+    // Deliberately omit createGate. The route must treat this as a non-Clerk
+    // default identity and (with ALLOW_OPEN_COMPANY_SIGNUP unset in the test
+    // env) reject. We force the env-default gate by leaving createGate absent.
+    delete process.env.ALLOW_OPEN_COMPANY_SIGNUP
+    const ctx: CompanyRouteCtx = {
+      pool: pool as unknown as Pool,
+      userId: 'someone',
+      sendJson: (status, b) => responses.push({ status, body: b }),
+      readBody: async () => body,
+    }
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(pool.companies).toHaveLength(0)
+  })
+
+  it('re-opens self-serve for a plain authenticated user when the flag is set', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'pilot_user', body, {
+      identity: { userId: 'pilot_user', source: 'header' },
+      config: { allowOpenSignup: true, superadminEnvIds: new Set<string>() },
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(201)
+    expect(pool.companies).toHaveLength(1)
+    // The creator becomes admin — the historical self-serve contract.
+    expect(pool.memberships[0]?.role).toBe('admin')
   })
 })
 

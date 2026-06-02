@@ -7,6 +7,8 @@ import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
 import { enqueueNotification, recordMutationOutbox, withMutationTx } from '../mutation-tx.js'
+import type { Identity } from '../auth.js'
+import { isSuperadmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 
 // JSON-object guard used for the modules / portal_settings PATCH bodies.
 // The route writes `modules || $2::jsonb` and `portal_settings || $3::jsonb`,
@@ -118,11 +120,109 @@ const WorkingHoursSchema = z
   .strict()
 type WorkingHours = z.infer<typeof WorkingHoursSchema>
 
+// ---- Company self-creation gate (scale hygiene) ----------------------------
+//
+// `POST /api/companies` is self-serve: any authenticated caller creates a
+// company and becomes its admin. That is the right posture for the closed
+// pilot, but the moment signups open it becomes an abuse vector (one user can
+// mint unbounded tenants). We gate creation behind the platform-admin trust
+// boundary BY DEFAULT, with an env escape hatch (`ALLOW_OPEN_COMPANY_SIGNUP=1`)
+// that re-opens the historical self-serve flow without a code change.
+//
+// The gate reuses the SAME superadmin set the `/api/admin/*` routes trust:
+// the `PLATFORM_SUPERADMIN_CLERK_IDS` env allowlist ∪ the `platform_admins`
+// table, and — like every other platform-admin surface — it is only reachable
+// via a verified Clerk session (`identity.source === 'clerk'`). The dev
+// `x-sitelayer-act-as` / header / internal / default identity paths can never
+// satisfy it, so the gate cannot be escalated through a spoofed header.
+
+export type CompanyCreateGateConfig = {
+  /** When true, the historical ungated self-serve flow is restored. */
+  allowOpenSignup: boolean
+  /** Bootstrap superadmin allowlist (∪ the platform_admins table). */
+  superadminEnvIds: ReadonlySet<string>
+}
+
+/** Read the gate config from the environment. `ALLOW_OPEN_COMPANY_SIGNUP=1`
+ *  (or `=true`) re-opens self-serve; default (unset/anything else) = gated. */
+export function loadCompanyCreateGateConfig(env: NodeJS.ProcessEnv = process.env): CompanyCreateGateConfig {
+  const raw = env.ALLOW_OPEN_COMPANY_SIGNUP
+  const allowOpenSignup = raw === '1' || raw === 'true'
+  return {
+    allowOpenSignup,
+    superadminEnvIds: parseSuperadminEnvIds(env.PLATFORM_SUPERADMIN_CLERK_IDS),
+  }
+}
+
+export type CompanyCreateGate = { ok: true } | { ok: false; status: number; message: string }
+
+/**
+ * Decide whether `identity` may create a company. Pure given the precomputed
+ * `isPlatformAdmin` flag so the open-signup / source / membership branches are
+ * trivially unit-testable. Order matters:
+ *   1. open-signup flag set → allow anyone (the pilot escape hatch).
+ *   2. otherwise require a verified Clerk session (fail-closed 403) — the same
+ *      "no act-as / header / internal escalation" posture as requirePlatformAdmin.
+ *   3. then require platform-admin membership (403).
+ */
+export function requireCompanyCreate(
+  identity: Identity,
+  isPlatformAdmin: boolean,
+  config: CompanyCreateGateConfig,
+): CompanyCreateGate {
+  if (config.allowOpenSignup) return { ok: true }
+  if (identity.source !== 'clerk') {
+    return {
+      ok: false,
+      status: 403,
+      message:
+        'company self-creation is disabled — ask a platform admin to create your company (or set ALLOW_OPEN_COMPANY_SIGNUP=1 to re-open self-serve)',
+    }
+  }
+  if (!isPlatformAdmin) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'company creation requires a platform admin',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * Full async gate: short-circuits when open-signup is on (no DB), otherwise
+ * verifies the Clerk source (no DB query for non-Clerk callers) and resolves
+ * platform-admin membership before applying `requireCompanyCreate`.
+ */
+export async function authorizeCompanyCreate(
+  client: AdminQueryExecutor,
+  identity: Identity,
+  config: CompanyCreateGateConfig,
+): Promise<CompanyCreateGate> {
+  if (config.allowOpenSignup) return { ok: true }
+  if (identity.source !== 'clerk') {
+    return requireCompanyCreate(identity, false, config)
+  }
+  const admin = await isSuperadmin(client, identity.userId, config.superadminEnvIds)
+  return requireCompanyCreate(identity, admin, config)
+}
+
 export type CompanyRouteCtx = {
   pool: Pool
   userId: string
   sendJson: (status: number, body: unknown) => void
   readBody: () => Promise<Record<string, unknown>>
+  /**
+   * The verified request identity + the gate config for `POST /api/companies`.
+   * Optional so the many GET/PATCH callers (and the unit tests that only
+   * exercise those) need not supply it; when ABSENT on a POST /api/companies
+   * call the route FAILS CLOSED (treats it as a non-Clerk identity), so a
+   * mis-wired caller cannot accidentally re-open self-serve.
+   */
+  createGate?: {
+    identity: Identity
+    config: CompanyCreateGateConfig
+  }
 }
 
 export async function getMemberships(pool: Pool, userId: string) {
@@ -595,6 +695,18 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
   }
 
   if (req.method === 'POST' && url.pathname === '/api/companies') {
+    // Scale-hygiene gate: company self-creation is platform-admin-only by
+    // default. Fail CLOSED when the caller didn't supply the gate context
+    // (treat as a non-Clerk identity) so a mis-wired dispatch can never
+    // silently re-open self-serve. `ALLOW_OPEN_COMPANY_SIGNUP=1` restores the
+    // historical pilot flow; see loadCompanyCreateGateConfig.
+    const gateConfig = ctx.createGate?.config ?? loadCompanyCreateGateConfig()
+    const gateIdentity: Identity = ctx.createGate?.identity ?? { userId, source: 'default' }
+    const gate = await authorizeCompanyCreate(pool as unknown as AdminQueryExecutor, gateIdentity, gateConfig)
+    if (!gate.ok) {
+      sendJson(gate.status, { error: gate.message })
+      return true
+    }
     const parsed = parseJsonBody(CompanyCreateBodySchema, await readBody())
     if (!parsed.ok) {
       sendJson(400, { error: parsed.error })
