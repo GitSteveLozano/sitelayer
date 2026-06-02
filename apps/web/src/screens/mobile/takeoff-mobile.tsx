@@ -63,6 +63,8 @@ import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
+import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { formatQty } from '@/lib/takeoff/canvas-totals'
 import {
   MBody,
   MButton,
@@ -227,12 +229,8 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
     // a fresh draft point.
     if (selectedId) setSelectedId(null)
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    const pt = svg.createSVGPoint()
-    pt.x = e.clientX
-    pt.y = e.clientY
-    const local = pt.matrixTransform(ctm.inverse())
+    const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+    if (!local) return
     setDraftPoints((prev) => [...prev, { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }])
   }
 
@@ -1544,12 +1542,8 @@ function CanvasSurface({
   const toBoard = (clientX: number, clientY: number): TakeoffPoint | null => {
     const svg = svgRef.current
     if (!svg) return null
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return null
-    const pt = svg.createSVGPoint()
-    pt.x = clientX
-    pt.y = clientY
-    const local = pt.matrixTransform(ctm.inverse())
+    const local = screenToBoardPoint(svg, clientX, clientY)
+    if (!local) return null
     return { x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) }
   }
   const onSvgPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -1816,6 +1810,11 @@ interface ScopeTotal {
   mixedUnits: boolean
 }
 
+// NOTE: this is kept local (NOT the shared `@/lib/takeoff/canvas-totals`
+// `buildScopeTotals`) because the mobile copy DRIFTED from desktop — it sums
+// `quantity` WITHOUT the `is_deduction` sign that the desktop/server use. Until
+// that behavioral difference is reconciled it stays separate so the
+// Blocker-1 canvas-math extraction is a pure, behavior-identical refactor.
 function buildScopeTotals(measurements: TakeoffMeasurement[]): ScopeTotal[] {
   const buckets = new Map<string, { quantity: number; units: Set<string>; count: number }>()
   for (const m of measurements) {
@@ -1834,19 +1833,4 @@ function buildScopeTotals(measurements: TakeoffMeasurement[]): ScopeTotal[] {
       mixedUnits: b.units.size > 1,
     }))
     .sort((a, b) => b.quantity - a.quantity)
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, n))
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
-function formatQty(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
-  if (Number.isInteger(n)) return String(n)
-  return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }

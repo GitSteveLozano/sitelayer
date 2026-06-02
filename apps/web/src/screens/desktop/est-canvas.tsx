@@ -56,6 +56,8 @@ import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'
+import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
@@ -388,7 +390,8 @@ export function EstCanvas() {
     return draftPoints.length
   }, [tool, draftPoints, arcCurve, worldScale])
 
-  // EXACT same CTM math as takeoff-mobile.tsx — do not change.
+  // Screen→board mapping uses the shared `screenToBoardPoint` CTM transform
+  // (`@/lib/takeoff/canvas-math`), the same one the mobile + projects canvases use.
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
     // In select/scale mode the canvas tap is not a draft-point append: select
     // mode tapping empty space clears the marquee selection; scale mode lets
@@ -402,12 +405,8 @@ export function EstCanvas() {
         // reference line. A third click restarts the pair.
         const svg = svgRef.current
         if (!svg) return
-        const ctm = svg.getScreenCTM()
-        if (!ctm) return
-        const pt = svg.createSVGPoint()
-        pt.x = e.clientX
-        pt.y = e.clientY
-        const local = pt.matrixTransform(ctm.inverse())
+        const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+        if (!local) return
         const p = { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }
         setScaleError(null)
         setScalePoints((prev) => (prev.length >= 2 ? [p] : [...prev, p]))
@@ -418,12 +417,8 @@ export function EstCanvas() {
     if (!svg) return
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
     if (tool === 'arc' && draftPoints.length >= 3) return // arc = exactly 3 control points
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    const pt = svg.createSVGPoint()
-    pt.x = e.clientX
-    pt.y = e.clientY
-    const local = pt.matrixTransform(ctm.inverse())
+    const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+    if (!local) return
     const snapped = snapPoint({ x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) })
     setRedoStack([])
     setDraftPoints((prev) => [...prev, { x: round2(snapped.x), y: round2(snapped.y) }])
@@ -558,12 +553,8 @@ export function EstCanvas() {
   const clientToBoard = (clientX: number, clientY: number): TakeoffPoint | null => {
     const svg = svgRef.current
     if (!svg) return null
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return null
-    const pt = svg.createSVGPoint()
-    pt.x = clientX
-    pt.y = clientY
-    const local = pt.matrixTransform(ctm.inverse())
+    const local = screenToBoardPoint(svg, clientX, clientY)
+    if (!local) return null
     return { x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) }
   }
 
@@ -2785,55 +2776,6 @@ function ghostChip(disabled: boolean): React.CSSProperties {
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.4 : 1,
   }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers (copied verbatim from takeoff-mobile.tsx — same totals + math)
-// ---------------------------------------------------------------------------
-interface ScopeTotal {
-  code: string
-  quantity: number
-  unit: string
-  count: number
-  mixedUnits: boolean
-}
-
-function buildScopeTotals(measurements: TakeoffMeasurement[]): ScopeTotal[] {
-  const buckets = new Map<string, { quantity: number; units: Set<string>; count: number }>()
-  for (const m of measurements) {
-    const bucket = buckets.get(m.service_item_code) ?? { quantity: 0, units: new Set<string>(), count: 0 }
-    // Cutout/deduct measurements subtract their area from the net for the item,
-    // matching the signed estimate-line derivation on the server.
-    const sign = m.is_deduction ? -1 : 1
-    bucket.quantity += (Number(m.quantity) || 0) * sign
-    bucket.units.add(m.unit)
-    bucket.count += 1
-    buckets.set(m.service_item_code, bucket)
-  }
-  return Array.from(buckets.entries())
-    .map(([code, b]) => ({
-      code,
-      quantity: round2(b.quantity),
-      unit: b.units.size === 1 ? (Array.from(b.units)[0] ?? '') : 'mixed',
-      count: b.count,
-      mixedUnits: b.units.size > 1,
-    }))
-    .sort((a, b) => b.quantity - a.quantity)
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, n))
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
-function formatQty(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
-  if (Number.isInteger(n)) return String(n)
-  return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }
 
 /**

@@ -30,6 +30,7 @@ import {
 } from '@/lib/api'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
+import { clamp, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useRole } from '@/lib/role'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
 import { PageStrip } from './page-strip'
@@ -314,12 +315,8 @@ export function TakeoffCanvasScreen() {
     // (i.e. zoom). A naive client-rect map would always project to the
     // full 0–100 board space and drop points in the wrong place at any
     // zoom != 1.
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    const pt = svg.createSVGPoint()
-    pt.x = e.clientX
-    pt.y = e.clientY
-    const local = pt.matrixTransform(ctm.inverse())
+    const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+    if (!local) return
     const x = clamp(local.x, 0, 100)
     const y = clamp(local.y, 0, 100)
     setDraftPoints((prev) => [...prev, { x, y }])
@@ -972,10 +969,6 @@ function CanvasSurface({
       </svg>
     </div>
   )
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, n))
 }
 
 function polygonArea(points: ReadonlyArray<{ x: number; y: number }>): number {
