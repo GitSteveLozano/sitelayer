@@ -40,6 +40,41 @@ export interface MeshDispatchResult {
 
 const DEFAULT_TIMEOUT_MS = 3000
 
+/**
+ * Single feature gate for the in-app operator AI chat.
+ *
+ * The chat's only response path is a hand-off to the operator's private
+ * mesh (`MESH_API_URL`, reachable ONLY inside Taylor's Tailnet) plus a
+ * shared-secret callback webhook (`SITELAYER_CHAT_WEBHOOK_TOKEN`). A
+ * sitelayer instance with no mesh access (a fresh owner, any non-operator
+ * deployment) has neither, so every staged message would otherwise hang
+ * for ~60s and the operator could only re-poll into the same dead end.
+ *
+ * To make that cleanly feature-flaggable OFF we resolve a single boolean:
+ *
+ *   - `AI_CHAT_ENABLED` is the explicit override. `0`/`false`/`off`/`no`
+ *     forces the chat OFF even when mesh env is present; `1`/`true`/`on`/
+ *     `yes` forces it ON (the route still surfaces a calm dispatch error
+ *     if the mesh hand-off later fails, but it is "configured").
+ *   - When `AI_CHAT_ENABLED` is unset, a non-empty `MESH_API_URL` is
+ *     treated as the implicit enable signal (preserves current behavior
+ *     for the operator's own deployment, which sets it).
+ *
+ * Disabled ⇒ the route answers a structured "AI chat not configured"
+ * (no audit row, no doomed poll loop, no repeated error logs) and the web
+ * widget hides its composer.
+ */
+export function isAiChatEnabled(): boolean {
+  const explicit = process.env.AI_CHAT_ENABLED?.trim().toLowerCase()
+  if (explicit !== undefined && explicit !== '') {
+    if (explicit === '0' || explicit === 'false' || explicit === 'off' || explicit === 'no') return false
+    if (explicit === '1' || explicit === 'true' || explicit === 'on' || explicit === 'yes') return true
+    // Unrecognized value: fall through to the implicit env signal rather
+    // than guessing — a typo shouldn't silently force the chat on.
+  }
+  return Boolean(process.env.MESH_API_URL?.trim())
+}
+
 function buildChatPrompt(input: DispatchInput, webhookUrl: string): string {
   const ctx = input.operatorContext
   return [

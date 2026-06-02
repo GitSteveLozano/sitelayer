@@ -213,11 +213,16 @@ Once Step 3 succeeds:
 
 ## Rollback
 
-Unset the secret and re-deploy:
+Flip the flag back off in the droplet `.env` and bounce the API — deploys
+are local-fleet, there is no GitHub Actions secret store or
+`deploy-droplet.yml` workflow (both removed; the repo runs zero workflows).
+The live source of truth is `/app/sitelayer/.env` on the prod droplet:
 
 ```bash
-gh secret delete BLUEPRINT_DOWNLOAD_PRESIGNED --repo GitSteveLozano/sitelayer --env production
-gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+ssh sitelayer@165.245.230.3 \
+  "sed -i 's/^BLUEPRINT_DOWNLOAD_PRESIGNED=.*/BLUEPRINT_DOWNLOAD_PRESIGNED=0/' /app/sitelayer/.env \
+     && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d --force-recreate api"
 ```
 
 The API falls back to streaming through itself; no Spaces config has to

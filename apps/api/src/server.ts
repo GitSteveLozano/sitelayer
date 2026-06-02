@@ -19,6 +19,7 @@ import { handleInviteRoutes } from './routes/invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { resolveBlueprintVisionMode } from './takeoff-capture-pipelines/blueprint-vision.js'
+import { isAiChatEnabled } from './mesh-dispatcher.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
@@ -778,6 +779,11 @@ const server = http.createServer(async (req, res) => {
                   // only streams a multipart PDF for a real read when this is
                   // true, otherwise it stays on the dry-run/demo path.
                   blueprintVisionLive: resolveBlueprintVisionMode() === 'live',
+                  // In-app operator AI chat availability — single gate in
+                  // mesh-dispatcher.ts. Unset MESH_API_URL (no mesh access)
+                  // ⇒ false ⇒ the operator-context chat widget hides its
+                  // composer instead of staging messages that hang.
+                  aiChatEnabled: isAiChatEnabled(),
                 },
                 getCorsOrigin: () => getCorsOrigin(req),
                 sendJson: (status, body) => sendJson(res, status, body, req),

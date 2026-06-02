@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useChatWidget } from '@/machines/chat-widget'
 import { useOperatorContext } from '@/lib/operator-context'
+import { useAiChatEnabled } from '@/lib/api/operator-context-chat'
 
 /**
  * Operator-context chat widget — v0 floating panel that consumes
@@ -22,6 +23,15 @@ export function OperatorContextChatWidget() {
   const packet = useOperatorContext()
   const widget = useChatWidget()
   const { syncContext } = widget
+  // Whether this deployment has the chat configured (mesh access). When
+  // false the composer is hidden and a calm "not configured" notice
+  // replaces it — a deployment with no mesh access never offers a chat
+  // that would only ever time out. `data` is undefined while loading; we
+  // only disable once we've confirmed false, so a slow /api/features
+  // fetch doesn't flash the disabled state. Defaults to enabled-looking
+  // while loading; the server gate (200 disabled) is the real backstop.
+  const { data: aiChatEnabled } = useAiChatEnabled()
+  const chatDisabled = aiChatEnabled === false
 
   // Mirror the global operator-context into the chat-widget machine so
   // anything the machine renders reads from a single, statechart-owned
@@ -213,34 +223,46 @@ export function OperatorContextChatWidget() {
             </div>
           ) : null}
 
-          <div className="border-t border-sand-3 px-3 py-2 flex gap-2">
-            <input
-              type="text"
-              value={widget.draft}
-              onChange={(e) => widget.setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !widget.isSending && !widget.isAwaitingResponse) {
-                  e.preventDefault()
-                  widget.send()
-                }
-              }}
-              placeholder={widget.isAwaitingResponse ? 'Waiting for the agent reply…' : 'Ask about this project…'}
-              disabled={widget.isSending || widget.isAwaitingResponse}
-              className="flex-1 text-sm border border-sand-3 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
-              data-testid="operator-context-chat-input"
-            />
-            <button
-              type="button"
-              onClick={widget.send}
-              disabled={!widget.draft.trim() || widget.isSending || widget.isAwaitingResponse}
-              className="text-sm min-w-[4.5rem] px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
-              data-testid="operator-context-chat-send"
+          {chatDisabled ? (
+            <div
+              className="border-t border-sand-3 px-3 py-3 text-xs text-ink-2 bg-sand-1"
+              role="note"
+              data-testid="operator-context-chat-disabled"
             >
-              {widget.isSending ? 'Sending...' : widget.isAwaitingResponse ? 'Awaiting…' : 'Stage'}
-            </button>
-          </div>
+              AI chat is not configured on this deployment. The operator context above is still shown for reference.
+            </div>
+          ) : (
+            <div className="border-t border-sand-3 px-3 py-2 flex gap-2">
+              <input
+                type="text"
+                value={widget.draft}
+                onChange={(e) => widget.setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !widget.isSending && !widget.isAwaitingResponse) {
+                    e.preventDefault()
+                    widget.send()
+                  }
+                }}
+                placeholder={widget.isAwaitingResponse ? 'Waiting for the agent reply…' : 'Ask about this project…'}
+                disabled={widget.isSending || widget.isAwaitingResponse}
+                className="flex-1 text-sm border border-sand-3 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                data-testid="operator-context-chat-input"
+              />
+              <button
+                type="button"
+                onClick={widget.send}
+                disabled={!widget.draft.trim() || widget.isSending || widget.isAwaitingResponse}
+                className="text-sm min-w-[4.5rem] px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
+                data-testid="operator-context-chat-send"
+              >
+                {widget.isSending ? 'Sending...' : widget.isAwaitingResponse ? 'Awaiting…' : 'Stage'}
+              </button>
+            </div>
+          )}
           <footer className="px-3 py-1 text-[10px] text-ink-3 border-t border-sand-3 bg-sand-1">
-            v0 · staged messages are logged for operator follow-up.
+            {chatDisabled
+              ? 'v0 · AI chat disabled (no mesh access).'
+              : 'v0 · staged messages are logged for operator follow-up.'}
           </footer>
         </section>
       ) : null}

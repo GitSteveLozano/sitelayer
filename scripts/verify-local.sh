@@ -247,7 +247,8 @@ stage_unit() {
 
 # ============================================================================
 # Stage: integration — RUN_API_INTEGRATION=1 suite against an ISOLATED
-#        throwaway postgres. Mirrors quality.yml's test-integration job:
+#        throwaway postgres. This is the same shape the removed
+#        quality.yml test-integration job used to run (deleted 2026-06-02):
 #        same DATABASE_URL, migrations applied, then the api vitest run.
 # ============================================================================
 wait_for_pg() {
@@ -387,10 +388,11 @@ stage_integration() {
 }
 
 # ============================================================================
-# Stage: e2e — replicate quality.yml's e2e job. Bring up the app stack via
-#        docker compose (isolated project + non-conflicting ports), apply
+# Stage: e2e — the e2e job the removed quality.yml used to run (deleted
+#        2026-06-02), now an opt-in --full level here. Bring up the app stack
+#        via docker compose (isolated project + non-conflicting ports), apply
 #        migrations, seed e2e fixtures, ensure Playwright browsers, run the
-#        Playwright suite with the SAME env CI uses (RATE_LIMIT_*=100000,
+#        Playwright suite with the SAME env that job used (RATE_LIMIT_*=100000,
 #        the e2e-fixtures act-as identity, etc.), then tear down (trap).
 #
 # NO silent skips: if docker or playwright is genuinely unavailable the

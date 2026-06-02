@@ -79,7 +79,7 @@ single-cause.
 What actually stopped the bleeding (not what should have, what did):
 
 - Rollback to SHA `<sha>` via `scripts/rollback-droplet.sh`?
-- Env flip via `gh variable set` + re-deploy?
+- Env flip by editing `/app/sitelayer/.env` on the prod droplet + container bounce (local-fleet; no GitHub Actions)?
 - Manual container restart?
 - Waited for upstream provider to recover?
 - Manual SQL fix (paste the statement and link to a planning note)?

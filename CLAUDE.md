@@ -614,7 +614,29 @@ VOICE_TO_LOG_MODE=dry-run|live       # worker voice-to-log narrative; live also 
 VOICE_TO_LOG_MODEL=claude-haiku-4-5-20251001  # optional override for the voice-to-log model
 ANTHROPIC_API_KEY=<set-outside-git>  # Claude key for blueprint vision + voice-to-log; placeholder in .env.example only
 ALLOWED_ORIGINS=http://localhost:5173,...
+AI_CHAT_ENABLED=                     # Single gate for the in-app operator AI chat (see below); unset + no MESH_API_URL = OFF
+MESH_API_URL=                        # Operator's private mesh API (Tailnet-only, e.g. http://mesh-hetzner:8713); also the implicit AI-chat enable signal
 ```
+
+**In-app AI chat feature gate.** The operator-context chat widget's only
+response path is a hand-off to the operator's _private_ mesh
+(`MESH_API_URL`, reachable only inside Taylor's Tailnet) plus the
+`SITELAYER_CHAT_WEBHOOK_TOKEN` callback. A deployment with no mesh access
+(a fresh owner, any non-operator instance) has neither, so the chat is
+feature-flaggable OFF behind a single gate — `isAiChatEnabled()` in
+`apps/api/src/mesh-dispatcher.ts`:
+
+- `AI_CHAT_ENABLED` is the explicit override (`1/true/on/yes` forces ON,
+  `0/false/off/no` forces OFF even with `MESH_API_URL` set).
+- When `AI_CHAT_ENABLED` is unset, a non-empty `MESH_API_URL` is the
+  implicit enable signal (preserves the operator's own deployment).
+
+When disabled, `POST /api/ai/chat` returns a calm, structured
+`200 {"status":"disabled","ai_chat_enabled":false}` — no staged audit row,
+no mesh dispatch, no repeated 503/error logs — and the web widget hides its
+composer (it reads `ai_chat_enabled` off `GET /api/features`). So a new
+owner with no mesh access gets a clean app, not error noise. Set
+`MESH_API_URL` (or `AI_CHAT_ENABLED=1`) to preserve the prior behavior.
 
 **Tier isolation.** The API refuses to boot if `APP_TIER` disagrees with `DATABASE_URL` (e.g. `APP_TIER=dev` pointing at `sitelayer_prod`) or with `DO_SPACES_BUCKET`. Full rules + feature-flag semantics live in `DEPLOYMENT.md` → Tier Isolation. The web UI shows a colored ribbon reflecting the tier; absence of the ribbon means production. Claude Desktop / MCP agents must never be handed prod credentials.
 

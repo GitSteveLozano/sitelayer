@@ -282,3 +282,34 @@ describe('handlePublicRoutes — POST /api/webhooks/clerk → clerk_users mirror
     expect(responses[0]?.status).toBe(503)
   })
 })
+
+describe('handlePublicRoutes — GET /api/features', () => {
+  const URL_FEATURES = new URL('http://localhost/api/features')
+  function getReq(): import('node:http').IncomingMessage {
+    return { method: 'GET', headers: {} } as unknown as import('node:http').IncomingMessage
+  }
+
+  it('reports ai_chat_enabled=true when the API resolves the flag on', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, res } = makeCtx(pool, '')
+    ctx.features = { flags: [], ribbon: null, aiChatEnabled: true }
+
+    const handled = await handlePublicRoutes(getReq(), URL_FEATURES, res, ctx)
+
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as Record<string, unknown>).ai_chat_enabled).toBe(true)
+  })
+
+  it('defaults ai_chat_enabled to false when the flag is not resolved (fail closed)', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, res } = makeCtx(pool, '')
+    // features without aiChatEnabled — older server.ts shape.
+    ctx.features = { flags: [], ribbon: null }
+
+    await handlePublicRoutes(getReq(), URL_FEATURES, res, ctx)
+
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as Record<string, unknown>).ai_chat_enabled).toBe(false)
+  })
+})
