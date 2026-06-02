@@ -66,6 +66,30 @@ After these three, the five seams map to five owners with minimal collision: `li
 
 **The dist gotcha applies to all package work:** every `@sitelayer/*` has `main: ./dist/index.js`; `dist` is git-ignored but present on disk; the `Dockerfile:33` copies host-prebuilt `packages/*/dist`. Editing `packages/<x>/src` has **no runtime effect until `npm run build --workspace @sitelayer/<x>`**.
 
+### 3.5 — Takeoff feature roadmap × workstream (the WHAT that flows through these seams)
+
+The seams above are _how_ to parallelize takeoff work. The takeoff deep dive — [`docs/TAKEOFF_DEEP_DIVE_2026-06-01.md`](./TAKEOFF_DEEP_DIVE_2026-06-01.md) — is _what_ to build (benchmarked vs PlanSwift + the AI-takeoff market). Its verdict: a better-architected-than-PlanSwift core missing four scoped features (Conditions, pitch, a wired live-AI path, revision overlay) plus cheap UX fixes — all **additive, no rewrite**. Each roadmap item routes to exactly one workstream above, so the slices carry concrete, low-collision work:
+
+| Roadmap item (deep dive)                                                                                                 | Pri    | Workstream / seam                                                   | Lands in                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **C1** — wire live AI auto-takeoff + a "demo-data vs AI-reading-sheet" badge (kill the hardcoded `dryRun:true` dead-end) | **P0** | capture-pipelines (#4) + web feature slice                          | `est-ai-{takeoff,count}.tsx` Run buttons, `blueprint-vision.ts` multipart path, `takeoff-drafts`   |
+| **H4** — recompute-staleness banner                                                                                      | **P0** | takeoff-quantities (#3) + web feature slice                         | estimate staleness flag; builder/quantities/summary banners                                        |
+| **H5** — batch scale apply / accept-detected-ratio                                                                       | **P0** | drawing-canvas (#2) + blueprint-ingest (#1)                         | `world-scale.ts`, wire `detectSheetScale` in `sheet-scale.ts`, per-page calibration                |
+| **L1 / L5** — assembly clone + destructive-action confirm                                                                | **P0** | web feature slices                                                  | `est-assemblies.tsx`, `est-canvas` bulk-delete                                                     |
+| **H1** — Condition layer (keystone reusable typed template)                                                              | **P1** | takeoff-quantities (#3, domain) **+** drawing-canvas (#2)           | NEW `takeoff_conditions` table + domain type, `condition_id` on measurements, canvas picker/legend |
+| **H2** — pitch / slope math                                                                                              | **P1** | takeoff-quantities (#3) — **same `geometry.ts` split as Blocker 2** | `slope_factor = √(rise²+12²)/12` in `calculatePolygon/LinealLengthScaled`                          |
+| **H3** — plan-revision overlay + version-stamped estimates (market's #1 unmet pain)                                      | **P1** | blueprint-ingest (#1)                                               | `blueprint_page_diffs` route + worker, consume `affected_measurement_ids`, stamp measured version  |
+| **M2** — parent-driver + `include_when` formulas                                                                         | **P1** | takeoff-quantities (#3) + `packages/formula-evaluator`              | `FormulaContext` drivers / sibling refs                                                            |
+| **H6** — copy / typical / array / mirror tools                                                                           | **P1** | drawing-canvas (#2)                                                 | board-space geometry + existing marquee selection                                                  |
+| Bid/Budget/Actuals snapshots · typed UoM + conversions · regional cost library                                           | **P2** | takeoff-quantities (#3) + domain                                    | budget snapshot, UoM enum + conversion, cost-library import                                        |
+
+**Two couplings to honor when sequencing:**
+
+1. **Pitch (H2) rides Blocker 2.** Don't do pitch as a separate edit — do the `packages/domain/src/geometry.ts` split first (Blocker 2), then add `slope_factor` as the first new function in the clean file. One owner, one PR chain.
+2. **The Condition layer (H1) is the one item that spans seams** (domain type + canvas UI + tag-derivation), so it is its **own workstream owner**, built **on top of** Blocker 1 (canvas-math extraction) and Blocker 2 (geometry split) — not in parallel. It is also the natural home for pitch and trade-aware deductions, so land H1 before over-investing in their standalone versions.
+
+**Rollout fold:** deep-dive **P0** (C1 badge/wire, H4, H5, L1/L5) → this plan's **Phase 0** (additive, days). **P1** (Conditions, pitch, revision overlay, formulas, copy tools) → **Phase 1/2** seam-cutting, once Blockers 1–2 land. **P2** (Bid/Budget/Actuals, UoM, cost library) → longer-horizon Phase 2. Deep-dive §7 lists the migration risks to resolve first (Condition backfill vs additive-with-tags, pitch-before-Condition double-handle, UoM expand/backfill/contract, async live-AI so Claude-vision doesn't block the HTTP handler).
+
 ---
 
 ## 4. Capture E2E + progressive enhancement
