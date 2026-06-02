@@ -990,6 +990,12 @@ export function EstCanvas() {
     clearSelection()
   }
   const onBulkDelete = () => {
+    const count = bulkSelected.size
+    if (count === 0) return
+    // Bulk delete is destructive and (unlike single delete) can wipe many
+    // measurements at once — confirm before removing. Matches the discard-draft
+    // confirm pattern already used in this file.
+    if (!window.confirm(`Delete ${count} ${count === 1 ? 'measurement' : 'measurements'}?`)) return
     for (const id of bulkSelected) removeMeasurement.mutate({ id })
     clearSelection()
   }
