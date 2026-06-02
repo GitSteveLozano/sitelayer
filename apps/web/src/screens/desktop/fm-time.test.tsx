@@ -41,7 +41,11 @@ vi.mock('@/lib/api/time-review', async () => {
   }
 })
 
-import { FmTime } from './fm-time'
+// Phase B responsive consolidation: FmTime (the desktop time-review surface)
+// moved into the merged screens/mobile/foreman-time-entry.tsx; the standalone
+// screens/desktop/fm-time.tsx twin was deleted. The mocked hook modules are
+// referenced by their `@/` aliases (resolved-path mocks), so they still apply.
+import { FmTime } from '../mobile/foreman-time-entry'
 
 const RUN_ID = '00000000-0000-4000-8000-000000000001'
 
