@@ -7,6 +7,50 @@
 
 ---
 
+## Progress tracker
+
+This batch (`integrate/strategy-exec`) landed the operation-readiness slice of
+this strategy: it fixes the single biggest risk in §1 (single-tenant worker) and
+the surrounding scale/security/governance hardening. The table below records what
+is **done** in this batch vs. what is **groundwork** the operator still provisions.
+
+| Item                                              | Status        | Where                                                                             |
+| ------------------------------------------------- | ------------- | --------------------------------------------------------------------------------- |
+| Worker multi-tenant drain (all companies)         | ✅ done       | `apps/worker/src/{companies,worker}.ts`                                           |
+| Per-company QBO-live flag (fail-safe dry-run)     | ✅ done       | migration `144_company_qbo_live.sql`, `apps/worker/src/qbo-live.ts`               |
+| `asset_deployments` RLS (ENABLE + FORCE + policy) | ✅ done       | migration `145_asset_deployments_rls.sql`                                         |
+| RLS forced-coverage blocking audit gate           | ✅ done       | `apps/api/src/routes/rls-force-audit.ts` (`RLS_PHASE3_FAIL_ON_LEAK`)              |
+| Pre-push governance hook                          | ✅ done       | `.githooks/pre-push`, `scripts/install-git-hooks.sh`                              |
+| Post-deploy smoke (tier-aware)                    | ✅ done       | `scripts/smoke-tier.sh`, `npm run smoke:dev/demo`                                 |
+| Company-create gate (platform-admin by default)   | ✅ done       | `apps/api/src/routes/companies.ts`                                                |
+| Per-company rate limit                            | ✅ done       | `apps/api/src/rate-limit.ts`                                                      |
+| Mesh AI-chat feature flag (off unless configured) | ✅ done       | `apps/api/src/mesh-dispatcher.ts`, `routes/ai-chat.ts`                            |
+| Doc reconcile (e2e/README, PITR/DR, UptimeRobot)  | ✅ done       | `e2e/README.md`, `docs/DR_RESTORE.md`, `docs/UPTIME_ROBOT_MONITORS.md`            |
+| Terraform IaC skeleton                            | ⏳ groundwork | `infra/terraform/*` — operator runs `terraform import` + `apply`                  |
+| E2E runner (script + systemd unit)                | ⏳ groundwork | `scripts/e2e-runner.sh`, `ops/systemd/sitelayer-e2e-runner.*` — needs a quiet box |
+| Ops-VM migration runbook                          | ⏳ groundwork | `docs/OPS_VM_MIGRATION.md` — operator executes the cutover                        |
+
+### ⚠️ Operator actions required at PROD deploy
+
+These are **intentional fail-safe defaults**. Without the operator action, the
+relevant feature stays in its safe (off / dry-run / gated) posture.
+
+- **(a) QBO go-live for `la-operations`.** The worker now drains every company,
+  but every company starts in **dry-run** (synthetic ids, no Intuit POST). To
+  keep `la-operations` live on QBO you must do **both**: set its
+  `integration_connections.qbo_live_enabled = true` **and** set the cluster-wide
+  `QBO_LIVE_*` env (the kill switch). `live = QBO_LIVE_*=1 AND
+qbo_live_enabled=true`; either off keeps the company in dry-run. This is
+  deliberate — no company goes live by accident.
+- **(b) Open company signup.** `POST /api/companies` is now **platform-admin
+  gated by default**. Set `ALLOW_OPEN_COMPANY_SIGNUP=1` only if you want to keep
+  the historical self-serve company-creation flow open.
+- **(c) AI chat.** The in-app operator AI chat is **disabled** unless mesh access
+  is configured: set `MESH_API_URL` (and `AI_CHAT_ENABLED`). With `MESH_API_URL`
+  unset the chat widget reports disabled and the route is inert.
+
+---
+
 ## 1. Executive summary
 
 **What we have.** Sitelayer is a multi-tenant construction SaaS on DigitalOcean

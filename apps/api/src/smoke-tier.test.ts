@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import http from 'node:http'
 import { spawnSync, spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'

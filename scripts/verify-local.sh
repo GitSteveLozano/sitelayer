@@ -382,6 +382,20 @@ stage_integration() {
   rm -f "$ilog" 2>/dev/null || true
   [ "$int_rc" -ne 0 ] && return "$int_rc"
 
+  # Multi-tenant worker integration suite against the SAME migrated throwaway
+  # pg. multitenant-drain.integration.test.ts is gated on RUN_API_INTEGRATION=1
+  # (it self-skips in the unit stage where there is no DB) and needs migration
+  # 144 (integration_connections.qbo_live_enabled) applied — proving the worker
+  # drains MULTIPLE companies in one tick, never crosses tenant scope, and the
+  # per-company QBO-live flag gates correctly with the global kill switch.
+  echo "  -> RUN_API_INTEGRATION=1 vitest (@sitelayer/worker — multitenant drain)"
+  local worker_int_rc=0
+  DATABASE_URL="$db_url" \
+  RUN_API_INTEGRATION=1 \
+  APP_TIER=local \
+    npm run test --workspace @sitelayer/worker || worker_int_rc=$?
+  [ "$worker_int_rc" -ne 0 ] && return "$worker_int_rc"
+
   # Tear the throwaway pg down now (trap is the backstop).
   "$DOCKER" rm -f "$container" >/dev/null 2>&1 || true
   CLEANUP_PG_CONTAINER=""
