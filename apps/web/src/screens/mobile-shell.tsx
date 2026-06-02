@@ -59,8 +59,11 @@ const MobilePostMortem = lazy(() =>
 )
 const MobileProjectNew = lazy(() => import('./mobile/project-new.js').then((m) => ({ default: m.MobileProjectNew })))
 const MobileTakeoffList = lazy(() => import('./mobile/takeoff-list.js').then((m) => ({ default: m.MobileTakeoffList })))
+// Phase C: the takeoff canvas is now ONE responsive component. The mobile route
+// mounts it (it renders the phone body below the 1024px gate); the desktop route
+// (`/desktop/canvas/:id`) mounts the same component for the command-center body.
 const TakeoffMobileScreen = lazy(() =>
-  import('./mobile/takeoff-mobile.js').then((m) => ({ default: m.TakeoffMobileScreen })),
+  import('./desktop/est-canvas.js').then((m) => ({ default: m.TakeoffMobileScreen })),
 )
 const MobileSettingsHome = lazy(() =>
   import('./settings/settings-home.js').then((m) => ({ default: m.MobileSettingsHome })),
