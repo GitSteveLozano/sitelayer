@@ -162,6 +162,58 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
     return true
   }
 
+  // Mutation: reset a demo/dev company back to its scenario fixture (design §5A).
+  //
+  // SAFETY: this is gated IDENTICALLY to the apply route above — the superadmin
+  // check already ran at the top (authorizePlatformAdmin), and scenarios are a
+  // dev/demo concept that the prod-block forbids. The reset is currently a pure
+  // idempotent RESEED: it re-runs the SAME @sitelayer/scenario apply that
+  // /apply uses. The seed is additive-idempotent (the engine upserts via
+  // `on conflict do nothing` + replays the workflow event log), so this safely
+  // re-asserts the curated fixture without ever touching another tenant or prod.
+  //
+  // NOTE: §5A's full design also wants a company-scoped wipe BEFORE the reseed
+  // (DELETE the tenant rows so prospect edits are undone, not just re-asserted).
+  // That destructive half is intentionally NOT shipped here: a correct,
+  // FK-ordered DELETE needs the verified set of company_id-keyed tenant tables
+  // (~97 of them across the migrations, and not all FK-cascade — e.g.
+  // workflow_event_log — see the PR body / decomposition-plan Risk #5).
+  // Shipping a blind multi-table DELETE without that verified list risks orphan
+  // rows or a cross-tenant delete, so per the slice's safety rule we ship the
+  // idempotent reseed and flag the wipe as a follow-up.
+  const resetMatch = path.match(/^\/api\/admin\/scenarios\/([^/]+)\/reset$/)
+  if (method === 'POST' && resetMatch) {
+    // Scenarios are a dev/demo concept — never reseed prod (mirrors /apply).
+    if (deps.tier === 'prod') {
+      sendJson(403, { error: 'scenarios cannot be reset in prod' })
+      return true
+    }
+    if (!deps.runScenarioApply) {
+      sendJson(501, { error: 'scenario reset is not wired in this context' })
+      return true
+    }
+    const slug = decodeURIComponent(resetMatch[1]!)
+    const body = deps.readBody ? await deps.readBody() : {}
+    const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : undefined
+    if (target !== undefined && !COMPANY_SLUG_PATTERN.test(target)) {
+      sendJson(400, { error: 'target must be a valid company slug' })
+      return true
+    }
+    let result
+    try {
+      result = await deps.runScenarioApply(target !== undefined ? { slug, target } : { slug })
+    } catch {
+      sendJson(500, { error: 'scenario reset failed' })
+      return true
+    }
+    if (!result) {
+      sendJson(404, { error: 'scenario not found' })
+      return true
+    }
+    sendJson(200, { ...result, reset: true })
+    return true
+  }
+
   // Mutation: mint a sendable demo sign-in link (super-admin surface over the
   // demo-tier minter). Only works on the demo tier — the capability is null
   // elsewhere, so this is a clean 409 rather than a confusing 404/500.
