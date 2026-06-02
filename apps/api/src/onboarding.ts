@@ -1,11 +1,5 @@
 import type { PoolClient } from 'pg'
-import {
-  DEFAULT_SEED_TEMPLATE_SLUG,
-  LA_SEED_TEMPLATE,
-  resolveSeedTemplate,
-  type AssemblyTemplate,
-  type SeedTemplate,
-} from '@sitelayer/domain'
+import { LA_SEED_TEMPLATE, resolveSeedTemplate, type AssemblyTemplate, type SeedTemplate } from '@sitelayer/domain'
 
 export const COMPANY_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/
 

@@ -114,6 +114,41 @@ hole. See [`docs/MULTI_TENANCY.md`](./MULTI_TENANCY.md) for the invariants.
 
 ---
 
+## The three-layer architecture (where things live)
+
+Sort every piece of the system into one of three layers. This is the operator's
+own **"survivable core + opportunistic accelerator"** architecture applied to
+Sitelayer: the product on DigitalOcean must survive without the fleet, and the
+fleet sits on top as an accelerator that can **enhance but never block** it.
+
+- **Layer 1 — The product (DigitalOcean).** Sitelayer itself: the droplets, the
+  managed Postgres, the container registry, Spaces, the 4 tiers, Clerk, and
+  Cloudflare. This is the customer-facing system, and it hands off **with** the
+  product.
+- **Layer 2 — The product control plane (the "intermediate" layer).** The build,
+  the verify gate, the deploy authority, the auto-deploy watcher, preview
+  orchestration, and the e2e runner. This is product-specific tooling that
+  currently **rides on** the fleet but a team or a new owner genuinely needs.
+  **Where** it lives is a function of **who** must operate it, not of compute:
+  solo today → a fleet node is the right home (powerful and free); when a second
+  developer must deploy, or at handoff → it **moves to a shared, non-personal
+  control point** — another fleet node made team-accessible, a small always-on
+  cloud VM, or minimal hosted CI (§6 has the concrete near-term target). The
+  trigger is **"more than one person deploys."**
+- **Layer 3 — The meta-harness (the fleet/mesh).** Mesh, control-plane,
+  browser-bridge, the flywheel — the operator's personal agent-orchestration
+  across **all** projects, not Sitelayer-specific. This stays the operator's, and
+  the product must be cleanly **decoupled** from it (optional integrations behind
+  feature flags — e.g. the AI chat is now flag-gated off mesh) so the harness is
+  an opportunistic **accelerator**, never a hard dependency.
+
+**The handoff test (the rule that sorts the murky pieces):** _"Does a new owner
+**need** this to run, deploy, and extend Sitelayer?"_ **Yes → Layer 2**
+(product-owned, handoff-ready). **No → Layer 3** (the operator's; the product must
+stand alone without it).
+
+---
+
 ## 2. Current-state architecture
 
 ### 2.1 The fleet ↔ DigitalOcean boundary
@@ -368,7 +403,9 @@ turn-key, documented step rather than a bespoke one.
 > developers to operate it without each joining the operator's private Tailnet and
 > SSH-ing personal machines, or a way for a new owner to inherit it. The move is about
 > a **shared, non-personal control point** and an auditable, access-controlled deploy
-> surface — _not_ "more power."
+> surface — _not_ "more power." In the three-layer taxonomy above, this is **Layer 2
+> moving off a personal box** once more than one person deploys; the section below is
+> the concrete near-term target.
 
 ### Move the deploy authority OFF `taylor-pc` — the concrete near-term target
 

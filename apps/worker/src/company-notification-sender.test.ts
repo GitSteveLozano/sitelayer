@@ -1,3 +1,4 @@
+import type { Pool, PoolClient } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import {
   formatSenderFromHeader,
@@ -6,6 +7,14 @@ import {
 } from './company-notification-sender.js'
 
 const ENV_FROM = 'noreply@sitelayer.sandolab.xyz'
+
+// pg's `query` is a heavily-overloaded type; a narrow vitest fake doesn't satisfy
+// it directly. The same `as unknown as` cast the rest of the suite uses bridges
+// the fake to the consumer's Pick<Pool|PoolClient,'query'> param without widening
+// the production type. Behavior + assertions run against the real mock.
+function asExecutor(query: ReturnType<typeof vi.fn>): Pick<Pool | PoolClient, 'query'> {
+  return { query } as unknown as Pick<Pool | PoolClient, 'query'>
+}
 
 describe('resolveSender (pure fallback truth table)', () => {
   it('falls back to the env sender when the company has no override (the default for every existing row)', () => {
@@ -64,10 +73,10 @@ describe('formatSenderFromHeader', () => {
 
 describe('resolveCompanyNotificationSender (DB read)', () => {
   it('reads the per-company row and scopes the query by company id', async () => {
-    const query = vi.fn(async () => ({
+    const query = vi.fn(async (_sql: string, _params?: readonly unknown[]) => ({
       rows: [{ notification_from_email: 'noreply@acme.com', notification_from_name: 'Acme' }],
     }))
-    const sender = await resolveCompanyNotificationSender({ query }, 'company-a', ENV_FROM)
+    const sender = await resolveCompanyNotificationSender(asExecutor(query), 'company-a', ENV_FROM)
     expect(sender).toEqual({ email: 'noreply@acme.com', name: 'Acme', perCompany: true })
     expect(query).toHaveBeenCalledTimes(1)
     const [, params] = query.mock.calls[0]!
@@ -75,24 +84,26 @@ describe('resolveCompanyNotificationSender (DB read)', () => {
   })
 
   it('falls back to env when the company has no row', async () => {
-    const query = vi.fn(async () => ({ rows: [] }))
-    const sender = await resolveCompanyNotificationSender({ query }, 'unknown', ENV_FROM)
+    const query = vi.fn(async (_sql: string, _params?: readonly unknown[]) => ({
+      rows: [] as Array<{ notification_from_email: string | null; notification_from_name: string | null }>,
+    }))
+    const sender = await resolveCompanyNotificationSender(asExecutor(query), 'unknown', ENV_FROM)
     expect(sender).toEqual({ email: ENV_FROM, name: null, perCompany: false })
   })
 
   it('tolerates the pre-migration-150 schema (undefined_column 42703) and falls back to env', async () => {
-    const query = vi.fn(async () => {
+    const query = vi.fn(async (_sql: string, _params?: readonly unknown[]) => {
       throw Object.assign(new Error('column "notification_from_email" does not exist'), { code: '42703' })
     })
-    const sender = await resolveCompanyNotificationSender({ query }, 'company-a', ENV_FROM)
+    const sender = await resolveCompanyNotificationSender(asExecutor(query), 'company-a', ENV_FROM)
     expect(sender).toEqual({ email: ENV_FROM, name: null, perCompany: false })
   })
 
   it('propagates non-column errors (does not swallow real DB failures)', async () => {
-    const query = vi.fn(async () => {
+    const query = vi.fn(async (_sql: string, _params?: readonly unknown[]) => {
       throw Object.assign(new Error('connection terminated'), { code: '57P01' })
     })
-    await expect(resolveCompanyNotificationSender({ query }, 'company-a', ENV_FROM)).rejects.toThrow(
+    await expect(resolveCompanyNotificationSender(asExecutor(query), 'company-a', ENV_FROM)).rejects.toThrow(
       'connection terminated',
     )
   })

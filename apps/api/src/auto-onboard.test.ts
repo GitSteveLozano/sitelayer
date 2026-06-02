@@ -1,3 +1,4 @@
+import type { Pool, PoolClient } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import { autoOnboardFirstAdmin } from './auto-onboard.js'
 
@@ -17,7 +18,15 @@ function makeExecutor() {
     calls.push({ sql, params })
     return { rows: [], rowCount: 0 }
   })
-  return { executor: { query } as { query: typeof query }, calls }
+  // pg's `query` is a heavily-overloaded type; the same `as unknown as` cast the
+  // rest of the suite uses (pricing.test.ts, catalog.test.ts) bridges the narrow
+  // fake to the consumer's Pick<Pool|PoolClient,'query'> param without widening
+  // the production type. The assertions still run against the real `query` mock.
+  return {
+    executor: { query } as unknown as Pick<Pool | PoolClient, 'query'>,
+    query,
+    calls,
+  }
 }
 
 describe('autoOnboardFirstAdmin', () => {
@@ -52,12 +61,12 @@ describe('autoOnboardFirstAdmin', () => {
   })
 
   it('trims the slug and user id and is a no-op when either is blank', async () => {
-    const { executor, calls } = makeExecutor()
+    const { executor, query, calls } = makeExecutor()
     const blankSlug = await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: '   ', userId: 'u' })
     expect(blankSlug.attempted).toBe(false)
     const blankUser = await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: 'company-b', userId: '' })
     expect(blankUser.attempted).toBe(false)
-    expect(executor.query).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
     expect(calls).toHaveLength(0)
 
     await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: '  company-b  ', userId: '  u  ' })
