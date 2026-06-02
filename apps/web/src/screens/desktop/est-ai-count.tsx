@@ -25,7 +25,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DEyebrow } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { MBanner, MButton, MI, MPill } from '@/components/m'
 import {
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
@@ -35,6 +35,16 @@ import {
 } from '@/lib/api/takeoff-drafts'
 
 type Sensitivity = 'STRICT' | 'NORMAL' | 'LOOSE'
+
+// Demo-data notice (C1, takeoff deep-dive 2026-06-01). The Run button posts
+// `payload: { dryRun: true }` with a JSON body and never streams a PDF, so the
+// count this produces is ALWAYS deterministic demo/stub output, never a real AI
+// symbol read. The review surface always carries an explicit demo banner so a
+// stub count can never be mistaken for a real read and submitted in a bid.
+// Follow-up: wire the live multipart Claude-vision path (out of scope here).
+const DEMO_BADGE_TITLE = 'DEMO DATA · NOT A REAL AI SYMBOL COUNT'
+const DEMO_BADGE_BODY =
+  'This count is placeholder demo data, not detected from your sheets. Do not submit it in a bid — verify every mark against the real drawing first.'
 
 const label: React.CSSProperties = {
   fontFamily: 'var(--m-num)',
@@ -134,7 +144,7 @@ export function EstAiCountSetupPanel({
       }}
     >
       <div style={{ ...floatHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>● AI · Count a symbol</span>
+        <span>● AI · Count a symbol · DEMO</span>
         <button
           type="button"
           onClick={onClose}
@@ -242,7 +252,7 @@ export function EstAiCountSetupPanel({
 
         <div style={{ marginTop: 18 }}>
           <MButton variant="primary" onClick={runCount} disabled={capture.isPending || selectedCount === 0}>
-            {capture.isPending ? 'Scanning…' : 'Run · ~30s'}
+            {capture.isPending ? 'Scanning…' : 'Run demo count · ~30s'}
           </MButton>
           {capture.isError ? (
             <div
@@ -562,6 +572,9 @@ export function EstAiCountReview() {
               }}
             >
               J/K NAVIGATE · Y KEEP · N REJECT
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
             </div>
           </div>
           {dets.map((d, i) => {
