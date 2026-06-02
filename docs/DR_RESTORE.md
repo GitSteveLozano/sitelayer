@@ -8,25 +8,38 @@
 | Failure                   | RPO                                           | RTO       | Primary recovery path                         |
 | ------------------------- | --------------------------------------------- | --------- | --------------------------------------------- |
 | App droplet lost          | 0 for DB and blueprint objects                | <= 30 min | Restore droplet snapshot OR redeploy from DCR |
-| Managed Postgres deleted  | <= 5 min via DO point-in-time-restore (PITR)  | <= 60 min | DO PITR fork (preferred), then re-cutover     |
+| Managed Postgres deleted  | <= 24 h via daily logical pg_dump\*           | <= 60 min | psql restore from `/app/backups/postgres`     |
 | Bad migration / data corr | <= 24 h via daily logical pg_dump on prod box | <= 60 min | psql restore from `/app/backups/postgres`     |
 | Region-wide outage        | <= 24 h logical, weekly droplet snapshot      | hours     | Manual rebuild in different region from dump  |
 
-DigitalOcean Managed Postgres includes daily backups + 7-day PITR on every plan.
+> **\* True PITR is NOT available on the current plan.** The managed cluster
+> is `db-s-1vcpu-1gb` (single node, no standby). DigitalOcean point-in-time
+> recovery / a continuous WAL-replay restore requires a plan that provisions a
+> standby node — the 1 GB single-node tier does **not** support it. So the
+> real RPO for the managed DB is the **daily logical `pg_dump`** (≈ 24 h),
+> NOT "<= 5 min PITR". DO's free automatic backups are taken roughly daily and
+> are a coarse fallback, but they are not point-in-time and not the recovery
+> path we rely on; the daily `pg_dump` (`/app/backups/postgres`, plus the
+> off-host copy on the preview droplet) is. **Upgrade path to true PITR:**
+> resize the cluster to a plan with a standby node (e.g. `db-s-1vcpu-2gb` or
+> larger with the standby add-on); DO then enables continuous PITR and the
+> "Managed Postgres deleted" RPO drops to minutes — re-point this row + the
+> backup table below when that lands.
+
 Droplet weekly backups: Sunday 04:00 UTC, 28-day retention (DO standard).
 
 ## Where backups live
 
-| Backup                   | Location                                                                  | Retention | List command                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
-| Droplet snapshots        | DO snapshots service                                                      | 28 days   | `doctl compute droplet backups <ID>`                                                          |
-| Managed Postgres backup  | DO managed                                                                | 7 days    | `doctl databases backups 9948c96b-b6b6-45ad-adf7-d20e4c206c66`                                |
-| Managed Postgres PITR    | DO managed                                                                | 7 days    | API: `/v2/databases/<id>/replicas` and fork-from-time                                         |
-| Logical pg_dump          | `/app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz` on prod droplet | 30 days   | `ssh sitelayer ls /app/backups/postgres`                                                      |
-| Off-host logical dump    | Preview droplet `/app/offsite-backups/postgres-from-prod`                 | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/postgres-from-prod`                     |
-| Blueprint objects        | DO Spaces `sitelayer-blueprints-prod` in `tor1`, versioning enabled       | versioned | `aws s3 ls s3://sitelayer-blueprints-prod --endpoint-url https://tor1.digitaloceanspaces.com` |
-| Off-host blueprint dump  | Preview droplet `/app/offsite-backups/blueprints-from-prod` fallback      | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/blueprints-from-prod`                   |
-| Future object-store dump | DO Spaces `s3://sitelayer-blueprints-prod/db-backups/` (NOT YET ENABLED)  | 90 days   | requires Spaces creds — see "Open work" below                                                 |
+| Backup                   | Location                                                                     | Retention | List command                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| Droplet snapshots        | DO snapshots service                                                         | 28 days   | `doctl compute droplet backups <ID>`                                                          |
+| Managed Postgres backup  | DO managed (free daily automatic backups; coarse, not point-in-time)         | ~7 days   | `doctl databases backups 9948c96b-b6b6-45ad-adf7-d20e4c206c66`                                |
+| Managed Postgres PITR    | NOT AVAILABLE on `db-s-1vcpu-1gb` (single node, no standby) — see note above | n/a       | requires a standby-node plan; until then use the logical pg_dump rows below                   |
+| Logical pg_dump          | `/app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz` on prod droplet    | 30 days   | `ssh sitelayer ls /app/backups/postgres`                                                      |
+| Off-host logical dump    | Preview droplet `/app/offsite-backups/postgres-from-prod`                    | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/postgres-from-prod`                     |
+| Blueprint objects        | DO Spaces `sitelayer-blueprints-prod` in `tor1`, versioning enabled          | versioned | `aws s3 ls s3://sitelayer-blueprints-prod --endpoint-url https://tor1.digitaloceanspaces.com` |
+| Off-host blueprint dump  | Preview droplet `/app/offsite-backups/blueprints-from-prod` fallback         | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/blueprints-from-prod`                   |
+| Future object-store dump | DO Spaces `s3://sitelayer-blueprints-prod/db-backups/` (NOT YET ENABLED)     | 90 days   | requires Spaces creds — see "Open work" below                                                 |
 
 ## On-call quick reference (5 commands)
 
@@ -81,11 +94,22 @@ doctl databases firewalls append 9948c96b-b6b6-45ad-adf7-d20e4c206c66 \
 
 Once verified healthy, destroy the dead droplet so its trusted-source rule auto-prunes.
 
-## Procedure 2 — Restore Postgres from DO managed backup (preferred)
+## Procedure 2 — Restore Postgres from DO managed backup
 
-Use when DB is corrupted but cluster still exists, OR when cluster was deleted in last 7 days.
+Use when DB is corrupted but cluster still exists, OR when cluster was deleted
+recently. On the current `db-s-1vcpu-1gb` (single-node) plan the realistic
+recovery is the **logical pg_dump (Procedure 3)** — DO managed PITR/fork is not
+available until the cluster gains a standby node.
 
-**Option A: Fork from PITR (sub-5min RPO).** This creates a NEW cluster from a point in time:
+> **PITR / fork is NOT available on `db-s-1vcpu-1gb`.** The
+> `doctl databases fork --restore-from-timestamp` command requires the source
+> cluster to have a standby node (continuous WAL retention). The single-node
+> 1 GB tier does not, so the fork command below returns an error today. It is
+> kept here as the **post-upgrade** path: once the cluster is resized to a
+> standby-capable plan, this becomes a sub-5-min-RPO option. Until then, jump
+> to Procedure 3.
+
+**Option A (post-upgrade only): Fork from PITR.** Creates a NEW cluster from a point in time. **Requires a standby-node plan — errors on `db-s-1vcpu-1gb`.**
 
 ```bash
 doctl databases fork \
@@ -95,8 +119,8 @@ doctl databases fork \
   --engine pg \
   --version 18 \
   --region tor1 \
-  --size db-s-1vcpu-1gb \
-  --num-nodes 1
+  --size db-s-1vcpu-2gb \
+  --num-nodes 2
 ```
 
 Wait until `doctl databases get <new-id>` shows status `online`, then point prod `.env` at the new connection URI:
@@ -109,11 +133,19 @@ ssh sitelayer 'cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha)
 
 After validation, retire the old cluster and rename the new one to `sitelayer-db`.
 
-**Option B: In-place backup restore.** DO console only — no doctl verb. Settings -> Restore. Slower; effectively rebuilds the cluster.
+**Option B: In-place daily-backup restore.** DO console only — no doctl verb.
+Settings -> Restore, choose a daily automatic backup (coarse, ~daily
+granularity, NOT point-in-time). Slower; effectively rebuilds the cluster. This
+is the only managed-backup option on the current single-node plan; for finer
+recovery use the logical dump (Procedure 3).
 
-## Procedure 3 — Restore from logical pg_dump
+## Procedure 3 — Restore from logical pg_dump (PRIMARY recovery path)
 
-Use when you need to recover a single table, undo a bad migration, or DO managed backups are unavailable.
+This is the recovery path the managed-DB RPO actually rests on (≈ 24 h, the
+daily dump) while the cluster is single-node `db-s-1vcpu-1gb` with no PITR. Use
+it to recover a single table, undo a bad migration, rebuild after a cluster
+loss, or any time DO managed point-in-time restore is unavailable (which is
+"always", on the current plan).
 
 ```bash
 # 1. Pick a dump

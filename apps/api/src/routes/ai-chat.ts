@@ -4,7 +4,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
-import { dispatchChatResponseToMesh } from '../mesh-dispatcher.js'
+import { dispatchChatResponseToMesh, isAiChatEnabled } from '../mesh-dispatcher.js'
 import { publish as publishChatResponse, subscribe as subscribeChatResponse } from '../chat-response-bus.js'
 
 /**
@@ -142,6 +142,25 @@ export async function handleAiChatRoutes(req: http.IncomingMessage, url: URL, ct
   if (!(req.method === 'POST' && url.pathname === '/api/ai/chat')) return false
 
   if (!ctx.requireRole(['admin'])) return true
+
+  // Feature gate: the chat's only response path is a hand-off to the
+  // operator's private mesh (MESH_API_URL, Tailnet-only) + the
+  // SITELAYER_CHAT_WEBHOOK_TOKEN callback. A deployment with no mesh
+  // access (fresh owner / non-operator instance) would otherwise stage
+  // messages that hang for ~60s forever. When the chat is disabled we
+  // answer a calm, structured "not configured" 200 — NO audit row, NO
+  // mesh dispatch, NO doomed poll loop, NO repeated error logs — and the
+  // web widget hides its composer (it reads ai_chat_enabled off
+  // /api/features). 200 (not 503) so this is a clean app state, not an
+  // error the SPA/operator has to triage. See isAiChatEnabled().
+  if (!isAiChatEnabled()) {
+    ctx.sendJson(200, {
+      status: 'disabled',
+      ai_chat_enabled: false,
+      reason: 'AI chat is not configured on this deployment.',
+    })
+    return true
+  }
 
   let body: IncomingBody
   try {

@@ -1,5 +1,31 @@
+import { useQuery } from '@tanstack/react-query'
 import type { OperatorContextPacket } from '@/lib/operator-context'
 import { API_URL, buildAuthHeaders, request } from './client'
+
+/**
+ * Whether the in-app operator AI chat is configured on this deployment.
+ * Reads the public `/api/features` snapshot (`ai_chat_enabled`). The chat
+ * only works when the API can hand a staged message to the operator's
+ * private mesh (MESH_API_URL) — a deployment with no mesh access reports
+ * false, and the operator-context chat widget then hides its composer so
+ * it never offers a chat that would only ever time out.
+ *
+ * Cached for the page lifetime — the env gate doesn't change without a
+ * redeploy (which restarts the SPA via the stale-chunk boundary).
+ * Absent/false ⇒ widget stays read-only. Mirrors
+ * `useBlueprintVisionLiveAvailable` in lib/api/takeoff-drafts.ts.
+ */
+export function useAiChatEnabled() {
+  return useQuery<{ ai_chat_enabled: boolean }, Error, boolean>({
+    queryKey: ['features', 'ai-chat-enabled'],
+    queryFn: () =>
+      request<{ ai_chat_enabled?: boolean }>('/api/features', { skipAuth: true }).then((res) => ({
+        ai_chat_enabled: res.ai_chat_enabled === true,
+      })),
+    select: (data) => data.ai_chat_enabled,
+    staleTime: 5 * 60_000,
+  })
+}
 
 export type OperatorContextChatMessage = {
   id: string
@@ -8,12 +34,22 @@ export type OperatorContextChatMessage = {
   packet_generated_at?: string
 }
 
-export type StageOperatorContextChatResponse = {
-  status: 'staged'
-  audit_event_id: string
-  response_pending: boolean
-  followup_hint: string
-}
+export type StageOperatorContextChatResponse =
+  | {
+      status: 'staged'
+      audit_event_id: string
+      response_pending: boolean
+      followup_hint: string
+    }
+  | {
+      // Returned (HTTP 200) when AI chat is not configured on this
+      // deployment (no mesh access). The server stages nothing and the
+      // widget surfaces a calm "not configured" state instead of entering
+      // the doomed awaitingResponse poll loop.
+      status: 'disabled'
+      ai_chat_enabled: false
+      reason: string
+    }
 
 export type StageOperatorContextChatInput = {
   messages: OperatorContextChatMessage[]

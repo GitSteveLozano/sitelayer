@@ -62,11 +62,20 @@ paid plan (60s interval). Until that's provisioned, monitor 1 falls back to
 3. Notification: route alerts to Taylor's pager (Pushover) and the
    `#sitelayer-ops` Slack channel via the existing UptimeRobot Slack
    integration.
-4. Maintenance windows: any deploy via `.github/workflows/deploy-droplet.yml`
-   takes ~2 minutes of downtime on `/health`. Configure maintenance windows
-   via the UptimeRobot API in deploy-droplet workflow if false-positive
-   alerts during deploys become noisy — for now, the 2-strike threshold
-   absorbs a single normal deploy.
+4. Maintenance windows: deploys are local-fleet via
+   [`scripts/deploy.sh prod`](../scripts/deploy.sh) (there is **no GitHub
+   Actions** — the `deploy-droplet.yml` workflow was removed; the repo runs
+   zero workflows). A prod container swap takes ~2 minutes of downtime on
+   `/health`. The deploy script's own droplet health-check plus the
+   post-deploy smoke ([`scripts/verify-prod-deploy.sh`](../scripts/verify-prod-deploy.sh),
+   run at the tail of `deploy-production-local.sh`) confirm the new build is
+   live, so a transient `/health` blip during the swap is expected. For the
+   dev/demo tiers the fleet auto-deploy watcher
+   ([`scripts/fleet-auto-deploy.sh`](../scripts/fleet-auto-deploy.sh), a 2-min
+   systemd timer) drives the same path. If false-positive alerts during
+   deploys become noisy, set a maintenance window via the UptimeRobot API
+   around a planned `scripts/deploy.sh prod` run — for now, the 2-strike
+   threshold absorbs a single normal deploy.
 
 ## Why not just Sentry uptime?
 

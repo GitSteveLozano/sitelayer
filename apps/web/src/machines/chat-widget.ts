@@ -433,22 +433,49 @@ export function createChatWidgetMachine(
                   messages: stageableMessages(context.messages),
                 }
               },
-              onDone: {
-                target: 'awaitingResponse',
-                actions: assign({
-                  messages: ({ context, event }) =>
-                    context.messages.map((m) =>
-                      m.id === context.pendingMessageId
-                        ? { ...m, status: 'staged', audit_event_id: event.output.audit_event_id }
-                        : m,
-                    ),
-                  pendingMessageId: () => null,
-                  awaitingResponseFor: ({ event }) => event.output.audit_event_id,
-                  awaitingResponseSince: () => Date.now(),
-                  lastStage: ({ event }) => event.output,
-                  error: () => null,
-                }),
-              },
+              onDone: [
+                {
+                  // AI chat not configured on this deployment (no mesh
+                  // access). The server staged nothing; do NOT enter
+                  // awaitingResponse (it would only ever time out). Drop
+                  // back to idle, mark the message failed, and surface the
+                  // calm reason so the operator sees "not configured", not
+                  // a 60s spinner. The widget host also hides the composer
+                  // via ai_chat_enabled, so this is a defense-in-depth
+                  // path for a race where the flag was still loading.
+                  guard: ({ event }) => event.output.status === 'disabled',
+                  target: 'idle',
+                  actions: assign({
+                    messages: ({ context }) =>
+                      context.messages.map((m) => (m.id === context.pendingMessageId ? { ...m, status: 'failed' } : m)),
+                    pendingMessageId: () => null,
+                    awaitingResponseFor: () => null,
+                    awaitingResponseSince: () => null,
+                    lastStage: ({ event }) => event.output,
+                    error: ({ event }) =>
+                      event.output.status === 'disabled'
+                        ? event.output.reason
+                        : 'AI chat is not configured on this deployment.',
+                  }),
+                },
+                {
+                  target: 'awaitingResponse',
+                  actions: assign({
+                    messages: ({ context, event }) =>
+                      context.messages.map((m) =>
+                        m.id === context.pendingMessageId && event.output.status === 'staged'
+                          ? { ...m, status: 'staged', audit_event_id: event.output.audit_event_id }
+                          : m,
+                      ),
+                    pendingMessageId: () => null,
+                    awaitingResponseFor: ({ event }) =>
+                      event.output.status === 'staged' ? event.output.audit_event_id : null,
+                    awaitingResponseSince: () => Date.now(),
+                    lastStage: ({ event }) => event.output,
+                    error: () => null,
+                  }),
+                },
+              ],
               onError: {
                 target: 'idle',
                 actions: assign({

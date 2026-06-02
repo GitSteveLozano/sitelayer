@@ -158,6 +158,16 @@ export type PublicRouteCtx = {
      * server.ts that doesn't resolve it still type-checks (defaults to false).
      */
     blueprintVisionLive?: boolean
+    /**
+     * Whether the in-app operator AI chat is configured on this deployment
+     * (see mesh-dispatcher.ts isAiChatEnabled()). The operator-context chat
+     * widget reads this to hide its composer when false, so a deployment
+     * with no mesh access never offers a chat that would only ever time
+     * out. Optional so an older server.ts still type-checks (defaults to
+     * false — fail closed: a deployment that can't report the flag is
+     * treated as not configured).
+     */
+    aiChatEnabled?: boolean
   }
   /** Resolved CORS allow-origin for the current request. */
   getCorsOrigin: () => string
@@ -272,6 +282,11 @@ export async function handlePublicRoutes(
       // the SPA reads this to decide whether to stream a multipart PDF for a
       // real Claude-vision read vs. the dry-run/demo path.
       blueprint_vision_live: ctx.features.blueprintVisionLive ?? false,
+      // In-app operator AI chat availability. Additive — the
+      // operator-context chat widget reads this to hide its composer when
+      // the chat isn't configured (no mesh access), so it never offers a
+      // chat that would only ever time out.
+      ai_chat_enabled: ctx.features.aiChatEnabled ?? false,
     })
     return true
   }

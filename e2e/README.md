@@ -19,7 +19,8 @@ npm run test:e2e:tagged @rental
 # Combine areas (Playwright OR-matches a regex over the tag string)
 npm run test:e2e:tagged "@rental|@payroll"
 
-# Full suite (no grep) — this is what push:main runs as the merge gate
+# Full suite (no grep) — opt-in; runs via the e2e level of the local gate
+# (npm run verify:full / scripts/verify-local.sh --full), NOT the deploy gate
 npm run test:e2e
 ```
 
@@ -45,10 +46,12 @@ and `@capture`) so they surface in either area's lane.
 ## Safety invariant
 
 Tags **scope** runs; they never **skip** anything permanently. The untagged
-full run is the source of truth and executes via the local gate's e2e step
-(`scripts/verify-local.sh --full` / `npm run verify:full` — the opt-in e2e
-level, run on a quiet box). Adding a tag to a spec must not remove it from the
-full suite — the
+full run is the source of truth. It is **opt-in**: it runs only via the e2e
+level of the local gate (`scripts/verify-local.sh --full` / `npm run
+verify:full`, run on a quiet/dedicated box) — e2e is **NOT** part of the
+default deploy/merge gate (`scripts/verify-local.sh` standard =
+static+build+unit+integration), which blocks on the deterministic stages
+only. Adding a tag to a spec must not remove it from the full suite — the
 `{ tag }` option does not filter the default run.
 
 ## Adding a new area tag
@@ -56,5 +59,6 @@ full suite — the
 1. Pick or reuse an area token (lowercase, `@`-prefixed).
 2. Pass it via the `{ tag }` option on the spec's `test(...)` / `runSpec(...)`.
 3. Add a row to the table above.
-4. The full untagged suite always runs in the local gate, so a new tag needs no
-   extra wiring; use tags only to scope a faster local subset.
+4. The full untagged suite runs whenever the e2e level runs (`npm run
+verify:full`), so a new tag needs no extra wiring; use tags only to scope a
+   faster local subset.

@@ -358,6 +358,36 @@ describe('chatWidgetMachine', () => {
     expect(ctx.error).toBe('network down')
   })
 
+  it('stays in idle (no doomed awaiting loop) when staging returns status=disabled', async () => {
+    // AI chat not configured on this deployment: the API returns a calm
+    // 200 { status: 'disabled' } instead of staging. The machine must NOT
+    // enter awaitingResponse (it would only ever time out) — it returns
+    // to idle, marks the message failed, and surfaces the reason. No
+    // subscription should ever open.
+    const stage = vi.fn<(input: StageOperatorContextChatInput) => Promise<StageOperatorContextChatResponse>>(
+      async () => ({
+        status: 'disabled' as const,
+        ai_chat_enabled: false,
+        reason: 'AI chat is not configured on this deployment.',
+      }),
+    )
+    const { subscriber, subscriptions } = makeManualSubscriber()
+    const { actor } = startActor(stage, subscriber)
+    actor.send({ type: 'CONTEXT_UPDATED', packet: makePacket() })
+    actor.send({ type: 'OPEN' })
+    actor.send({ type: 'SET_DRAFT', value: 'will not be answered' })
+    actor.send({ type: 'SEND' })
+
+    await settle()
+    const ctx = actor.getSnapshot().context
+    expectValue(actor, { open: 'idle' })
+    expect(ctx.messages[0]).toMatchObject({ status: 'failed' })
+    expect(ctx.error).toBe('AI chat is not configured on this deployment.')
+    expect(ctx.awaitingResponseFor).toBeNull()
+    // The whole point: no subscription was opened against a dead lane.
+    expect(subscriptions).toHaveLength(0)
+  })
+
   it('CONTEXT_UPDATED can fire while open without changing the state', () => {
     const { actor } = startActor()
     actor.send({ type: 'OPEN' })

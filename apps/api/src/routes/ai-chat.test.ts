@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type http from 'node:http'
 import type { Pool } from 'pg'
@@ -252,6 +252,28 @@ function makeCtx(
 }
 
 describe('handleAiChatRoutes — operator-context chat staging', () => {
+  // These tests exercise the staging path, which requires AI chat to be
+  // ENABLED. The gate (isAiChatEnabled) treats a non-empty MESH_API_URL
+  // as the enable signal, so set a dummy one. SITELAYER_PUBLIC_BASE stays
+  // unset on purpose: the mesh dispatch then returns ok=false with a
+  // dispatch_error (the route still 202-stages — dispatch is best-effort),
+  // which is exactly the production-disconnected-but-configured shape the
+  // assertions below check. The disabled path is covered separately.
+  let prevMeshApiUrl: string | undefined
+  let prevAiChatEnabled: string | undefined
+  beforeEach(() => {
+    prevMeshApiUrl = process.env.MESH_API_URL
+    prevAiChatEnabled = process.env.AI_CHAT_ENABLED
+    process.env.MESH_API_URL = 'http://mesh-test.invalid:8713'
+    delete process.env.AI_CHAT_ENABLED
+  })
+  afterEach(() => {
+    if (prevMeshApiUrl === undefined) delete process.env.MESH_API_URL
+    else process.env.MESH_API_URL = prevMeshApiUrl
+    if (prevAiChatEnabled === undefined) delete process.env.AI_CHAT_ENABLED
+    else process.env.AI_CHAT_ENABLED = prevAiChatEnabled
+  })
+
   it('ignores non-chat routes', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
@@ -371,10 +393,11 @@ describe('handleAiChatRoutes — operator-context chat staging', () => {
     expect(stagedBody.status).toBe('staged')
     expect(stagedBody.audit_event_id).toBe('audit-1')
     expect(stagedBody.response_pending).toBe(true)
-    // Mesh dispatch is best-effort — without MESH_API_URL configured in
-    // the test env, the dispatcher returns ok=false and the response
-    // surfaces dispatch_error + null mesh_task_id. Production wiring
-    // sets MESH_API_URL on sitelayer's prod env.
+    // Mesh dispatch is best-effort — MESH_API_URL is set (so the chat is
+    // ENABLED and we 202-stage) but SITELAYER_PUBLIC_BASE is not, so the
+    // dispatcher returns ok=false and the response surfaces dispatch_error
+    // + null mesh_task_id. Production wiring sets both on sitelayer's prod
+    // env. The staged message is durable regardless.
     expect(stagedBody.mesh_task_id).toBeNull()
     expect(typeof stagedBody.dispatch_error).toBe('string')
     expect(stagedBody.followup_hint).toMatch(/Subscription-CLI dispatch enqueued/)
@@ -409,6 +432,89 @@ describe('handleAiChatRoutes — operator-context chat staging', () => {
       mutationType: 'stage_message',
       idempotencyKey: 'ai_chat:stage_message:audit-1',
     })
+  })
+})
+
+describe('handleAiChatRoutes — POST /api/ai/chat feature gate (AI chat disabled)', () => {
+  // When AI chat is not configured (no MESH_API_URL, no AI_CHAT_ENABLED),
+  // the route must answer a calm, structured "disabled" 200 — NO audit
+  // row, NO mesh dispatch, NO doomed poll loop. This is the clean state a
+  // new owner with no mesh access gets, instead of 503/error noise.
+  let prevMeshApiUrl: string | undefined
+  let prevAiChatEnabled: string | undefined
+  let prevPublicBase: string | undefined
+  beforeEach(() => {
+    prevMeshApiUrl = process.env.MESH_API_URL
+    prevAiChatEnabled = process.env.AI_CHAT_ENABLED
+    prevPublicBase = process.env.SITELAYER_PUBLIC_BASE
+    delete process.env.MESH_API_URL
+    delete process.env.AI_CHAT_ENABLED
+    delete process.env.SITELAYER_PUBLIC_BASE
+  })
+  afterEach(() => {
+    if (prevMeshApiUrl === undefined) delete process.env.MESH_API_URL
+    else process.env.MESH_API_URL = prevMeshApiUrl
+    if (prevAiChatEnabled === undefined) delete process.env.AI_CHAT_ENABLED
+    else process.env.AI_CHAT_ENABLED = prevAiChatEnabled
+    if (prevPublicBase === undefined) delete process.env.SITELAYER_PUBLIC_BASE
+    else process.env.SITELAYER_PUBLIC_BASE = prevPublicBase
+  })
+
+  it('returns a calm 200 disabled with no audit row or dispatch when unconfigured', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    const handled = await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(handled).toBe(true)
+    expect(responses[0]).toEqual({
+      status: 200,
+      body: {
+        status: 'disabled',
+        ai_chat_enabled: false,
+        reason: 'AI chat is not configured on this deployment.',
+      },
+    })
+    // The whole point: staging never happened, so no error noise builds up.
+    expect(pool.auditEvents).toEqual([])
+    expect(pool.mutationOutbox).toEqual([])
+    expect(pool.syncEvents).toEqual([])
+  })
+
+  it('still enforces admin role before reporting disabled (defense in depth)', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool, validBody, 'member')
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+    expect(pool.auditEvents).toEqual([])
+  })
+
+  it('AI_CHAT_ENABLED=0 forces disabled even when MESH_API_URL is set', async () => {
+    process.env.MESH_API_URL = 'http://mesh-test.invalid:8713'
+    process.env.AI_CHAT_ENABLED = '0'
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as Record<string, unknown>).status).toBe('disabled')
+    expect(pool.auditEvents).toEqual([])
+  })
+
+  it('AI_CHAT_ENABLED=1 enables staging even when MESH_API_URL is unset', async () => {
+    process.env.AI_CHAT_ENABLED = '1'
+    delete process.env.MESH_API_URL
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    // Enabled ⇒ the staging path runs and 202-stages (mesh dispatch is
+    // best-effort and fails with no MESH_API_URL, but the message is
+    // durably staged).
+    expect(responses[0]?.status).toBe(202)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('staged')
+    expect(pool.auditEvents).toHaveLength(1)
   })
 })
 

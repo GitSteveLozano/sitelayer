@@ -104,16 +104,20 @@ doctl compute ssh sitelayer --ssh-command="
    path leaves no orphan rows. Re-upload from the SPA.
 
 4. **Cred rotation that wasn't propagated yet** — if you (or someone)
-   rotated keys in the DO console but forgot to update the `production`
-   GitHub environment, do that now:
+   rotated keys in the DO console but forgot to update the droplet `.env`,
+   do that now. There is no `production` GitHub environment / GitHub
+   Actions secret store (removed; the repo runs zero workflows) — edit the
+   live `/app/sitelayer/.env` in place and bounce the API:
 
    ```bash
-   gh secret set DO_SPACES_KEY --env production --repo GitSteveLozano/sitelayer
-   gh secret set DO_SPACES_SECRET --env production --repo GitSteveLozano/sitelayer
-   # Both prompt for values; paste the new ones from DO Spaces "Access Keys".
+   ssh sitelayer@10.118.0.4 \
+     "sed -i 's|^DO_SPACES_KEY=.*|DO_SPACES_KEY=<NEW_KEY>|; \
+              s|^DO_SPACES_SECRET=.*|DO_SPACES_SECRET=<NEW_SECRET>|' /app/sitelayer/.env \
+        && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+           docker compose -f docker-compose.prod.yml up -d --force-recreate api worker"
+   # New values come from DO Spaces "Access Keys". Also update the
+   # ops/env/production.env.json manifest scope notes if the key name changed.
    ```
-
-   Then re-run the deploy workflow as in step 1.
 
 ## Fallback
 
@@ -131,11 +135,18 @@ fallback is allowed but requires the off-host backup timer to be live.
    Expected: `active`. If it isn't, do not enable local fallback — a
    droplet loss equals blueprint loss without that timer copying off-host.
 
-2. **Flip the flag** for the duration of the Spaces outage:
+2. **Flip the flag** for the duration of the Spaces outage. Edit the live
+   droplet `.env` and bounce the API — no GitHub Actions / `gh workflow run`
+   in the path (the deploy workflows were removed; the repo runs zero
+   workflows):
 
    ```bash
-   gh variable set ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD --env production --body "1"
-   gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+   ssh sitelayer@10.118.0.4 \
+     "grep -q '^ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=' /app/sitelayer/.env \
+        && sed -i 's/^ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=.*/ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=1/' /app/sitelayer/.env \
+        || printf '\nALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=1\n' >> /app/sitelayer/.env \
+        && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+           docker compose -f docker-compose.prod.yml up -d --force-recreate api worker"
    ```
 
    New uploads now land at `BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints`
@@ -146,8 +157,10 @@ fallback is allowed but requires the off-host backup timer to be live.
 3. **Flip it back off** as soon as Spaces is healthy:
 
    ```bash
-   gh variable set ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD --env production --body ""
-   gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+   ssh sitelayer@10.118.0.4 \
+     "sed -i 's/^ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=.*/ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=0/' /app/sitelayer/.env \
+        && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+           docker compose -f docker-compose.prod.yml up -d --force-recreate api worker"
    ```
 
    Any blueprints uploaded during the fallback window stay on local FS;

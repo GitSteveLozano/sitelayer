@@ -35,10 +35,10 @@ something we get to undo cheaply.
       sitelayer QBO app and can mint a fresh sandbox OAuth token (they
       expire ~60 minutes; if last smoke was older than that, mint a new
       pair)
-- [ ] You have admin access to the `sitelayer` GitHub repo's Actions
-      `production` environment
 - [ ] You have SSH to `sitelayer@10.118.0.4` (the prod droplet) via the
-      `DEPLOY_SSH_KEY`
+      `DEPLOY_SSH_KEY` — this is how prod env changes land (the live
+      `/app/sitelayer/.env`); there is no GitHub Actions `production`
+      environment in the path (the repo runs zero workflows)
 - [ ] Pilot customer is NOT actively running a payroll cycle right now
 
 ## Step 1 — Add `ESTIMATE_SHARE_SECRET` to production
@@ -47,31 +47,34 @@ This is independent of the QBO flip but should land first since it
 removes a noisy `[estimate-share]` warning log and gives you rotation
 independence from `QBO_STATE_SECRET`.
 
+Deploys are local-fleet — there is no GitHub Actions secret store or
+`deploy-droplet.yml` workflow (both removed; the repo runs zero workflows).
+The live source of truth is `/app/sitelayer/.env` on the prod droplet, which
+each deploy REUSES. Add the secret in place and bounce the API:
+
 ```bash
-# From your local machine. Generate a fresh 64-byte hex secret.
+# Generate a fresh 64-byte hex secret (from your local machine).
 SECRET=$(openssl rand -hex 32)
 
-# Set it in the production environment. gh prompts for the value;
-# paste $SECRET when asked.
-gh secret set ESTIMATE_SHARE_SECRET \
-  --env production \
-  --repo GitSteveLozano/sitelayer \
-  --body "$SECRET"
-
-# Trigger a re-deploy so the new secret lands on the droplet. Either
-# push an empty commit or re-run the latest deploy workflow.
-gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+# Write it into the live droplet .env and recreate the API so it re-reads
+# the env. Also add the entry to ops/env/production.env.json (manifest;
+# names/scope only — never the value) so a future re-render keeps it.
+ssh sitelayer@10.118.0.4 \
+  "grep -q '^ESTIMATE_SHARE_SECRET=' /app/sitelayer/.env \
+     && sed -i 's|^ESTIMATE_SHARE_SECRET=.*|ESTIMATE_SHARE_SECRET=$SECRET|' /app/sitelayer/.env \
+     || printf '\nESTIMATE_SHARE_SECRET=%s\n' '$SECRET' >> /app/sitelayer/.env \
+     && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d --force-recreate api"
 ```
 
-After the deploy completes, verify:
+Then verify:
 
 ```bash
 ssh sitelayer@10.118.0.4 "grep '^ESTIMATE_SHARE_SECRET=' /app/sitelayer/.env | cut -d= -f1"
 # Expected: ESTIMATE_SHARE_SECRET
 ```
 
-The application will pick up the new secret automatically when the API
-container restarts (the deploy workflow handles this).
+The API picks up the new secret when the container is recreated above.
 
 ## Step 2 — QBO sandbox smoke
 
@@ -104,22 +107,20 @@ sandbox failure mode you'll see in prod is identical.
 ## Step 3 — Flip the live flag
 
 ```bash
-# Update the production environment variable. gh sets it as plaintext
-# (it's a flag, not a secret).
-gh variable set QBO_LIVE_LABOR_PAYROLL \
-  --env production \
-  --repo GitSteveLozano/sitelayer \
-  --body "1"
-
-# Trigger a re-deploy so the new env reaches the droplet. Don't
-# manually edit /app/sitelayer/.env — the deploy workflow re-renders
-# it from ops/env/production.env.json.
-gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+# It's a plaintext flag, not a secret. Edit the live droplet .env in
+# place and recreate ONLY the worker (CLAUDE.md QBO rule #3: a QBO_LIVE_*
+# flip needs a worker restart, not a full deploy). The local-fleet deploy
+# REUSES /app/sitelayer/.env, so editing it in place is the supported path.
+ssh sitelayer@10.118.0.4 \
+  "grep -q '^QBO_LIVE_LABOR_PAYROLL=' /app/sitelayer/.env \
+     && sed -i 's/^QBO_LIVE_LABOR_PAYROLL=.*/QBO_LIVE_LABOR_PAYROLL=1/' /app/sitelayer/.env \
+     || printf '\nQBO_LIVE_LABOR_PAYROLL=1\n' >> /app/sitelayer/.env \
+     && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d worker"
 ```
 
-The deploy workflow's worker container restart picks up the new env.
-You don't need to manually `docker compose up -d worker` because
-deploy-droplet.yml does the recreate.
+The worker container recreate above picks up the new env. (No GitHub
+Actions / `deploy-droplet.yml` in the path — both removed.)
 
 ## Step 4 — Verify the worker picked up the flag
 
@@ -174,8 +175,10 @@ If the live flag does the wrong thing in prod (e.g. mis-posting), flip
 it back immediately:
 
 ```bash
-gh variable set QBO_LIVE_LABOR_PAYROLL --env production --body "0"
-gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
+ssh sitelayer@10.118.0.4 \
+  "sed -i 's/^QBO_LIVE_LABOR_PAYROLL=.*/QBO_LIVE_LABOR_PAYROLL=0/' /app/sitelayer/.env \
+     && cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+        docker compose -f docker-compose.prod.yml up -d worker"
 ```
 
 Stub ids will start being returned again. Open Intuit's dashboard,
@@ -203,12 +206,14 @@ So this stays a documented operator runbook, not an automated trigger.
 When labor-payroll has accumulated a few weeks of green prod runs
 without surprises, candidate automations:
 
-- A nightly `gh workflow run` that hits `scripts/qbo-sandbox-smoke.sh`
-  with a refreshed token, alerts Sentry on regression. Catches
-  upstream Intuit API breakage before it hits prod TimeActivity.
-- A monthly key-rotation job that re-runs `gh secret set` for
-  `ESTIMATE_SHARE_SECRET` after warning operators that pending
-  share-links will need to be re-sent.
+- A nightly fleet timer (systemd, like `scripts/fleet-auto-deploy.sh`) that
+  hits `scripts/qbo-sandbox-smoke.sh` with a refreshed token and alerts
+  Sentry on regression. Catches upstream Intuit API breakage before it hits
+  prod TimeActivity. (No GitHub Actions in the path — the repo runs zero
+  workflows.)
+- A monthly key-rotation job (fleet-side) that re-renders
+  `ESTIMATE_SHARE_SECRET` into the droplet `.env` after warning operators
+  that pending share-links will need to be re-sent.
 
 Both are explicit follow-ups; do not implement them as part of this
 cutover.
