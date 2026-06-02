@@ -57,6 +57,7 @@ import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
@@ -345,6 +346,21 @@ export function EstCanvas() {
   // deduction (window/door opening) whose area subtracts from the net for its
   // service item. Sticky so several openings can be cut in a row.
   const [deduct, setDeduct] = useState(false)
+
+  // Copy / array / mirror tools (deep-dive gap H6 — repeated bays/typicals).
+  // When a selection exists in SELECT mode, a small toolbar group lets the
+  // estimator duplicate the selected measurement(s) by a board-space offset,
+  // array them N-up along a row/grid, or mirror/rotate the copies. Each copy is
+  // saved as a NEW measurement via the existing `useCreateMeasurement` path, so
+  // quantities recompute server-side just like a hand-drawn shape. `copyOpen`
+  // toggles the parameter panel; the rest hold the user's chosen plan.
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [copyDx, setCopyDx] = useState('6')
+  const [copyDy, setCopyDy] = useState('0')
+  const [copyCount, setCopyCount] = useState('3')
+  const [copyMirror, setCopyMirror] = useState<MirrorAxis | 'none'>('none')
+  const [copyRotate, setCopyRotate] = useState('0')
+  const [copyBusy, setCopyBusy] = useState(false)
 
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
@@ -981,6 +997,7 @@ export function EstCanvas() {
     setEditGeomId(null)
     setEditPoints([])
     editDragIdxRef.current = null
+    setCopyOpen(false)
   }
 
   // Real delete (was a no-op that only cleared the highlight).
@@ -1016,6 +1033,76 @@ export function EstCanvas() {
       draft_id: activeDraftId,
     })
     clearSelection()
+  }
+
+  // --- Copy / array / mirror (deep-dive H6) --------------------------------
+  // The measurements a copy plan acts on: the marquee bulk set when several are
+  // selected, otherwise the single selected measurement. Only point-based
+  // geometries (polygon / lineal / count) are copyable in board space; the
+  // toolbar is suppressed when none of the selection qualifies.
+  const copyTargets = useMemo<TakeoffMeasurement[]>(() => {
+    if (bulkRows.length > 0) return bulkRows
+    return selectedMeasurement ? [selectedMeasurement] : []
+  }, [bulkRows, selectedMeasurement])
+  const copyableTargets = useMemo(
+    () => copyTargets.filter((m) => Array.isArray((m.geometry as MeasurementGeometry).points)),
+    [copyTargets],
+  )
+
+  // Build the chosen CopyPlan from the panel inputs. Mirror/rotate ride along
+  // as per-copy modifiers; an array of count>1 lays the copies along the row,
+  // otherwise it is a single offset copy.
+  const buildCopyPlan = (mode: CopyPlan['mode']): CopyPlan => {
+    const dx = Number(copyDx)
+    const dy = Number(copyDy)
+    const count = Math.max(1, Math.floor(Number(copyCount) || 1))
+    const rotateDeg = Number(copyRotate) || 0
+    return {
+      mode,
+      delta: { dx: Number.isFinite(dx) ? dx : 0, dy: Number.isFinite(dy) ? dy : 0 },
+      count,
+      mirror: copyMirror === 'none' ? undefined : copyMirror,
+      rotateDeg,
+    }
+  }
+
+  // Run a copy plan: for each copyable selected measurement, generate the
+  // duplicate geometries (board-space transforms) and save each as a NEW
+  // measurement via the existing create path — same scope/unit/sheet/deduct, so
+  // quantities recompute server-side. Sequential to keep the optimistic-queue
+  // and 30-req/min API budget calm; the selection is cleared on completion.
+  const runCopyPlan = async (mode: CopyPlan['mode']) => {
+    if (copyableTargets.length === 0 || copyBusy) return
+    const plan = buildCopyPlan(mode)
+    setError(null)
+    setCopyBusy(true)
+    let made = 0
+    try {
+      for (const m of copyableTargets) {
+        const geo = m.geometry as MeasurementGeometry
+        const dupes = buildDuplicateGeometries(geo, plan)
+        for (const dupe of dupes) {
+          await create.mutateAsync({
+            blueprint_document_id: m.blueprint_document_id ?? activeBlueprint?.id ?? null,
+            page_id: m.page_id ?? activePage?.id ?? null,
+            service_item_code: m.service_item_code,
+            unit: m.unit,
+            elevation: m.elevation ?? undefined,
+            geometry: dupe as MeasurementGeometry,
+            is_deduction: m.is_deduction ?? false,
+            draft_id: activeDraftId,
+          })
+          made += 1
+        }
+      }
+      setSavedToast(made > 0 ? `Copied ${made} measurement${made === 1 ? '' : 's'}.` : 'Nothing to copy.')
+      setCopyOpen(false)
+      clearSelection()
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Copy failed')
+    } finally {
+      setCopyBusy(false)
+    }
   }
 
   // Interactive "edit geometry" (dsg__48): engage in-place vertex drag on the
@@ -1128,6 +1215,32 @@ export function EstCanvas() {
     letterSpacing: '0.06em',
     textTransform: 'uppercase',
   }
+  // Shared field + action styling for the copy/array/mirror panel (H6).
+  const copyInputStyle: React.CSSProperties = {
+    display: 'block',
+    width: '100%',
+    marginTop: 4,
+    padding: '6px 8px',
+    border: '2px solid var(--m-ink)',
+    background: 'var(--m-card)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 12,
+    fontWeight: 700,
+    color: 'var(--m-ink)',
+  }
+  const copyActionStyle = (danger: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: '10px 8px',
+    border: '2px solid var(--m-ink)',
+    background: 'var(--m-accent)',
+    color: danger ? 'var(--m-red)' : 'var(--m-accent-ink)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+    cursor: copyBusy ? 'not-allowed' : 'pointer',
+    opacity: copyBusy ? 0.6 : 1,
+  })
 
   return (
     <div className="d-content-full" style={{ position: 'relative' }}>
@@ -2583,6 +2696,7 @@ export function EstCanvas() {
                 },
                 { l: 'EDIT GEOM', action: onEditGeom },
                 { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
+                { l: copyOpen ? 'COPY ✕' : 'COPY…', action: () => setCopyOpen((v) => !v) },
                 { l: 'DELETE', danger: true, action: onDeleteSelected },
               ] as const)
           ).map((b, i, arr) => (
@@ -2699,6 +2813,24 @@ export function EstCanvas() {
           </button>
           <button
             type="button"
+            onClick={() => setCopyOpen((v) => !v)}
+            style={{
+              padding: '0 24px',
+              background: copyOpen ? 'var(--m-accent)' : 'var(--m-card)',
+              color: copyOpen ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+              border: 'none',
+              borderRight: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              cursor: 'pointer',
+            }}
+          >
+            {copyOpen ? 'COPY ✕' : 'COPY…'}
+          </button>
+          <button
+            type="button"
             onClick={onBulkDelete}
             style={{
               padding: '0 24px',
@@ -2714,6 +2846,97 @@ export function EstCanvas() {
           >
             DELETE {bulkSelected.size}
           </button>
+        </div>
+      ) : null}
+
+      {/* ---- Copy / array / mirror panel (deep-dive H6) ----
+          Additive toolbar group: when a selection exists in SELECT mode and the
+          COPY… button is toggled on, offer copy-with-offset, array-paste (N along
+          a row), and mirror/rotate of the duplicated geometry. Each action saves
+          NEW measurements through `useCreateMeasurement` (same scope/unit/sheet),
+          so quantities recompute server-side. Only point-based geometries copy. */}
+      {mode === 'select' && copyOpen && copyableTargets.length > 0 ? (
+        <div style={floatBox({ bottom: 110, left: '50%', transform: 'translateX(-50%)', width: 360 })}>
+          <div style={floatHead}>
+            Copy · {copyableTargets.length} {copyableTargets.length === 1 ? 'measurement' : 'measurements'}
+          </div>
+          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                OFFSET X (BOARD)
+                <input
+                  type="number"
+                  value={copyDx}
+                  onChange={(e) => setCopyDx(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                OFFSET Y (BOARD)
+                <input
+                  type="number"
+                  value={copyDy}
+                  onChange={(e) => setCopyDy(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                ARRAY COUNT
+                <input
+                  type="number"
+                  min={1}
+                  value={copyCount}
+                  onChange={(e) => setCopyCount(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                MIRROR
+                <select
+                  value={copyMirror}
+                  onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
+                  style={copyInputStyle}
+                >
+                  <option value="none">None</option>
+                  <option value="x">Flip ↔</option>
+                  <option value="y">Flip ↕</option>
+                </select>
+              </label>
+              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
+                ROTATE °
+                <input
+                  type="number"
+                  value={copyRotate}
+                  onChange={(e) => setCopyRotate(e.target.value)}
+                  style={copyInputStyle}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                disabled={copyBusy}
+                onClick={() => void runCopyPlan('offset')}
+                style={copyActionStyle(false)}
+              >
+                {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
+              </button>
+              <button
+                type="button"
+                disabled={copyBusy}
+                onClick={() => void runCopyPlan('array')}
+                style={copyActionStyle(false)}
+              >
+                ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
+              </button>
+            </div>
+            <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', lineHeight: 1.4 }}>
+              New measurements keep the same item, unit, and sheet — quantities recompute on save. Mirror / rotate apply
+              to every copy.
+            </div>
+          </div>
         </div>
       ) : null}
 
