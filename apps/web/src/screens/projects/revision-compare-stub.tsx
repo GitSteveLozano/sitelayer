@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { Banner, Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { MEmptyState } from '@/components/m-states'
 import { Attribution } from '@/components/ai'
-import { API_URL, useProjectBlueprints, type BlueprintDocument } from '@/lib/api'
+import {
+  API_URL,
+  useBlueprintDiffs,
+  useProjectBlueprints,
+  useProjectMeasurements,
+  type BlueprintDocument,
+  type TakeoffMeasurement,
+} from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { blueprintReferenceKind } from '@/lib/takeoff/blueprint-reference'
 import { computeRasterDiff, type DiffMode, type DiffResult } from '@/lib/blueprint-diff'
@@ -110,6 +117,8 @@ export function RevisionCompareStub({ open, onClose, projectId, initialAfterId }
               </select>
             </Card>
 
+            <AffectedMeasurementsBadge projectId={projectId} after={after} />
+
             <RevisionDiffSurface before={before} after={after} />
           </>
         )}
@@ -120,9 +129,102 @@ export function RevisionCompareStub({ open, onClose, projectId, initialAfterId }
           </MobileButton>
         </div>
 
-        <Attribution source="GET /api/projects/:id/blueprints · GET /api/blueprints/:id/file · client-side raster diff (037 blueprint_page_diffs not yet API-served)" />
+        <Attribution source="GET /api/projects/:id/blueprints · GET /api/blueprints/:id/file · GET /api/blueprints/:id/diffs (037 blueprint_page_diffs) · client-side raster diff" />
       </div>
     </Sheet>
+  )
+}
+
+interface AffectedMeasurementsBadgeProps {
+  projectId: string
+  after: BlueprintDocument | undefined
+}
+
+/**
+ * "N measurements affected" badge — consumes the stored
+ * `blueprint_page_diffs.affected_measurement_ids` served by
+ * `GET /api/blueprints/:id/diffs`. The diffs are keyed to the newer
+ * revision's document, so this reads the currently-selected **after**
+ * blueprint.
+ *
+ * When no diff rows have been populated for the revision (no image-diff
+ * worker has run, or this revision introduced no overlapping changes) the
+ * route returns an empty rollup and this component renders nothing — the
+ * badge hides. Diff population is a follow-up slice; this surfaces what the
+ * raster-diff/worker has persisted.
+ *
+ * "Links the affected measurements" by resolving each affected id against the
+ * project's measurements and listing its service item + quantity, so the
+ * estimator can see exactly which takeoff items live on changed regions.
+ */
+function AffectedMeasurementsBadge({ projectId, after }: AffectedMeasurementsBadgeProps) {
+  const diffs = useBlueprintDiffs(after?.id)
+  const measurements = useProjectMeasurements(projectId)
+  const [expanded, setExpanded] = useState(false)
+
+  const affectedIds = diffs.data?.affected_measurement_ids ?? []
+  const count = diffs.data?.affected_measurement_count ?? affectedIds.length
+
+  // Resolve the affected ids to live measurement rows so we can show what
+  // each one measures. Ids with no matching row (soft-deleted since the diff
+  // was cached) are surfaced as a bare id so the count still reconciles.
+  const byId = useMemo(() => {
+    const map = new Map<string, TakeoffMeasurement>()
+    for (const m of measurements.data?.measurements ?? []) map.set(m.id, m)
+    return map
+  }, [measurements.data])
+
+  // Nothing to show until the diffs land and at least one measurement is
+  // flagged — the badge hides on an empty result (no rows populated yet).
+  if (diffs.isPending || count === 0) return null
+
+  return (
+    <Banner
+      tone="warn"
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Pill tone="warn" withDot>
+            {count} measurement{count === 1 ? '' : 's'} affected
+          </Pill>
+        </span>
+      }
+      action={
+        affectedIds.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[12px] font-semibold text-accent"
+          >
+            {expanded ? 'Hide' : 'Show'}
+          </button>
+        ) : null
+      }
+    >
+      <div>
+        This revision changed regions overlapping {count} saved takeoff measurement{count === 1 ? '' : 's'}.
+      </div>
+      {expanded ? (
+        <ul className="mt-2 space-y-1">
+          {affectedIds.map((id) => {
+            const m = byId.get(id)
+            return (
+              <li key={id} className="flex items-center justify-between gap-2 text-[12px]">
+                {m ? (
+                  <>
+                    <span className="font-medium truncate">{m.service_item_code}</span>
+                    <span className="tabular-nums text-ink-3 shrink-0">
+                      {m.quantity} {m.unit}
+                    </span>
+                  </>
+                ) : (
+                  <span className="font-mono text-ink-3 truncate">{id}</span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+    </Banner>
   )
 }
 

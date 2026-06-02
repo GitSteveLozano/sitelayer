@@ -428,6 +428,55 @@ export function useVerifyPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Plan-revision diffs (H3)
+// ---------------------------------------------------------------------------
+
+/**
+ * One stored region-of-change between plan revisions (migration 037
+ * `blueprint_page_diffs`). `affected_measurement_ids` is the snapshot of
+ * takeoff measurements whose centroid falls inside the changed bbox — the
+ * cache that drives the "N measurements affected" badge. Numeric fields come
+ * back as strings (pg numeric) per this codebase's convention.
+ */
+export interface BlueprintPageDiff {
+  id: string
+  new_page_id: string
+  prior_page_id: string | null
+  new_page_number: number
+  prior_page_number: number | null
+  change_kind: 'added' | 'removed' | 'modified'
+  bbox_x: string
+  bbox_y: string
+  bbox_w: string
+  bbox_h: string
+  confidence: string
+  affected_measurement_ids: string[]
+  notes: string | null
+  created_at: string
+}
+
+export interface BlueprintDiffsResponse {
+  diffs: BlueprintPageDiff[]
+  /** Deduped union of every diff's affected measurement ids (server rollup). */
+  affected_measurement_ids: string[]
+  affected_measurement_count: number
+}
+
+/**
+ * Stored plan-revision diffs for a blueprint document (GET
+ * /api/blueprints/:id/diffs). Returns an empty list when no diff worker has
+ * populated rows yet, so callers can hide the badge on an empty result. The
+ * route is read-only; diff population is a follow-up slice.
+ */
+export function useBlueprintDiffs(docId: string | null | undefined) {
+  return useQuery<BlueprintDiffsResponse>({
+    queryKey: ['blueprints', 'diffs', docId ?? ''],
+    queryFn: () => request(`/api/blueprints/${encodeURIComponent(docId!)}/diffs`),
+    enabled: Boolean(docId),
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Assemblies (3F)
 // ---------------------------------------------------------------------------
 
