@@ -1,0 +1,16 @@
+[Unit]
+Description=Poll origin/dev every 2 minutes and auto-deploy dev+demo (never prod)
+Documentation=https://github.com/GitSteveLozano/sitelayer/blob/main/docs/AUTO_DEPLOY.md
+
+[Timer]
+# Fire 2 minutes after boot, then every 2 minutes thereafter. Persistent=true
+# so a missed window (laptop asleep / box off) fires once on the next wake
+# rather than backfilling. The script itself is flock-guarded, so overlapping
+# fires are harmless.
+OnBootSec=2min
+OnUnitActiveSec=2min
+Persistent=true
+Unit=sitelayer-auto-deploy.service
+
+[Install]
+WantedBy=timers.target
