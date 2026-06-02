@@ -51,6 +51,7 @@ import { handleObstructionsRoutes } from './obstructions.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
+import { handleBlueprintDiffRoutes } from './blueprint-diffs.js'
 import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
 import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 import { handleBidAccuracyRoutes } from './bid-accuracy.js'
@@ -580,6 +581,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
         sendFileContent: ctx.sendFileContent,
         sendFileRedirect: ctx.sendFileRedirect,
+      }),
+
+    // Plan-revision diffs (H3) — serve stored blueprint_page_diffs +
+    // affected_measurement_ids so the takeoff surface can render the
+    // "N measurements affected" badge. Read-only; diff population is a
+    // follow-up slice.
+    () =>
+      handleBlueprintDiffRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
       }),
 
     // Takeoff CSV import (Phase 3G)
