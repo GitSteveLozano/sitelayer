@@ -22,7 +22,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { MButton, MI, MPill, Spark } from '../../components/m/index.js'
+import { MBanner, MButton, MI, MPill, Spark } from '../../components/m/index.js'
 import {
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
@@ -30,6 +30,16 @@ import {
   useTakeoffDrafts,
   type CapturedQuantity,
 } from '../../lib/api/takeoff-drafts.js'
+
+// Demo-data notice (C1, takeoff deep-dive 2026-06-01). RUN posts
+// `payload: { dryRun: true }` with a JSON body and never streams a PDF, so this
+// flow ALWAYS returns deterministic demo/stub quantities, never a real AI sheet
+// read. The review surface always carries an explicit demo banner so a stub
+// draft can never be mistaken for a real read and submitted in a bid.
+// Follow-up: wire the live multipart Claude-vision path (out of scope here).
+const DEMO_BADGE_TITLE = 'DEMO DATA · NOT A REAL AI SHEET READ'
+const DEMO_BADGE_BODY =
+  'These quantities are placeholder demo numbers, not measured from your blueprint. Do not submit them in a bid — verify every line against the real drawing first.'
 
 const sectionBar: React.CSSProperties = {
   padding: '10px 20px',
@@ -182,7 +192,7 @@ export function TakeoffAiTakeoffSetup({ companySlug }: { companySlug: string }) 
           </div>
         ) : null}
         <MButton variant="primary" onClick={run} disabled={capture.isPending || enabled === 0}>
-          {capture.isPending ? 'Drafting…' : `Run · Draft 22 sheets · ${enabled} targets · ~3m`}
+          {capture.isPending ? 'Drafting…' : `Run demo · ${enabled} targets · stub data`}
         </MButton>
       </div>
     </div>
@@ -281,9 +291,9 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
       <div style={{ padding: 20, borderBottom: '2px solid var(--m-ink)' }}>
         <span
           className="m-topbar-eyebrow"
-          style={{ display: 'inline-block', background: 'var(--m-green)', color: '#fff', padding: '3px 8px' }}
+          style={{ display: 'inline-block', background: 'var(--m-amber)', color: 'var(--m-ink)', padding: '3px 8px' }}
         >
-          {resultQuery.data?.source ? `SOURCE · ${resultQuery.data.source.toUpperCase()}` : 'AI DRAFT'}
+          DEMO · {resultQuery.data?.source ? resultQuery.data.source.toUpperCase() : 'AI DRAFT'}
         </span>
         <h2
           style={{
@@ -306,6 +316,10 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
         >
           {counts.ok} OK · {counts.review} NEEDS REVIEW · {counts.flag} FLAGGED
         </div>
+      </div>
+
+      <div style={{ padding: '14px 20px 0' }}>
+        <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
       </div>
 
       <div style={{ flex: 1, overflow: 'auto' }}>

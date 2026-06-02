@@ -25,7 +25,7 @@
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DLoadingState, type DColumn } from '@/components/d'
-import { MAiStripe, MButton, MPill } from '@/components/m'
+import { MAiStripe, MBanner, MButton, MI, MPill } from '@/components/m'
 import {
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
@@ -33,6 +33,20 @@ import {
   useTakeoffDrafts,
   type CapturedQuantity,
 } from '@/lib/api/takeoff-drafts'
+
+// ---------------------------------------------------------------------------
+// Demo-data notice (C1, takeoff deep-dive 2026-06-01).
+// The Run button below posts `payload: { dryRun: true }` with a JSON body and
+// never streams a multipart PDF, so the capture endpoint ALWAYS returns the
+// deterministic demo/stub quantities — never a real AI sheet read — regardless
+// of the API's BLUEPRINT_VISION_MODE. The review surface this feeds therefore
+// always carries an explicit demo banner so a stub draft can never be mistaken
+// for a real read and submitted in a bid. Follow-up: wire the live multipart
+// Claude-vision path (out of scope here, intentionally riskier).
+// ---------------------------------------------------------------------------
+const DEMO_BADGE_TITLE = 'DEMO DATA · NOT A REAL AI SHEET READ'
+const DEMO_BADGE_BODY =
+  'These quantities are placeholder demo numbers, not measured from your blueprint. Do not submit them in a bid — verify every line against the real drawing first.'
 
 // ---------------------------------------------------------------------------
 // Shared blueprint backdrop + floating-palette chrome (translated from the
@@ -151,7 +165,7 @@ export function EstAiTakeoffSetupPanel({
       }}
     >
       <div style={{ ...floatHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span>● AI · Draft the whole takeoff</span>
+        <span>● AI · Draft the whole takeoff · DEMO</span>
         <button
           type="button"
           onClick={onClose}
@@ -274,10 +288,10 @@ export function EstAiTakeoffSetupPanel({
             letterSpacing: '0.04em',
           }}
         >
-          DRAFT 22 SHEETS · {enabledCount} TARGETS · ~3M · REVIEW BEFORE ACCEPT
+          DEMO · {enabledCount} TARGETS · STUB QUANTITIES · NOT A REAL SHEET READ
         </div>
         <MButton variant="primary" onClick={runTakeoff} disabled={capture.isPending || enabledCount === 0}>
-          {capture.isPending ? 'Drafting…' : 'Run auto-takeoff →'}
+          {capture.isPending ? 'Drafting…' : 'Run demo auto-takeoff →'}
         </MButton>
         {capture.isError ? (
           <div
@@ -528,13 +542,17 @@ export function EstAiTakeoffReview() {
           </div>
         ) : null}
 
+        <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
+
         <MAiStripe
-          eyebrow="AI auto-takeoff"
-          title="Detected quantities — review before they hit the estimate"
-          attribution="Auto-takeoff · review required"
+          tone="warn"
+          eyebrow="AI auto-takeoff · DEMO"
+          title="Demo quantities — not a real AI sheet read"
+          attribution="Demo data · stub · review required"
         >
-          The AI read every verified sheet and produced one row per scope item. High-confidence rows are kept as-is;
-          medium and low-confidence rows are flagged for a closer look. Nothing is committed until you accept the draft.
+          This draft is demo/stub output — the live sheet-reading path is not wired yet, so these rows are placeholder
+          quantities, not measured from your blueprint. The confidence buckets below are illustrative only. Nothing is
+          committed until you accept the draft; do not accept demo data into a real bid.
         </MAiStripe>
 
         {/* AI confidence triage (design dsg__54: OK / REVIEW / FLAGGED), driven by

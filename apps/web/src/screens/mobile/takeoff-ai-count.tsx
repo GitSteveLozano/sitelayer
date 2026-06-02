@@ -22,7 +22,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { MButton, MI, MPill, Spark } from '../../components/m/index.js'
+import { MBanner, MButton, MI, MPill, Spark } from '../../components/m/index.js'
 import {
   useCaptureTakeoffDraft,
   usePromoteCapturedQuantities,
@@ -32,6 +32,16 @@ import {
 } from '../../lib/api/takeoff-drafts.js'
 
 type Sensitivity = 'STRICT' | 'NORMAL' | 'LOOSE'
+
+// Demo-data notice (C1, takeoff deep-dive 2026-06-01). RUN posts
+// `payload: { dryRun: true }` with a JSON body and never streams a PDF, so this
+// flow ALWAYS returns deterministic demo/stub quantities, never a real AI
+// symbol read. The review surface always carries an explicit demo banner so a
+// stub count can never be mistaken for a real read and submitted in a bid.
+// Follow-up: wire the live multipart Claude-vision path (out of scope here).
+const DEMO_BADGE_TITLE = 'DEMO DATA · NOT A REAL AI SYMBOL COUNT'
+const DEMO_BADGE_BODY =
+  'This count is placeholder demo data, not detected from your sheets. Do not submit it in a bid — verify every mark against the real drawing first.'
 
 const eyebrow: React.CSSProperties = {
   fontFamily: 'var(--m-num)',
@@ -272,7 +282,7 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
           </div>
         ) : null}
         <MButton variant="primary" onClick={run} disabled={capture.isPending || scanCount === 0}>
-          {capture.isPending ? 'Scanning…' : `Run · Scan ${scanCount} sheet${scanCount === 1 ? '' : 's'} · ~30s`}
+          {capture.isPending ? 'Scanning…' : `Run demo · ${scanCount} sheet${scanCount === 1 ? '' : 's'} · stub`}
         </MButton>
       </div>
     </div>
@@ -356,8 +366,8 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
 
       {/* Hero count slab */}
       <div style={{ padding: 20, background: 'var(--m-ink)', color: 'var(--m-sand)' }}>
-        <div className="m-topbar-eyebrow" style={{ color: 'var(--m-accent)' }}>
-          {resultQuery.data?.source ? `SOURCE · ${resultQuery.data.source.toUpperCase()}` : 'AI DETECTED'}
+        <div className="m-topbar-eyebrow" style={{ color: 'var(--m-amber)' }}>
+          DEMO · {resultQuery.data?.source ? resultQuery.data.source.toUpperCase() : 'AI DETECTED'} · STUB
         </div>
         <div
           style={{
@@ -379,6 +389,10 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
         >
           HIGH {confidenceBuckets.HIGH} · MED {confidenceBuckets.MED} · LOW {confidenceBuckets.LOW}
         </div>
+      </div>
+
+      <div style={{ padding: '14px 20px 0' }}>
+        <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
       </div>
 
       {/* Keep/reject lane over the captured quantities */}
