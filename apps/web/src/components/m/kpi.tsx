@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { MTone } from './list.js'
+import { Kpi, KpiRow } from './kpi-unified.js'
 
 export type MKpiProps = {
   label: ReactNode
@@ -10,28 +11,20 @@ export type MKpiProps = {
 }
 
 /**
- * KPI tile. Eyebrow (10px uppercase) + value (24px tabular) + optional unit
+ * KPI tile. Eyebrow (10px uppercase) + value (38px tabular) + optional unit
  * and a meta line that takes a tone. Compose multiple in <MKpiRow>.
+ *
+ * BACK-COMPAT ALIAS: thin wrapper over the unified <Kpi> (kpi-unified.tsx).
+ * Existing imports + the `m-kpi-*` rendered output are preserved exactly; the
+ * mobile metaTone vocabulary ('green' | 'red' | 'amber') is the type the
+ * unified `data-tone` passthrough receives here.
  */
 export function MKpi({ label, value, unit, meta, metaTone }: MKpiProps) {
-  return (
-    <div className="m-kpi">
-      <div className="m-kpi-eyebrow">{label}</div>
-      <div className="m-kpi-val num">
-        {value}
-        {unit ? <span className="m-kpi-unit"> {unit}</span> : null}
-      </div>
-      {meta ? (
-        <div className="m-kpi-meta" data-tone={metaTone}>
-          {meta}
-        </div>
-      ) : null}
-    </div>
-  )
+  return <Kpi label={label} value={value} unit={unit} meta={meta} metaTone={metaTone} />
 }
 
 export function MKpiRow({ cols = 2, children }: { cols?: 2 | 3; children: ReactNode }) {
-  return <div className={`m-kpi-row${cols === 3 ? ' m-kpi-row-3' : ''}`}>{children}</div>
+  return <KpiRow cols={cols}>{children}</KpiRow>
 }
 
 // Re-export tone for convenience.

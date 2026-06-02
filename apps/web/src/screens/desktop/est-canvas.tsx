@@ -59,8 +59,11 @@ import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
 import { useAssemblies, useAttachAssemblyToMeasurement, useExplodeAssembly, type Assembly } from '@/lib/api/assemblies'
 import { formatMoney } from '../mobile/format.js'
-import { EstAiCountSetupPanel } from './est-ai-count'
-import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
+// Phase B responsive consolidation: the AI setup panels moved into the merged
+// responsive screens (former desktop twins est-ai-count.tsx / est-ai-takeoff.tsx
+// were deleted). The standalone float-palette exports are unchanged.
+import { EstAiCountSetupPanel } from '../mobile/takeoff-ai-count'
+import { EstAiTakeoffSetupPanel } from '../mobile/takeoff-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'

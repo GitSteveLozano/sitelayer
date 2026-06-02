@@ -9,9 +9,17 @@
  * JetBrains Mono micro-labels. .m-dark is now the genuinely-inverted v2 worker
  * dark theme (ink bg, yellow is the only light source).
  *
- * m.css carries a NEAR-DUPLICATE :root block (it loads after this via
- * main.tsx and wins for shared vars); tailwind.config.cjs is a THIRD copy of
- * the font stacks — keep all three in sync when these change.
+ * SINGLE-SOURCE STATUS (responsive-consolidation Phase A):
+ *   - tailwind.config.cjs no longer hardcodes a third copy of the font stacks;
+ *     its `fontFamily` now READS the --m-font* vars below (like colors/radii/
+ *     shadows already do), so this file is the single source for the fonts.
+ *   - m.css STILL carries a NEAR-DUPLICATE :root (and .m-dark) block. It loads
+ *     after this file via main.tsx and intentionally "wins" for shared vars,
+ *     and the two blocks are byte-identical today. Deduping it (e.g. making
+ *     m.css `@import './tokens.css'`) was deliberately NOT done here: it is
+ *     load-order- / PostCSS-@import-hoist-sensitive and could not be verified
+ *     without a build in this change. Until that is done with a green build,
+ *     keep the m.css :root + .m-dark blocks byte-in-sync with the ones here.
  *
  * Naming convention: --m-* (mobile) is the canonical prefix because the
  * design is mobile-first; the same tokens drive desktop. Don't add

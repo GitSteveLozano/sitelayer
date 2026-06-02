@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from 'react'
 import { NavLink } from 'react-router-dom'
+import { Kpi, KpiRow } from '../m/kpi-unified.js'
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -97,6 +98,10 @@ export function DH1({ children }: { children: ReactNode }) {
 }
 
 // ---- KPI strip -----------------------------------------------------------
+// BACK-COMPAT ALIASES: DKpi/DKpiStrip are thin wrappers over the unified <Kpi>
+// (components/m/kpi-unified.tsx) in `dense` mode. The `d-kpi-*` rendered output
+// is preserved exactly; the desktop metaTone vocabulary ('good' | 'bad') is the
+// type accepted here and passed straight through the unified `data-tone`.
 export interface DKpiProps {
   label: ReactNode
   value: ReactNode
@@ -106,23 +111,10 @@ export interface DKpiProps {
   tone?: 'accent' | undefined
 }
 export function DKpiStrip({ children }: { children: ReactNode }) {
-  return <div className="d-kpi-strip">{children}</div>
+  return <KpiRow dense>{children}</KpiRow>
 }
 export function DKpi({ label, value, unit, meta, metaTone, tone }: DKpiProps) {
-  return (
-    <div className="d-kpi" data-tone={tone}>
-      <div className="d-kpi-l">{label}</div>
-      <div className="d-kpi-v num">
-        {value}
-        {unit ? <span className="d-kpi-unit">{unit}</span> : null}
-      </div>
-      {meta ? (
-        <div className="d-kpi-meta" data-tone={metaTone}>
-          {meta}
-        </div>
-      ) : null}
-    </div>
-  )
+  return <Kpi dense label={label} value={value} unit={unit} meta={meta} metaTone={metaTone} tone={tone} />
 }
 
 // ---- Data table ----------------------------------------------------------
@@ -530,66 +522,8 @@ export function DMenu({
 }
 
 // ---- Content states: empty · error · loading -----------------------------
-export function DEmptyState({
-  mark = '○',
-  title = 'Nothing here yet',
-  body = 'When data arrives it shows up here.',
-  action,
-}: {
-  mark?: string
-  title?: ReactNode
-  body?: ReactNode
-  action?: ReactNode
-}) {
-  return (
-    <div className="d-state">
-      <div className="d-state-mark" aria-hidden>
-        <span className="d-state-sq d-state-sq-accent" />
-        <span className="d-state-sq" />
-        <span className="d-state-sq d-state-sq-ink">{mark}</span>
-      </div>
-      <div className="d-state-title">{title}</div>
-      <div className="d-state-body">{body}</div>
-      {action ? <div className="d-state-action">{action}</div> : null}
-    </div>
-  )
-}
-export function DErrorState({
-  title = 'Couldn’t load',
-  body = 'The server didn’t answer. Your work is safe.',
-  code,
-  actions,
-}: {
-  title?: ReactNode
-  body?: ReactNode
-  code?: ReactNode
-  actions?: ReactNode
-}) {
-  return (
-    <div className="d-state">
-      <div className="d-state-bang" aria-hidden>
-        !
-      </div>
-      <div className="d-state-title" data-tone="bad">
-        {title}
-      </div>
-      <div className="d-state-body">{body}</div>
-      {code ? <div className="d-state-code">{code}</div> : null}
-      {actions ? <div className="d-state-action">{actions}</div> : null}
-    </div>
-  )
-}
-export function DLoadingState({ label = 'Loading…' }: { label?: string }) {
-  return (
-    <div className="d-state">
-      <div className="d-state-mark" aria-hidden>
-        <span className="d-state-sq d-state-sq-accent d-pulse" />
-        <span className="d-state-sq d-pulse" />
-        <span className="d-state-sq d-state-sq-ink d-pulse" />
-      </div>
-      <div className="d-state-body" style={{ marginTop: 18 }}>
-        {label}
-      </div>
-    </div>
-  )
-}
+// BACK-COMPAT ALIASES: promoted into the shared kit (components/m/states.tsx)
+// so they are no longer desktop-only. The implementations (and their
+// `d-state-*` output) are unchanged; these names re-export the shared ones so
+// existing `import { DEmptyState, ... } from '@/components/d'` keeps working.
+export { EmptyState as DEmptyState, ErrorState as DErrorState, LoadingState as DLoadingState } from '../m/states.js'

@@ -14,7 +14,7 @@
  * pattern explicitly accepts that for the morning-brief surface.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import { useSubmitForm } from '../../machines/submit-form.js'
 import {
@@ -29,11 +29,34 @@ import {
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
+import { DEyebrow, DH1, DModal } from '../../components/d/index.js'
 import { MAiAgent } from '../../components/m/ai.js'
 import { useCreateProjectBrief, type ProjectBriefStep } from '../../lib/api/project-briefs.js'
 import { useProjectBriefs } from '../../lib/api/projects.js'
 import { useScopeVsBid } from '../../lib/api/estimate.js'
+import { useIsDesktop } from '../../lib/use-is-desktop.js'
+import { resolveForemanNav } from '../foreman-nav.js'
 import { todayIso } from './format.js'
+
+/**
+ * Responsive Foreman Brief composer. Mounts the dense desktop author + sticky
+ * live-preview split (the former `screens/desktop/fm-brief.tsx`,
+ * `ForemanBriefDesktop`, with its edit-mode + send-reminders modal) at >=1024px
+ * and the richer mobile composer below it. Both submit through the SAME
+ * `useSubmitForm` + `useCreateProjectBrief` (POST /api/projects/:id/briefs); the
+ * mobile composer additionally prefills from yesterday's brief / the estimate
+ * scope, edits per-step time/crew/materials, and has a dedicated preview screen.
+ * Only ONE render mounts at a time. Navigation is resolved via
+ * `resolveForemanNav` so each surface returns to its own Today board.
+ */
+export function ForemanBrief(props: { bootstrap: BootstrapResponse | null; companySlug: string }) {
+  const isDesktop = useIsDesktop()
+  return isDesktop ? <ForemanBriefDesktop /> : <ForemanBriefMobile {...props} />
+}
+
+/** Desktop-route alias — kept so desktop-workspace.tsx can keep importing
+ *  `FmBrief` after the desktop twin file was deleted. */
+export const FmBrief = ForemanBriefDesktop
 
 function yesterdayIso(): string {
   const d = new Date()
@@ -44,7 +67,7 @@ function yesterdayIso(): string {
   return `${y}-${m}-${day}`
 }
 
-export function ForemanBrief({
+function ForemanBriefMobile({
   bootstrap,
   companySlug: _companySlug,
 }: {
@@ -52,6 +75,7 @@ export function ForemanBrief({
   companySlug: string
 }) {
   const navigate = useNavigate()
+  const nav = resolveForemanNav(useLocation().pathname)
   const params = useParams<{ projectId?: string }>()
   const projects = useMemo(
     () => bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? [],
@@ -147,7 +171,7 @@ export function ForemanBrief({
       steps: s,
       materials: m.map((row) => ({ description: row.description, quantity: row.quantity ?? null })),
     })
-    navigate('/today')
+    navigate(nav.today)
     return res
   })
 
@@ -218,7 +242,7 @@ export function ForemanBrief({
 
   return (
     <>
-      <MTopBar back title="Brief crew" sub={project?.name} onBack={() => navigate('/today')} />
+      <MTopBar back title="Brief crew" sub={project?.name} onBack={() => navigate(nav.today)} />
       <MBody pad>
         {projects.length === 0 ? (
           <div style={{ padding: 24, color: 'var(--m-ink-3)', fontSize: 13 }}>
@@ -794,4 +818,416 @@ function reorderBtnStyle(disabled: boolean): React.CSSProperties {
     alignItems: 'center',
     justifyContent: 'center',
   }
+}
+
+// ---------------------------------------------------------------------------
+// Desktop composition — the former screens/desktop/fm-brief.tsx, folded in
+// verbatim (data + behavior preserved) with navigation resolved through
+// resolveForemanNav. Local helpers are suffixed `_DESKTOP` where they would
+// otherwise collide with the mobile composer's same-named locals.
+// ---------------------------------------------------------------------------
+
+// Presentational crew roster for the Send-reminders panel. The brief composer
+// does not load the crew roster, so these rows are a clearly-labeled sample —
+// the real send wiring lands when a crew/notification hook is threaded in.
+interface ReminderRecipient {
+  id: string
+  name: string
+  role: string
+}
+const DEMO_CREW: ReminderRecipient[] = [
+  { id: 'crew-1', name: 'Carlos M.', role: 'Lead' },
+  { id: 'crew-2', name: 'Devon R.', role: 'Plaster' },
+  { id: 'crew-3', name: 'Sam P.', role: 'Apprentice' },
+]
+
+const MONO_LABEL_DESKTOP: React.CSSProperties = {
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--m-ink-3)',
+}
+
+function ForemanBriefDesktop() {
+  const navigate = useNavigate()
+  const nav = resolveForemanNav(useLocation().pathname)
+  const params = useParams<{ projectId?: string }>()
+  const projectId = params.projectId ?? ''
+
+  const [goal, setGoal] = useState('')
+  const [steps, setSteps] = useState<ProjectBriefStep[]>([])
+
+  // Edit mode (DBriefEdit): the author form is read-only until the foreman
+  // taps EDIT, then SAVE + PUSH / CANCEL frame the edit session.
+  const [editing, setEditing] = useState(true)
+  const [draftBackup, setDraftBackup] = useState<{ goal: string; steps: ProjectBriefStep[] } | null>(null)
+
+  // Send-reminders modal (DSendReminders): crew rows with per-recipient send
+  // toggles. Defaults all recipients on.
+  const [remindersOpen, setRemindersOpen] = useState(false)
+  const [selectedCrew, setSelectedCrew] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(DEMO_CREW.map((c) => [c.id, true])),
+  )
+
+  const createBrief = useCreateProjectBrief(projectId)
+  const { submit, isSubmitting, error } = useSubmitForm<{ goal: string; steps: ProjectBriefStep[] }, unknown>(
+    async ({ goal: g, steps: s }) => {
+      if (!projectId) return null
+      const res = await createBrief.mutateAsync({
+        effective_date: todayIso(),
+        goal: g,
+        steps: s.filter((step) => step.title.trim().length > 0),
+      })
+      navigate(nav.today)
+      return res
+    },
+  )
+
+  const handlePush = () => {
+    const trimmed = goal.trim()
+    if (!projectId || !trimmed) return
+    submit({ goal: trimmed, steps })
+  }
+
+  const addStep = () => setSteps((cur) => [...cur, { id: `local-${Date.now()}`, title: '' }])
+  const removeStep = (idx: number) => setSteps((cur) => cur.filter((_, i) => i !== idx))
+  const updateStep = (idx: number, title: string) =>
+    setSteps((cur) => cur.map((s, i) => (i === idx ? { ...s, title } : s)))
+
+  // Enter edit mode, stashing a backup so CANCEL can roll the draft back.
+  const startEditing = () => {
+    setDraftBackup({ goal, steps })
+    setEditing(true)
+  }
+  const cancelEditing = () => {
+    if (draftBackup) {
+      setGoal(draftBackup.goal)
+      setSteps(draftBackup.steps)
+    }
+    setDraftBackup(null)
+    setEditing(false)
+  }
+  // SAVE + PUSH commits the edit and pushes to the crew in one action.
+  const saveAndPush = () => {
+    setDraftBackup(null)
+    setEditing(false)
+    handlePush()
+  }
+
+  const toggleCrew = (id: string) => setSelectedCrew((cur) => ({ ...cur, [id]: !cur[id] }))
+  const selectedCount = DEMO_CREW.filter((c) => selectedCrew[c.id]).length
+
+  const previewSteps = steps.filter((s) => s.title.trim().length > 0)
+  const canPush = Boolean(projectId) && goal.trim().length > 0 && !isSubmitting
+
+  return (
+    <div className="d-content">
+      <div className="d-stack">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <DEyebrow>Foreman · Brief{editing ? ' · editing' : ''}</DEyebrow>
+            <DH1>Brief the crew</DH1>
+          </div>
+          {projectId ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {editing ? (
+                <MButton size="sm" variant="quiet" onClick={cancelEditing}>
+                  Cancel
+                </MButton>
+              ) : (
+                <MButton size="sm" variant="quiet" onClick={startEditing}>
+                  Edit brief
+                </MButton>
+              )}
+              <MButton size="sm" variant="ghost" onClick={() => setRemindersOpen(true)}>
+                Send reminders
+              </MButton>
+            </div>
+          ) : null}
+        </div>
+
+        {!projectId ? (
+          <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
+            No project selected. Open a project to brief its crew.
+          </div>
+        ) : (
+          <div className="d-split">
+            {/* LEFT — author */}
+            <div className="d-stack" style={{ gap: 20 }}>
+              <div>
+                <div style={MONO_LABEL_DESKTOP}>TODAY&apos;S GOAL</div>
+                <MTextarea
+                  value={goal}
+                  onChange={(e) => setGoal(e.currentTarget.value)}
+                  readOnly={!editing}
+                  placeholder="What's the crew building today, in plain words?"
+                  maxLength={280}
+                  style={{
+                    width: '100%',
+                    minHeight: 110,
+                    marginTop: 8,
+                    background: 'var(--m-card-soft)',
+                    border: editing ? '2px solid var(--m-accent)' : '2px solid var(--m-ink)',
+                    fontSize: 16,
+                    lineHeight: 1.45,
+                  }}
+                />
+                <div style={{ ...MONO_LABEL_DESKTOP, marginTop: 6, textAlign: 'right' }}>
+                  {goal.length} / 280{editing ? ' CHARS · INLINE EDIT · ESC TO CANCEL' : ''}
+                </div>
+              </div>
+
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={MONO_LABEL_DESKTOP}>STEP PLAN · {steps.length}</div>
+                  {editing ? (
+                    <MButton size="sm" variant="ghost" onClick={addStep}>
+                      + Add step
+                    </MButton>
+                  ) : null}
+                </div>
+
+                <div className="d-card" style={{ padding: 0 }}>
+                  {steps.length === 0 ? (
+                    <div style={{ padding: '16px 18px', color: 'var(--m-ink-3)', fontSize: 13 }}>
+                      No steps yet. Add the first step to build the plan.
+                    </div>
+                  ) : (
+                    steps.map((step, idx) => (
+                      <div
+                        key={step.id ?? idx}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '10px 14px',
+                          borderBottom: idx === steps.length - 1 ? 'none' : '1px solid var(--m-line)',
+                        }}
+                      >
+                        <div
+                          aria-hidden
+                          style={{
+                            width: 28,
+                            height: 28,
+                            flexShrink: 0,
+                            border: '2px solid var(--m-ink)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontFamily: 'var(--m-font-display)',
+                            fontWeight: 800,
+                            fontSize: 13,
+                          }}
+                        >
+                          {idx + 1}
+                        </div>
+                        <MInput
+                          value={step.title}
+                          onChange={(e) => updateStep(idx, e.currentTarget.value)}
+                          readOnly={!editing}
+                          placeholder={`Step ${idx + 1}`}
+                          style={{ flex: 1 }}
+                        />
+                        {editing ? (
+                          <button
+                            type="button"
+                            aria-label="Remove step"
+                            onClick={() => removeStep(idx)}
+                            style={{
+                              width: 36,
+                              height: 36,
+                              flexShrink: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: 'var(--m-red)',
+                              cursor: 'pointer',
+                              fontSize: 18,
+                              lineHeight: 1,
+                              padding: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                {editing ? (
+                  <>
+                    <MButton variant="primary" onClick={saveAndPush} disabled={!canPush}>
+                      {isSubmitting ? 'Pushing…' : 'Save + push'}
+                    </MButton>
+                    <MButton variant="quiet" onClick={cancelEditing} disabled={isSubmitting}>
+                      Cancel
+                    </MButton>
+                  </>
+                ) : (
+                  <MButton variant="primary" onClick={handlePush} disabled={!canPush}>
+                    {isSubmitting ? 'Pushing…' : 'Push to crew'}
+                  </MButton>
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT — live preview (sticky) */}
+            <div className="d-card" style={{ position: 'sticky', top: 24 }}>
+              <div style={MONO_LABEL_DESKTOP}>Live preview</div>
+
+              {/* Goal slab — the headline the crew sees first. */}
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '14px 16px',
+                  background: 'var(--m-ink)',
+                  color: 'var(--m-card)',
+                }}
+              >
+                <div style={{ ...MONO_LABEL_DESKTOP, color: 'var(--m-accent)' }}>TODAY&apos;S GOAL</div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontFamily: 'var(--m-font-display)',
+                    fontWeight: 800,
+                    fontSize: 20,
+                    lineHeight: 1.25,
+                    letterSpacing: '-0.02em',
+                  }}
+                >
+                  {goal.trim() || 'Your goal shows up here.'}
+                </div>
+              </div>
+
+              {/* Numbered steps as the crew will read them. */}
+              <div style={{ ...MONO_LABEL_DESKTOP, marginTop: 16 }}>STEP PLAN</div>
+              <ol style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
+                {previewSteps.length === 0 ? (
+                  <li style={{ color: 'var(--m-ink-3)', fontSize: 13, padding: '6px 0' }}>
+                    Steps appear here as you add them.
+                  </li>
+                ) : (
+                  previewSteps.map((step, idx) => (
+                    <li
+                      key={step.id ?? idx}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 10,
+                        padding: '8px 0',
+                        borderBottom: idx === previewSteps.length - 1 ? 'none' : '1px solid var(--m-line)',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: 'var(--m-num)',
+                          fontWeight: 700,
+                          fontSize: 13,
+                          color: 'var(--m-ink-3)',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {String(idx + 1).padStart(2, '0')}
+                      </span>
+                      <span style={{ fontSize: 15, lineHeight: 1.35 }}>{step.title.trim()}</span>
+                    </li>
+                  ))
+                )}
+              </ol>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* DSendReminders — bulk crew reminder modal with per-recipient toggles. */}
+      <DModal
+        open={remindersOpen}
+        onClose={() => setRemindersOpen(false)}
+        title={`Send reminders · ${selectedCount} selected`}
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <MButton size="sm" variant="quiet" onClick={() => setRemindersOpen(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              size="sm"
+              variant="primary"
+              disabled={selectedCount === 0}
+              onClick={() => {
+                // TODO: wire to a crew/notification send hook. Closes for now.
+                setRemindersOpen(false)
+              }}
+            >
+              {`Send ${selectedCount} ${selectedCount === 1 ? 'reminder' : 'reminders'}`}
+            </MButton>
+          </div>
+        }
+      >
+        <div style={{ ...MONO_LABEL_DESKTOP, marginBottom: 10 }}>SAMPLE CREW · TOGGLE WHO GETS THE BRIEF</div>
+        <div className="d-stack" style={{ gap: 8 }}>
+          {DEMO_CREW.map((c) => {
+            const on = Boolean(selectedCrew[c.id])
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => toggleCrew(c.id)}
+                aria-pressed={on}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '12px 14px',
+                  border: '2px solid var(--m-ink)',
+                  background: on ? 'transparent' : 'var(--m-card-soft)',
+                  opacity: on ? 1 : 0.6,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 18,
+                    height: 18,
+                    flexShrink: 0,
+                    border: '2px solid var(--m-ink)',
+                    background: on ? 'var(--m-accent)' : 'transparent',
+                  }}
+                />
+                <span style={{ flex: 1 }}>
+                  <span style={{ display: 'block', fontWeight: 700, fontSize: 14, color: 'var(--m-ink)' }}>
+                    {c.name}
+                  </span>
+                  <span style={{ ...MONO_LABEL_DESKTOP, marginTop: 3 }}>{c.role}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </DModal>
+    </div>
+  )
 }

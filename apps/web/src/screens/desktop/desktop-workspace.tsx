@@ -65,8 +65,12 @@ import {
   type DNotifItem,
 } from '@/components/d'
 import { MButton } from '@/components/m'
-import { EstAiTakeoffSetup, EstAiTakeoffReview } from './est-ai-takeoff'
-import { EstAiCountSetup, EstAiCountReview } from './est-ai-count'
+// Phase B responsive consolidation: the AI takeoff/count screens are now single
+// responsive screens living in the mobile (canonical) tree — they render the
+// desktop layout at the `lg:` breakpoint. The former desktop twins
+// (est-ai-takeoff.tsx / est-ai-count.tsx) were deleted.
+import { TakeoffAiTakeoffSetup, TakeoffAiTakeoffReview } from '../mobile/takeoff-ai-takeoff'
+import { TakeoffAiCountSetup, TakeoffAiCountReview } from '../mobile/takeoff-ai-count'
 import { OwnerDashboard } from './owner-dashboard'
 import { OwnerProjects } from './owner-projects'
 import { OwnerTeam } from './owner-team'
@@ -76,6 +80,17 @@ import { OwnerMoney } from './owner-money'
 import { OwnerJobCosts } from './est-actuals'
 import { OwnerBudgetVariance } from './budget-variance'
 import { FmConfirmDay } from './fm-confirm-day'
+// Phase B responsive consolidation: the foreman desktop↔mobile twin pairs were
+// merged into one responsive screen each (the canonical file is the mobile one).
+// The desktop command center imports the desktop render from those merged files
+// via the preserved `Fm*` aliases; the standalone screens/desktop/fm-*.tsx twin
+// files were deleted.
+import { FmToday } from '../mobile/foreman-today'
+import { FmCrew } from '../mobile/foreman-crew'
+import { FmTime } from '../mobile/foreman-time-entry'
+import { FmBrief } from '../mobile/foreman-brief'
+import { FmBlockerDetail } from './fm-blocker-detail'
+import { FmLog } from '../mobile/foreman-log'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
 import { OwnerRentalsAsset } from './owner-rentals-asset'
@@ -91,15 +106,12 @@ import { EstAssemblies } from './est-assemblies'
 import { EstClientProfile } from './est-client-profile'
 import { EstQuantities } from './est-quantities'
 import { EstScaleVerify } from './est-scale-verify'
-import { EstPlanIngest } from './est-plan-ingest'
-import { FmToday } from './fm-today'
-import { FmCrew } from './fm-crew'
+// Plan ingest is now ONE responsive screen (Phase B merge); the desktop layout
+// renders at the `lg:` breakpoint inside the canonical mobile file.
+// (FmToday/FmCrew are imported above from the merged foreman mobile screens.)
+import { TakeoffIngest } from '../mobile/takeoff-ingest'
 import { EstCanvas } from './est-canvas'
 import { FmSchedule } from './fm-schedule'
-import { FmTime } from './fm-time'
-import { FmBrief } from './fm-brief'
-import { FmBlockerDetail } from './fm-blocker-detail'
-import { FmLog } from './fm-log'
 import { OwnerRentalsUtilization } from './owner-rentals-utilization'
 import { OwnerNewProject } from './owner-new-project'
 import { OwnerMessages } from './owner-messages'
@@ -821,7 +833,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="clients/:clientId" element={<EstClientProfile />} />
           <Route path="estimate/:projectId" element={<EstQuantities />} />
           <Route path="budget/:projectId" element={<OwnerBudgetVariance />} />
-          <Route path="ingest/:projectId" element={<EstPlanIngest />} />
+          <Route path="ingest/:projectId" element={<TakeoffIngest />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />
           <Route path="fm/today" element={<FmToday bootstrap={bootstrap} companySlug={companySlug ?? ''} />} />
@@ -834,10 +846,13 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
             path="fm/blocker/:issueId"
             element={<FmBlockerDetail bootstrap={bootstrap} companySlug={companySlug ?? ''} />}
           />
-          <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
-          <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
-          <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />
-          <Route path="ai-count/:projectId/review" element={<EstAiCountReview />} />
+          <Route path="ai-takeoff/:projectId" element={<TakeoffAiTakeoffSetup companySlug={companySlug ?? ''} />} />
+          <Route
+            path="ai-takeoff/:projectId/review"
+            element={<TakeoffAiTakeoffReview companySlug={companySlug ?? ''} />}
+          />
+          <Route path="ai-count/:projectId" element={<TakeoffAiCountSetup companySlug={companySlug ?? ''} />} />
+          <Route path="ai-count/:projectId/review" element={<TakeoffAiCountReview companySlug={companySlug ?? ''} />} />
           <Route path="*" element={<DComingSoon name="Screen" />} />
         </Routes>
       </RoleContext.Provider>
