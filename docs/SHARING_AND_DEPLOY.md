@@ -49,8 +49,10 @@ every demo deploy** — say so to the prospect. See
 
 ## 3. How deploy works now
 
-Deploy is **local-fleet, not GitHub Actions** (the Actions deploy workflows were
-removed in `70b9584`). One entrypoint, run from a fleet box:
+Deploy is **local-fleet, not GitHub Actions** — the repo runs **zero GitHub
+Actions** now (the Actions deploy workflows were removed in `70b9584`, and the
+last workflow `.github/workflows/quality.yml` was deleted on 2026-06-02). One
+entrypoint, run from a fleet box:
 
 ```bash
 scripts/deploy.sh <prod|dev|demo>
@@ -75,6 +77,21 @@ as `origin/dev` advances: it polls the desired SHA
 drift. **Prod stays manual and gated** — the watcher never touches it. The
 watcher script + systemd unit and its runbook live in
 [`AUTO_DEPLOY.md`](./AUTO_DEPLOY.md) (companion slice).
+
+**The verification gate.** There is **no CI gate** — the single verification
+authority is the local script:
+
+```bash
+npm run verify           # = bash scripts/verify-local.sh
+```
+
+`scripts/verify-local.sh` is what `scripts/deploy.sh` runs before it ships an
+image: `deploy.sh prod` runs the **full** gate (shell-syntax,
+migration-immutability, prettier, lint, typecheck, unit tests, the
+dockerfile-import guard, the post-build bundle-budget, and the docker-compose
+integration/e2e checks), and the fleet auto-deploy watcher runs it for the
+dev/demo tiers. Run it yourself before pushing. Nothing in this path queries
+GitHub Actions.
 
 ## 4. Pre-share checklist
 

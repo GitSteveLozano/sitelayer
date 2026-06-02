@@ -2,8 +2,10 @@
 
 **Status:** Tooling shipped; the operator installs the timer (one command below).
 **What it restores:** "merge to `dev` → it's live in ~2 minutes" — WITHOUT GitHub
-Actions (the Actions deploy workflows were removed in `70b9584b`; deploys are now
-local-fleet via `scripts/deploy.sh`).
+Actions. The repo runs **zero GitHub Actions** (the Actions deploy workflows were
+removed in `70b9584b`, and the last workflow `.github/workflows/quality.yml` was
+deleted on 2026-06-02); deploys are local-fleet via `scripts/deploy.sh`, and the
+single verification authority is the local gate `scripts/verify-local.sh`.
 
 ## What it does
 
@@ -119,6 +121,15 @@ replacement for it:
   (`touch …/PAUSED`) while you hand-deploy that tier, or just let the watcher's
   flock serialize.
 - `scripts/deploy.sh prod` is untouched and remains the **only** way prod ships.
+
+## The verification gate
+
+There is **no CI gate** — the single verification authority is the local script
+`scripts/verify-local.sh` (`npm run verify`), which `scripts/deploy.sh` runs
+before it ships. Because the watcher calls `scripts/deploy.sh <tier>` verbatim,
+every auto-deploy of `dev`/`demo` runs that gate too; the prod path
+(`deploy.sh prod`) runs the full gate before building the image. Nothing in this
+path queries GitHub Actions.
 
 ## Configuration (env overrides)
 

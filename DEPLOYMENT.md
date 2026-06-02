@@ -1,19 +1,21 @@
 # Sitelayer Deployment Guide
 
-> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> **DEPLOY MODEL UPDATED 2026-06-02.** Deploys are now local-fleet via
 > `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box — NOT GitHub
-> Actions. The GitHub Actions deploy workflows (`deploy-droplet.yml`,
-> `deploy-dev.yml`, `deploy-demo.yml`, `deploy-preview.yml`, plus
-> `preview-gc.yml` / `registry-gc.yml`) were all removed in commit
-> `70b9584b`. `quality.yml` (lint/build/test) stays as the passive CI net.
-> Where this doc says "the GitHub Actions workflow" / "push to `main`",
-> read it as "`scripts/deploy.sh prod` from the fleet". Prod runtime
-> secrets now live in `/app/sitelayer/.env` on the droplet (rendered once
-> from `ops/env/production.env.json` and **reused** by each local deploy —
-> the deploy script no longer re-uploads `.env`). Adopted policy: `main`
-> branch-protected (PR + green `Quality` + no force-push) and a
-> green-`Quality` gate landing in `deploy-production-local.sh` — until then
-> confirm `Quality` is green for the deploy SHA before deploying.
+> Actions. **The repo runs ZERO GitHub Actions.** The deploy workflows
+> (`deploy-droplet.yml`, `deploy-dev.yml`, `deploy-demo.yml`,
+> `deploy-preview.yml`, plus `preview-gc.yml` / `registry-gc.yml`) were
+> removed in commit `70b9584b`, and the last remaining workflow,
+> `.github/workflows/quality.yml`, was deleted on 2026-06-02. The single
+> verification authority is the **local gate** `scripts/verify-local.sh`
+> (`npm run verify`), run locally by the deploy path. Where this doc says
+> "the GitHub Actions workflow" / "push to `main`", read it as
+> "`scripts/deploy.sh prod` from the fleet". Prod runtime secrets now live
+> in `/app/sitelayer/.env` on the droplet (rendered once from
+> `ops/env/production.env.json` and **reused** by each local deploy — the
+> deploy script no longer re-uploads `.env`). `scripts/deploy.sh prod` runs
+> the full local gate before it ships the image, so there is no separate
+> "confirm CI is green" step.
 
 ## Overview
 

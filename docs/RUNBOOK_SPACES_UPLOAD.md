@@ -79,20 +79,17 @@ doctl compute ssh sitelayer --ssh-command="
 
 ## Mitigation (in order)
 
-1. **Re-render the production env via GitHub Actions** — this pulls fresh
-   secret values from the `production` environment and writes a new
-   `/app/sitelayer/.env`:
-
-   ```bash
-   gh workflow run deploy-droplet.yml --repo GitSteveLozano/sitelayer
-   gh run watch -R GitSteveLozano/sitelayer
-   ```
+1. **Re-render the production env on the droplet** — fix the bad value in
+   `/app/sitelayer/.env` directly (the live source of truth that each
+   local-fleet deploy reuses), or re-render it with
+   `scripts/render-production-env.mjs` from the `ops/env/production.env.json`
+   manifest. Deploys are local-fleet — there is no GitHub Actions
+   `production` environment to re-render from.
 
    If the cause is rotation drift, this is the whole fix.
 
-2. **Restart the API container** — the deploy workflow does this
-   automatically, but if you only need an env reload after a manual
-   `.env` edit (avoid this — prefer the workflow):
+2. **Restart the API container** — a prod deploy does this automatically,
+   but if you only need an env reload after the `.env` edit above:
 
    ```bash
    ssh sitelayer@10.118.0.4 \

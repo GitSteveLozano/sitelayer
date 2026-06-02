@@ -24,9 +24,14 @@ PR previews are ephemeral and per-PR (`sitelayer_pr_42` schema, dropped on PR cl
 
 ## Deploy contract
 
-> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> **DEPLOY MODEL UPDATED 2026-06-02.** Deploys are now local-fleet via
 > `scripts/deploy.sh dev` — the GitHub Actions `deploy-dev.yml` workflow and
-> the self-hosted preview runner were removed in commit `70b9584b`.
+> the self-hosted preview runner were removed in commit `70b9584b`. The repo
+> now runs **zero GitHub Actions** (the last workflow,
+> `.github/workflows/quality.yml`, was deleted on 2026-06-02); the single
+> verification authority is the local gate `scripts/verify-local.sh`
+> (`npm run verify`), which `scripts/deploy.sh` runs before it ships, and the
+> fleet auto-deploy watcher runs for the dev/demo tiers.
 
 From the fleet, `scripts/deploy.sh dev` (with `HEAD` on an origin branch, normally `dev`) SSHes to the preview droplet and invokes `scripts/deploy-preview.sh` with:
 

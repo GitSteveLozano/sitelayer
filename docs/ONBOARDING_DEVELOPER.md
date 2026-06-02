@@ -101,7 +101,7 @@ Variables you may want to set locally:
 | `QBO_*`                          | QBO OAuth + sandbox flags. Leave at placeholders; QBO sync is not on the golden path for collaborator work. | Placeholders                                                                            |
 | `SENTRY_DSN` / `VITE_SENTRY_DSN` | Optional; leave empty unless you want errors to flow.                                                       | Empty                                                                                   |
 
-**Never** put real secrets in a committed file or paste them into a shell that records history. `.env.example` documents names only; real production secrets live in GitHub Actions `production` environment (operator-only).
+**Never** put real secrets in a committed file or paste them into a shell that records history. `.env.example` documents names only; real production secrets live in `/app/sitelayer/.env` on the prod droplet (rendered from the `ops/env/production.env.json` manifest, operator-only) — there is no GitHub Actions secret store in the deploy path.
 
 ---
 
@@ -216,11 +216,13 @@ npm run typecheck --workspace @sitelayer/api
 # Unit tests (vitest, collocated).
 npm run test
 
-# Web bundle gzip budget (CI gate).
+# Web bundle gzip budget (part of the local gate).
 npm run web:bundle-budget
 
-# Full CI mirror — slow (~5-10 min cold). Run before pushing a non-trivial PR.
-npm run ci:quality
+# Full local gate — slow (~5-10 min cold). This is the single verification
+# authority (no CI). Run it before pushing; scripts/deploy.sh runs it too.
+npm run verify          # = bash scripts/verify-local.sh
+# (npm run ci:quality runs the same fast checks without the integration/e2e steps.)
 
 # Playwright E2E — requires the full local stack already up.
 npm run test:e2e

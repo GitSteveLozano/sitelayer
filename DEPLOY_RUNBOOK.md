@@ -1,24 +1,25 @@
 # Deploy Runbook
 
-Last updated: 2026-04-29 (deploy model updated 2026-06-01)
+Last updated: 2026-04-29 (deploy model updated 2026-06-02)
 
-> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> **DEPLOY MODEL UPDATED 2026-06-02.** Deploys are now local-fleet via
 > `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box — NOT GitHub
-> Actions. The GitHub Actions deploy workflows (`deploy-droplet.yml`,
-> `deploy-dev.yml`, `deploy-demo.yml`, `deploy-preview.yml`, plus
-> `preview-gc.yml` / `registry-gc.yml`) were all removed in commit
-> `70b9584b`. `quality.yml` (lint/build/test) stays as the passive CI net
-> and is what the planned green-gate will consume. The mechanics below
+> Actions. **The repo runs ZERO GitHub Actions.** The deploy workflows
+> (`deploy-droplet.yml`, `deploy-dev.yml`, `deploy-demo.yml`,
+> `deploy-preview.yml`, plus `preview-gc.yml` / `registry-gc.yml`) were
+> removed in commit `70b9584b`, and the last remaining workflow,
+> `.github/workflows/quality.yml`, was deleted on 2026-06-02. The single
+> verification authority is now the **local gate** `scripts/verify-local.sh`
+> (`npm run verify`), run locally by the deploy path. The mechanics below
 > (immutable migrations, pre-migration backup, image pinned to the built
 > SHA, `.last_*_deployed_sha` markers, rollback via
 > `scripts/rollback-droplet.sh`) are **unchanged** — only the orchestrator
 > moved from a CI runner to `scripts/deploy-production-local.sh` on the
-> fleet. Adopted policy: `main` is being GitHub-branch-protected (PR +
-> green `Quality` + no force-push) and a green-`Quality` gate is being
-> added to `deploy-production-local.sh` by a follow-on agent; **until that
-> gate lands, confirm `Quality` is green for the deploy SHA before running
-> a prod deploy.** Where this doc still says "the workflow" / "push to
-> `main`", read it as "`scripts/deploy.sh prod`" unless noted.
+> fleet, and the gate moved from GitHub `Quality` to `scripts/verify-local.sh`.
+> `scripts/deploy.sh prod` runs the full gate before it ships an image, so
+> there is no separate "confirm CI is green" step. Where this doc still says
+> "the workflow" / "push to `main`", read it as "`scripts/deploy.sh prod`"
+> unless noted.
 
 This is the operating contract for shipping changes to the production
 `sitelayer` droplet (`165.245.230.3`) and managed Postgres database
@@ -33,13 +34,14 @@ careless merge cannot break a paying customer.
 
 ## Hard rules
 
-1. **Nothing reaches prod without a green `Quality` for that exact SHA.**
-   Under the adopted trunk-ish model (2026-06-01), solo work may commit to
-   `main`/`dev` directly and prune branches aggressively; `main` is being
-   branch-protected (PR + green `Quality` + no force-push). Exercise risky
-   changes on `dev` / a preview first. The hard invariant: the SHA you
-   deploy to prod has a green `Quality` run — manually confirm it until the
-   green-gate lands in `deploy-production-local.sh`.
+1. **Nothing reaches prod without a green local gate for that exact SHA.**
+   Under the adopted trunk-ish model, solo work may commit to `main`/`dev`
+   directly and prune branches aggressively. Exercise risky changes on
+   `dev` / a preview first. The hard invariant: the SHA you deploy to prod
+   passes `scripts/verify-local.sh` — and it does, because
+   `scripts/deploy.sh prod` runs that gate locally **before** building and
+   shipping the image (break-glass `FORCE_DEPLOY_UNCHECKED=1` only). There
+   is no GitHub `Quality` status check to confirm; the gate is the deploy.
 
 2. **Migrations are forward-only.** Once a file in
    `docker/postgres/init/*.sql` exists on `main`, it is immutable. To
@@ -48,10 +50,12 @@ careless merge cannot break a paying customer.
    checksum per applied file and refuses to apply a file with the same
    name and a different checksum.
 
-3. **CI must be green.** `Quality` workflow on the PR has to pass.
-   `test-integration` runs every migration against a real Postgres 18
-   instance and boots the API against the resulting schema, so
-   migration breakage gets caught at PR time, not deploy time.
+3. **The local gate must be green.** `scripts/verify-local.sh`
+   (`npm run verify`) is the single verification authority — there is no CI
+   workflow. Its docker-compose integration check runs every migration
+   against a real Postgres 18 instance and boots the API against the
+   resulting schema, so migration breakage gets caught locally before the
+   deploy, not at deploy time.
 
 4. **Preview must be smoked.** Before merging, hit the changed
    surface on the preview URL printed in the PR comment
@@ -68,16 +72,17 @@ careless merge cannot break a paying customer.
 
 | Stage       | Trigger                       | Mechanism                                               | Target                                                              |
 | ----------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
-| PR / push   | every push (PR or branch)     | `.github/workflows/quality.yml` (CI net)                | none (validates only — lint/build/test)                             |
+| Verify gate | local, before every deploy    | `scripts/verify-local.sh` (`npm run verify`)            | none (validates only — lint/typecheck/test/build/integration/e2e)   |
 | Prod deploy | manual, from the fleet        | `scripts/deploy.sh prod` → `deploy-production-local.sh` | production droplet, `sitelayer_prod` Postgres                       |
 | Dev deploy  | manual, from the fleet        | `scripts/deploy.sh dev` → `deploy-preview.sh`           | `dev.sitelayer.sandolab.xyz`, `sitelayer_dev` Postgres              |
 | Demo deploy | manual, from the fleet        | `scripts/deploy.sh demo` → `deploy-preview.sh` (+ seed) | `demo.preview.sitelayer.sandolab.xyz`, `sitelayer_demo` Postgres    |
 | PR preview  | manual on the preview droplet | `scripts/deploy-preview.sh`                             | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
 
-The prod deploy builds + pushes the image on the fleet box, then SSHes
-(flock-locked) to the production droplet. There is no longer a self-hosted
-GitHub Actions runner in the deploy path (the `sitelayer-preview` runner was
-part of the removed Actions topology).
+The prod deploy runs the local gate, builds + pushes the image on the fleet
+box, then SSHes (flock-locked) to the production droplet. There is no GitHub
+Actions in the deploy path at all — the repo runs zero workflows (the
+`sitelayer-preview` self-hosted runner was part of the removed Actions
+topology, and `quality.yml` was deleted on 2026-06-02).
 
 ## Migration workflow in detail
 
@@ -85,8 +90,8 @@ part of the removed Actions topology).
 It is invoked by:
 
 - Local dev: `npm run db:migrate`
-- CI: `quality.yml` → `test-integration` job, against an ephemeral
-  Postgres 18 service container
+- Verify gate: `scripts/verify-local.sh`'s docker-compose integration
+  check, against an ephemeral Postgres 18 service container
 - Preview/dev/demo deploy: `scripts/deploy-preview.sh` against
   `sitelayer_preview` / `sitelayer_dev` / `sitelayer_demo`
 - Prod deploy: inline in `scripts/deploy-production-local.sh` (the SSH
@@ -108,10 +113,11 @@ Inside the script:
 Because the wrapper transaction includes both the migration body and the
 ledger insert, a failed migration leaves zero state behind.
 
-### CI catches edits at PR time
+### The local gate catches edits before deploy
 
-`scripts/check-migrations-immutable.sh` runs on every PR (wired into
-`quality.yml`). It diffs the PR branch against the merge-base with
+`scripts/check-migrations-immutable.sh` runs as part of the local gate
+(`scripts/verify-local.sh`, which `scripts/deploy.sh prod` runs before it
+ships). It diffs the working branch against the merge-base with
 `origin/main` and fails if any pre-existing `docker/postgres/init/*.sql`
 file shows up as `M` (modified), `D` (deleted), or `R` (renamed). New
 files are always allowed.
@@ -335,11 +341,12 @@ prod`, which builds the image, pushes it to the DO registry, and SSHes
 to the prod droplet as the `sitelayer` deploy user (key authorized on the
 fleet). Whoever can run that script on a fleet box with the deploy key can
 deploy — so the fleet box's access to the deploy key is the gate. The
-adopted policy (rolling in) tightens this further: `main` is being
-GitHub-branch-protected (PR + green `Quality` + no force-push) and a
-green-`Quality` gate is being added to `deploy-production-local.sh` by a
-follow-on agent. **Until that gate lands, confirm `Quality` is green for
-the deploy SHA before deploying.**
+verification gate is built in: `scripts/deploy.sh prod` runs
+`scripts/verify-local.sh` locally before it builds or ships, so a deploy
+cannot ship a SHA that fails the gate (break-glass `FORCE_DEPLOY_UNCHECKED=1`
+only). GitHub branch protection on `main` (PR + review) is optional
+code-review hygiene; it is no longer enforced by any status check, since the
+repo runs zero GitHub Actions.
 
 Manual SSH access is for diagnostics only:
 
@@ -356,10 +363,11 @@ Before turning on either of the QBO live flags in prod
 (`QBO_LIVE_RENTAL_INVOICE=1`, `QBO_LIVE_ESTIMATE_PUSH=1`), exercise
 `scripts/qbo-sandbox-smoke.sh` against a real Intuit sandbox.
 
-CI runs `apps/api/src/qbo-material-bill-sync.test.ts` against a
-localhost mock, which catches request-shape regressions but not
-authentication, rate-limiting, or schema-validation behaviours that
-real QBO enforces. Those only show up against a live sandbox.
+The local gate (`scripts/verify-local.sh`) runs
+`apps/api/src/qbo-material-bill-sync.test.ts` against a localhost mock,
+which catches request-shape regressions but not authentication,
+rate-limiting, or schema-validation behaviours that real QBO enforces.
+Those only show up against a live sandbox.
 
 ### Sandbox provisioning (one-time, per developer or per CI)
 

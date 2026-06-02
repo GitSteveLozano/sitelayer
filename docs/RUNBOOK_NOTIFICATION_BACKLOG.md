@@ -78,20 +78,23 @@ ssh sitelayer@10.118.0.4 \
    backs off via `next_attempt_at` so a recovering provider drains the
    backlog without intervention. Watch the gauge drop.
 
-2. **If `NOTIFICATIONS_ENABLED=0` accidentally** — set back to `1` via
-   `gh variable set NOTIFICATIONS_ENABLED --env production --body 1`
-   and trigger a re-deploy (worker bounce reads new env).
+2. **If `NOTIFICATIONS_ENABLED=0` accidentally** — set it back to `1` in
+   `/app/sitelayer/.env` on the prod droplet (the live source of truth) and
+   bounce the worker so it re-reads env (`docker compose -f
+docker-compose.prod.yml up -d --force-recreate worker`). Deploys are
+   local-fleet — there is no GitHub Actions `production` environment.
 
 3. **If env vars rotated mid-run** — verify `CLERK_SECRET_KEY`,
-   `RESEND_API_KEY` (or `SENDGRID_API_KEY`) on the droplet match the
-   GitHub Actions `production` environment values:
+   `RESEND_API_KEY` (or `SENDGRID_API_KEY`) on the droplet are the intended
+   values (`/app/sitelayer/.env` is the live source; the
+   `ops/env/production.env.json` manifest defines names/scope):
 
    ```bash
    ssh sitelayer@10.118.0.4 "grep -E '^(CLERK_SECRET_KEY|RESEND_API_KEY|SENDGRID_API_KEY)=' /app/sitelayer/.env | sed 's/=.*/=***/'"
    ```
 
-   If they disagree, re-run `gh workflow run deploy-droplet.yml` to
-   re-render `/app/sitelayer/.env` from the production environment.
+   If a value is wrong, edit `/app/sitelayer/.env` in place (or re-render it
+   via `scripts/render-production-env.mjs`) and bounce the worker.
 
 4. **If a small number of rows are stuck claimed by a crashed worker**
    (claim_token set, `next_attempt_at` in the past, `status='pending'`):
@@ -118,7 +121,8 @@ ssh sitelayer@10.118.0.4 \
    ```
 
    Note: this restarts in place; if the underlying image needs to change
-   (env structure differs across SHAs), use the deploy workflow instead.
+   (env structure differs across SHAs), re-deploy via `scripts/deploy.sh prod`
+   from the fleet instead.
 
 ## Verifying recovery
 

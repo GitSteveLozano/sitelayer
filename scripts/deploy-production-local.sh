@@ -67,11 +67,12 @@ fi
 # GitHub Actions" check: deploys went fully local-fleet (NHL-style), so both
 # the Actions deploy workflows and the CI green-gate coupling are gone.
 #
-# Runs the fast, deterministic half of quality.yml (shell syntax, migration
-# immutability, prettier, lint, typecheck, unit tests, dockerfile-import guard).
-# Integration/e2e (need a live DB + API) stay in PR CI; runtime correctness is
-# verified post-deploy by the droplet health check + verify-prod-deploy.sh
-# below. web:bundle-budget runs after the build (it checks the built bundle).
+# Runs the fast, deterministic checks (shell syntax, migration immutability,
+# prettier, lint, typecheck, unit tests, dockerfile-import guard) — the same
+# set the local gate scripts/verify-local.sh runs. The repo runs no GitHub
+# Actions; runtime correctness is verified post-deploy by the droplet health
+# check + verify-prod-deploy.sh below. web:bundle-budget runs after the build
+# (it checks the built bundle).
 #
 # Break-glass: FORCE_DEPLOY_UNCHECKED=1 skips the gate (loud warning).
 if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ]; then
@@ -129,8 +130,8 @@ VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RA
 VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
 SENTRY_RELEASE="$GIT_SHA" GIT_SHA="$GIT_SHA" APP_BUILD_SHA="$GIT_SHA" \
   npm run build
-# Web bundle-budget guard (was part of the Quality CI gate; runs here now,
-# against the freshly-built dist, before we package the image).
+# Web bundle-budget guard (part of the local gate; runs here against the
+# freshly-built dist, before we package the image).
 if [ "${FORCE_DEPLOY_UNCHECKED:-0}" != "1" ]; then
   npm run web:bundle-budget
 fi

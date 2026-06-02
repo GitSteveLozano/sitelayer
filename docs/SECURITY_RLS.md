@@ -116,15 +116,15 @@ CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localh
   npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
 ```
 
-CI: the `test-integration` job in `.github/workflows/quality.yml` exports
-the same URL automatically once the migration has run against the
+Local gate: `scripts/verify-local.sh`'s docker-compose integration check
+exports the same URL automatically once the migration has run against the
 ephemeral Postgres service.
 
 Preview deploys intentionally skip the constrained-role migration. The
 preview stack connects to the managed preview database as the app role, which
 does not have `CREATEROLE`; the preview app does not need the runtime probe
-login role. Local Docker and CI still run the migration and exercise the
-probe.
+login role. Local Docker and the local integration gate still run the
+migration and exercise the probe.
 
 ## When you add a new company-scoped table
 
@@ -144,12 +144,12 @@ Do **not** edit migration 066; it is immutable per `CLAUDE.md` deploy rules.
 - Enable+force RLS on the remaining tables per the sequence above
   (`clock_events`, `labor_entries`, `daily_logs`, then projects/blueprint/
   takeoff/estimate, then reference data).
-- Add a CI check that greps for direct `ctx.pool.query(` in route
+- Add a local-gate check that greps for direct `ctx.pool.query(` in route
   handlers and fails if the call isn't inside `withMutationTx` /
   `withCompanyClient` (the audit done in Phase 2 was manual).
 - Drop the `app_current_company_id() IS NULL OR ...` permissive clause
   once every read goes through a scoped client; tighten the policy to a
   strict equality check.
-- Provision a non-superuser app role in CI so the integration test suite
-  actually exercises RLS enforcement (currently `sitelayer` is BYPASSRLS
-  per `.github/workflows/quality.yml`).
+- Provision a non-superuser app role in the integration gate so the test
+  suite actually exercises RLS enforcement (currently `sitelayer` is
+  BYPASSRLS in the docker-compose integration check).

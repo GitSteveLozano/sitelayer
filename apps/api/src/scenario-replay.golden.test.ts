@@ -9,9 +9,10 @@ import { applyScenarioFixture } from './admin-scenarios.js'
 /**
  * Scenario-replay golden tests against an ephemeral Postgres.
  *
- * Gated on RUN_API_INTEGRATION=1 (the CI `test-integration` job spins up a
- * migrated Postgres 18 — see .github/workflows/quality.yml). Each test runs in
- * its own BEGIN/ROLLBACK so it leaves no residue.
+ * Gated on RUN_API_INTEGRATION=1 (the local gate's docker-compose integration
+ * check spins up a migrated Postgres 18 — see scripts/verify-local.sh; the repo
+ * runs no GitHub Actions). Each test runs in its own BEGIN/ROLLBACK so it leaves
+ * no residue.
  *
  * This is the row-level parity proof for `@sitelayer/scenario`: it applies the
  * real `scenarios/*.yaml` through the engine + the real `seedCompanyDefaults`

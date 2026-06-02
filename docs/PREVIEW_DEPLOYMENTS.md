@@ -124,7 +124,7 @@ Current default:
 
 ## Deploy Flow
 
-Preview/dev/demo deploys are fleet-driven, not GitHub Actions. The `.github/workflows/deploy-preview.yml` workflow and the self-hosted `sitelayer-preview` runner were removed in commit `70b9584b`; only `.github/workflows/quality.yml` remains, and it is optional passive PR CI (lint/build/test) — not a deploy gate.
+Preview/dev/demo deploys are fleet-driven, not GitHub Actions. The `.github/workflows/deploy-preview.yml` workflow and the self-hosted `sitelayer-preview` runner were removed in commit `70b9584b`; the last remaining workflow, `.github/workflows/quality.yml`, was deleted on 2026-06-02, so **no GitHub Actions remain**. The single verification authority is the local gate `scripts/verify-local.sh` (`npm run verify`), run by `scripts/deploy.sh` and the fleet auto-deploy watcher — there is no CI deploy gate.
 
 Run the deploy from a fleet box (e.g. taylor-pc-ubuntu):
 

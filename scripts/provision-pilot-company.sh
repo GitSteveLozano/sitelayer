@@ -17,10 +17,10 @@
 #     company + memberships") names these two endpoints explicitly. A
 #     bash wrapper is the smallest thing that ratchets it from
 #     "unchecked" to "checked".
-#   - Production deploys must go through the GitHub Actions pipeline,
-#     but provisioning is a one-time tenant bootstrap done by the
-#     operator AFTER deploy with their Clerk identity. Curl-from-host
-#     is the right granularity.
+#   - Production deploys go through the local-fleet path
+#     (scripts/deploy.sh prod, off GitHub Actions), but provisioning is a
+#     one-time tenant bootstrap done by the operator AFTER deploy with
+#     their Clerk identity. Curl-from-host is the right granularity.
 #
 # Required env:
 #   SITELAYER_API_URL       e.g. https://sitelayer.sandolab.xyz/api or
