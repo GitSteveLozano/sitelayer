@@ -18,6 +18,7 @@
 // redacts further.
 
 import { getActiveCaptureSessionId } from './capture-session'
+import { resolveCaptureCapabilities } from './capture-capabilities'
 
 export const TRACE_CONSENT_VERSION = '2026-05-29'
 const CONSENT_KEY = 'sitelayer.trace-consent'
@@ -44,7 +45,7 @@ type BeaconEvent = {
   payload: Record<string, unknown>
 }
 
-function beaconUrl(): string {
+export function beaconUrl(): string {
   try {
     return String((import.meta as { env?: Record<string, string> }).env?.VITE_TRACE_BEACON_URL || '').trim()
   } catch {
@@ -52,7 +53,7 @@ function beaconUrl(): string {
   }
 }
 
-function dntOptOut(): boolean {
+export function dntOptOut(): boolean {
   if (typeof navigator === 'undefined') return true
   const nav = navigator as unknown as { doNotTrack?: string; globalPrivacyControl?: boolean }
   if (nav.globalPrivacyControl === true) return true
@@ -79,7 +80,10 @@ export function setTraceBeaconConsent(accepted: boolean): void {
 }
 
 function beaconEnabled(): boolean {
-  return Boolean(beaconUrl()) && !dntOptOut() && traceBeaconConsentGranted()
+  // Single source of truth for the capability ladder. The resolver composes the
+  // same gate (URL configured + consent granted + not DNT) from this module's
+  // leaf helpers; see capture-capabilities.ts.
+  return resolveCaptureCapabilities().beacon
 }
 
 function sessionId(): string {

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle, Mic, Square, X } from 'lucide-react'
-import { isAudioCaptureSupported } from '@/lib/capture-recorder'
+import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import { clearLocalCaptureSession, currentCaptureRoutePath, startLocalCaptureSession } from '@/lib/capture-session'
 import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
 import {
@@ -114,7 +114,7 @@ async function appendPortalFeedbackEvent(
 export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderProps) {
   const invite = inviteToken()
   const enabled = Boolean(invite) && Boolean(shareToken)
-  const audioSupported = isAudioCaptureSupported()
+  const audioSupported = resolveCaptureCapabilities().audio
   const replayEnabled = captureReplayEnabled()
   const backend = useMemo(() => portalBackend(surface, shareToken), [surface, shareToken])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
