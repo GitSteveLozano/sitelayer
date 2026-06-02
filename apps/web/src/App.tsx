@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
@@ -31,18 +31,14 @@ import {
  */
 const SHOW_ROLE_SWITCHER = !isClerkConfigured() && import.meta.env.MODE !== 'production'
 
-// Authenticated workspace router. It resolves the caller's company first,
-// then picks the admin shell or the field shell from permissions.
-const WorkspaceRoute = lazy(() => import('@/routes/workspace'))
-
-// Canonical field shell from PR #229. `/m/*` remains as a legacy alias
-// for links that pointed directly at the mobile shell before the
-// admin-first workspace router became the root.
-const MRoute = lazy(() => import('@/routes/m'))
+// Unified responsive app shell (Phase D). Resolves the caller's company +
+// persona once, then renders ONE route tree: the `/desktop` command-center
+// section (sidebar/⌘K chrome) and the field/mobile section (bottom-tab chrome)
+// behind a single shell. Replaces the former split between routes/workspace
+// (mobile root), screens/desktop/desktop-workspace (`/desktop/*`), and the
+// `/m/*` alias.
+const AppShellRoute = lazy(() => import('@/screens/app-shell'))
 const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
-const DesktopWorkspaceRoute = lazy(() =>
-  import('@/screens/desktop/desktop-workspace').then((m) => ({ default: m.DesktopWorkspace })),
-)
 // Desktop v2 account-setup wizard (steve-desktop-3). Full-screen, pre-workspace
 // — mounted at the root (NOT under /desktop) so it renders without the command-
 // center sidebar/topbar chrome. `/onboarding` is already the mobile install /
@@ -388,15 +384,31 @@ function AppShellRoutes() {
 
       {/* Dev-only primitive showcase. */}
       <Route path="/m-preview" element={<MPreviewRoute />} />
-      <Route path="/desktop/*" element={<DesktopWorkspaceRoute />} />
 
-      {/* Legacy alias -- original mount of the mobile shell. */}
-      <Route path="/m/*" element={<MRoute basePath="/m" />} />
+      {/* Legacy `/m/*` alias — the original mount of the mobile shell (PR #229)
+          before the field shell promoted to the app root. No internal code
+          links at it anymore, but keep a thin redirect so any external
+          bookmark resolves to the canonical unprefixed path instead of 404ing.
+          `/m/foo` → `/foo`. */}
+      <Route path="/m" element={<Navigate to="/" replace />} />
+      <Route path="/m/*" element={<LegacyMRedirect />} />
 
-      {/* Workspace shell -- canonical UX, claims everything else. */}
-      <Route path="/*" element={<WorkspaceRoute />} />
+      {/* Unified responsive shell — ONE shell + ONE route tree. Claims the
+          `/desktop` command-center section and everything else (field/mobile).
+          The forced `/` → `/desktop` redirect is gone; landing is persona-aware
+          inside the shell. */}
+      <Route path="/*" element={<AppShellRoute />} />
     </Routes>
   )
+}
+
+// `/m/<rest>` → `/<rest>` back-compat redirect. The mobile shell used to mount
+// under `/m/*`; nothing internal points there now, but a thin redirect keeps any
+// stale external link resolving to the canonical unprefixed route.
+function LegacyMRedirect() {
+  const location = useLocation()
+  const rest = location.pathname.replace(/^\/m(?=\/|$)/, '') || '/'
+  return <Navigate to={`${rest}${location.search}${location.hash}`} replace />
 }
 
 // Full-screen desktop onboarding wrapper. Lives at /welcome so it renders
