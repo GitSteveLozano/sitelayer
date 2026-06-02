@@ -341,6 +341,88 @@ describe('handleAdminRoutes — POST /api/admin/scenarios/:slug/apply (P3 mutati
   })
 })
 
+describe('handleAdminRoutes — POST /api/admin/scenarios/:slug/reset (§5A mutation)', () => {
+  const url = (slug = 'mid-flight-rental') => new URL(`http://x/api/admin/scenarios/${slug}/reset`)
+  const runScenarioApply: ScenarioApplyRunner = async (a) => ({
+    slug: a.slug,
+    company_slug: a.target ?? 'acme-midflight',
+    company_id: 'co-1',
+    applied: true,
+  })
+  const readBody = async () => ({})
+
+  it('resets a fixture (idempotent reseed) and returns the result with reset:true', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, runScenarioApply }))
+    expect(calls[0]?.status).toBe(200)
+    expect(calls[0]?.body).toMatchObject({ company_id: 'co-1', applied: true, reset: true })
+  })
+
+  it('retargets the company via { target }', async () => {
+    const seen: Array<{ slug: string; target?: string }> = []
+    const runner: ScenarioApplyRunner = async (a) => {
+      seen.push(a)
+      return { slug: a.slug, company_slug: a.target ?? 'x', company_id: 'co-2', applied: true }
+    }
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, readBody: async () => ({ target: 'demo-co-2' }), runScenarioApply: runner }),
+    )
+    expect(seen[0]).toMatchObject({ target: 'demo-co-2' })
+    expect(calls[0]?.status).toBe(200)
+  })
+
+  it('400s an invalid target slug', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({ sendJson, readBody: async () => ({ target: 'Not A Slug' }), runScenarioApply }),
+    )
+    expect(calls[0]?.status).toBe(400)
+  })
+
+  it('404s an unknown fixture (runner returns null)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url('nope'), deps({ sendJson, readBody, runScenarioApply: async () => null }))
+    expect(calls[0]?.status).toBe(404)
+  })
+
+  it('blocks reset in prod (scenarios are dev/demo only)', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody, runScenarioApply, tier: 'prod' }))
+    expect(calls[0]?.status).toBe(403)
+  })
+
+  it('501s when no runner is wired', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody }))
+    expect(calls[0]?.status).toBe(501)
+  })
+
+  it('still enforces the superadmin gate (non-clerk identity → 401, never reseeds)', async () => {
+    const { calls, sendJson } = capture()
+    let ran = false
+    await handleAdminRoutes(
+      req('POST'),
+      url(),
+      deps({
+        sendJson,
+        identity: { userId: 'x', source: 'header' },
+        readBody,
+        runScenarioApply: async (a) => {
+          ran = true
+          return { slug: a.slug, company_slug: 'x', company_id: 'co', applied: true }
+        },
+      }),
+    )
+    expect(calls[0]?.status).toBe(401)
+    expect(ran).toBe(false)
+  })
+})
+
 describe('handleAdminRoutes — demo-link', () => {
   const url = () => new URL('http://x/api/admin/demo-link')
   const fakeDemoLink = (over: Partial<DemoLinkCapability> = {}): DemoLinkCapability => ({

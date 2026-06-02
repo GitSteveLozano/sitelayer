@@ -225,6 +225,9 @@ function ScenariosTab() {
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<ScenarioApplyResult | null>(null)
   const [applyError, setApplyError] = useState<string | null>(null)
+  const [resetting, setResetting] = useState(false)
+  const [resetResult, setResetResult] = useState<ScenarioApplyResult | null>(null)
+  const [resetError, setResetError] = useState<string | null>(null)
   const list = useLoad<{ scenarios: ScenarioSummary[] }>(true, '/api/admin/scenarios')
   const plan = useLoad<{ plan: PlanPreview }>(
     !!selected,
@@ -234,6 +237,8 @@ function ScenariosTab() {
   useEffect(() => {
     setApplyResult(null)
     setApplyError(null)
+    setResetResult(null)
+    setResetError(null)
     setTarget('')
   }, [selected])
 
@@ -253,6 +258,25 @@ function ScenariosTab() {
       setApplyError(err instanceof Error ? err.message : String(err))
     } finally {
       setApplying(false)
+    }
+  }
+
+  async function doReset() {
+    if (!selected) return
+    setResetting(true)
+    setResetResult(null)
+    setResetError(null)
+    try {
+      const body = target.trim() ? { target: target.trim() } : {}
+      const res = await request<ScenarioApplyResult>(`/api/admin/scenarios/${encodeURIComponent(selected)}/reset`, {
+        method: 'POST',
+        json: body,
+      })
+      setResetResult(res)
+    } catch (err) {
+      setResetError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setResetting(false)
     }
   }
 
@@ -292,7 +316,8 @@ function ScenariosTab() {
             </ol>
             <div style={{ marginTop: 12, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
               <p style={{ ...styles.muted, marginBottom: 6 }}>
-                Apply to the dev/demo DB (optionally as a fresh company). Blocked in prod.
+                Apply (or reset) to the dev/demo DB (optionally as a fresh company). Blocked in prod. Reset idempotently
+                re-asserts the curated fixture (additive reseed — see PR notes).
               </p>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input
@@ -324,12 +349,36 @@ function ScenariosTab() {
                 >
                   {applying ? 'Applying…' : 'Apply'}
                 </button>
+                <button
+                  type="button"
+                  disabled={resetting}
+                  onClick={() => void doReset()}
+                  style={{
+                    background: '#fff',
+                    color: resetting ? '#9ca3af' : '#b45309',
+                    border: `1px solid ${resetting ? '#e5e7eb' : '#f59e0b'}`,
+                    borderRadius: 6,
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: resetting ? 'default' : 'pointer',
+                  }}
+                >
+                  {resetting ? 'Resetting…' : 'Reset to scenario'}
+                </button>
               </div>
               {applyError && <div style={{ ...styles.err, marginTop: 8 }}>{applyError}</div>}
               {applyResult && (
                 <p style={{ color: '#15803d', fontSize: 13, marginTop: 8 }}>
                   ✓ Seeded <span style={styles.code}>{applyResult.company_slug}</span> ·{' '}
                   {applyResult.company_id.slice(0, 8)}…
+                </p>
+              )}
+              {resetError && <div style={{ ...styles.err, marginTop: 8 }}>{resetError}</div>}
+              {resetResult && (
+                <p style={{ color: '#15803d', fontSize: 13, marginTop: 8 }}>
+                  ✓ Reset <span style={styles.code}>{resetResult.company_slug}</span> ·{' '}
+                  {resetResult.company_id.slice(0, 8)}… to its scenario fixture.
                 </p>
               )}
             </div>
