@@ -2,18 +2,36 @@
 
 ## Status
 
-**Phase 2 — append-only tables enforced (current).** Migration
-`073_rls_enable_phase_2.sql` flips RLS ENABLED + FORCED on the four
-append-only / queue tables: `audit_events`, `workflow_event_log`,
-`mutation_outbox`, `sync_events`. The policy still permits NULL GUC
-(`app_current_company_id() IS NULL OR company_id = ...`), so any code
-path that forgets to bind `app.company_id` still works — but writes are
-checked under WITH CHECK once the GUC is set, so accidental cross-company
-inserts now fail loudly.
+**Phase 3 — company-scoped surface ENFORCED + gated (current).** RLS is
+ENABLED + FORCED across the company-scoped domain tables: the bulk flip
+landed in `085_rls_enable_phase_3.sql` (the ~65 tables from the 066
+policy sweep), `101_v2_rls.sql` (the v2 entity tables), and the
+per-table migrations that flip RLS in the same file that creates a new
+company-scoped table (e.g. `088`, `092`, `103`, `104`, `105`, `120`,
+`124`, `125`, `131`, and `145_asset_deployments_rls.sql`). The policy
+still permits NULL GUC (`app_current_company_id() IS NULL OR company_id =
+...`), so legacy/debug paths keep working, but every read inside a
+`withCompanyClient` / `withMutationTx` closure is filtered and every
+INSERT/UPDATE is checked under WITH CHECK.
 
-The remaining 60+ tables (`projects`, `customers`, `takeoff_*`,
-`estimate_*`, etc.) are still shadow-mode (policy defined, RLS not yet
-enabled). Phase 3 will extend the enforcement after staging soak time.
+`asset_deployments` was the canonical gap: migration `118` created it
+with `company_id NOT NULL` AFTER the 085 flip but added no policy and
+never enabled RLS, so it shipped unforced. `145_asset_deployments_rls.sql`
+closes it (policy + ENABLE + FORCE, mirroring 066/085/101), and the
+**forced-coverage audit is now a blocking gate** so the next such table
+fails verification instead of shipping silently — see
+[The RLS audit is a blocking gate](#the-rls-audit-is-a-blocking-gate).
+
+**Still ENABLE-not-FORCE (intentional).** The four append-only / queue
+tables `audit_events`, `workflow_event_log`, `mutation_outbox`,
+`sync_events` are ENABLED but NOT FORCED, so `pg_dump` running as the
+table owner can still back them up (migration
+`078_rls_no_force_for_owner_dumps.sql`). The app role is a non-owner and
+stays filtered by the policy. A handful of company-scoped tables remain
+unforced as tracked follow-ups (nullable-`company_id` globals and known
+gaps); they are enumerated in `RLS_FORCE_AUDIT_ALLOWLIST` (see the gate
+section) so the gate stays green today while still blocking new
+offenders.
 
 **Phase 1 — shadow mode (historical).** Migration `066_row_level_security.sql`
 defines `company_isolation` policies on every company-scoped table. The
@@ -126,30 +144,69 @@ does not have `CREATEROLE`; the preview app does not need the runtime probe
 login role. Local Docker and the local integration gate still run the
 migration and exercise the probe.
 
+## The RLS audit is a blocking gate
+
+`apps/api/src/routes/rls-phase3-audit.test.ts` runs in the integration
+stage of `scripts/verify-local.sh`, which sets `RLS_PHASE3_FAIL_ON_LEAK=1`.
+With that flag the audit is a **hard gate**, not a report. Two checks fail
+the build:
+
+1. **Static route audit.** Any audited route that issues a raw
+   `pool.query(` outside a `withCompanyClient` / `withMutationTx` closure
+   (and is not a documented cross-company admin read marked with
+   `rawQueryExemptReason`) fails.
+
+2. **Forced-coverage audit (the asset_deployments-gap catcher).** Defined
+   in `apps/api/src/routes/rls-force-audit.ts`, it queries the live
+   post-migration schema for every `public` table with a `company_id`
+   column and reads `pg_class.relforcerowsecurity`. Any table that is NOT
+   forced AND NOT on `RLS_FORCE_AUDIT_ALLOWLIST` is a failure. This is what
+   would have caught `asset_deployments` at gate time.
+
+Run it locally:
+
+```bash
+docker compose up -d db
+DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
+  RUN_API_INTEGRATION=1 RLS_PHASE3_FAIL_ON_LEAK=1 \
+  npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
+```
+
+The pure pass/fail logic also has database-free unit coverage in
+`apps/api/src/routes/rls-force-audit.test.ts` (runs in the unit stage).
+
 ## When you add a new company-scoped table
 
-Add the policy in the same migration that creates the table:
+Add the policy AND enable+force RLS in the same migration that creates the
+table (mirror `101_v2_rls.sql` / `145_asset_deployments_rls.sql`):
 
 ```sql
 CREATE POLICY company_isolation ON your_new_table
   FOR ALL
   USING (app_current_company_id() IS NULL OR company_id = app_current_company_id())
   WITH CHECK (app_current_company_id() IS NULL OR company_id = app_current_company_id());
+ALTER TABLE your_new_table ENABLE ROW LEVEL SECURITY;
+ALTER TABLE your_new_table FORCE ROW LEVEL SECURITY;
 ```
+
+If you skip the ENABLE/FORCE, the forced-coverage gate above will fail your
+build — by design. If the table is genuinely not tenant-isolated (e.g. a
+nullable-`company_id` global catalog), add it to `RLS_FORCE_AUDIT_ALLOWLIST`
+in `apps/api/src/routes/rls-force-audit.ts` with a one-line reason instead.
 
 Do **not** edit migration 066; it is immutable per `CLAUDE.md` deploy rules.
 
 ## Open work
 
-- Enable+force RLS on the remaining tables per the sequence above
-  (`clock_events`, `labor_entries`, `daily_logs`, then projects/blueprint/
-  takeoff/estimate, then reference data).
-- Add a local-gate check that greps for direct `ctx.pool.query(` in route
-  handlers and fails if the call isn't inside `withMutationTx` /
-  `withCompanyClient` (the audit done in Phase 2 was manual).
+- Force RLS on the remaining `KNOWN GAP` tables in
+  `RLS_FORCE_AUDIT_ALLOWLIST` (the pricing-override tables,
+  `rental_rate_tiers`, `qbo_sync_runs`, `takeoff_drafts`,
+  `takeoff_capture_artifacts`) and delete each from the allowlist as it is
+  closed so the gate protects it.
 - Drop the `app_current_company_id() IS NULL OR ...` permissive clause
   once every read goes through a scoped client; tighten the policy to a
   strict equality check.
-- Provision a non-superuser app role in the integration gate so the test
-  suite actually exercises RLS enforcement (currently `sitelayer` is
-  BYPASSRLS in the docker-compose integration check).
+- Provision a non-superuser app role in the integration gate so the
+  runtime probe (`CONSTRAINED_DB_URL`) runs by default (currently
+  `sitelayer` is BYPASSRLS in the docker-compose integration check, so the
+  probe tests skip).
