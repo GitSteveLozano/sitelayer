@@ -399,6 +399,57 @@ exports[`plan golden snapshots > takeoff-bulk.yaml plans to a stable shape 1`] =
 }
 `;
 
+exports[`plan golden snapshots > takeoff-canvas-states.yaml plans to a stable shape 1`] = `
+{
+  "counts": {
+    "boms": 0,
+    "capture_sessions": 0,
+    "change_orders": 0,
+    "crew_schedules": 0,
+    "customers": 1,
+    "damage_charges": 0,
+    "estimates": 0,
+    "inventory": 0,
+    "projects": 4,
+    "qbo_sync_runs": 0,
+    "rental_requests": 0,
+    "rentals": 0,
+    "takeoff_drafts": 3,
+    "worker_issues": 0,
+    "workers": 0,
+  },
+  "ops": [
+    "query membership:e2e-admin",
+    "query membership:e2e-office",
+    "query membership:e2e-member",
+    "company_defaults company_defaults",
+    "query customer:cust",
+    "query project:manual",
+    "query project:uncal",
+    "query project:ai",
+    "query project:empty",
+    "query blueprint_document:bp-manual",
+    "query blueprint_page:pg-manual",
+    "query blueprint_document:bp-uncal",
+    "query blueprint_page:pg-uncal",
+    "query blueprint_document:bp-ai",
+    "query blueprint_page:pg-ai",
+    "query blueprint_document:bp-empty",
+    "query blueprint_page:pg-empty",
+    "query takeoff_condition:cond-wall",
+    "query takeoff_draft:manual-draft",
+    "query takeoff_draft:measurement:manual-draft:0",
+    "query takeoff_draft:measurement:manual-draft:1",
+    "query takeoff_draft:measurement:manual-draft:2",
+    "query takeoff_draft:measurement:manual-draft:3",
+    "query takeoff_draft:uncal-draft",
+    "query takeoff_draft:measurement:uncal-draft:0",
+    "query takeoff_draft:ai-draft",
+    "query takeoff_draft:measurement:ai-draft:0",
+  ],
+}
+`;
+
 exports[`plan golden snapshots — renderable takeoff fixtures > AI-capture draft pending review with geometry 1`] = `
 [
   "company_defaults company_defaults",
