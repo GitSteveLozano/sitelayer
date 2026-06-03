@@ -54,9 +54,7 @@ import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 
-import { MButton, MPill, MSelect } from '@/components/m'
-
-import { DEmptyState } from '@/components/d'
+import { MButton, MSelect } from '@/components/m'
 
 import { type Tool, type CanvasMode, type SheetCallout } from './types'
 import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS } from './constants'
@@ -75,6 +73,8 @@ import { CopyPanel } from './copy-panel'
 import { ConditionPicker } from './condition-picker'
 import { DraftHud } from './draft-hud'
 import { RunningTotals } from './running-totals'
+import { SingleSelectBar, BulkSelectToolbar } from './select-toolbars'
+import { JumpedFromPanel, SheetRefChip, EmptyDropzone, AssignItemAffordance } from './canvas-chrome'
 
 import { useTakeoffSession } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
@@ -1847,18 +1847,7 @@ export function EstCanvasDesktopBody() {
           clicked and offers a one-click RETURN to the source sheet. Floats
           top-right under the strip, clear of the AI/Item palettes. */}
       {jumpedFrom ? (
-        <div style={floatBox({ top: 232, right: 312, width: 240 })}>
-          <div style={floatHead}>● Jumped from {jumpedFrom.label}</div>
-          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ fontSize: 12, color: 'var(--m-ink)', lineHeight: 1.5 }}>
-              You followed a detail callout. This is the referenced sheet
-              {activePage ? ` (pg ${activePage.page_number})` : ''}.
-            </div>
-            <MButton variant="primary" onClick={returnFromJump}>
-              ← Return to {jumpedFrom.label}
-            </MButton>
-          </div>
-        </div>
+        <JumpedFromPanel label={jumpedFrom.label} activePage={activePage} onReturn={returnFromJump} />
       ) : null}
 
       {/* ---- TOOL palette (top-left, below the strip) ---- */}
@@ -2045,87 +2034,16 @@ export function EstCanvasDesktopBody() {
       </div>
 
       {/* ---- DCanvasSheetRef · sheet-reference chip (bottom-left) ---- */}
-      <div
-        style={floatBox({
-          bottom: 16,
-          left: 16,
-          padding: '8px 12px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-        })}
-      >
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            background: activeBlueprint ? 'var(--m-green)' : 'var(--m-ink-3)',
-            flexShrink: 0,
-          }}
-          aria-hidden
-        />
-        <span
-          style={{
-            fontFamily: 'var(--m-num)',
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            color: 'var(--m-ink)',
-          }}
-        >
-          {activeBlueprint
-            ? `Sheet · ${activeBlueprint.file_name}${activePage ? ` · pg ${activePage.page_number}` : ''}`
-            : 'No sheet · grid only'}
-        </span>
-        {activeBlueprint?.sheet_scale ? (
-          <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>
-            {activeBlueprint.sheet_scale}
-          </span>
-        ) : null}
-      </div>
+      <SheetRefChip activeBlueprint={activeBlueprint} activePage={activePage} />
 
       {/* ---- DCanvasEmpty · no-drawing dropzone (uses DEmptyState) ---- */}
       {!activeBlueprint && mode === 'draw' ? (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            style={{
-              pointerEvents: 'auto',
-              background: 'var(--m-card)',
-              border: '3px dashed var(--m-ink)',
-              maxWidth: 520,
-            }}
-          >
-            <DEmptyState
-              mark="↓"
-              title="Drop the plan set"
-              body="Plan set, drawings, or architect's PDF — up to 200MB, multi-page OK. Sheets, cross-references, and scales read automatically. Or pick a blueprint from the Item palette."
-              action={
-                canUploadBlueprint ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
-                    <MButton
-                      variant="primary"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadBlueprint.isPending}
-                    >
-                      {uploadBlueprint.isPending ? 'Uploading…' : '↑ Upload blueprint'}
-                    </MButton>
-                    {uploadError ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{uploadError}</div> : null}
-                  </div>
-                ) : undefined
-              }
-            />
-          </div>
-        </div>
+        <EmptyDropzone
+          canUploadBlueprint={canUploadBlueprint}
+          uploadPending={uploadBlueprint.isPending}
+          uploadError={uploadError}
+          onPickFile={() => fileInputRef.current?.click()}
+        />
       ) : null}
 
       {/* ---- DCanvasScale · scale-calibration overlay (center) ---- */}
@@ -2216,77 +2134,24 @@ export function EstCanvasDesktopBody() {
 
       {/* ---- DCanvasEditMeasure · single-selection contextual action bar ---- */}
       {mode === 'select' && selectedMeasurement && bulkSelected.size === 1 ? (
-        <div
-          style={floatBox({
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            alignItems: 'stretch',
-          })}
-        >
-          <div style={{ padding: '14px 20px', borderRight: '2px solid var(--m-ink)' }}>
-            <span
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                color: 'var(--m-accent-ink)',
-                background: 'var(--m-accent)',
-                display: 'inline-block',
-                padding: '2px 6px',
-              }}
-            >
-              {editGeomId === selectedMeasurement.id
-                ? 'EDIT GEOM · DRAG A HANDLE'
-                : `SELECTED · ${selectedIndex >= 0 ? selectedIndex + 1 : '—'} OF ${blueprintMeasurements.length}`}
-            </span>
-            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 24, marginTop: 6 }}>
-              {formatQty(Number(selectedMeasurement.quantity))} {selectedMeasurement.unit} ·{' '}
-              {selectedMeasurement.service_item_code}
-            </div>
-          </div>
-          {(editGeomId === selectedMeasurement.id
-            ? ([
-                { l: patchMeasurement.isPending ? 'SAVING…' : 'APPLY', action: () => void commitEditGeom() },
-                { l: 'CANCEL', action: cancelEditGeom },
-              ] as const)
-            : ([
-                {
-                  l: 'REASSIGN',
-                  action: () => {
-                    if (selectedMeasurement) setReassignIds([selectedMeasurement.id])
-                    setItemPaletteOpen(true)
-                  },
-                },
-                { l: 'EDIT GEOM', action: onEditGeom },
-                { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
-                { l: copyOpen ? 'COPY ✕' : 'COPY…', action: () => setCopyOpen((v) => !v) },
-                { l: 'DELETE', danger: true, action: onDeleteSelected },
-              ] as const)
-          ).map((b, i, arr) => (
-            <button
-              key={b.l}
-              type="button"
-              onClick={b.action}
-              disabled={patchMeasurement.isPending && editGeomId === selectedMeasurement.id}
-              style={{
-                padding: '0 22px',
-                background: 'var(--m-card)',
-                color: 'danger' in b && b.danger ? 'var(--m-red)' : 'var(--m-ink)',
-                border: 'none',
-                borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                cursor: 'pointer',
-              }}
-            >
-              {b.l}
-            </button>
-          ))}
-        </div>
+        <SingleSelectBar
+          selectedMeasurement={selectedMeasurement}
+          selectedIndex={selectedIndex}
+          measurementCount={blueprintMeasurements.length}
+          editGeomId={editGeomId}
+          patchPending={patchMeasurement.isPending}
+          commitEditGeom={commitEditGeom}
+          cancelEditGeom={cancelEditGeom}
+          onReassign={() => {
+            setReassignIds([selectedMeasurement.id])
+            setItemPaletteOpen(true)
+          }}
+          onEditGeom={onEditGeom}
+          onDuplicate={onDuplicateSelected}
+          copyOpen={copyOpen}
+          toggleCopy={() => setCopyOpen((v) => !v)}
+          onDelete={onDeleteSelected}
+        />
       ) : null}
 
       {/* ---- Floating SHEETS panel (bottom-right) ----
@@ -2300,79 +2165,17 @@ export function EstCanvasDesktopBody() {
 
       {/* ---- DCanvasBulkSelect · marquee multi-selection toolbar (2+) ---- */}
       {mode === 'select' && bulkSelected.size >= 2 ? (
-        <div
-          style={floatBox({
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            alignItems: 'stretch',
-          })}
-        >
-          <div style={{ padding: '14px 24px', borderRight: '2px solid var(--m-ink)' }}>
-            <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>
-              MARQUEE SELECTION · {bulkSelected.size} {bulkSelected.size === 1 ? 'ITEM' : 'ITEMS'}
-            </div>
-            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 28, marginTop: 6 }}>
-              {formatQty(bulkTotal)}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setReassignIds(Array.from(bulkSelected))
-              setItemPaletteOpen(true)
-            }}
-            style={{
-              padding: '0 24px',
-              background: 'var(--m-card)',
-              border: 'none',
-              borderRight: '2px solid var(--m-ink)',
-              fontFamily: 'var(--m-num)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              cursor: 'pointer',
-            }}
-          >
-            REASSIGN ITEM
-          </button>
-          <button
-            type="button"
-            onClick={() => setCopyOpen((v) => !v)}
-            style={{
-              padding: '0 24px',
-              background: copyOpen ? 'var(--m-accent)' : 'var(--m-card)',
-              color: copyOpen ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-              border: 'none',
-              borderRight: '2px solid var(--m-ink)',
-              fontFamily: 'var(--m-num)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              cursor: 'pointer',
-            }}
-          >
-            {copyOpen ? 'COPY ✕' : 'COPY…'}
-          </button>
-          <button
-            type="button"
-            onClick={onBulkDelete}
-            style={{
-              padding: '0 24px',
-              background: 'var(--m-card)',
-              color: 'var(--m-red)',
-              border: 'none',
-              fontFamily: 'var(--m-num)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              cursor: 'pointer',
-            }}
-          >
-            DELETE {bulkSelected.size}
-          </button>
-        </div>
+        <BulkSelectToolbar
+          count={bulkSelected.size}
+          bulkTotal={bulkTotal}
+          onReassign={() => {
+            setReassignIds(Array.from(bulkSelected))
+            setItemPaletteOpen(true)
+          }}
+          copyOpen={copyOpen}
+          toggleCopy={() => setCopyOpen((v) => !v)}
+          onBulkDelete={onBulkDelete}
+        />
       ) : null}
 
       {/* ---- Copy / array / mirror panel (deep-dive H6) ----
@@ -2401,49 +2204,13 @@ export function EstCanvasDesktopBody() {
 
       {/* ---- "/" affordance to open the item palette while drawing ---- */}
       {mode === 'draw' && !itemPaletteOpen ? (
-        <button
-          type="button"
-          onClick={() => {
+        <AssignItemAffordance
+          selectedItem={selectedItem}
+          onOpen={() => {
             setReassignIds(null)
             setItemPaletteOpen(true)
           }}
-          aria-label="Assign item (command palette)"
-          style={floatBox({
-            bottom: 16,
-            right: 16,
-            padding: '8px 12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            cursor: 'pointer',
-          })}
-        >
-          <span
-            style={{
-              fontFamily: 'var(--m-num)',
-              fontWeight: 800,
-              fontSize: 12,
-              color: 'var(--m-accent-ink)',
-              background: 'var(--m-accent)',
-              padding: '1px 6px',
-            }}
-            aria-hidden
-          >
-            /
-          </span>
-          <span
-            style={{
-              fontFamily: 'var(--m-num)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              color: 'var(--m-ink)',
-            }}
-          >
-            ASSIGN ITEM
-          </span>
-          {selectedItem ? <MPill tone="accent">{selectedItem.code}</MPill> : null}
-        </button>
+        />
       ) : null}
     </div>
   )
