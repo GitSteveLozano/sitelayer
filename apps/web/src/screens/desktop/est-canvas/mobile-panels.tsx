@@ -1,6 +1,30 @@
 import { Spark, MI } from '@/components/m'
 import { formatQty } from '@/lib/takeoff/canvas-totals'
+import { type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { type MobileTool } from './types'
+
+// Field + action styling for the mobile copy panel (H6). Co-located with the
+// panel that owns them (moved verbatim from mobile-body.tsx).
+const mCopyLabelStyle: React.CSSProperties = {
+  flex: 1,
+  fontFamily: 'var(--m-num)',
+  fontSize: 9,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  color: 'var(--m-ink-4)',
+}
+const mCopyInputStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  marginTop: 4,
+  padding: '8px 8px',
+  border: '2px solid var(--m-ink-2)',
+  background: 'var(--m-sand)',
+  fontFamily: 'var(--m-num)',
+  fontSize: 13,
+  fontWeight: 700,
+  color: 'var(--m-ink)',
+}
 
 // ---------------------------------------------------------------------------
 // AI launch slab — "● AI · Count or draft with AI" — launches the mobile
@@ -354,6 +378,126 @@ export function MobileBulkFooter({
         >
           DELETE {bulkSelectedCount}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Copy / array / mirror panel (deep-dive H6). Renders when the COPY… toggle is
+// on and a copyable measurement is selected (single or bulk). Saves NEW
+// measurements via the create path — same item/unit/sheet — so quantities
+// recompute. Extracted verbatim from mobile-body.tsx.
+// ---------------------------------------------------------------------------
+export function MobileCopyPanel({
+  copyableCount,
+  copyDx,
+  copyDy,
+  copyCount,
+  copyMirror,
+  copyRotate,
+  copyBusy,
+  onCopyDx,
+  onCopyDy,
+  onCopyCount,
+  onCopyMirror,
+  onCopyRotate,
+  onRun,
+}: {
+  copyableCount: number
+  copyDx: string
+  copyDy: string
+  copyCount: string
+  copyMirror: MirrorAxis | 'none'
+  copyRotate: string
+  copyBusy: boolean
+  onCopyDx: (v: string) => void
+  onCopyDy: (v: string) => void
+  onCopyCount: (v: string) => void
+  onCopyMirror: (v: MirrorAxis | 'none') => void
+  onCopyRotate: (v: string) => void
+  onRun: (mode: 'offset' | 'array') => void
+}) {
+  const mCopyActionStyle: React.CSSProperties = {
+    flex: 1,
+    padding: '12px 8px',
+    border: 'none',
+    background: 'var(--m-accent)',
+    color: 'var(--m-accent-ink)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+    cursor: copyBusy ? 'not-allowed' : 'pointer',
+    opacity: copyBusy ? 0.6 : 1,
+  }
+  return (
+    <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
+      <div
+        style={{
+          padding: '10px 14px',
+          borderBottom: '1px solid var(--m-ink-2)',
+          fontFamily: 'var(--m-num)',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          color: 'var(--m-accent)',
+        }}
+      >
+        COPY · {copyableCount} {copyableCount === 1 ? 'MEASUREMENT' : 'MEASUREMENTS'}
+      </div>
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <label style={mCopyLabelStyle}>
+            OFFSET X
+            <input type="number" value={copyDx} onChange={(e) => onCopyDx(e.target.value)} style={mCopyInputStyle} />
+          </label>
+          <label style={mCopyLabelStyle}>
+            OFFSET Y
+            <input type="number" value={copyDy} onChange={(e) => onCopyDy(e.target.value)} style={mCopyInputStyle} />
+          </label>
+          <label style={mCopyLabelStyle}>
+            COUNT
+            <input
+              type="number"
+              min={1}
+              value={copyCount}
+              onChange={(e) => onCopyCount(e.target.value)}
+              style={mCopyInputStyle}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <label style={mCopyLabelStyle}>
+            MIRROR
+            <select
+              value={copyMirror}
+              onChange={(e) => onCopyMirror(e.target.value as MirrorAxis | 'none')}
+              style={mCopyInputStyle}
+            >
+              <option value="none">None</option>
+              <option value="x">Flip ↔</option>
+              <option value="y">Flip ↕</option>
+            </select>
+          </label>
+          <label style={mCopyLabelStyle}>
+            ROTATE °
+            <input
+              type="number"
+              value={copyRotate}
+              onChange={(e) => onCopyRotate(e.target.value)}
+              style={mCopyInputStyle}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" disabled={copyBusy} onClick={() => onRun('offset')} style={mCopyActionStyle}>
+            {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
+          </button>
+          <button type="button" disabled={copyBusy} onClick={() => onRun('array')} style={mCopyActionStyle}>
+            ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
+          </button>
+        </div>
       </div>
     </div>
   )

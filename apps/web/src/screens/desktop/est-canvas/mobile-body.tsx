@@ -68,6 +68,7 @@ import {
   MobileDeductToggle,
   MobileBulkSelectToggle,
   MobileBulkFooter,
+  MobileCopyPanel,
 } from './mobile-panels'
 
 // The phone canvas only surfaces three of the machine's six drawing tools
@@ -606,41 +607,6 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       setCopyBusy(false)
     }
   }
-  // Field + action styling for the mobile copy panel (H6).
-  const mCopyLabelStyle: React.CSSProperties = {
-    flex: 1,
-    fontFamily: 'var(--m-num)',
-    fontSize: 9,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
-    color: 'var(--m-ink-4)',
-  }
-  const mCopyInputStyle: React.CSSProperties = {
-    display: 'block',
-    width: '100%',
-    marginTop: 4,
-    padding: '8px 8px',
-    border: '2px solid var(--m-ink-2)',
-    background: 'var(--m-sand)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 13,
-    fontWeight: 700,
-    color: 'var(--m-ink)',
-  }
-  const mCopyActionStyle: React.CSSProperties = {
-    flex: 1,
-    padding: '12px 8px',
-    border: 'none',
-    background: 'var(--m-accent)',
-    color: 'var(--m-accent-ink)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    cursor: copyBusy ? 'not-allowed' : 'pointer',
-    opacity: copyBusy ? 0.6 : 1,
-  }
-
   useEffect(() => {
     if (!projectId) return
     return registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
@@ -983,95 +949,21 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         (single or bulk). Saves NEW measurements via the create
                         path — same item/unit/sheet — so quantities recompute. */}
                     {copyOpen && copyableTargets.length > 0 ? (
-                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
-                        <div
-                          style={{
-                            padding: '10px 14px',
-                            borderBottom: '1px solid var(--m-ink-2)',
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.06em',
-                            color: 'var(--m-accent)',
-                          }}
-                        >
-                          COPY · {copyableTargets.length}{' '}
-                          {copyableTargets.length === 1 ? 'MEASUREMENT' : 'MEASUREMENTS'}
-                        </div>
-                        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <label style={mCopyLabelStyle}>
-                              OFFSET X
-                              <input
-                                type="number"
-                                value={copyDx}
-                                onChange={(e) => setCopyDx(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              OFFSET Y
-                              <input
-                                type="number"
-                                value={copyDy}
-                                onChange={(e) => setCopyDy(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              COUNT
-                              <input
-                                type="number"
-                                min={1}
-                                value={copyCount}
-                                onChange={(e) => setCopyCount(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <label style={mCopyLabelStyle}>
-                              MIRROR
-                              <select
-                                value={copyMirror}
-                                onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
-                                style={mCopyInputStyle}
-                              >
-                                <option value="none">None</option>
-                                <option value="x">Flip ↔</option>
-                                <option value="y">Flip ↕</option>
-                              </select>
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              ROTATE °
-                              <input
-                                type="number"
-                                value={copyRotate}
-                                onChange={(e) => setCopyRotate(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <button
-                              type="button"
-                              disabled={copyBusy}
-                              onClick={() => void runCopyPlan('offset')}
-                              style={mCopyActionStyle}
-                            >
-                              {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={copyBusy}
-                              onClick={() => void runCopyPlan('array')}
-                              style={mCopyActionStyle}
-                            >
-                              ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                      <MobileCopyPanel
+                        copyableCount={copyableTargets.length}
+                        copyDx={copyDx}
+                        copyDy={copyDy}
+                        copyCount={copyCount}
+                        copyMirror={copyMirror}
+                        copyRotate={copyRotate}
+                        copyBusy={copyBusy}
+                        onCopyDx={setCopyDx}
+                        onCopyDy={setCopyDy}
+                        onCopyCount={setCopyCount}
+                        onCopyMirror={setCopyMirror}
+                        onCopyRotate={setCopyRotate}
+                        onRun={(mode) => void runCopyPlan(mode)}
+                      />
                     ) : null}
                     {/* Edit-committed-measurement action bar (msg22). Appears when a
                         saved polygon on the canvas is tapped. Hidden in bulk mode:
