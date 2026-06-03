@@ -1,10 +1,10 @@
 import { type PointerEvent as ReactPointerEvent } from 'react'
 import { calculatePolygonCentroid, type TakeoffPoint } from '@sitelayer/domain'
-import { type MeasurementGeometry, type TakeoffMeasurement } from '@/lib/api'
-import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { type MeasurementGeometry } from '@/lib/api'
+import { clamp, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { formatQty } from '@/lib/takeoff/canvas-totals'
 import { HEIGHT_PRESETS, stepperBtn } from './constants'
-import { type MobileCanvasSurfaceProps, type MobileScopeTotal } from './types'
+import { type MobileCanvasSurfaceProps } from './types'
 
 // ---------------------------------------------------------------------------
 // Segmented control — small two/three-up toggle built from m-btn so it
@@ -449,22 +449,6 @@ export function MobileCanvasSurface({
 // `quantity` WITHOUT the `is_deduction` sign that the desktop/server use. Until
 // that behavioral difference is reconciled it stays separate so the
 // Blocker-1 canvas-math extraction is a pure, behavior-identical refactor.
-export function buildMobileScopeTotals(measurements: TakeoffMeasurement[]): MobileScopeTotal[] {
-  const buckets = new Map<string, { quantity: number; units: Set<string>; count: number }>()
-  for (const m of measurements) {
-    const bucket = buckets.get(m.service_item_code) ?? { quantity: 0, units: new Set<string>(), count: 0 }
-    bucket.quantity += Number(m.quantity) || 0
-    bucket.units.add(m.unit)
-    bucket.count += 1
-    buckets.set(m.service_item_code, bucket)
-  }
-  return Array.from(buckets.entries())
-    .map(([code, b]) => ({
-      code,
-      quantity: round2(b.quantity),
-      unit: b.units.size === 1 ? (Array.from(b.units)[0] ?? '') : 'mixed',
-      count: b.count,
-      mixedUnits: b.units.size > 1,
-    }))
-    .sort((a, b) => b.quantity - a.quantity)
-}
+// buildMobileScopeTotals removed — it duplicated buildScopeTotals but dropped the
+// is_deduction sign (overcounting net quantity). The mobile body now uses the
+// canonical signed buildScopeTotals from lib/takeoff/canvas-totals.

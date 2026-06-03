@@ -54,10 +54,5 @@ export interface MobileCanvasSurfaceProps {
   onEditPoint: (idx: number, p: TakeoffPoint) => void
 }
 
-export interface MobileScopeTotal {
-  code: string
-  quantity: number
-  unit: string
-  count: number
-  mixedUnits: boolean
-}
+// MobileScopeTotal removed — the mobile body now uses the canonical ScopeTotal
+// from lib/takeoff/canvas-totals (identical shape, signed by is_deduction).

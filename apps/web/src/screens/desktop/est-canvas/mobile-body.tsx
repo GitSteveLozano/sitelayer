@@ -33,7 +33,7 @@ import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 
 import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
-import { formatQty } from '@/lib/takeoff/canvas-totals'
+import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 
 import {
   MBody,
@@ -57,7 +57,7 @@ import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
 
-import { SegmentedControl, WallHeightPanel, MobileCanvasSurface, buildMobileScopeTotals } from './mobile-components'
+import { SegmentedControl, WallHeightPanel, MobileCanvasSurface } from './mobile-components'
 
 // Desktop capability body — the full-bleed floating-palette command-center
 // takeoff editor. Phase C: rendered by the responsive `TakeoffCanvas` wrapper
@@ -597,7 +597,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     }
   }
 
-  const totals = useMemo(() => buildMobileScopeTotals(draftMeasurements), [draftMeasurements])
+  // Canonical signed totals (cutouts subtract) — was a drifted mobile copy that
+  // ignored is_deduction and overcounted net quantity.
+  const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
 
   // --- Render ---------------------------------------------------------------
