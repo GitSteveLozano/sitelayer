@@ -1,12 +1,7 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, createActor, fromPromise, setup, type Actor, type SnapshotFrom, type StateValue } from 'xstate'
-import {
-  calculateLinealLength,
-  calculatePolygonArea,
-  type PitchDriver,
-  type TakeoffPoint,
-} from '@sitelayer/domain'
+import { calculateLinealLength, calculatePolygonArea, type PitchDriver, type TakeoffPoint } from '@sitelayer/domain'
 
 /**
  * `takeoff-session` — the single state owner for the blueprint takeoff canvas.
@@ -396,8 +391,8 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           draftId: input.context.draftId,
         }),
       ),
-      commitMeasurement: fromPromise<{ measurementId: string }, { context: TakeoffSessionContext }>(
-        async ({ input }) => deps.commitMeasurement({ context: input.context }),
+      commitMeasurement: fromPromise<{ measurementId: string }, { context: TakeoffSessionContext }>(async ({ input }) =>
+        deps.commitMeasurement({ context: input.context }),
       ),
       calibratePage: fromPromise<void, { context: TakeoffSessionContext }>(async ({ input }) => {
         const { calibration, pageId } = input.context
@@ -417,13 +412,12 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           mode: input.context.capture.mode,
         }),
       ),
-      promoteCaptured: fromPromise<void, { context: TakeoffSessionContext; quantityIds: string[] }>(
-        async ({ input }) =>
-          deps.promoteCaptured({
-            projectId: input.context.projectId,
-            draftId: input.context.draftId,
-            quantityIds: input.quantityIds,
-          }),
+      promoteCaptured: fromPromise<void, { context: TakeoffSessionContext; quantityIds: string[] }>(async ({ input }) =>
+        deps.promoteCaptured({
+          projectId: input.context.projectId,
+          draftId: input.context.draftId,
+          quantityIds: input.quantityIds,
+        }),
       ),
     },
     actions: {
@@ -465,13 +459,67 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           }),
         }),
       },
-      SET_CONDITION: { actions: assign({ draft: ({ context, event }) => ({ ...context.draft, conditionId: event.conditionId }) }) },
-      SET_ELEVATION: { actions: assign({ draft: ({ context, event }) => ({ ...context.draft, elevation: event.elevation }) }) },
-      TOGGLE_DEDUCT: { actions: assign({ draft: ({ context }) => ({ ...context.draft, deduct: !context.draft.deduct }) }) },
+      SET_CONDITION: {
+        actions: assign({ draft: ({ context, event }) => ({ ...context.draft, conditionId: event.conditionId }) }),
+      },
+      SET_ELEVATION: {
+        actions: assign({ draft: ({ context, event }) => ({ ...context.draft, elevation: event.elevation }) }),
+      },
+      TOGGLE_DEDUCT: {
+        actions: assign({ draft: ({ context }) => ({ ...context.draft, deduct: !context.draft.deduct }) }),
+      },
       SET_PITCH: { actions: assign({ draft: ({ context, event }) => ({ ...context.draft, pitch: event.pitch }) }) },
       OPEN_OVERLAY: { actions: assign({ overlay: ({ event }) => event.overlay }) },
       CLOSE_OVERLAY: { actions: assign({ overlay: () => null }) },
       DISMISS_ERROR: { actions: 'clearError' },
+      // Selection is orthogonal to mode: on the phone canvas you can single- or
+      // bulk-select a committed measurement WHILE a draft is in progress (the
+      // draft slice persists across mode flips), so the pure selection setters
+      // are global. The `selecting` state still owns the same events at its own
+      // level (deepest handler wins there), plus the mode-transition events
+      // START_EDIT_GEOM / DRAG_VERTEX / APPLY_EDIT / OPEN_COPY which only make
+      // sense inside `selecting` and stay scoped to it.
+      SELECT_MEASUREMENT: {
+        actions: assign({
+          selection: ({ context, event }) => ({ ...context.selection, selectedId: event.measurementId, bulkIds: [] }),
+        }),
+      },
+      BULK_SELECT: {
+        actions: assign({
+          selection: ({ context, event }) => ({
+            ...context.selection,
+            bulkIds: event.ids,
+            selectedId: event.ids.length === 1 ? event.ids[0]! : null,
+          }),
+        }),
+      },
+      CLEAR_SELECTION: { actions: assign({ selection: () => defaultSelection() }) },
+      // Vertex-edit slice is likewise orthogonal: a form factor (the phone) that
+      // edits geometry from the same surface it draws on can populate / drag /
+      // clear the working edit point set without a mode flip (the draft slice
+      // must survive). When the machine IS in `selecting.browsing` the scoped
+      // handler additionally drives the editingVertex sub-state transition
+      // (deepest handler wins there); these globals just own the context.
+      START_EDIT_GEOM: {
+        actions: assign({
+          selection: ({ context, event }) => ({
+            ...context.selection,
+            editGeomId: event.measurementId,
+            editPoints: event.points,
+          }),
+        }),
+      },
+      DRAG_VERTEX: {
+        actions: assign({
+          selection: ({ context, event }) => {
+            const editPoints = (context.selection.editPoints ?? []).map((p, i) => (i === event.index ? event.point : p))
+            return { ...context.selection, editPoints }
+          },
+        }),
+      },
+      APPLY_EDIT: {
+        actions: assign({ selection: ({ context }) => ({ ...context.selection, editGeomId: null, editPoints: null }) }),
+      },
     },
     states: {
       loading: {
@@ -489,7 +537,9 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           },
           onError: {
             target: 'idle',
-            actions: assign({ error: ({ event }) => (event.error instanceof Error ? event.error.message : 'failed to load') }),
+            actions: assign({
+              error: ({ event }) => (event.error instanceof Error ? event.error.message : 'failed to load'),
+            }),
           },
         },
       },
@@ -498,12 +548,21 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
         on: {
           LOAD: 'loading',
           START_DRAW: 'drawing',
-          START_CALIBRATION: { target: 'calibrating', actions: assign({ calibration: ({ context }) => ({ ...context.calibration, points: [] }) }) },
+          START_CALIBRATION: {
+            target: 'calibrating',
+            actions: assign({ calibration: ({ context }) => ({ ...context.calibration, points: [] }) }),
+          },
           START_SELECT: 'selecting',
           START_CAPTURE: {
             target: 'capturing',
             actions: assign({
-              capture: ({ context, event }) => ({ ...context.capture, kind: event.kind, mode: event.mode ?? context.capture.mode, result: null, decisions: {} }),
+              capture: ({ context, event }) => ({
+                ...context.capture,
+                kind: event.kind,
+                mode: event.mode ?? context.capture.mode,
+                result: null,
+                decisions: {},
+              }),
             }),
           },
         },
@@ -518,7 +577,13 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           placing: {
             on: {
               PLACE_POINT: {
-                actions: assign({ draft: ({ context, event }) => ({ ...context.draft, points: [...context.draft.points, event.point], redo: [] }) }),
+                actions: assign({
+                  draft: ({ context, event }) => ({
+                    ...context.draft,
+                    points: [...context.draft.points, event.point],
+                    redo: [],
+                  }),
+                }),
               },
               UNDO_POINT: {
                 guard: ({ context }) => context.draft.points.length > 0,
@@ -550,7 +615,10 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
               onDone: { target: '#takeoffSession.idle', actions: 'clearDraftPoints' },
               onError: {
                 target: 'placing',
-                actions: assign({ error: ({ event }) => (event.error instanceof Error ? event.error.message : 'failed to save measurement') }),
+                actions: assign({
+                  error: ({ event }) =>
+                    event.error instanceof Error ? event.error.message : 'failed to save measurement',
+                }),
               },
             },
           },
@@ -569,14 +637,21 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
                 actions: assign({
                   calibration: ({ context, event }) => {
                     // Two points max; a third click restarts the reference line.
-                    const points = context.calibration.points.length >= 2 ? [event.point] : [...context.calibration.points, event.point]
+                    const points =
+                      context.calibration.points.length >= 2
+                        ? [event.point]
+                        : [...context.calibration.points, event.point]
                     return { ...context.calibration, points }
                   },
                 }),
               },
               SET_SCALE_LENGTH: {
                 actions: assign({
-                  calibration: ({ context, event }) => ({ ...context.calibration, lengthText: event.lengthText, unit: event.unit ?? context.calibration.unit }),
+                  calibration: ({ context, event }) => ({
+                    ...context.calibration,
+                    lengthText: event.lengthText,
+                    unit: event.unit ?? context.calibration.unit,
+                  }),
                 }),
               },
               APPLY_CALIBRATION: { target: 'applying', guard: 'scaleReady' },
@@ -589,7 +664,9 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
               onDone: { target: '#takeoffSession.idle' },
               onError: {
                 target: 'placing',
-                actions: assign({ error: ({ event }) => (event.error instanceof Error ? event.error.message : 'failed to calibrate') }),
+                actions: assign({
+                  error: ({ event }) => (event.error instanceof Error ? event.error.message : 'failed to calibrate'),
+                }),
               },
             },
           },
@@ -600,17 +677,41 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
         initial: 'browsing',
         on: {
           CANCEL: { target: 'idle', actions: assign({ selection: () => defaultSelection() }) },
-          SELECT_MEASUREMENT: { actions: assign({ selection: ({ context, event }) => ({ ...context.selection, selectedId: event.measurementId, bulkIds: [] }) }) },
-          BULK_SELECT: { actions: assign({ selection: ({ context, event }) => ({ ...context.selection, bulkIds: event.ids, selectedId: event.ids.length === 1 ? event.ids[0]! : null }) }) },
+          SELECT_MEASUREMENT: {
+            actions: assign({
+              selection: ({ context, event }) => ({
+                ...context.selection,
+                selectedId: event.measurementId,
+                bulkIds: [],
+              }),
+            }),
+          },
+          BULK_SELECT: {
+            actions: assign({
+              selection: ({ context, event }) => ({
+                ...context.selection,
+                bulkIds: event.ids,
+                selectedId: event.ids.length === 1 ? event.ids[0]! : null,
+              }),
+            }),
+          },
           CLEAR_SELECTION: { actions: assign({ selection: () => defaultSelection() }) },
-          START_REASSIGN: { actions: assign({ selection: ({ context, event }) => ({ ...context.selection, reassignIds: event.ids }) }) },
+          START_REASSIGN: {
+            actions: assign({ selection: ({ context, event }) => ({ ...context.selection, reassignIds: event.ids }) }),
+          },
         },
         states: {
           browsing: {
             on: {
               START_EDIT_GEOM: {
                 target: 'editingVertex',
-                actions: assign({ selection: ({ context, event }) => ({ ...context.selection, editGeomId: event.measurementId, editPoints: event.points }) }),
+                actions: assign({
+                  selection: ({ context, event }) => ({
+                    ...context.selection,
+                    editGeomId: event.measurementId,
+                    editPoints: event.points,
+                  }),
+                }),
               },
               OPEN_COPY: 'copying',
             },
@@ -620,13 +721,25 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
               DRAG_VERTEX: {
                 actions: assign({
                   selection: ({ context, event }) => {
-                    const editPoints = (context.selection.editPoints ?? []).map((p, i) => (i === event.index ? event.point : p))
+                    const editPoints = (context.selection.editPoints ?? []).map((p, i) =>
+                      i === event.index ? event.point : p,
+                    )
                     return { ...context.selection, editPoints }
                   },
                 }),
               },
-              APPLY_EDIT: { target: 'browsing', actions: assign({ selection: ({ context }) => ({ ...context.selection, editGeomId: null, editPoints: null }) }) },
-              CANCEL: { target: 'browsing', actions: assign({ selection: ({ context }) => ({ ...context.selection, editGeomId: null, editPoints: null }) }) },
+              APPLY_EDIT: {
+                target: 'browsing',
+                actions: assign({
+                  selection: ({ context }) => ({ ...context.selection, editGeomId: null, editPoints: null }),
+                }),
+              },
+              CANCEL: {
+                target: 'browsing',
+                actions: assign({
+                  selection: ({ context }) => ({ ...context.selection, editGeomId: null, editPoints: null }),
+                }),
+              },
             },
           },
           copying: {
@@ -653,17 +766,35 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
             invoke: {
               src: 'runCapture',
               input: ({ context }) => ({ context }),
-              onDone: { target: 'reviewing', actions: assign({ capture: ({ context, event }) => ({ ...context.capture, result: event.output.result }) }) },
+              onDone: {
+                target: 'reviewing',
+                actions: assign({
+                  capture: ({ context, event }) => ({ ...context.capture, result: event.output.result }),
+                }),
+              },
               onError: {
                 target: 'configuring',
-                actions: assign({ error: ({ event }) => (event.error instanceof Error ? event.error.message : 'capture failed') }),
+                actions: assign({
+                  error: ({ event }) => (event.error instanceof Error ? event.error.message : 'capture failed'),
+                }),
               },
             },
           },
           reviewing: {
             on: {
-              REVIEW_DECISION: { actions: assign({ capture: ({ context, event }) => ({ ...context.capture, decisions: { ...context.capture.decisions, [event.quantityId]: event.decision } }) }) },
-              TOGGLE_SHOW_LOW: { actions: assign({ capture: ({ context }) => ({ ...context.capture, showLow: !context.capture.showLow }) }) },
+              REVIEW_DECISION: {
+                actions: assign({
+                  capture: ({ context, event }) => ({
+                    ...context.capture,
+                    decisions: { ...context.capture.decisions, [event.quantityId]: event.decision },
+                  }),
+                }),
+              },
+              TOGGLE_SHOW_LOW: {
+                actions: assign({
+                  capture: ({ context }) => ({ ...context.capture, showLow: !context.capture.showLow }),
+                }),
+              },
               PROMOTE: 'promoting',
             },
           },
@@ -677,7 +808,9 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
               onDone: { target: '#takeoffSession.idle', actions: assign({ capture: () => defaultCapture() }) },
               onError: {
                 target: 'reviewing',
-                actions: assign({ error: ({ event }) => (event.error instanceof Error ? event.error.message : 'promote failed') }),
+                actions: assign({
+                  error: ({ event }) => (event.error instanceof Error ? event.error.message : 'promote failed'),
+                }),
               },
             },
           },
@@ -704,10 +837,7 @@ export interface TakeoffSessionSeed {
  * affordance to land the canvas in e.g. `{ drawing: 'placing' }` with 3 points
  * already placed, or `{ capturing: 'reviewing' }` with a result loaded.
  */
-export function takeoffSessionSeedActor(
-  machine: TakeoffSessionMachine,
-  seed: TakeoffSessionSeed,
-): TakeoffSessionActor {
+export function takeoffSessionSeedActor(machine: TakeoffSessionMachine, seed: TakeoffSessionSeed): TakeoffSessionActor {
   const context = buildTakeoffSessionContext(seed.context)
   const snapshot = machine.resolveState({ value: seed.value ?? 'idle', context })
   // `input` is required by the actor types even though the resolved snapshot
@@ -727,11 +857,31 @@ export interface UseTakeoffSessionOptions {
   pageId?: string | null
   draftId?: string | null
   deps?: TakeoffSessionDeps
+  /**
+   * Dev/test-only boot-into-a-named-state seam. When provided, the machine is
+   * rehydrated straight into `seed.value` with `seed.context` merged over the
+   * defaults — the canvas lands mid-draw / in AI review / etc. with no clicks.
+   * NO entry actions/actors fire (xstate `resolveState` rehydration), so the
+   * `loading → idle` load actor is skipped and the seeded state is authoritative.
+   * Callers gate this behind `import.meta.env.MODE !== 'production'`.
+   */
+  seed?: TakeoffSessionSeed | null
 }
 
 export function useTakeoffSession(options: UseTakeoffSessionOptions) {
   const machine = useMemo(() => createTakeoffSessionMachine(options.deps ?? unwiredTakeoffSessionDeps), [options.deps])
+  // A seed is a ONE-TIME boot snapshot, captured on first render: a later
+  // re-render (or the seed object identity changing) must never rehydrate the
+  // live machine out from under the user mid-session.
+  const seedRef = useRef(options.seed)
+  const initialSnapshot = useMemo(() => {
+    const seed = seedRef.current
+    if (!seed) return undefined
+    return machine.resolveState({ value: seed.value ?? 'idle', context: buildTakeoffSessionContext(seed.context) })
+    // resolveState is pure; the machine identity is stable for the deps lifetime.
+  }, [machine])
   const [state, send] = useMachine(machine, {
+    ...(initialSnapshot ? { snapshot: initialSnapshot } : {}),
     input: {
       projectId: options.projectId,
       companySlug: options.companySlug,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { calculateLinealLength, calculatePolygonArea, type TakeoffPoint } from '@sitelayer/domain'
+import { calculateLinealLength, calculatePolygonArea } from '@sitelayer/domain'
 import {
   useBlueprintPages,
   useCreateMeasurement,
@@ -57,7 +57,21 @@ import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
 
+import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
+import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
+
 import { SegmentedControl, WallHeightPanel, MobileCanvasSurface } from './mobile-components'
+
+// The phone canvas only surfaces three of the machine's six drawing tools
+// (POLY/RECT both map to the `polygon` value, plus `lineal` and `count`).
+// Narrow the machine's `TakeoffTool` down to the `MobileTool` the surface
+// understands so the rest of the body keeps its original, exhaustive
+// `polygon | lineal | count` switches without a stray arc/volume/rect branch.
+function toMobileTool(tool: TakeoffTool): MobileTool {
+  if (tool === 'lineal' || tool === 'arc') return 'lineal'
+  if (tool === 'count') return 'count'
+  return 'polygon' // polygon | rect | volume → the polygon draw surface
+}
 
 // Desktop capability body — the full-bleed floating-palette command-center
 // takeoff editor. Phase C: rendered by the responsive `TakeoffCanvas` wrapper
@@ -155,13 +169,56 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const serviceItems = useServiceItems()
   const items = useMemo(() => serviceItems.data?.serviceItems ?? [], [serviceItems.data])
 
+  // --- Session machine (CORE canvas state owner) ----------------------------
+  // The `takeoff-session` statechart is the single source of truth for the
+  // CORE drawing slices on the phone: the active `tool`, the in-progress draft
+  // `points`, and the committed-measurement `selection` (single / bulk / edit).
+  // Reads come off `session.context.draft` / `.selection`; writes dispatch
+  // machine events. Everything else below (manual qty, wall height, deduct,
+  // CSV import, copy panel, toasts) has no machine equivalent and stays local
+  // (hybrid by design). The dep actors stay unwired here — COMMIT/edit/etc.
+  // persist via the EXISTING TanStack-Query mutation hooks, then dispatch the
+  // matching machine event to reset the UI slice (so behavior is identical and
+  // the async actor wiring is a clean follow-up rather than a risky rewrite).
+  //
+  // `?seed=<name>` (dev/test only) boots the machine straight into a named
+  // state via resolveTakeoffSeed — a tester lands mid-polygon-draw with no
+  // clicks. Never honored in production.
+  const seedName = searchParams.get('seed')
+  const initialSeed = useMemo(() => {
+    if (!seedName || import.meta.env.MODE === 'production') return null
+    if (!(TAKEOFF_SEED_NAMES as readonly string[]).includes(seedName)) return null
+    return resolveTakeoffSeed(seedName, { projectId, companySlug, blueprintId: null, pageId: null, draftId: null })
+    // Captured ONCE at mount (empty deps); the live blueprint/page/draft picker
+    // re-syncs ids below. (react-hooks/exhaustive-deps is not enabled here.)
+  }, [])
+
+  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed })
+  const { context: sctx, dispatch: sdispatch } = session
+
+  // CORE slices now read from the machine.
+  const tool = toMobileTool(sctx.draft.tool)
+  const draftPoints = sctx.draft.points
+  const selectedId = sctx.selection.selectedId
+  const bulkIds = useMemo(() => new Set(sctx.selection.bulkIds), [sctx.selection.bulkIds])
+  const editId = sctx.selection.editGeomId
+  const editPoints = sctx.selection.editPoints ?? []
+
   // --- Entry state ----------------------------------------------------------
-  const [mode, setMode] = useState<MobileMode>('manual')
-  const [tool, setTool] = useState<MobileTool>('polygon')
+  // `mode` ('manual' | 'draw') has no clean 1:1 with the machine's exclusive
+  // modes (the phone draws AND selects on one surface), so it stays a thin
+  // local notion: 'draw' parks the machine in `drawing`, 'manual' in `idle`.
+  // Lazy-initialised from the boot snapshot so a `?seed=drawing-*` lands the
+  // phone on the draw tab WITHOUT the mode-sync effect cancelling the seeded
+  // draft on mount.
+  const [mode, setMode] = useState<MobileMode>(() => (session.matches('drawing') ? 'draw' : 'manual'))
   // The tool *label* the user picked (POLY/RECT/LIN/PT). RECT shares the
   // `polygon` tool value, so we track the label separately to highlight the
   // right chip without changing the draw behavior.
-  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT'>('POLY')
+  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT'>(() => {
+    const t = toMobileTool(sctx.draft.tool)
+    return t === 'lineal' ? 'LIN' : t === 'count' ? 'PT' : 'POLY'
+  })
   const [serviceItemCode, setServiceItemCode] = useState('')
   const [manualQty, setManualQty] = useState('')
   // LIN → area: optional wall height applied to a lineal trace (msg21). When
@@ -172,18 +229,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // deduction (its area subtracts from the net for its scope item) via the
   // real `is_deduction` field.
   const [deduct, setDeduct] = useState(false)
-  const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
-  // Committed-measurement selection (msg22 edit measurement). Tapping a saved
-  // polygon on the canvas selects it and opens the REASSIGN/DUPLICATE/DELETE
-  // action sheet, all wired to the real measurement PATCH/DELETE/create hooks.
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   // Bulk multi-select (msg23). When on, canvas taps toggle membership in a set
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
+  // `bulkMode` is the phone-only toggle (no machine equivalent); the bulk *set*
+  // itself lives in the machine's selection slice.
   const [bulkMode, setBulkMode] = useState(false)
-  const [bulkIds, setBulkIds] = useState<Set<string>>(() => new Set())
   // Copy / array / mirror tools (deep-dive gap H6). When a measurement is
   // selected (single or bulk), a small COPY panel offers copy-with-offset,
   // array-paste (N along a row), and mirror/rotate of the copies. Each copy is
@@ -198,10 +251,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const [copyBusy, setCopyBusy] = useState(false)
   // EDIT GEOM (msg22 vertex drag). When a saved polygon/lineal is selected, the
   // EDIT GEOM action turns its committed vertices into draggable handles; the
-  // working point set lives here until APPLY PATCHes the new geometry (server
-  // recomputes the quantity). `editId` mirrors `selectedId` while editing.
-  const [editId, setEditId] = useState<string | null>(null)
-  const [editPoints, setEditPoints] = useState<TakeoffPoint[]>([])
+  // working point set lives in the machine's `selection.editPoints` (read above
+  // as `editPoints`, with `editId` = `selection.editGeomId`) until APPLY
+  // PATCHes the new geometry (server recomputes the quantity).
   const editDragIdxRef = useRef<number | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
@@ -209,6 +261,31 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
   }, [serviceItemCode, items])
+
+  // Park the machine in the mode that matches the phone surface: 'draw' →
+  // `drawing` (so PLACE_POINT lands), 'manual' → `idle`. Selection/edit drive
+  // their own machine sub-states from the canvas handlers and are left alone
+  // here (only flip when actually entering/leaving the manual↔draw surfaces).
+  useEffect(() => {
+    if (mode === 'draw') {
+      // Land on the draw surface from idle (selecting cancels to idle first).
+      if (session.matches('selecting')) sdispatch({ type: 'CANCEL' })
+      if (!session.matches('drawing')) sdispatch({ type: 'START_DRAW' })
+    } else if (!session.matches('idle')) {
+      sdispatch({ type: 'CANCEL' })
+    }
+    // Re-runs only on a mode flip; `session`/`sdispatch` are stable for the
+    // machine's lifetime. (react-hooks/exhaustive-deps is not enabled here.)
+  }, [mode])
+
+  // Mirror the scope item into the machine draft so its commit guard + future
+  // wired actors see the same scope the UI persists with.
+  useEffect(() => {
+    if (serviceItemCode && sctx.draft.serviceItemCode !== serviceItemCode) {
+      sdispatch({ type: 'SET_SERVICE_ITEM', serviceItemCode })
+    }
+    // Mirror on scope change only. (react-hooks/exhaustive-deps is not enabled here.)
+  }, [serviceItemCode])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
   // LIN trace length (board-space) reused by the wall-height → area step.
@@ -226,6 +303,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     return draftPoints.length
   }, [mode, tool, manualQty, draftPoints, linHasHeight, linealLength, wallHeight])
 
+  // Clear the in-progress draft via the machine while staying on the draw
+  // surface (CANCEL drops points and lands in idle; START_DRAW re-enters
+  // drawing so the next PLACE_POINT is accepted).
+  const resetDraftPoints = () => {
+    sdispatch({ type: 'CANCEL' })
+    sdispatch({ type: 'START_DRAW' })
+  }
+
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = svgRef.current
     if (!svg) return
@@ -236,11 +321,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     if (editId) return
     // A tap on the empty grid deselects any committed measurement and starts
     // a fresh draft point.
-    if (selectedId) setSelectedId(null)
+    if (selectedId) sdispatch({ type: 'CLEAR_SELECTION' })
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
     const local = screenToBoardPoint(svg, e.clientX, e.clientY)
     if (!local) return
-    setDraftPoints((prev) => [...prev, { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }])
+    sdispatch({
+      type: 'PLACE_POINT',
+      point: { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) },
+    })
   }
 
   const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
@@ -287,7 +375,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         // Land on the selected draft; null falls back to the project default.
         draft_id: activeDraftId,
       })
-      setDraftPoints([])
+      // COMMIT-equivalent UI reset through the machine (persistence already
+      // happened above via the existing create hook — hybrid dep wiring).
+      if (mode !== 'manual') resetDraftPoints()
       setWallHeight(0)
       setDeduct(false)
       if (mode === 'manual') setManualQty('')
@@ -361,7 +451,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     setError(null)
     try {
       await deleteMeasurement.mutateAsync({ id: selected.id, expected_version: selected.version })
-      setSelectedId(null)
+      sdispatch({ type: 'CLEAR_SELECTION' })
       setSavedToast('Measurement deleted.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed')
@@ -374,12 +464,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     const geo = selected.geometry as MeasurementGeometry
     const pts = geo.points
     if (!pts || pts.length === 0) return
-    setEditId(selected.id)
-    setEditPoints(pts.map((p) => ({ x: p.x, y: p.y })))
+    sdispatch({ type: 'START_EDIT_GEOM', measurementId: selected.id, points: pts.map((p) => ({ x: p.x, y: p.y })) })
   }
   const cancelEditGeom = () => {
-    setEditId(null)
-    setEditPoints([])
+    // APPLY_EDIT clears the working edit slice (editGeomId/editPoints). The
+    // actual persist is the component's job (hybrid), so cancel and apply both
+    // reduce to "drop the working edit set" at the machine level.
+    sdispatch({ type: 'APPLY_EDIT' })
     editDragIdxRef.current = null
   }
   const commitEditGeom = async () => {
@@ -465,8 +556,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       }
       setSavedToast(made > 0 ? `Copied ${made} measurement${made === 1 ? '' : 's'}.` : 'Nothing to copy.')
       setCopyOpen(false)
-      setSelectedId(null)
-      setBulkIds(new Set())
+      sdispatch({ type: 'CLEAR_SELECTION' })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Copy failed')
     } finally {
@@ -556,15 +646,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     tool,
   ])
 
-  const toggleBulk = (id: string) =>
-    setBulkIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  const selectAllBulk = () => setBulkIds(new Set(canvasMeasurements.map((m) => m.id)))
-  const clearBulk = () => setBulkIds(new Set())
+  const toggleBulk = (id: string) => {
+    const next = new Set(sctx.selection.bulkIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    sdispatch({ type: 'BULK_SELECT', ids: Array.from(next) })
+  }
+  const selectAllBulk = () => sdispatch({ type: 'BULK_SELECT', ids: canvasMeasurements.map((m) => m.id) })
+  const clearBulk = () => sdispatch({ type: 'BULK_SELECT', ids: [] })
 
   const bulkReassign = async () => {
     if (bulkSelected.length === 0) return
@@ -721,8 +810,10 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                     ]}
                     value={mode}
                     onChange={(v) => {
+                      // The machine syncs to the new mode in an effect (START_DRAW
+                      // on 'draw', CANCEL — which clears the draft — on 'manual'),
+                      // so no explicit point clearing is needed here.
                       setMode(v as MobileMode)
-                      setDraftPoints([])
                       setError(null)
                     }}
                   />
@@ -821,9 +912,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                                 navigate(`/projects/${projectId}/takeoff-ai/detect`)
                                 return
                               }
-                              setTool(t.tool)
+                              // SET_TOOL resets the in-progress draft points in
+                              // the machine (the old setDraftPoints([]) is now
+                              // implicit), and we make sure we're on the draw
+                              // surface so the next tap places a point.
+                              sdispatch({ type: 'SET_TOOL', tool: t.tool })
+                              if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
                               setToolLabel(t.label)
-                              setDraftPoints([])
                               setWallHeight(0)
                               cancelEditGeom()
                             }}
@@ -884,10 +979,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         type="button"
                         onClick={() => {
                           setBulkMode((b) => !b)
-                          setSelectedId(null)
-                          clearBulk()
-                          setDraftPoints([])
-                          cancelEditGeom()
+                          // CLEAR_SELECTION resets selectedId + bulkIds + the edit
+                          // slice in one go; resetDraftPoints drops any in-progress
+                          // draft while keeping the draw surface live.
+                          sdispatch({ type: 'CLEAR_SELECTION' })
+                          resetDraftPoints()
+                          editDragIdxRef.current = null
                         }}
                         aria-pressed={bulkMode}
                         style={{
@@ -944,7 +1041,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                       onSelectMeasurement={(id) => {
                         if (editId) return // handles own the gestures while editing
                         if (bulkMode) toggleBulk(id)
-                        else setSelectedId((cur) => (cur === id ? null : id))
+                        // Toggle single selection through the machine: tapping the
+                        // already-selected row clears it.
+                        else sdispatch({ type: 'SELECT_MEASUREMENT', measurementId: selectedId === id ? null : id })
                       }}
                       underlay={
                         pdfEngineOn && blueprintIsPdf ? (
@@ -983,7 +1082,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                       editPoints={editPoints}
                       editDragIdxRef={editDragIdxRef}
                       onEditPoint={(idx, p) =>
-                        setEditPoints((prev) => prev.map((pt, i) => (i === idx ? { x: p.x, y: p.y } : pt)))
+                        sdispatch({ type: 'DRAG_VERTEX', index: idx, point: { x: p.x, y: p.y } })
                       }
                     />
                     {/* Bulk selection footer (msg23). */}
@@ -1176,8 +1275,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                       </div>
                     ) : null}
                     {/* Edit-committed-measurement action bar (msg22). Appears when a
-                        saved polygon on the canvas is tapped. */}
-                    {selected ? (
+                        saved polygon on the canvas is tapped. Hidden in bulk mode:
+                        the machine's BULK_SELECT sets `selectedId` when exactly one
+                        row is in the set, but the single-select bar must not show
+                        while multi-selecting (the canvas masks selection the same
+                        way via `bulkMode ? null : selectedId`). */}
+                    {selected && !bulkMode ? (
                       <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
                         <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
                           <div
@@ -1345,7 +1448,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                       <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                         <button
                           type="button"
-                          onClick={() => setDraftPoints((p) => p.slice(0, -1))}
+                          onClick={() => sdispatch({ type: 'UNDO_POINT' })}
                           disabled={draftPoints.length === 0}
                           style={{
                             padding: '8px 10px',
@@ -1364,7 +1467,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         </button>
                         <button
                           type="button"
-                          onClick={() => setDraftPoints([])}
+                          onClick={() => resetDraftPoints()}
                           disabled={draftPoints.length === 0}
                           style={{
                             padding: '8px 10px',

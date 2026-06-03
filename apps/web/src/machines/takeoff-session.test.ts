@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { renderHook, act } from '@testing-library/react'
 import { createActor } from 'xstate'
 import {
   buildTakeoffSessionContext,
@@ -9,8 +10,10 @@ import {
   minPointsForTool,
   takeoffSessionSeedActor,
   TOOL_GEOMETRY_KIND,
+  useTakeoffSession,
   type TakeoffSessionDeps,
 } from './takeoff-session'
+import { resolveTakeoffSeed } from './takeoff-session-seeds'
 
 // Flush the fromPromise microtask scheduler (6 turns — enough for an actor's
 // invoke onDone chain, matching headless-workflow.test.ts).
@@ -49,7 +52,11 @@ describe('takeoff-session: load → idle', () => {
   })
 
   it('surfaces a load error but still reaches idle (degraded, not stuck)', async () => {
-    const deps = makeDeps({ loadSession: vi.fn(async () => { throw new Error('boom') }) })
+    const deps = makeDeps({
+      loadSession: vi.fn(async () => {
+        throw new Error('boom')
+      }),
+    })
     const { actor } = startMachine(deps)
     await settle()
     expect(actor.getSnapshot().value).toBe('idle')
@@ -100,12 +107,27 @@ describe('takeoff-session: drawing', () => {
   })
 
   it('returns to placing with an error when the commit fails', async () => {
-    const deps = makeDeps({ commitMeasurement: vi.fn(async () => { throw new Error('save failed') }) })
+    const deps = makeDeps({
+      commitMeasurement: vi.fn(async () => {
+        throw new Error('save failed')
+      }),
+    })
     const { actor } = startMachine(deps)
     await settle()
     const seeded = takeoffSessionSeedActor(createTakeoffSessionMachine(deps), {
       value: { drawing: 'placing' },
-      context: { ...BASE_INPUT, draft: { tool: 'polygon', serviceItemCode: 'EPS', points: [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }] } },
+      context: {
+        ...BASE_INPUT,
+        draft: {
+          tool: 'polygon',
+          serviceItemCode: 'EPS',
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 10 },
+            { x: 10, y: 10 },
+          ],
+        },
+      },
     })
     seeded.start()
     seeded.send({ type: 'COMMIT' })
@@ -166,10 +188,20 @@ describe('takeoff-session: select / edit', () => {
     actor.send({ type: 'SELECT_MEASUREMENT', measurementId: 'm-9' })
     expect(actor.getSnapshot().context.selection.selectedId).toBe('m-9')
 
-    actor.send({ type: 'START_EDIT_GEOM', measurementId: 'm-9', points: [{ x: 0, y: 0 }, { x: 5, y: 5 }] })
+    actor.send({
+      type: 'START_EDIT_GEOM',
+      measurementId: 'm-9',
+      points: [
+        { x: 0, y: 0 },
+        { x: 5, y: 5 },
+      ],
+    })
     expect(actor.getSnapshot().value).toEqual({ selecting: 'editingVertex' })
     actor.send({ type: 'DRAG_VERTEX', index: 1, point: { x: 8, y: 8 } })
-    expect(actor.getSnapshot().context.selection.editPoints).toEqual([{ x: 0, y: 0 }, { x: 8, y: 8 }])
+    expect(actor.getSnapshot().context.selection.editPoints).toEqual([
+      { x: 0, y: 0 },
+      { x: 8, y: 8 },
+    ])
     actor.send({ type: 'APPLY_EDIT' })
     expect(actor.getSnapshot().value).toEqual({ selecting: 'browsing' })
     expect(actor.getSnapshot().context.selection.editGeomId).toBeNull()
@@ -227,7 +259,15 @@ describe('takeoff-session: seed/hydrate seam', () => {
       value: { drawing: 'placing' },
       context: {
         ...BASE_INPUT,
-        draft: { tool: 'polygon', serviceItemCode: 'EPS', points: [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }] },
+        draft: {
+          tool: 'polygon',
+          serviceItemCode: 'EPS',
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 10 },
+            { x: 10, y: 10 },
+          ],
+        },
       },
     })
     actor.start()
@@ -253,7 +293,17 @@ describe('takeoff-session: seed/hydrate seam', () => {
     const machine = createTakeoffSessionMachine(makeDeps())
     const actor = takeoffSessionSeedActor(machine, {
       value: 'idle',
-      context: { ...BASE_INPUT, calibration: { points: [{ x: 0, y: 0 }, { x: 50, y: 0 }], lengthText: '24', unit: 'ft' } },
+      context: {
+        ...BASE_INPUT,
+        calibration: {
+          points: [
+            { x: 0, y: 0 },
+            { x: 50, y: 0 },
+          ],
+          lengthText: '24',
+          unit: 'ft',
+        },
+      },
     })
     actor.start()
     expect(actor.getSnapshot().value).toBe('idle')
@@ -284,7 +334,18 @@ describe('takeoff-session: affordance golden map', () => {
 
     const ready = takeoffSessionSeedActor(machine, {
       value: { drawing: 'placing' },
-      context: { ...BASE_INPUT, draft: { tool: 'polygon', serviceItemCode: 'EPS', points: [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }] } },
+      context: {
+        ...BASE_INPUT,
+        draft: {
+          tool: 'polygon',
+          serviceItemCode: 'EPS',
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 10 },
+            { x: 10, y: 10 },
+          ],
+        },
+      },
     })
     ready.start()
     expect(ready.getSnapshot().can({ type: 'COMMIT' })).toBe(true)
@@ -307,5 +368,44 @@ describe('takeoff-session: pure helpers', () => {
     expect(ctx.draft.points).toEqual([])
     expect(ctx.viewport.zoom).toBe(1)
     expect(ctx.overlay).toBeNull()
+  })
+})
+
+describe('useTakeoffSession: ?seed boot seam (phone canvas wiring)', () => {
+  // This is the exact path the phone body takes for `?seed=drawing-polygon`:
+  // resolveTakeoffSeed(name, base) → useTakeoffSession({ seed }). The hook must
+  // rehydrate straight into the seeded state with the seeded points — no clicks,
+  // no load actor.
+  it('boots the machine into the seeded drawing state with the seeded points', () => {
+    const base = { projectId: 'p-1', companySlug: 'acme', blueprintId: null, pageId: null, draftId: null }
+    const seed = resolveTakeoffSeed('drawing-polygon', base)
+    expect(seed).not.toBeNull()
+
+    // Stable deps so the hook's machine memo doesn't churn across re-renders.
+    const deps = makeDeps()
+    const { result } = renderHook(() => useTakeoffSession({ projectId: 'p-1', companySlug: 'acme', deps, seed }))
+
+    // Landed mid-polygon-draw (skipping loading → idle), 3 seeded vertices, and
+    // the scope is set so COMMIT is unlocked — the testability win.
+    expect(result.current.value).toEqual({ drawing: 'placing' })
+    expect(result.current.context.draft.tool).toBe('polygon')
+    expect(result.current.context.draft.points).toHaveLength(3)
+    expect(result.current.canCommit).toBe(true)
+  })
+
+  it('without a seed it boots normally (loading → idle) and PLACE_POINT flows through dispatch', async () => {
+    const deps = makeDeps()
+    const { result } = renderHook(() => useTakeoffSession({ projectId: 'p-1', companySlug: 'acme', deps }))
+    expect(result.current.mode).toBe('loading')
+    // Let the loadSession actor settle into idle.
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve()
+    })
+    expect(result.current.mode).toBe('idle')
+    // Drive the machine the way the phone body does: events via `dispatch`.
+    act(() => result.current.dispatch({ type: 'START_DRAW' }))
+    act(() => result.current.dispatch({ type: 'PLACE_POINT', point: { x: 1, y: 2 } }))
+    expect(result.current.value).toEqual({ drawing: 'placing' })
+    expect(result.current.context.draft.points).toEqual([{ x: 1, y: 2 }])
   })
 })
