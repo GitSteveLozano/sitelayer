@@ -36,21 +36,7 @@ import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 
-import {
-  MBody,
-  MButton,
-  MChip,
-  MChipRow,
-  MI,
-  MInput,
-  MListInset,
-  MListRow,
-  MPill,
-  MSectionH,
-  MSelect,
-  MTopBar,
-  Spark,
-} from '@/components/m'
+import { MBody, MButton, MChip, MChipRow, MI, MInput, MSectionH, MSelect, MTopBar, Spark } from '@/components/m'
 import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
@@ -62,6 +48,16 @@ import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
 import { SegmentedControl, WallHeightPanel, MobileCanvasSurface } from './mobile-components'
+import {
+  MobileAiLaunch,
+  MobileToolToolbar,
+  MobileDeductToggle,
+  MobileBulkSelectToggle,
+  MobileBulkFooter,
+  MobileCopyPanel,
+  MobileMeasurementStrip,
+  MobileRunningTotals,
+} from './mobile-panels'
 
 // The phone canvas only surfaces three of the machine's six drawing tools
 // (POLY/RECT both map to the `polygon` value, plus `lineal` and `count`).
@@ -599,41 +595,6 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       setCopyBusy(false)
     }
   }
-  // Field + action styling for the mobile copy panel (H6).
-  const mCopyLabelStyle: React.CSSProperties = {
-    flex: 1,
-    fontFamily: 'var(--m-num)',
-    fontSize: 9,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
-    color: 'var(--m-ink-4)',
-  }
-  const mCopyInputStyle: React.CSSProperties = {
-    display: 'block',
-    width: '100%',
-    marginTop: 4,
-    padding: '8px 8px',
-    border: '2px solid var(--m-ink-2)',
-    background: 'var(--m-sand)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 13,
-    fontWeight: 700,
-    color: 'var(--m-ink)',
-  }
-  const mCopyActionStyle: React.CSSProperties = {
-    flex: 1,
-    padding: '12px 8px',
-    border: 'none',
-    background: 'var(--m-accent)',
-    color: 'var(--m-accent-ink)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    cursor: copyBusy ? 'not-allowed' : 'pointer',
-    opacity: copyBusy ? 0.6 : 1,
-  }
-
   useEffect(() => {
     if (!projectId) return
     return registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
@@ -856,164 +817,39 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                 </div>
 
                 {/* --- AI launch button --- */}
-                <div style={{ padding: '10px 16px 0' }}>
-                  {/* "● AI" — launches the mobile AI-takeoff flow (chooser → count /
-                      auto-takeoff lanes). Brutalist ink slab with the Spark marker. */}
-                  <button
-                    type="button"
-                    onClick={() => navigate(`/projects/${projectId}/takeoff-ai`)}
-                    style={{
-                      width: '100%',
-                      minHeight: 52,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      padding: '0 16px',
-                      background: 'var(--m-ink)',
-                      color: 'var(--m-sand)',
-                      border: '2px solid var(--m-ink)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                  >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                      <Spark size={16} state="strong" />
-                      <span style={{ minWidth: 0 }}>
-                        <span
-                          style={{
-                            display: 'block',
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.08em',
-                            color: 'var(--m-accent)',
-                          }}
-                        >
-                          AI
-                        </span>
-                        <span
-                          style={{
-                            display: 'block',
-                            fontFamily: 'var(--m-font-display)',
-                            fontSize: 16,
-                            fontWeight: 800,
-                            letterSpacing: '-0.01em',
-                            marginTop: 1,
-                          }}
-                        >
-                          Count or draft with AI
-                        </span>
-                      </span>
-                    </span>
-                    <MI.ChevRight size={20} />
-                  </button>
-                </div>
+                <MobileAiLaunch onLaunch={() => navigate(`/projects/${projectId}/takeoff-ai`)} />
 
                 {/* --- Canvas (draw mode) --- */}
                 {mode === 'draw' ? (
                   <div style={{ padding: '10px 16px 0' }}>
-                    {/* Mono tool toolbar — square brutalist chips (POLY/RECT/LIN/PT/TAP).
-                        POLY/LIN/PT drive the existing draw handlers unchanged. RECT is a
-                        polygon alias (tap the 4 corners). TAP hands off to the AI tap-to-
-                        detect canvas. */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        marginBottom: 8,
-                        border: '2px solid var(--m-ink)',
-                        background: 'var(--m-card-soft)',
+                    <MobileToolToolbar
+                      toolLabel={toolLabel}
+                      onTap={() => navigate(`/projects/${projectId}/takeoff-ai/detect`)}
+                      onPickTool={(pickedTool, label) => {
+                        // SET_TOOL resets the in-progress draft points in
+                        // the machine (the old setDraftPoints([]) is now
+                        // implicit), and we make sure we're on the draw
+                        // surface so the next tap places a point.
+                        sdispatch({ type: 'SET_TOOL', tool: pickedTool })
+                        if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
+                        setToolLabel(label)
+                        setWallHeight(0)
+                        cancelEditGeom()
                       }}
-                    >
-                      {(
-                        [
-                          { tool: 'polygon', label: 'POLY' },
-                          { tool: 'polygon', label: 'RECT' },
-                          { tool: 'lineal', label: 'LIN' },
-                          { tool: 'count', label: 'PT' },
-                          { tool: null, label: 'TAP' },
-                        ] as const
-                      ).map((t, i, arr) => {
-                        // TAP is the AI hand-off (tool: null); never an active draw tool.
-                        // RECT shares the polygon tool value, so highlight it only when
-                        // its label is the user's pick (tracked alongside the tool).
-                        const isTap = t.tool === null
-                        const on = isTap ? false : t.label === toolLabel
-                        return (
-                          <button
-                            key={t.label}
-                            type="button"
-                            onClick={() => {
-                              if (t.tool === null) {
-                                navigate(`/projects/${projectId}/takeoff-ai/detect`)
-                                return
-                              }
-                              // SET_TOOL resets the in-progress draft points in
-                              // the machine (the old setDraftPoints([]) is now
-                              // implicit), and we make sure we're on the draw
-                              // surface so the next tap places a point.
-                              sdispatch({ type: 'SET_TOOL', tool: t.tool })
-                              if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
-                              setToolLabel(t.label)
-                              setWallHeight(0)
-                              cancelEditGeom()
-                            }}
-                            style={{
-                              flex: 1,
-                              padding: '14px 0',
-                              background: on ? 'var(--m-accent)' : 'transparent',
-                              color: isTap ? 'var(--m-accent)' : on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                              border: 'none',
-                              borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 11,
-                              fontWeight: on ? 700 : 600,
-                              letterSpacing: '0.06em',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {t.label}
-                          </button>
-                        )
-                      })}
-                    </div>
+                    />
                     {/* Deduct/cutout toggle (msg19 "WIN") — only meaningful for
                         an area (polygon/rect) tool. */}
                     {tool === 'polygon' ? (
-                      <button
-                        type="button"
-                        onClick={() => setDeduct((d) => !d)}
-                        aria-pressed={deduct}
-                        style={{
-                          width: '100%',
-                          marginBottom: 8,
-                          padding: '10px 12px',
-                          background: deduct ? 'var(--m-ink)' : 'transparent',
-                          color: deduct ? 'var(--m-sand)' : 'var(--m-ink-2)',
-                          border: '2px solid var(--m-ink)',
-                          fontFamily: 'var(--m-num)',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          letterSpacing: '0.04em',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span>DEDUCT · CUTOUT (E.G. WINDOW)</span>
-                        <span style={{ color: deduct ? 'var(--m-accent)' : 'var(--m-ink-4)' }}>
-                          {deduct ? '● ON' : '○ OFF'}
-                        </span>
-                      </button>
+                      <MobileDeductToggle deduct={deduct} onToggle={() => setDeduct((d) => !d)} />
                     ) : null}
                     {/* Bulk-select toggle (msg23) — switches canvas taps from
                         draw to multi-select. */}
                     {canvasMeasurements.length > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => {
+                      <MobileBulkSelectToggle
+                        bulkMode={bulkMode}
+                        bulkSelectedCount={bulkSelected.length}
+                        canvasMeasurementCount={canvasMeasurements.length}
+                        onToggle={() => {
                           setBulkMode((b) => !b)
                           // CLEAR_SELECTION resets selectedId + bulkIds + the edit
                           // slice in one go; resetDraftPoints drops any in-progress
@@ -1022,48 +858,8 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                           resetDraftPoints()
                           editDragIdxRef.current = null
                         }}
-                        aria-pressed={bulkMode}
-                        style={{
-                          width: '100%',
-                          marginBottom: 8,
-                          padding: '10px 12px',
-                          background: bulkMode ? 'var(--m-accent)' : 'transparent',
-                          color: bulkMode ? 'var(--m-accent-ink)' : 'var(--m-ink-2)',
-                          border: '2px solid var(--m-ink)',
-                          fontFamily: 'var(--m-num)',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          letterSpacing: '0.04em',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span>{bulkMode ? `${bulkSelected.length} SELECTED` : 'SELECT MULTIPLE'}</span>
-                        {bulkMode ? (
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              selectAllBulk()
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.stopPropagation()
-                                selectAllBulk()
-                              }
-                            }}
-                            style={{ color: 'var(--m-accent-ink)', textDecoration: 'underline', cursor: 'pointer' }}
-                          >
-                            SELECT ALL · {canvasMeasurements.length}
-                          </span>
-                        ) : (
-                          <span style={{ color: 'var(--m-ink-4)' }}>○ OFF</span>
-                        )}
-                      </button>
+                        onSelectAll={selectAllBulk}
+                      />
                     ) : null}
                     <MobileCanvasSurface
                       svgRef={svgRef}
@@ -1123,192 +919,39 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                     />
                     {/* Bulk selection footer (msg23). */}
                     {bulkMode && bulkSelected.length > 0 ? (
-                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
-                        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              letterSpacing: '0.06em',
-                              color: 'var(--m-accent)',
-                            }}
-                          >
-                            SELECTION · {bulkPolys} POLY{bulkPolys === 1 ? '' : 'S'} · TOTAL
-                          </div>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-font-display)',
-                              fontWeight: 800,
-                              fontSize: 26,
-                              lineHeight: 1,
-                              marginTop: 4,
-                              color: 'var(--m-sand)',
-                              fontVariantNumeric: 'tabular-nums',
-                            }}
-                          >
-                            {formatQty(bulkTotal)}
-                            <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                              {bulkUnit.toUpperCase()}
-                            </span>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex' }}>
-                          <button
-                            type="button"
-                            onClick={() => void bulkReassign()}
-                            disabled={patchMeasurement.isPending}
-                            style={{
-                              flex: 1,
-                              padding: '12px 6px',
-                              background: 'transparent',
-                              color: 'var(--m-sand)',
-                              border: 'none',
-                              borderRight: '1px solid var(--m-ink-2)',
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 11,
-                              fontWeight: 700,
-                              letterSpacing: '0.04em',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            REASSIGN ITEM
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setCopyOpen((v) => !v)}
-                            style={{
-                              flex: 1,
-                              padding: '12px 6px',
-                              background: copyOpen ? 'var(--m-accent)' : 'transparent',
-                              color: copyOpen ? 'var(--m-accent-ink)' : 'var(--m-sand)',
-                              border: 'none',
-                              borderRight: '1px solid var(--m-ink-2)',
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 11,
-                              fontWeight: 700,
-                              letterSpacing: '0.04em',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {copyOpen ? 'COPY ✕' : 'COPY…'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void bulkDelete()}
-                            disabled={deleteMeasurement.isPending}
-                            style={{
-                              flex: 1,
-                              padding: '12px 6px',
-                              background: 'transparent',
-                              color: 'var(--m-red)',
-                              border: 'none',
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 11,
-                              fontWeight: 700,
-                              letterSpacing: '0.04em',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            DELETE {bulkSelected.length}
-                          </button>
-                        </div>
-                      </div>
+                      <MobileBulkFooter
+                        bulkPolys={bulkPolys}
+                        bulkTotal={bulkTotal}
+                        bulkUnit={bulkUnit}
+                        bulkSelectedCount={bulkSelected.length}
+                        copyOpen={copyOpen}
+                        reassignPending={patchMeasurement.isPending}
+                        deletePending={deleteMeasurement.isPending}
+                        onReassign={() => void bulkReassign()}
+                        onToggleCopy={() => setCopyOpen((v) => !v)}
+                        onDelete={() => void bulkDelete()}
+                      />
                     ) : null}
                     {/* Copy / array / mirror panel (deep-dive H6). Renders when the
                         COPY… toggle is on and a copyable measurement is selected
                         (single or bulk). Saves NEW measurements via the create
                         path — same item/unit/sheet — so quantities recompute. */}
                     {copyOpen && copyableTargets.length > 0 ? (
-                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
-                        <div
-                          style={{
-                            padding: '10px 14px',
-                            borderBottom: '1px solid var(--m-ink-2)',
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.06em',
-                            color: 'var(--m-accent)',
-                          }}
-                        >
-                          COPY · {copyableTargets.length}{' '}
-                          {copyableTargets.length === 1 ? 'MEASUREMENT' : 'MEASUREMENTS'}
-                        </div>
-                        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <label style={mCopyLabelStyle}>
-                              OFFSET X
-                              <input
-                                type="number"
-                                value={copyDx}
-                                onChange={(e) => setCopyDx(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              OFFSET Y
-                              <input
-                                type="number"
-                                value={copyDy}
-                                onChange={(e) => setCopyDy(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              COUNT
-                              <input
-                                type="number"
-                                min={1}
-                                value={copyCount}
-                                onChange={(e) => setCopyCount(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <label style={mCopyLabelStyle}>
-                              MIRROR
-                              <select
-                                value={copyMirror}
-                                onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
-                                style={mCopyInputStyle}
-                              >
-                                <option value="none">None</option>
-                                <option value="x">Flip ↔</option>
-                                <option value="y">Flip ↕</option>
-                              </select>
-                            </label>
-                            <label style={mCopyLabelStyle}>
-                              ROTATE °
-                              <input
-                                type="number"
-                                value={copyRotate}
-                                onChange={(e) => setCopyRotate(e.target.value)}
-                                style={mCopyInputStyle}
-                              />
-                            </label>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <button
-                              type="button"
-                              disabled={copyBusy}
-                              onClick={() => void runCopyPlan('offset')}
-                              style={mCopyActionStyle}
-                            >
-                              {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={copyBusy}
-                              onClick={() => void runCopyPlan('array')}
-                              style={mCopyActionStyle}
-                            >
-                              ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                      <MobileCopyPanel
+                        copyableCount={copyableTargets.length}
+                        copyDx={copyDx}
+                        copyDy={copyDy}
+                        copyCount={copyCount}
+                        copyMirror={copyMirror}
+                        copyRotate={copyRotate}
+                        copyBusy={copyBusy}
+                        onCopyDx={setCopyDx}
+                        onCopyDy={setCopyDy}
+                        onCopyCount={setCopyCount}
+                        onCopyMirror={setCopyMirror}
+                        onCopyRotate={setCopyRotate}
+                        onRun={(mode) => void runCopyPlan(mode)}
+                      />
                     ) : null}
                     {/* Edit-committed-measurement action bar (msg22). Appears when a
                         saved polygon on the canvas is tapped. Hidden in bulk mode:
@@ -1428,100 +1071,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                     ) : null}
                     {/* Live measurement strip — brutalist eyebrow + big-number readout
                         on an ink slab; Undo/Clear as mono chips. */}
-                    <div
-                      style={{
-                        marginTop: 8,
-                        padding: '12px 14px',
-                        background: 'var(--m-ink)',
-                        color: 'var(--m-sand)',
-                        border: '2px solid var(--m-ink)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 12,
-                      }}
-                    >
-                      <div style={{ minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.08em',
-                            textTransform: 'uppercase',
-                            color: 'var(--m-accent)',
-                          }}
-                        >
-                          {tool === 'polygon'
-                            ? `POLY · ${draftPoints.length} PTS`
-                            : tool === 'lineal'
-                              ? `LIN · ${draftPoints.length} PTS`
-                              : `PT · ${draftPoints.length}`}
-                        </div>
-                        <div
-                          style={{
-                            fontFamily: 'var(--m-font-display)',
-                            fontWeight: 800,
-                            fontSize: 30,
-                            lineHeight: 1,
-                            marginTop: 4,
-                            color: 'var(--m-sand)',
-                            fontVariantNumeric: 'tabular-nums',
-                          }}
-                        >
-                          {tool === 'count' ? `${draftPoints.length}` : formatQty(draftQuantity)}
-                          <span style={{ fontSize: 14, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                            {tool === 'polygon'
-                              ? 'AREA'
-                              : tool === 'lineal'
-                                ? 'LEN'
-                                : draftPoints.length === 1
-                                  ? 'CT'
-                                  : 'CTS'}
-                          </span>
-                        </div>
-                      </div>
-                      <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                        <button
-                          type="button"
-                          onClick={() => sdispatch({ type: 'UNDO_POINT' })}
-                          disabled={draftPoints.length === 0}
-                          style={{
-                            padding: '8px 10px',
-                            background: 'transparent',
-                            color: 'var(--m-sand)',
-                            border: '2px solid var(--m-sand)',
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.06em',
-                            cursor: draftPoints.length === 0 ? 'default' : 'pointer',
-                            opacity: draftPoints.length === 0 ? 0.4 : 1,
-                          }}
-                        >
-                          UNDO
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => resetDraftPoints()}
-                          disabled={draftPoints.length === 0}
-                          style={{
-                            padding: '8px 10px',
-                            background: 'transparent',
-                            color: 'var(--m-sand)',
-                            border: '2px solid var(--m-sand)',
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 10,
-                            fontWeight: 700,
-                            letterSpacing: '0.06em',
-                            cursor: draftPoints.length === 0 ? 'default' : 'pointer',
-                            opacity: draftPoints.length === 0 ? 0.4 : 1,
-                          }}
-                        >
-                          CLEAR
-                        </button>
-                      </span>
-                    </div>
+                    <MobileMeasurementStrip
+                      tool={tool}
+                      pointCount={draftPoints.length}
+                      draftQuantity={draftQuantity}
+                      onUndo={() => sdispatch({ type: 'UNDO_POINT' })}
+                      onClear={() => resetDraftPoints()}
+                    />
                     {/* LIN → area: wall-height step (msg21). Once a lineal trace
                         exists, set a wall height to convert length into area. */}
                     {tool === 'lineal' && draftPoints.length >= 2 ? (
@@ -1586,118 +1142,19 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                 </div>
 
                 {/* --- Running totals by scope item --- */}
-                <MSectionH>Running quantities</MSectionH>
-                {totals.length === 0 ? (
-                  <div style={{ padding: '0 16px 8px', fontSize: 13, color: 'var(--m-ink-3)', lineHeight: 1.5 }}>
-                    No measurements on this draft yet. Add one above — it saves straight to the project takeoff.
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ padding: '0 16px 6px', fontSize: 12, color: 'var(--m-ink-3)' }}>
-                      {draftMeasurements.length} measurement{draftMeasurements.length === 1 ? '' : 's'} ·{' '}
-                      {totals.length} scope item{totals.length === 1 ? '' : 's'}
-                    </div>
-                    <MListInset>
-                      {totals.map((t) => {
-                        const share = grandTotal > 0 ? Math.max(2, Math.round((t.quantity / grandTotal) * 100)) : 0
-                        return (
-                          <MListRow
-                            key={t.code}
-                            leading={<MI.Layers size={18} />}
-                            leadingTone="accent"
-                            headline={t.code}
-                            chev
-                            onTap={() =>
-                              navigate(
-                                `/projects/${projectId}/takeoff-item/${encodeURIComponent(t.code)}${
-                                  activeDraftId ? `?draft=${activeDraftId}` : ''
-                                }`,
-                              )
-                            }
-                            supporting={
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                                {t.count} measurement{t.count === 1 ? '' : 's'}
-                                <span
-                                  aria-hidden="true"
-                                  style={{
-                                    display: 'inline-block',
-                                    width: 48,
-                                    height: 4,
-                                    borderRadius: 2,
-                                    background: 'var(--m-line)',
-                                    overflow: 'hidden',
-                                    verticalAlign: 'middle',
-                                  }}
-                                >
-                                  <span
-                                    style={{
-                                      display: 'block',
-                                      width: `${share}%`,
-                                      height: '100%',
-                                      background: 'var(--m-accent)',
-                                    }}
-                                  />
-                                </span>
-                              </span>
-                            }
-                            trailing={
-                              <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
-                                {formatQty(t.quantity)} {t.mixedUnits ? <MPill>mixed</MPill> : t.unit}
-                              </span>
-                            }
-                          />
-                        )
-                      })}
-                    </MListInset>
-                    {/* DONE / running-total — big-number brutalist action.
-                        Same navigation handler; grandTotal is view-only. */}
-                    <div style={{ padding: '8px 16px 16px' }}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/projects/${projectId}/estimate`)}
-                        style={{
-                          width: '100%',
-                          minHeight: 56,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 12,
-                          padding: '0 18px',
-                          background: 'var(--m-accent)',
-                          color: 'var(--m-accent-ink)',
-                          border: '2px solid var(--m-ink)',
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontFamily: 'var(--m-num)',
-                            fontSize: 12,
-                            fontWeight: 700,
-                            letterSpacing: '0.08em',
-                          }}
-                        >
-                          DONE
-                        </span>
-                        <span
-                          style={{
-                            fontFamily: 'var(--m-font-display)',
-                            fontSize: 26,
-                            fontWeight: 800,
-                            lineHeight: 1,
-                            fontVariantNumeric: 'tabular-nums',
-                          }}
-                        >
-                          {formatQty(grandTotal)}
-                          <span style={{ fontSize: 12, marginLeft: 6 }}>
-                            {totals.length === 1 ? totals[0]?.unit?.toUpperCase() : 'QTY →'}
-                          </span>
-                        </span>
-                      </button>
-                    </div>
-                  </>
-                )}
+                <MobileRunningTotals
+                  totals={totals}
+                  measurementCount={draftMeasurements.length}
+                  grandTotal={grandTotal}
+                  onItemTap={(code) =>
+                    navigate(
+                      `/projects/${projectId}/takeoff-item/${encodeURIComponent(code)}${
+                        activeDraftId ? `?draft=${activeDraftId}` : ''
+                      }`,
+                    )
+                  }
+                  onDone={() => navigate(`/projects/${projectId}/estimate`)}
+                />
               </>
             ) : null}
           </>
