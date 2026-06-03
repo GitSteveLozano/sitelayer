@@ -1,5 +1,5 @@
-import { Spark, MI } from '@/components/m'
-import { formatQty } from '@/lib/takeoff/canvas-totals'
+import { Spark, MI, MListInset, MListRow, MPill, MSectionH } from '@/components/m'
+import { formatQty, type ScopeTotal } from '@/lib/takeoff/canvas-totals'
 import { type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { type MobileTool } from './types'
 
@@ -500,5 +500,246 @@ export function MobileCopyPanel({
         </div>
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Live measurement strip — brutalist eyebrow + big-number readout on an ink
+// slab; Undo/Clear as mono chips. Extracted verbatim from mobile-body.tsx.
+// ---------------------------------------------------------------------------
+export function MobileMeasurementStrip({
+  tool,
+  pointCount,
+  draftQuantity,
+  onUndo,
+  onClear,
+}: {
+  tool: MobileTool
+  pointCount: number
+  draftQuantity: number
+  onUndo: () => void
+  onClear: () => void
+}) {
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: '12px 14px',
+        background: 'var(--m-ink)',
+        color: 'var(--m-sand)',
+        border: '2px solid var(--m-ink)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--m-accent)',
+          }}
+        >
+          {tool === 'polygon'
+            ? `POLY · ${pointCount} PTS`
+            : tool === 'lineal'
+              ? `LIN · ${pointCount} PTS`
+              : `PT · ${pointCount}`}
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 30,
+            lineHeight: 1,
+            marginTop: 4,
+            color: 'var(--m-sand)',
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {tool === 'count' ? `${pointCount}` : formatQty(draftQuantity)}
+          <span style={{ fontSize: 14, color: 'var(--m-ink-4)', marginLeft: 6 }}>
+            {tool === 'polygon' ? 'AREA' : tool === 'lineal' ? 'LEN' : pointCount === 1 ? 'CT' : 'CTS'}
+          </span>
+        </div>
+      </div>
+      <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={onUndo}
+          disabled={pointCount === 0}
+          style={{
+            padding: '8px 10px',
+            background: 'transparent',
+            color: 'var(--m-sand)',
+            border: '2px solid var(--m-sand)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            cursor: pointCount === 0 ? 'default' : 'pointer',
+            opacity: pointCount === 0 ? 0.4 : 1,
+          }}
+        >
+          UNDO
+        </button>
+        <button
+          type="button"
+          onClick={onClear}
+          disabled={pointCount === 0}
+          style={{
+            padding: '8px 10px',
+            background: 'transparent',
+            color: 'var(--m-sand)',
+            border: '2px solid var(--m-sand)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            cursor: pointCount === 0 ? 'default' : 'pointer',
+            opacity: pointCount === 0 ? 0.4 : 1,
+          }}
+        >
+          CLEAR
+        </button>
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Running totals by scope item — section header + per-item rows with a share
+// bar + the DONE / grand-total brutalist action. Extracted verbatim from
+// mobile-body.tsx. `onItemTap` opens the per-item takeoff; `onDone` opens the
+// estimate (grandTotal is view-only). Both navigation handlers stay in the
+// parent so this component owns no routing.
+// ---------------------------------------------------------------------------
+export function MobileRunningTotals({
+  totals,
+  measurementCount,
+  grandTotal,
+  onItemTap,
+  onDone,
+}: {
+  totals: ScopeTotal[]
+  measurementCount: number
+  grandTotal: number
+  onItemTap: (code: string) => void
+  onDone: () => void
+}) {
+  return (
+    <>
+      <MSectionH>Running quantities</MSectionH>
+      {totals.length === 0 ? (
+        <div style={{ padding: '0 16px 8px', fontSize: 13, color: 'var(--m-ink-3)', lineHeight: 1.5 }}>
+          No measurements on this draft yet. Add one above — it saves straight to the project takeoff.
+        </div>
+      ) : (
+        <>
+          <div style={{ padding: '0 16px 6px', fontSize: 12, color: 'var(--m-ink-3)' }}>
+            {measurementCount} measurement{measurementCount === 1 ? '' : 's'} · {totals.length} scope item
+            {totals.length === 1 ? '' : 's'}
+          </div>
+          <MListInset>
+            {totals.map((t) => {
+              const share = grandTotal > 0 ? Math.max(2, Math.round((t.quantity / grandTotal) * 100)) : 0
+              return (
+                <MListRow
+                  key={t.code}
+                  leading={<MI.Layers size={18} />}
+                  leadingTone="accent"
+                  headline={t.code}
+                  chev
+                  onTap={() => onItemTap(t.code)}
+                  supporting={
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      {t.count} measurement{t.count === 1 ? '' : 's'}
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          display: 'inline-block',
+                          width: 48,
+                          height: 4,
+                          borderRadius: 2,
+                          background: 'var(--m-line)',
+                          overflow: 'hidden',
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: 'block',
+                            width: `${share}%`,
+                            height: '100%',
+                            background: 'var(--m-accent)',
+                          }}
+                        />
+                      </span>
+                    </span>
+                  }
+                  trailing={
+                    <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
+                      {formatQty(t.quantity)} {t.mixedUnits ? <MPill>mixed</MPill> : t.unit}
+                    </span>
+                  }
+                />
+              )
+            })}
+          </MListInset>
+          {/* DONE / running-total — big-number brutalist action.
+              Same navigation handler; grandTotal is view-only. */}
+          <div style={{ padding: '8px 16px 16px' }}>
+            <button
+              type="button"
+              onClick={onDone}
+              style={{
+                width: '100%',
+                minHeight: 56,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '0 18px',
+                background: 'var(--m-accent)',
+                color: 'var(--m-accent-ink)',
+                border: '2px solid var(--m-ink)',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                }}
+              >
+                DONE
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--m-font-display)',
+                  fontSize: 26,
+                  fontWeight: 800,
+                  lineHeight: 1,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {formatQty(grandTotal)}
+                <span style={{ fontSize: 12, marginLeft: 6 }}>
+                  {totals.length === 1 ? totals[0]?.unit?.toUpperCase() : 'QTY →'}
+                </span>
+              </span>
+            </button>
+          </div>
+        </>
+      )}
+    </>
   )
 }
