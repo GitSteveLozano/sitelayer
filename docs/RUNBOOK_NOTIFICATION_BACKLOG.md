@@ -14,19 +14,28 @@ Any one of:
 - `notifications` rows with `status='pending'` count > 100 (rough
   threshold; normal backlog at steady-state is 0–10).
 - User reports: "I clocked in but never got the email/SMS confirmation."
-- Sentry `sitelayer-worker` shows `[notification]` errors —
-  `failed_provider`, `failed_clerk_not_found`, or
-  `failed_clerk_unreachable` workflow transitions.
+- Sentry shows `[notification]` errors — `failed_provider`,
+  `failed_clerk_not_found`, or `failed_clerk_unreachable` workflow
+  transitions. These come from the **worker**, but land in the
+  **`sitelayer-api`** Sentry project: `SENTRY_WORKER_DSN` is absent so the
+  worker falls back to `SENTRY_DSN` (the api project). There is no live
+  `sitelayer-worker` project to filter on.
 
 ## Detection
 
-- **API:** `GET /api/sync/events?entity_type=notification&status=pending`
+> **No Prometheus today.** `/api/metrics` is exposed (bearer
+> `API_METRICS_TOKEN`) but **nothing scrapes it** — no Prometheus server, no
+> alerting on these series. "Graph the gauge" below means "curl `/api/metrics`
+> and read the value"; the live detection surface is the API queue endpoints +
+> Sentry (`sitelayer-api` project — worker events fall back there).
+
+- **API (primary):** `GET /api/sync/events?entity_type=notification&status=pending`
   returns recent pending rows.
-- **Prometheus:** graph
+- **Metrics (ad-hoc curl):**
   `sitelayer_queue_pending_count{queue="notifications"}`. Sustained
   rise > 50 over 5 min is actionable.
-- **Workflow counter:**
-  `sitelayer_workflow_events_total{workflow="notification",outcome="failed"}`
+- **Workflow counter (ad-hoc curl):**
+  `sitelayer_workflow_event_total{workflow="notification",outcome="failed"}`
   rate, broken out by the terminal `failed_*` states for cause attribution.
 
 ## Common causes

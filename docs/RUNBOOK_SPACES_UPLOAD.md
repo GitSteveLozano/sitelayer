@@ -188,5 +188,6 @@ ssh sitelayer@10.118.0.4 \
 
 File a postmortem using [POSTMORTEM_TEMPLATE.md](./POSTMORTEM_TEMPLATE.md).
 Likely follow-ups: (a) wire `DO_SPACES_KEY` rotation into
-`docs/SECRET_ROTATION.md`, (b) Prometheus alert on
+`docs/SECRET_ROTATION.md`, (b) stand up a Prometheus scraper for `/api/metrics`
+(none today — it's exposed but unscraped) plus an alert on
 `sitelayer_http_request_errors_total{route=~".*/blueprints"}`.

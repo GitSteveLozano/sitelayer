@@ -1,10 +1,21 @@
 # Sitelayer Incident Response Runbook
 
 **Audience:** on-call engineer (currently Taylor).
-**Edge:** `sitelayer.sandolab.xyz` → Cloudflare DNS → reserved IP `159.203.51.158` → containerized Caddy → api/web/worker.
-**Postgres:** managed `sitelayer-db` (`9948c96b-b6b6-45ad-adf7-d20e4c206c66`), Toronto `tor1`.
+**Edge:** `sitelayer.sandolab.xyz` → Cloudflare **DNS-only** (grey cloud; the
+CF proxy is OFF — no WAF, no CF TLS, no origin-hiding) → reserved IP
+`159.203.51.158` → containerized Caddy on the prod droplet, which **terminates
+TLS itself** (Let's Encrypt) → api/web/worker. The droplet origin is therefore
+**publicly reachable on 443** and Caddy is the only edge. Enabling the
+Cloudflare proxy (orange cloud) for WAF + origin-hiding is an open operator
+task, not the current reality — see §4.
+**Postgres:** managed `sitelayer-db` (`9948c96b-b6b6-45ad-adf7-d20e4c206c66`),
+`db-s-1vcpu-2gb` single node, Toronto `tor1`. No PITR (needs a standby node, not
+more RAM — see `docs/DR_RESTORE.md`).
 **Auth:** Clerk (Hobby).
-**Errors:** Sentry org `sandolabs`, projects `sitelayer-api`, `sitelayer-web`, `sitelayer-worker`.
+**Errors:** Sentry org `sandolabs`, project `sitelayer-api` (API **and** worker
+events — `SENTRY_WORKER_DSN` is absent so the worker falls back to `SENTRY_DSN`,
+i.e. the api project) and `sitelayer-web`. There is no separate live
+`sitelayer-worker` project receiving events today.
 
 For each incident: **detect → mitigate → investigate → comms (when customers exist) → escalate**. Cutover steps assume you can SSH via `doctl compute ssh sitelayer`.
 
@@ -24,7 +35,12 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail 200 -f api
 
 ## 1. 5xx error spike
 
-**Detect:** Sentry alert "issue rate > 5/min" on `sitelayer-api`; or `/api/metrics` `http_requests_total{status=~"5.."}` rising.
+**Detect:** Sentry alert "issue rate > 10 in 5 min" on `sitelayer-api` (this is
+where both API and worker errors land — `SENTRY_WORKER_DSN` is absent). The
+`/api/metrics` series `sitelayer_http_requests_total{status=~"5.."}` rising is
+the corroborating signal, but note **nothing scrapes `/api/metrics`** (no
+Prometheus); you curl it ad hoc with the `API_METRICS_TOKEN` bearer, so Sentry
+is the real detection surface.
 
 **Mitigate (≤ 2 min):**
 
@@ -36,14 +52,38 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml ps
 docker compose -f /app/sitelayer/docker-compose.prod.yml restart api
 ```
 
-**Investigate:** open the Sentry issue, copy the `request_id`, then:
+**Investigate:** open the Sentry issue directly — that is the primary path in
+prod today. The `/api/debug/traces/:traceId` helper that joins a trace with
+`mutation_outbox` / `sync_events` rows is **not usable in prod right now**:
+
+- `DEBUG_TRACE_TOKEN` and `SENTRY_AUTH_TOKEN` are **absent** from the prod
+  `.env` (both are optional-secret manifest entries that haven't been
+  provisioned), so the endpoint can't authenticate the caller or reach the
+  Sentry API.
+- It is tier-gated against prod anyway unless `DEBUG_ALLOW_PROD=1` (also unset).
+- Prod trace sampling is `tracesSampleRate=0.1`, so most requests have no trace
+  to fetch even if it were wired.
+
+So in prod, work from the Sentry issue + the SQL below; don't burn time on
+`/api/debug/traces`. (The endpoint IS the right tool on dev/preview, where the
+token is set and sampling is `1.0`.)
 
 ```bash
+# dev/preview only — DEBUG_TRACE_TOKEN + SENTRY_AUTH_TOKEN must be set, and
+# prod requires DEBUG_ALLOW_PROD=1 (not set):
 curl -fsS -H "Authorization: Bearer $DEBUG_TRACE_TOKEN" \
-  "https://sitelayer.sandolab.xyz/api/debug/traces/<trace_id>?by=request_id"
+  "https://dev.sitelayer.sandolab.xyz/api/debug/traces/<trace_id>?by=request_id"
 ```
 
-That joins the Sentry trace with `mutation_outbox` / `sync_events` rows.
+To correlate by hand in prod, query the queue tables on the `request_id` from
+the Sentry event:
+
+```sql
+SELECT id, mutation_type, status, request_id, attempt_count, last_error
+  FROM mutation_outbox WHERE request_id = '<request_id>';
+SELECT id, entity_type, status, request_id, attempt_count, last_error
+  FROM sync_events WHERE request_id = '<request_id>';
+```
 
 Common causes: bad migration left a missing column → run `ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh`; QBO sync looping on bad token → look for `scope=qbo_sync` errors; pg pool exhausted → look for `Error: timeout exceeded when trying to connect`.
 
@@ -76,7 +116,11 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 
 **Risk note:** the lack of a circuit breaker is a known gap. Track in `mesh` as `sitelayer/api-circuit-breaker`. Mitigation order of preference once it lands: open-circuit on >3 consecutive pg errors, return 503 with `Retry-After: 30`.
 
-**Failover:** if the cluster is destroyed, follow `docs/DR_RESTORE.md` Procedure 2 (PITR fork).
+**Failover:** if the cluster is destroyed, the realistic path is the logical
+`pg_dump` restore — `docs/DR_RESTORE.md` **Procedure 3** (PRIMARY recovery
+path). PITR/fork (Procedure 2 Option A) is **not available**: the cluster is
+single-node (`db-s-1vcpu-2gb`, `NumNodes=1`) and PITR needs a standby node, not
+more RAM. Don't reach for the fork command — it errors.
 
 **Comms:** "Our database provider is experiencing an outage. We're following their status page; data is safe (provider backups + nightly logical dumps)."
 
@@ -104,12 +148,35 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 
 **Detect:** `dig sitelayer.sandolab.xyz` returns SERVFAIL or stale. Customers report `ERR_NAME_NOT_RESOLVED`.
 
-**Mitigate:** four `sandolab.xyz` zones live on Cloudflare Free. If Cloudflare is down for DNS, fallback options are limited:
+**Scope note:** Cloudflare is **DNS-only** for `sitelayer` (grey cloud — the
+proxy is OFF). So a Cloudflare outage that only affects their _proxy/WAF_ edge
+does **not** affect us — traffic already goes straight to the droplet's reserved
+IP after DNS resolves. The only Cloudflare dependency we have is **authoritative
+DNS resolution**. (This is also why there's no WAF in front of the origin — see
+the open task in §4a below.)
 
-- Direct IP smoke test: `curl -k --resolve sitelayer.sandolab.xyz:443:159.203.51.158 https://sitelayer.sandolab.xyz/health`.
-- If Cloudflare proxy is the issue (not DNS), set the `sitelayer` A record to "DNS only" (grey cloud) in CF dashboard; otherwise use Cloudflare Registrar's "Change nameservers" only as last resort (slow propagation).
+**Mitigate:** four `sandolab.xyz` zones live on Cloudflare Free, DNS-only. If
+Cloudflare's _DNS_ is down, fallback options are limited:
 
-**Comms:** "Cloudflare is experiencing a global outage. Sitelayer's servers are healthy; access is blocked at the edge until CF recovers."
+- Direct IP smoke test (the origin is publicly reachable, so this works even
+  with CF entirely down): `curl -k --resolve sitelayer.sandolab.xyz:443:159.203.51.158 https://sitelayer.sandolab.xyz/health`.
+- Because the record is already "DNS only", there is no proxy to bypass — if
+  resolution itself is failing, the last resort is Cloudflare Registrar's
+  "Change nameservers" (slow propagation).
+
+**Comms:** "Our DNS provider (Cloudflare) is experiencing a global outage. Sitelayer's servers are healthy; access is blocked at name resolution until CF recovers."
+
+### 4a. Open task — enable the Cloudflare proxy for WAF / origin-hiding
+
+Today the prod origin (`159.203.51.158`, droplet `sitelayer`) is **publicly
+exposed on 443** and Caddy terminates TLS directly; there is **no Cloudflare
+WAF and no origin-hiding**. Flipping the `sitelayer` A record to proxied (orange
+cloud) would put Cloudflare's edge (WAF, DDoS, bot mitigation, origin IP hidden)
+in front of the droplet — but requires moving TLS to a CF "Full (strict)"
+posture with the origin still reachable on 443 from CF, and validating that
+rate-limit / real-IP handling (`CF-Connecting-IP`) is correct in the app. Track
+as an operator security task; until then, do not write runbooks that assume a
+Cloudflare WAF exists.
 
 **Escalate:** none — Cloudflare Free has no support channel. Watch https://www.cloudflarestatus.com/.
 
@@ -154,7 +221,12 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml restart caddy
 docker compose -f /app/sitelayer/docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-Common causes: rate-limited by LE (5 fails/hour) — wait an hour; CF "Full (strict)" with origin not reachable on 443 — check `iptables -L`; A record drifted off the reserved IP — `dig +short sitelayer.sandolab.xyz` should equal `159.203.51.158`.
+Common causes: rate-limited by LE (5 fails/hour) — wait an hour; the ACME
+HTTP-01/TLS-ALPN challenge can't reach the origin on 80/443 — check `iptables -L`
+and that the droplet is publicly reachable (Caddy terminates TLS directly; the CF
+proxy is OFF, so there is no CF "Full (strict)" in the path today); A record
+drifted off the reserved IP — `dig +short sitelayer.sandolab.xyz` should equal
+`159.203.51.158`.
 
 **Escalate:** Let's Encrypt rate-limit — wait. Persistent ACME challenge failure — open issue against Caddy.
 
@@ -189,7 +261,19 @@ doctl compute ssh sitelayer --ssh-command="
 curl -fsS https://sitelayer.sandolab.xyz/health
 ```
 
-**Investigate:** failed migration → check `scripts/migrate-db.sh` output in run log; missing `.env` key → grep workflow for `ERROR:`; runner offline → `systemctl --user status actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service` on preview droplet.
+**Investigate:** deploys are **local-fleet** (`scripts/deploy.sh prod` →
+`scripts/deploy-production-local.sh` from a fleet box) — there is **no GitHub
+Actions runner** to check (`actions.runner.*` services were retired with the
+Actions workflows). Look in this order:
+
+- failed migration → `scripts/migrate-db.sh` output in the deploy stdout on the
+  fleet box that ran `scripts/deploy.sh prod`;
+- missing `.env` key → grep the deploy output for `ERROR:` (the prod deploy
+  REUSES `/app/sitelayer/.env`; a missing key is an env-render gap, not a CI
+  secret);
+- dev/demo deploy failure → the fleet auto-deploy watcher log
+  (`~/.cache/sitelayer-autodeploy/auto-deploy.log`) and the
+  `scripts/fleet-auto-deploy.sh` systemd timer status on the fleet box.
 
 **Escalate:** if rollback also fails (corrupt git state on droplet), nuke `/app/sitelayer/.git` and re-clone; `.env` survives because it's in the working tree, not git.
 
@@ -201,10 +285,22 @@ curl -fsS https://sitelayer.sandolab.xyz/health
 
 **Mitigate (immediate):**
 
-1. **Identify class** of credential (Clerk session token? `DEPLOY_SSH_KEY`? QBO?).
+1. **Identify class** of credential (Clerk session token? deploy SSH key? QBO? a runtime secret in `/app/sitelayer/.env`?).
 2. **Revoke first, rotate second.** Don't wait for full rotation.
    - Clerk session compromise: Clerk dashboard → Users → revoke sessions for affected user.
-   - `DEPLOY_SSH_KEY` exposed: `gh secret remove DEPLOY_SSH_KEY -R GitSteveLozano/sitelayer` AND `doctl compute ssh sitelayer --ssh-command='sudo -u sitelayer sed -i "/sitelayer-deploy/d" /home/sitelayer/.ssh/authorized_keys'`. Now the key is dead even if attacker has it.
+   - Deploy SSH key exposed: the key lives on the **fleet box** (used by
+     `scripts/deploy.sh prod` to SSH to the droplet) and in the droplet's
+     `authorized_keys` — there is **no GitHub Actions secret store** to clear
+     (the Actions workflows + `DEPLOY_SSH_KEY` GHA secret were removed; the repo
+     runs zero workflows, so `gh secret remove` is a no-op). Kill the key at the
+     droplet: `doctl compute ssh sitelayer --ssh-command='sudo -u sitelayer sed -i "/sitelayer-deploy/d" /home/sitelayer/.ssh/authorized_keys'`,
+     then remove the private key from the fleet box and mint a new pair. Now the
+     key is dead even if the attacker has it.
+   - A runtime secret leaked from `/app/sitelayer/.env` (Spaces key, QBO,
+     tokens): revoke at the provider (DO Console for Spaces/API tokens, Intuit
+     dashboard for QBO), then rotate the value in `/app/sitelayer/.env` and
+     bounce the affected container. The `.env` is the live source — there is no
+     CI secret to update.
    - DO Spaces / API token: DO Console → revoke immediately.
 3. Then run the full rotation procedure for that secret class — see `docs/SECRET_ROTATION.md`.
 

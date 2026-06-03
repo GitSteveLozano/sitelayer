@@ -10,8 +10,11 @@ and you need to decide whether to wait, rotate creds, or escalate to Intuit.
 
 Any one of:
 
-- Sentry `sitelayer-worker` shows `CircuitOpenError` events tagged with
-  `scope: 'circuit_breaker'`, integration `qbo`.
+- Sentry shows `CircuitOpenError` events tagged with
+  `scope: 'circuit_breaker'`, integration `qbo`. These are emitted by the
+  **worker** but land in the **`sitelayer-api`** Sentry project
+  (`SENTRY_WORKER_DSN` is absent → worker falls back to `SENTRY_DSN`); there is
+  no live `sitelayer-worker` project to filter on.
 - `GET /api/sync/status` reports the most recent QBO sync attempt as
   `last_sync_status: failed` and `last_error` contains `CircuitOpenError`
   or upstream Intuit 5xx text.
@@ -22,14 +25,19 @@ Any one of:
 
 ## Detection
 
-- **Sentry filter:** project `sitelayer-worker`, tag
-  `scope:circuit_breaker` and `integration:qbo`. The `onOpen` callback
-  records a warning with that tag every time the breaker trips.
-- **Prometheus:** graph
-  `sitelayer_circuit_breaker_state{integration="qbo"}`. `0 = closed`,
-  `1 = open`. A non-zero sustained reading > 10 min is the actionable
-  signal; momentary trips during a single Intuit blip are expected.
-- **Queue depth:** `sitelayer_queue_pending_count{queue="mutation_outbox"}`
+> **No Prometheus today.** `/api/metrics` is exposed (bearer
+> `API_METRICS_TOKEN`) but **nothing scrapes it** — no Prometheus server, no
+> alerting. "Graph the gauge" below means "curl `/api/metrics` and read the
+> value". Sentry (`sitelayer-api` project) + `GET /api/sync/status` /
+> `/api/sync/outbox` are the live detection surfaces.
+
+- **Sentry filter:** project `sitelayer-api` (worker events land here — see
+  Symptom), tag `scope:circuit_breaker` and `integration:qbo`. The `onOpen`
+  callback records a warning with that tag every time the breaker trips.
+- **Metrics (ad-hoc curl):** `sitelayer_circuit_breaker_state{integration="qbo"}`.
+  `0 = closed`, `1 = open`. A non-zero sustained reading > 10 min is the
+  actionable signal; momentary trips during a single Intuit blip are expected.
+- **Queue depth (ad-hoc curl):** `sitelayer_queue_pending_count{queue="mutation_outbox"}`
   rising in concert with the gauge above is confirmation.
 
 ## Diagnosis
