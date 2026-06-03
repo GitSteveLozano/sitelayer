@@ -7,14 +7,31 @@ holds only `000_baseline.sql`). The baseline captures **schema AND seed data**
 --on-conflict-do-nothing --disable-triggers`, excluding the `schema_migrations`
 ledger — and the equivalence proof now checks per-table row counts in addition to
 the schema diff). dev + demo were rebuilt fresh from the baseline (clean ledger =
-1 row, seed data intact). **PROD ledger reconcile is the one remaining step and is
-DEFERRED to the next prod deploy** (§3.3/§3.4): prod still runs the pre-squash SHA
-`bc5735f1`, so reconciling its ledger now would break rollback to that SHA; the
-next `scripts/deploy.sh prod` will apply the idempotent baseline (safe) and the
-reconcile rides that deploy's `pg_dump` backup. This doc is the runbook for
-collapsing the `docker/postgres/init/*.sql` history into a single
-`000_baseline.sql` during the learning phase, and the explicit rule for when that
-is no longer allowed.
+1 row, seed data intact). **PROD ledger reconcile is the one remaining step.**
+Prod is **behind the baseline boundary** — it was at migration **136** when the
+squash happened (the disposable tiers were at 152) — so it does NOT take the
+plain §3.3 reconcile. It must first be caught up to 152 via the individual
+`137…152` migrations from the **pre-squash parent SHA `cb5dc432`** (the squash
+commit's parent — the last commit with the full `init/` series; NOT `bc5735f1`,
+which is prod's currently-running SHA and only has `init/` up to 136), and only
+THEN reconciled (mark `000_baseline.sql` applied, delete the `< '153_'` rows);
+the baseline file itself is **never executed against prod** (its
+`--disable-triggers` data section needs superuser the prod app role lacks). See
+**§3.5** for the full behind-boundary procedure. This doc is the runbook for collapsing the
+`docker/postgres/init/*.sql` history into a single `000_baseline.sql` during the
+learning phase, and the explicit rule for when that is no longer allowed.
+
+> **REGEN NEEDED before the baseline is applied to a fresh PROD tier.** The
+> shipped `000_baseline.sql` still carries e2e/demo/test seed rows (the
+> `e2e-fixtures` company + its 5 role memberships from migration 072, etc.) in
+> its seed-data section. `scripts/squash-migrations-baseline.sh` has since been
+> updated to **tier-gate those rows OUT** of the data dump, but the baseline was
+> NOT regenerated here (regen is a separate gated op — see §3.2). Before any
+> baseline is applied to a fresh PROD tier, re-run the squash tool to regenerate
+> `000_baseline.sql` so the e2e/demo rows are excluded. For the current
+> behind-boundary prod cutover (§3.5) this is moot — prod is forward-migrated and
+> the baseline is never executed there — but a fresh-prod bring-up from the
+> baseline must use a regenerated, tier-gated file.
 
 > **Context.** This is the operational procedure referenced by
 > [`ENVIRONMENTS_AND_MIGRATIONS.md`](./ENVIRONMENTS_AND_MIGRATIONS.md) §3.2–3.4:
@@ -123,9 +140,13 @@ blast radius: **preview → dev → demo → prod**.
 ### 3.1 Decide the baseline boundary
 
 Pick the highest migration number folded into the baseline — call it
-`<BOUNDARY>` (e.g. `150`, the current max). Every file `≤ <BOUNDARY>` is
-represented by `000_baseline.sql`; anything `> <BOUNDARY>` stays a normal
-forward migration applied after the baseline.
+`<BOUNDARY>`. For the squash that actually shipped (2026-06-02) the boundary is
+**152** (the last folded file was `152_company_settings.sql`; note the history
+numbering skipped `151_`, so no `151_*` file ever existed). Every file
+`≤ <BOUNDARY>` is represented by `000_baseline.sql`; anything `> <BOUNDARY>`
+stays a normal forward migration applied after the baseline. The §3.3 reconcile
+DELETE bound is **one past** the boundary — for boundary 152 that is `'153_'`,
+NOT `'152_'` (which would orphan `152_company_settings.sql`).
 
 ### 3.2 Promote the candidate (repo change, once)
 
@@ -141,8 +162,9 @@ git mv docker/postgres/baseline-candidate/000_baseline.sql \
 
 # 3. Retire the folded history files (everything you squashed, ≤ <BOUNDARY>).
 #    Keep any post-baseline migrations (> <BOUNDARY>) untouched.
+#    For the boundary-152 squash the folded set is 0xx..152 (there is no 151_):
 git rm docker/postgres/init/0[0-9][0-9]_*.sql docker/postgres/init/1[0-4][0-9]_*.sql \
-       docker/postgres/init/150_*.sql   # adjust the globs to your <BOUNDARY>
+       docker/postgres/init/15[0-2]_*.sql   # adjust the globs to your <BOUNDARY>
 git checkout -- docker/postgres/init/000_baseline.sql  # keep the baseline
 ```
 
@@ -197,10 +219,22 @@ ON CONFLICT (name) DO NOTHING;
 --    i.e. files <= <BOUNDARY> that we removed from init/). We delete by the
 --    EXACT set of names we removed; never a blanket "delete everything but the
 --    baseline", which could nuke a legitimately-newer migration row.
+--
+--    The bound is ONE PAST the highest folded migration number. The squash
+--    boundary is 152 (the last folded file is 152_company_settings.sql; there
+--    is NO 151_* file in the history — the numbering skipped it), so the bound
+--    is '153_'. A common-and-wrong instinct is to write '151_' or '152_': both
+--    string-compare BELOW '152_company_settings.sql', so they LEAVE that ledger
+--    row orphaned (it points at a file the baseline already folded). Use '153_'.
+--
+--    Worked example (boundary 152, the real squash):
+--      DELETE ... AND name < '153_';
+--      -- '152_company_settings.sql' < '153_'  -> TRUE  (deleted, correct)
+--      -- a future '153_*.sql'        < '153_'  -> FALSE (kept,    correct)
 DELETE FROM schema_migrations
 WHERE name <> '000_baseline.sql'
-  AND name < '151_';   -- string compare works on the zero-padded NNN_ prefix;
-                       -- set this bound to one past <BOUNDARY>.
+  AND name < '153_';   -- string compare works on the zero-padded NNN_ prefix;
+                       -- set this bound to one past <BOUNDARY> (boundary 152 -> '153_').
 
 COMMIT;
 ```
@@ -221,6 +255,65 @@ COMMIT;
   while the [§5 gate](#5-maturity-curve-gate) still permits a squash at all. Take
   the normal pre-migration `pg_dump` backup the prod deploy already takes
   (`scripts/deploy-production-local.sh`) before the reconcile.
+
+### 3.5 Special case: PROD IS BEHIND THE BASELINE BOUNDARY (catch up FIRST)
+
+The §3.3 reconcile assumes the target environment has **already applied the
+history the baseline folds** — its belt-and-suspenders guard aborts unless a
+late table (`budget_snapshots`, migration 143) exists. That guard is correct:
+marking `000_baseline.sql` applied on a DB that is behind the boundary would
+record "this DB is at 152" while it is really at, say, 136 — silently skipping
+every migration in `(behind, 152]` forever. **Never reconcile a behind-boundary
+environment.**
+
+This is the **real** state of prod for the 2026-06-02 squash: prod was at
+migration **136** when the squash happened (the disposable tiers were at 152).
+Prod is therefore behind the boundary, so the plain §3.3 reconcile does **not**
+apply to it. The safe procedure is **catch up to the boundary first, THEN
+reconcile**:
+
+1. **Catch prod up to 152 using the INDIVIDUAL migrations from the pre-squash
+   SHA.** The squashed `main` no longer contains `137_*.sql … 152_*.sql`, so you
+   cannot migrate prod forward from `main`. Use the **squash commit's parent**
+   `cb5dc432` (= `<squash-commit>^`), which is the last commit that still holds
+   the full `docker/postgres/init/0xx…152` series. (Do NOT confuse this with
+   `bc5735f1` — that is the SHA prod is currently RUNNING, and its `init/` only
+   goes up to `136_custom_roles.sql`, so it cannot carry prod to 152.) Check out
+   the pre-squash parent and run the normal forward migrator against prod:
+
+   ```bash
+   git worktree add /tmp/sitelayer-presquash cb5dc432   # squash commit's parent
+   cd /tmp/sitelayer-presquash
+   # DATABASE_URL points at sitelayer_prod; this applies 137..152 normally and
+   # ledgers each one, leaving prod at the boundary with a TRUE 137..152 history.
+   # (There is no 151_* file — the history skipped that number; 150 then 152.)
+   scripts/migrate-db.sh
+   scripts/check-db-schema.sh
+   ```
+
+   This is an ordinary forward migration (additive, checksum-ledgered) — it is
+   NOT a squash operation and does not touch the immutability gate.
+
+2. **THEN run the §3.3 reconcile** on prod (mark `000_baseline.sql` applied +
+   delete the `< '153_'` history rows). Because prod is now genuinely at 152,
+   the §3.3 guard passes and the reconcile is a pure ledger swap.
+
+3. **Do NOT run the baseline (`000_baseline.sql`) AS A SCRIPT against prod.** Two
+   reasons:
+   - prod is already at 152 after step 1, so running the schema half would be a
+     no-op replay at best;
+   - more importantly, the baseline's **seed-data section** is dumped with
+     `pg_dump --disable-triggers`, which on restore issues `ALTER TABLE …
+DISABLE TRIGGER` — that requires **table-owner or superuser**. The prod app
+     role is a least-privilege login role and does **not** have it, so applying
+     the baseline as prod would error out partway through the data section. The
+     §3.3 reconcile sidesteps this entirely: it only marks the row applied and
+     never executes the file. (This is also why the baseline must NOT carry e2e /
+     demo seed rows into a fresh prod tier — see the tier-gating note in §5 and
+     the `--exclude-table-data` work in `squash-migrations-baseline.sh`.)
+
+In short, for a behind-boundary prod: **forward-migrate to the boundary from a
+pre-squash SHA → reconcile the ledger → never execute the baseline on prod.**
 
 ---
 
@@ -263,14 +356,46 @@ This is the load-bearing rule.
 > The migration history is then **strictly forward-only, forever** — you add
 > migrations, you never squash, you never remove an applied file.
 
+> **Operator judgment 2026-06-02: the gate was OPEN and the squash is DONE.**
+> On 2026-06-02 the operator judged prod to hold only seed/test/demo tenants
+> (no irreplaceable customer data), declared the gate OPEN, and the boundary-152
+> squash was **executed** for the repo + disposable tiers (`docker/postgres/init/`
+> now holds only `000_baseline.sql`; dev + demo rebuilt fresh). The prod ledger
+> reconcile is the one remaining step and follows the behind-boundary procedure
+> in §3.5 (prod was at 136). This was a one-time, deliberate operation; it does
+> NOT re-open the gate for future squashes — the trigger below still governs
+> whether another squash is ever permitted, and the answer is "no" the moment
+> prod holds real customer data.
+
 ### The trigger (state it explicitly)
 
 Treat the squash path as **closed** the moment **any** of these is true for the
 **prod** tier (`sitelayer_prod`):
 
 1. A **real (non-test, non-demo) company** exists in prod — i.e.
-   `SELECT count(*) FROM companies WHERE slug NOT IN ('e2e-fixtures','la-operations','demo', ...) > 0`
-   for any genuine customer slug; **or**
+   `SELECT count(*) FROM companies WHERE slug NOT IN (<allowlist>) > 0` for any
+   genuine customer slug. The **test/demo/seed allowlist** (slugs that do NOT
+   count as real customer data) must be kept current with what actually lives in
+   prod. As of 2026-06-02 it is:
+
+   ```sql
+   SELECT count(*) FROM companies
+   WHERE slug NOT IN (
+     'la-operations',   -- seeded LA Operations template tenant
+     'beta-build',      -- bootstrap fan-out shadow tenant
+     'e2e-fixtures',    -- role-matrix Playwright tenant (migration 072)
+     'demo',            -- demo-tier seed tenant
+     'steve',           -- operator/dev smoke tenant
+     'lastucco',        -- operator/dev smoke tenant
+     'acme-prod-smoke'  -- prod smoke-test tenant
+   ) > 0;
+   ```
+
+   Any row this query counts is a real customer and closes the gate. (The
+   previous version of this doc listed only `e2e-fixtures`, `la-operations`,
+   `demo` and was stale — prod also carries `steve`, `lastucco`, `beta-build`,
+   and `acme-prod-smoke` as non-customer tenants.) **or**
+
 2. prod holds **customer-authored blueprint documents** (uploaded PDFs in
    `blueprint_documents` whose `storage_path` points at the prod Spaces bucket),
    takeoffs, estimates, or QBO-synced financial rows that are not reproducible
