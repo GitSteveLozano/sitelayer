@@ -57,6 +57,19 @@ const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZ
 const activeCompanySlugOverride = (process.env.ACTIVE_COMPANY_SLUG ?? '').trim() || null
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
 const maxPollIntervalMs = Number(process.env.WORKER_POLL_MAX_INTERVAL_MS ?? 60_000)
+// Optional external-uptime heartbeat. When WORKER_HEARTBEAT_URL is set, the
+// worker fires a fire-and-forget GET at the end of every drain loop iteration
+// so an uptime monitor (healthchecks.io, Better Uptime, etc.) can detect a
+// stalled/crashed worker. Errors are swallowed — a flaky monitor must never
+// affect the drain.
+const heartbeatUrl = (process.env.WORKER_HEARTBEAT_URL ?? '').trim() || null
+
+function pingHeartbeat(): void {
+  if (!heartbeatUrl) return
+  void fetch(heartbeatUrl, { method: 'GET' }).catch(() => {
+    // best-effort only; never let monitor failures touch the drain
+  })
+}
 
 const pool = buildPool({
   databaseUrl,
@@ -750,6 +763,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   const companies = await listActiveCompanies(pool, activeCompanySlugOverride)
   if (companies.length === 0) {
     logger.info({ company_slug: activeCompanySlugOverride ?? '(all)' }, '[worker] waiting for company slug')
+    pingHeartbeat()
     return { idle: true }
   }
 
@@ -816,6 +830,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       '[worker] cross-tenant tick',
     )
   }
+
+  // External-uptime heartbeat: fire once at the end of every completed drain
+  // loop iteration (after all per-company + cross-tenant work). Fire-and-forget.
+  pingHeartbeat()
 
   const idle = !anyCompanyBusy && notifications.processed === 0 && !queuePruneSummary.ran
   return { idle }

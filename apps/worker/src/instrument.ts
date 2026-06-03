@@ -20,11 +20,17 @@ if (dsn) {
     release: process.env.SENTRY_RELEASE,
     tracesSampleRate: Number.isFinite(traceRate) ? traceRate : defaultTraceRate,
     sendDefaultPii: false,
+    // Single-pane logs: ship structured log records to Sentry Logs keyed by
+    // the active trace_id. The @sitelayer/logger Pino hook mirrors each record
+    // into Sentry.logger.*; consoleLoggingIntegration catches any stray
+    // console.* writes. No-op without a DSN (this whole block is DSN-guarded).
+    enableLogs: true,
     integrations: [
       Sentry.httpIntegration(),
       Sentry.nativeNodeFetchIntegration(),
       Sentry.postgresIntegration(),
       Sentry.contextLinesIntegration(),
+      Sentry.consoleLoggingIntegration({ levels: ['warn', 'error'] }),
     ],
   })
 }
@@ -35,6 +41,8 @@ registerSentry({
     if (!span) return undefined
     return { spanContext: () => span.spanContext() }
   },
+  // Pino records flow here. When Sentry has no DSN these calls are inert.
+  logger: Sentry.logger,
 })
 
 /**
