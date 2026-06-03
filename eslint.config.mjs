@@ -16,7 +16,18 @@ export default tseslint.config(
       '**/.vite-cache/**',
       '.turbo/**',
       'docs/steve-handoff/**',
+      // Git worktrees (agent isolation) are full repo checkouts with their own
+      // tsconfig. Linting them is redundant, AND their nested tsconfig makes
+      // typescript-eslint's parser report "multiple candidate TSConfigRootDirs"
+      // and fail every file. Ignore them; tsconfigRootDir below pins the root so
+      // main-tree files are unaffected when a worktree is present.
+      '**/.claude/**',
     ],
+  },
+  {
+    languageOptions: {
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
+    },
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
