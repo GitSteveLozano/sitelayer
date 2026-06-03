@@ -21,6 +21,7 @@ export async function loadPdfDocument(source: ArrayBuffer | string) {
 }
 
 export type {
+  PageRectRenderOptions,
   PageRenderOptions,
   PdfBookmark,
   PdfDocument,
@@ -28,4 +29,5 @@ export type {
   PdfRenderer,
   PdfSearchHandle,
   PdfSearchHit,
+  RenderHandle,
 } from './types'
