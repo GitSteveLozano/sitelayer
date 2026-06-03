@@ -135,6 +135,31 @@ target_dir="$PREVIEW_ROOT/$preview_slug"
 # schema; the LOCAL backend gives every stack its own database container, so it
 # uses `public` too. In both of those cases we skip schema-name derivation and
 # the schema-create step.
+#
+# ############################################################################
+# ## DATA-INTEGRITY WARNING — managed per-PR schema isolation vs the SQUASHED
+# ## baseline (docker/postgres/init/000_baseline.sql). See the GUARD just before
+# ## the migration step below, and docs/AUTO_DEPLOY.md "#27".
+# ##
+# ## How managed per-PR isolation is SUPPOSED to work: this tier renders
+# ##   PGOPTIONS=-c search_path=<slug>,public
+# ## into the per-stack .env, and migrate-db.sh / ensure-preview-schema.sh run
+# ## psql with that PGOPTIONS so every CREATE lands in the per-slug schema
+# ## `sitelayer_<slug>`, isolating each PR inside the shared sitelayer_preview
+# ## database.
+# ##
+# ## The trap: a `pg_dump --schema-only` BASELINE (which 000_baseline.sql is —
+# ## see its generated-artifact header) emits, at the top,
+# ##   SELECT pg_catalog.set_config('search_path', '', false);
+# ## and then FULLY-QUALIFIES every object as `public.<name>` (CREATE TABLE
+# ## public.foo, etc.). Both OVERRIDE the connection's search_path=<slug>,public
+# ## — so a squashed-baseline migration would create ALL objects in `public`,
+# ## NOT in the per-slug schema, silently collapsing every per-PR preview onto
+# ## ONE shared public schema (cross-PR data bleed + migration-checksum
+# ## collisions in the same DB). This breaks the very isolation this branch
+# ## sets up. The runtime GUARD below refuses to apply such a baseline under a
+# ## managed per-slug schema unless explicitly acknowledged.
+# ############################################################################
 if [ "$PREVIEW_TIER" = "preview" ] && [ "$PREVIEW_DB_BACKEND" = "managed" ]; then
   schema_slug="$(printf '%s' "$preview_slug" | tr '-' '_' | sed -E 's/[^a-z0-9_]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
   preview_db_schema="${PREVIEW_DB_SCHEMA:-sitelayer_${schema_slug}}"
@@ -367,6 +392,41 @@ else
     psql_env+=(PSQL_DOCKER_NETWORK="$local_db_network" DATABASE_URL="$LOCAL_DB_URL")
   fi
   if [ "$PREVIEW_TIER" = "preview" ] && [ "$PREVIEW_DB_BACKEND" = "managed" ]; then
+    # GUARD (#27): refuse to apply a search_path-defeating squashed baseline into
+    # a managed per-slug schema. A pg_dump baseline resets search_path to '' and
+    # public-qualifies every object, so it ignores PREVIEW_DB_SCHEMA / PGOPTIONS
+    # and lands ALL objects in `public` — collapsing every per-PR preview onto
+    # one shared schema (cross-PR data bleed + checksum collisions). Only fires
+    # when migrations actually run (an already-applied marker short-circuits this
+    # whole block). Ack with PREVIEW_ALLOW_PUBLIC_QUALIFIED_BASELINE=1 to proceed
+    # with the (then-correctly-documented) shared-`public` behavior.
+    baseline_file="$target_dir/docker/postgres/init/000_baseline.sql"
+    if [ -f "$baseline_file" ] && grep -qE "set_config\('search_path', ''" "$baseline_file"; then
+      if [ "${PREVIEW_ALLOW_PUBLIC_QUALIFIED_BASELINE:-0}" = "1" ]; then
+        echo "############################################################" >&2
+        echo "## WARNING: 000_baseline.sql resets search_path to '' and" >&2
+        echo "## public-qualifies every object. With PREVIEW_DB_SCHEMA=" >&2
+        echo "## $preview_db_schema, objects will STILL land in \`public\`, NOT" >&2
+        echo "## the per-slug schema — per-PR isolation is NOT effective." >&2
+        echo "## Proceeding because PREVIEW_ALLOW_PUBLIC_QUALIFIED_BASELINE=1." >&2
+        echo "############################################################" >&2
+      else
+        echo "ERROR: managed per-PR preview ($preview_slug) targets per-slug schema" >&2
+        echo "       '$preview_db_schema' via search_path, but docker/postgres/init/000_baseline.sql" >&2
+        echo "       is a pg_dump baseline that resets search_path to '' and qualifies" >&2
+        echo "       every object as public.<name>. Migrations would land in \`public\`," >&2
+        echo "       collapsing all per-PR previews onto ONE shared schema (cross-PR" >&2
+        echo "       data bleed + checksum collisions)." >&2
+        echo "       Fix: make the baseline generator emit unqualified / search_path-" >&2
+        echo "       relative object names (scripts/squash-migrations-baseline.sh)," >&2
+        echo "       OR switch managed previews to the LOCAL backend (per-stack DB," >&2
+        echo "       which uses \`public\` safely), OR — if you accept that previews" >&2
+        echo "       share \`public\` for now — re-run with" >&2
+        echo "       PREVIEW_ALLOW_PUBLIC_QUALIFIED_BASELINE=1." >&2
+        echo "       See docs/AUTO_DEPLOY.md '#27 — managed per-PR schema isolation'." >&2
+        exit 1
+      fi
+    fi
     env "${psql_env[@]}" "$target_dir/scripts/ensure-preview-schema.sh"
   fi
   env "${psql_env[@]}" MIGRATION_FILES="$(preview_migration_files)" "$target_dir/scripts/migrate-db.sh"

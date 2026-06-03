@@ -32,18 +32,27 @@
 # GitHub Actions in the path. The gate runs at LAND time (before pushing to
 # main/dev) and on every MANUAL `scripts/deploy.sh` (the operator's checkout has
 # node_modules). This watcher ships an ALREADY-GATED origin/dev SHA, so it passes
-# SKIP_VERIFY=1 below — its dedicated checkout has no node_modules to run the
-# gate, and re-gating an already-gated SHA is redundant. To re-gate here instead,
-# `npm ci` in AUTODEPLOY_REPO_DIR (ensure node/npm on the unit PATH) and drop the
-# SKIP_VERIFY=1.
+# SKIP_VERIFY=1 to deploy.sh by default — its dedicated checkout has no
+# node_modules to run the gate, and re-gating an already-gated SHA is redundant.
 #
-# LAND-TIME GATING IS NOW ENFORCED (2026-06-02): the SKIP_VERIFY=1 premise above
-# — "the SHA was already gated at land time" — is no longer an unenforced
-# assumption. The repo-tracked pre-push hook (`.githooks/pre-push`, installed via
-# `scripts/install-git-hooks.sh` → core.hooksPath) runs the STANDARD gate
-# (`npm run verify`) and BLOCKS any push to dev/main that fails it (bypass: the
-# standard `git push --no-verify`). So the SHA this watcher picks up off
-# origin/dev has actually passed the deterministic gate at land time.
+# WHY SKIP_VERIFY=1 IS SAFE HERE (the land-time gate is now ENFORCED + AUTO-INSTALLED):
+#   1. The repo-tracked pre-push hook (`.githooks/pre-push`) runs the STANDARD
+#      gate (`npm run verify`) and BLOCKS any push to dev/main that fails it
+#      (bypass: the explicit `git push --no-verify`).
+#   2. The hook is installed AUTOMATICALLY: root package.json's `prepare` script
+#      runs `scripts/install-git-hooks.sh` on every `npm install`, so a fresh
+#      clone is gated by default (core.hooksPath = .githooks). It is no longer a
+#      manual per-clone step that an operator can forget.
+#   So the SHA this watcher picks up off origin/dev has actually passed the
+#   deterministic gate at land time — the SKIP_VERIFY=1 premise is enforced by
+#   construction, not by trust.
+#
+# OPT-IN INLINE RE-GATE (defense in depth): set AUTODEPLOY_INLINE_VERIFY=1 to run
+# `npm run verify` (level AUTODEPLOY_VERIFY_LEVEL, default `fast`) in the
+# dedicated checkout BEFORE shipping — catching the `--no-verify`-bypassed push
+# or a divergent hook config. This requires node + npm on the unit PATH and a
+# one-time `npm ci` in AUTODEPLOY_REPO_DIR; the watcher runs `npm ci` itself when
+# node_modules is absent. Off by default to keep the 2-min poll fast.
 #
 # POST-DEPLOY SMOKE (detection, NOT a gate): after a SUCCESSFUL dev/demo deploy
 # this watcher runs `scripts/smoke-tier.sh <host> <sha>` against the live host to
@@ -74,7 +83,24 @@ AUTODEPLOY_STATE_FILE="${AUTODEPLOY_STATE_FILE:-$AUTODEPLOY_HOME/state}"
 AUTODEPLOY_LOG_FILE="${AUTODEPLOY_LOG_FILE:-$AUTODEPLOY_HOME/auto-deploy.log}"
 AUTODEPLOY_LOCK_FILE="${AUTODEPLOY_LOCK_FILE:-/tmp/sitelayer-autodeploy.lock}"
 AUTODEPLOY_PAUSED_FILE="${AUTODEPLOY_PAUSED_FILE:-$AUTODEPLOY_HOME/PAUSED}"
+# Remote to clone/fetch the dedicated deploy checkout from. This MUST use the
+# SAME transport as the droplet-side checkout that scripts/deploy.sh's heredoc
+# refreshes (it hardcodes `https://github.com/GitSteveLozano/sitelayer.git` and
+# runs `git remote set-url origin <that https url>` on the droplet). Keeping the
+# watcher on the SAME https url avoids a git@ (SSH) vs https divergence: the
+# watcher needs no GitHub deploy key, and both checkouts fetch the identical SHA
+# over the identical transport. If an operator overrides this with the SSH form
+# (git@github.com:GitSteveLozano/sitelayer.git), normalize it back to https
+# below so the two sides cannot silently diverge.
 AUTODEPLOY_REMOTE_URL="${AUTODEPLOY_REMOTE_URL:-https://github.com/GitSteveLozano/sitelayer.git}"
+# Normalize a git@github.com:owner/repo(.git) SSH override to the https form the
+# droplet-side deploy.sh uses, so the watcher's dedicated checkout and the
+# droplet checkout stay on one transport.
+case "$AUTODEPLOY_REMOTE_URL" in
+  git@github.com:*)
+    AUTODEPLOY_REMOTE_URL="https://github.com/${AUTODEPLOY_REMOTE_URL#git@github.com:}"
+    ;;
+esac
 
 # Tiers this watcher manages (space-separated). prod is rejected by design.
 AUTODEPLOY_TIERS="${AUTODEPLOY_TIERS:-dev demo}"
@@ -120,6 +146,16 @@ SHA_COMPARE_LEN="${AUTODEPLOY_SHA_COMPARE_LEN:-7}"
 AUTODEPLOY_SMOKE="${AUTODEPLOY_SMOKE:-1}"
 AUTODEPLOY_SMOKE_SCRIPT="${AUTODEPLOY_SMOKE_SCRIPT:-$AUTODEPLOY_REPO_DIR/scripts/smoke-tier.sh}"
 AUTODEPLOY_DEMO_ACCESS_CODE="${AUTODEPLOY_DEMO_ACCESS_CODE:-${DEMO_ACCESS_CODE:-}}"
+
+# Opt-in inline re-gate (defense in depth on top of the enforced land-time hook).
+# When AUTODEPLOY_INLINE_VERIFY=1, the watcher runs `npm run verify` (level
+# AUTODEPLOY_VERIFY_LEVEL, default `fast`) in the dedicated checkout BEFORE
+# calling deploy.sh — catching a `git push --no-verify` bypass or a checkout that
+# never had the hook installed. Requires node + npm on the unit PATH; the watcher
+# `npm ci`s the dedicated checkout when node_modules is absent. Off by default so
+# the 2-min poll stays fast and the SKIP_VERIFY=1 fast-path is preserved.
+AUTODEPLOY_INLINE_VERIFY="${AUTODEPLOY_INLINE_VERIFY:-0}"
+AUTODEPLOY_VERIFY_LEVEL="${AUTODEPLOY_VERIFY_LEVEL:-fast}"
 
 # ---- Logging ----------------------------------------------------------------
 # Structured, timestamped lines to both the log file and stdout (journald).
@@ -275,6 +311,44 @@ set_smoke_failure() {
   mv -f "$tmp" "$AUTODEPLOY_STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 }
 
+# ---- Opt-in inline re-gate --------------------------------------------------
+# Run `npm run verify` (level AUTODEPLOY_VERIFY_LEVEL) in the dedicated checkout
+# BEFORE shipping. Returns 0 = passed (or disabled), non-zero = the gate FAILED
+# (caller treats it as a deploy failure and records the failed-sha so the broken
+# SHA can't retry-storm). Requires node + npm on the PATH; `npm ci`s the checkout
+# if node_modules is absent. Off by default (AUTODEPLOY_INLINE_VERIFY=0).
+inline_verify() {
+  local tier="$1" sha="$2"
+
+  if [ "$AUTODEPLOY_INLINE_VERIFY" != "1" ]; then
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    log "INLINE-VERIFY-SKIP tier=$tier npm not on PATH (set AUTODEPLOY_INLINE_VERIFY=0 or add npm); shipping on the enforced land-time gate"
+    return 0
+  fi
+
+  if [ ! -d "$AUTODEPLOY_REPO_DIR/node_modules" ]; then
+    log "INLINE-VERIFY tier=$tier installing deps (npm ci) in dedicated checkout"
+    if ! ( cd "$AUTODEPLOY_REPO_DIR" && SITELAYER_SKIP_HOOKS=1 npm ci ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
+      log "INLINE-VERIFY-SKIP tier=$tier npm ci failed; shipping on the enforced land-time gate (see $AUTODEPLOY_LOG_FILE)"
+      return 0
+    fi
+  fi
+
+  log "INLINE-VERIFY tier=$tier sha=$(short "$sha") level=$AUTODEPLOY_VERIFY_LEVEL — re-gating before ship"
+  if ( cd "$AUTODEPLOY_REPO_DIR" && VERIFY_LEVEL="$AUTODEPLOY_VERIFY_LEVEL" bash scripts/verify-local.sh ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
+    log "INLINE-VERIFY-OK tier=$tier sha=$(short "$sha")"
+    return 0
+  fi
+  log "############################################################"
+  log "## INLINE-VERIFY-FAILED tier=$tier sha=$(short "$sha")"
+  log "## The desired SHA did NOT pass the inline gate (a --no-verify bypass"
+  log "## or a checkout missing the pre-push hook). NOT shipping $tier."
+  log "############################################################"
+  return 1
+}
+
 # ---- Deploy one tier --------------------------------------------------------
 deploy_tier() {
   local tier="$1"
@@ -323,9 +397,20 @@ deploy_tier() {
   fi
   git -C "$AUTODEPLOY_REPO_DIR" clean -fdq || true
 
+  # Defense-in-depth re-gate (opt-in). On the enforced land-time gate this is a
+  # no-op; when AUTODEPLOY_INLINE_VERIFY=1 it runs the gate against the
+  # just-checked-out SHA and refuses to ship a SHA that fails (recording the
+  # failed-sha so it can't retry-storm until the remote advances).
+  if ! inline_verify "$tier" "$desired"; then
+    set_failed_sha "$tier" "$desired"
+    return 0
+  fi
+
   # Run the existing deploy entrypoint from the dedicated checkout. SKIP_VERIFY=1:
-  # the SHA is already gated at land time and this checkout has no node_modules
-  # (see the LOCAL QUALITY GATE note in the header).
+  # the SHA is already gated at land time (the pre-push hook is auto-installed by
+  # root package.json's `prepare`) and this checkout has no node_modules — see the
+  # LOCAL QUALITY GATE note in the header. Set AUTODEPLOY_INLINE_VERIFY=1 to also
+  # re-gate here (the check just above).
   if ( cd "$AUTODEPLOY_REPO_DIR" && SKIP_VERIFY=1 bash scripts/deploy.sh "$tier" ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
     log "SUCCESS tier=$tier deployed $(short "$desired")"
     clear_failed_sha "$tier"

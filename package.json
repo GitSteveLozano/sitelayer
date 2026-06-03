@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "prepare": "node -e \"try{const{existsSync}=require('fs');if(process.env.CI||process.env.SITELAYER_SKIP_HOOKS==='1'||!existsSync('.git')||!existsSync('.githooks')){process.exit(0)}require('child_process').execSync('bash scripts/install-git-hooks.sh',{stdio:'inherit'})}catch(e){console.warn('[prepare] git hook install skipped: '+(e&&e.message));process.exit(0)}\"",
     "dev": "concurrently -k -n api,web,worker \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
     "dev:api": "npm run dev --workspace @sitelayer/api",
     "dev:web": "npm run dev --workspace @sitelayer/web",
