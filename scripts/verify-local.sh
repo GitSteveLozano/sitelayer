@@ -209,8 +209,15 @@ stage_static() {
 
   if [ -f scripts/check-migrations-immutable.sh ]; then
     echo "  -> migration immutability"
-    # Same one-time override the CI job carried for the 087 fix.
-    MIGRATION_GUARD_OVERRIDE="${MIGRATION_GUARD_OVERRIDE:-1}" \
+    # The immutability check MUST default to ON. Defaulting the override to 1
+    # made the check a no-op in every path (gate, pre-push hook, deploy), so a
+    # mutated/removed already-applied migration would have sailed through. The
+    # sanctioned squash escape is to EXPLICITLY export MIGRATION_GUARD_OVERRIDE=1
+    # for the one run that intentionally rewrites migration history
+    # (see docs/MIGRATION_BASELINE.md); it must never be the default. We pass the
+    # caller's value through verbatim (0 when unset) so the check itself
+    # enforces "anything but 1 blocks".
+    MIGRATION_GUARD_OVERRIDE="${MIGRATION_GUARD_OVERRIDE:-0}" \
       bash scripts/check-migrations-immutable.sh || return 1
   fi
 
