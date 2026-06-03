@@ -60,6 +60,7 @@ import { DEmptyState } from '@/components/d'
 import { type Tool, type CanvasMode, type SheetCallout } from './types'
 import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS, pitchInputStyle, ghostChip } from './constants'
 import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-body-styles'
+import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
 
 // Desktop command-center takeoff body — extracted verbatim from est-canvas.tsx
@@ -1161,22 +1162,7 @@ export function EstCanvasDesktopBody() {
 
   // ---- Loading state -------------------------------------------------------
   if (loading) {
-    return (
-      <div className="d-content-full" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span
-          style={{
-            fontFamily: 'var(--m-num)',
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            color: 'var(--m-ink-3)',
-          }}
-        >
-          Loading takeoff…
-        </span>
-      </div>
-    )
+    return <EstCanvasDesktopLoading />
   }
 
   const sheetLabel = activeBlueprint
