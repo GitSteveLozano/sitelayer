@@ -1752,7 +1752,7 @@ export function EstCanvasDesktopBody() {
                     cy={p.y}
                     r={1}
                     fill="var(--m-ink)"
-                    stroke="var(--m-paper)"
+                    stroke="var(--m-sand)"
                     strokeWidth={0.3}
                   />
                 ))}
