@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyScenario, planScenario, runFragments, type ApplyContext, type ScenarioDoc } from './index.js'
 import {
+  aiCaptureDraftPendingReview,
+  blueprintWithCalibratedPage,
   bomApproved,
   composeScenario,
   damageChargeOpen,
@@ -12,6 +14,7 @@ import {
   rentalPostedInvoice,
   rentalStuckPosting,
   starterFixtures,
+  takeoffDraftWithGeometry,
 } from './library.js'
 
 const COMPANY_ID = '00000000-0000-4000-8000-000000000def'
@@ -108,6 +111,47 @@ describe('library fragments fold through the real reducers', () => {
     const a = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
     const b = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
     expect(b).toEqual(a)
+  })
+})
+
+describe('renderable-takeoff fragments seed a non-blank canvas', () => {
+  it('composes blueprint + geometry draft into one idempotent doc', () => {
+    const merged = composeScenario(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+      takeoffDraftWithGeometry('manual-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+    )
+    expect(merged.blueprints).toHaveLength(1)
+    expect(merged.blueprints![0]!.pages).toHaveLength(1)
+    expect(merged.takeoff_drafts).toHaveLength(1)
+    expect(merged.takeoff_drafts![0]!.measurements).toHaveLength(3)
+  })
+
+  it('applies blueprint pages + geometry measurements end-to-end (fake client)', async () => {
+    const client = new FakeClient()
+    const ctx: ApplyContext<FakeClient> = { now: NOW, seedCompanyDefaults: async () => undefined }
+    const doc = docFrom(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+      takeoffDraftWithGeometry('manual-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+      aiCaptureDraftPendingReview('ai-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+    )
+    await applyScenario(client, doc, ctx)
+
+    expect(client.count(/insert into blueprint_documents/i)).toBe(1)
+    expect(client.count(/insert into blueprint_pages/i)).toBe(1)
+    // 3 manual geometry rows + 2 AI-capture geometry rows.
+    expect(client.count(/insert into takeoff_measurements/i)).toBe(5)
+    // Every seeded geometry measurement persists real geometry jsonb (not '{}').
+    const geomCalls = client.calls.filter((c) => /insert into takeoff_measurements/i.test(c.text))
+    for (const call of geomCalls) {
+      const geometryJson = call.values[7] as string | null
+      expect(geometryJson).toBeTruthy()
+      const geometry = JSON.parse(geometryJson as string) as { kind: string }
+      expect(['polygon', 'lineal', 'count', 'volume']).toContain(geometry.kind)
+    }
   })
 })
 

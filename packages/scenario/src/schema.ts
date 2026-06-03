@@ -119,11 +119,84 @@ const clockEvent = z.object({
   inside_geofence: z.boolean().optional(),
 })
 
+/** A board-space point ({x,y} in 0..100). */
+const boardPoint = z.object({ x: z.number(), y: z.number() })
+
+/** Permissive seed geometry. The planner normalizes this through
+ *  `buildGeometry` (src/geometry-fixtures.ts) into a canonical 0–100
+ *  board-space JSON the API's `normalizeGeometry` would accept. A `polygon`
+ *  needs ≥3 points, a `lineal` ≥2, a `count` ≥1, a `volume` positive l/w/h. */
+const geometryInput = z.object({
+  kind: z.enum(['polygon', 'lineal', 'count', 'volume']).optional(),
+  points: z.array(boardPoint).optional(),
+  length: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  unit: z.string().optional(),
+})
+
+/** Optional renderable-geometry fields shared by both measurement sections.
+ *  ALL optional + additive: a measurement that omits every field keeps the
+ *  exact legacy insert shape (geometry defaults to `{}`, no extra columns). */
+const measurementGeometryFields = {
+  geometry_kind: z.enum(['polygon', 'lineal', 'count', 'volume']).optional(),
+  geometry: geometryInput.optional(),
+  page_ref: z.string().optional(),
+  blueprint_ref: z.string().optional(),
+  condition_ref: z.string().optional(),
+  is_deduction: z.boolean().optional(),
+  elevation: z.string().optional(),
+  unit_canonical: z.string().optional(),
+  division_code: z.string().optional(),
+}
+
 const takeoffMeasurements = z.object({
   project_ref: z.string(),
   count: z.number(),
   service_item_code: z.string().optional(),
   unit: z.string().optional(),
+  ...measurementGeometryFields,
+})
+
+const blueprintPage = z.object({
+  ref,
+  page_number: z.number().int().optional(),
+  storage_path: z.string().optional(),
+  calibration: z
+    .object({
+      world_distance: z.number(),
+      world_unit: z.string(),
+      x1: z.number(),
+      y1: z.number(),
+      x2: z.number(),
+      y2: z.number(),
+      verified: z.boolean().optional(),
+    })
+    .optional(),
+})
+
+const blueprint = z.object({
+  ref,
+  project_ref: z.string(),
+  file_name: z.string().optional(),
+  preview_type: z.string().optional(),
+  pages: z.array(blueprintPage),
+})
+
+const takeoffCondition = z.object({
+  ref,
+  name: z.string(),
+  color: z.string().optional(),
+  measurement_kind: z.enum(['area', 'linear', 'count', 'volume']).optional(),
+  emit_linear: z.boolean().optional(),
+  emit_area: z.boolean().optional(),
+  emit_volume: z.boolean().optional(),
+  height_value: z.number().optional(),
+  thickness_value: z.number().optional(),
+  sides: z.number().int().optional(),
+  slope_value: z.number().optional(),
+  default_assembly_ref: z.string().optional(),
+  created_by: z.string().optional(),
 })
 
 const damageCharge = z.object({
@@ -256,6 +329,7 @@ const takeoffDraft = z.object({
         service_item_code: z.string(),
         quantity: z.number(),
         unit: z.string().optional(),
+        ...measurementGeometryFields,
       }),
     )
     .optional(),
@@ -378,6 +452,8 @@ export const ScenarioDoc = z.object({
   estimates: z.array(estimate).optional(),
   worker_issues: z.array(workerIssue).optional(),
   clock_events: z.array(clockEvent).optional(),
+  blueprints: z.array(blueprint).optional(),
+  takeoff_conditions: z.array(takeoffCondition).optional(),
   takeoff_measurements: takeoffMeasurements.optional(),
   damage_charges: z.array(damageCharge).optional(),
   rental_requests: z.array(rentalRequest).optional(),

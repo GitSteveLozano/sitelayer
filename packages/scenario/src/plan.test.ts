@@ -1,7 +1,15 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { parseScenario, planScenario, type ApplyOp, type ScenarioPlan } from './index.js'
+import { parseScenario, planScenario, type ApplyOp, type ScenarioDoc, type ScenarioPlan } from './index.js'
+import {
+  aiCaptureDraftPendingReview,
+  blueprintWithCalibratedPage,
+  composeScenario,
+  projectInProgress,
+  starterFixtures,
+  takeoffDraftWithGeometry,
+} from './library.js'
 
 const scenariosDir = fileURLToPath(new URL('../../../scenarios', import.meta.url))
 const scenarioFiles = readdirSync(scenariosDir)
@@ -120,6 +128,131 @@ describe('planScenario — workflow timelines fold through the real reducers', (
     expect(opByLabel(plan, 'rental_billing_run:riverside-pending')?.kind).toBe('query')
     expect(opByLabel(plan, 'rental_billing_run:events:riverside-pending')).toBeUndefined()
     expect(opByLabel(plan, 'rental_billing_run:stamp:riverside-pending')).toBeUndefined()
+  })
+})
+
+describe('planScenario — renderable takeoff (blueprints + geometry)', () => {
+  function renderableDoc(...parts: Parameters<typeof composeScenario>): ScenarioDoc {
+    return { company: { slug: 'render-co', name: 'Render Co' }, ...composeScenario(...parts) }
+  }
+
+  it('seeds a blueprint document + a calibrated, scale-verified page', () => {
+    const doc = renderableDoc(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+    )
+    const plan = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
+
+    const docOp = opByLabel(plan, 'blueprint_document:bp')
+    expect(docOp?.kind).toBe('query')
+    if (docOp?.kind === 'query') {
+      expect(docOp.text).toMatch(/insert into blueprint_documents/i)
+      // storage_path is the opaque <companyId>/<docId>/<file> placeholder.
+      expect(docOp.values[4]).toMatch(new RegExp(`^${COMPANY_ID}/[0-9a-f-]+/bp\\.pdf$`))
+    }
+
+    const pageOp = opByLabel(plan, 'blueprint_page:bp-p1')
+    expect(pageOp?.kind).toBe('query')
+    if (pageOp?.kind === 'query') {
+      expect(pageOp.text).toMatch(/insert into blueprint_pages/i)
+      // calibration columns: distance, unit, x1,y1,x2,y2 (params 6..11)
+      expect(pageOp.values[5]).toBe(60) // calibration_world_distance
+      expect(pageOp.values[6]).toBe('ft') // calibration_world_unit
+      expect(pageOp.values[7]).toBe(18) // x1
+      // verified ⇒ both calibration_set_at and scale_verified_at stamped to NOW
+      expect(pageOp.values[11]).toBe(NOW.toISOString()) // calibration_set_at
+      expect(pageOp.values[13]).toBe(NOW.toISOString()) // scale_verified_at
+    }
+  })
+
+  it('a geometry-carrying measurement emits geometry_kind + valid board-space points + page_id', () => {
+    const doc = renderableDoc(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+      takeoffDraftWithGeometry('manual-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+    )
+    const plan = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
+
+    const pageId = (() => {
+      const p = opByLabel(plan, 'blueprint_page:bp-p1')
+      return p?.kind === 'query' ? p.values[0] : undefined
+    })()
+    const blueprintId = (() => {
+      const d = opByLabel(plan, 'blueprint_document:bp')
+      return d?.kind === 'query' ? d.values[0] : undefined
+    })()
+
+    // First measurement (polygon, wall area).
+    const m0 = opByLabel(plan, 'takeoff_draft:measurement:manual-1:0')
+    expect(m0?.kind).toBe('query')
+    if (m0?.kind === 'query') {
+      expect(m0.text).toMatch(/geometry_kind/)
+      expect(m0.text).toMatch(/page_id/)
+      // values: id, company, project, draft, code, qty, unit, geometryJson, geometryKind, pageId, blueprintId, ...
+      expect(m0.values[8]).toBe('polygon') // geometry_kind
+      expect(m0.values[9]).toBe(pageId) // page_id resolved from page_ref
+      expect(m0.values[10]).toBe(blueprintId) // blueprint_document_id resolved from blueprint_ref
+
+      const geometry = JSON.parse(m0.values[7] as string) as { kind: string; points: Array<{ x: number; y: number }> }
+      expect(geometry.kind).toBe('polygon')
+      expect(geometry.points.length).toBeGreaterThanOrEqual(3) // valid polygon
+      for (const pt of geometry.points) {
+        expect(pt.x).toBeGreaterThanOrEqual(0)
+        expect(pt.x).toBeLessThanOrEqual(100)
+        expect(pt.y).toBeGreaterThanOrEqual(0)
+        expect(pt.y).toBeLessThanOrEqual(100)
+      }
+    }
+
+    // Second measurement is a lineal run (≥2 points).
+    const m1 = opByLabel(plan, 'takeoff_draft:measurement:manual-1:1')
+    if (m1?.kind === 'query') {
+      expect(m1.values[8]).toBe('lineal')
+      const geometry = JSON.parse(m1.values[7] as string) as { points: unknown[] }
+      expect(geometry.points.length).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('an AI-capture-pending-review draft seeds review_required + result_json', () => {
+    const doc = renderableDoc(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+      aiCaptureDraftPendingReview('ai-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+    )
+    const plan = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
+
+    const draftOp = opByLabel(plan, 'takeoff_draft:ai-1')
+    expect(draftOp?.kind).toBe('query')
+    if (draftOp?.kind === 'query') {
+      // insert into takeoff_drafts (..., source, kind, review_required, takeoff_result_json)
+      expect(draftOp.values[6]).toBe('blueprint_vision') // source
+      expect(draftOp.values[8]).toBe(true) // review_required
+      const resultJson = JSON.parse(draftOp.values[9] as string) as {
+        quantities: Array<{ confidence: number }>
+      }
+      expect(resultJson.quantities.length).toBeGreaterThan(0)
+      // mixed confidence — at least one high and one low.
+      const confidences = resultJson.quantities.map((q) => q.confidence)
+      expect(Math.max(...confidences)).toBeGreaterThan(0.8)
+      expect(Math.min(...confidences)).toBeLessThan(0.5)
+    }
+  })
+
+  it('plans blueprints + conditions before the measurements that reference them', () => {
+    const doc = renderableDoc(
+      starterFixtures(),
+      projectInProgress('alpha', { customerRef: 'cust-1' }),
+      blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+      takeoffDraftWithGeometry('manual-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+    )
+    const plan = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
+    const pageIdx = plan.ops.findIndex((o) => o.label === 'blueprint_page:bp-p1')
+    const measIdx = plan.ops.findIndex((o) => o.label === 'takeoff_draft:measurement:manual-1:0')
+    expect(pageIdx).toBeGreaterThanOrEqual(0)
+    expect(measIdx).toBeGreaterThan(pageIdx)
   })
 })
 

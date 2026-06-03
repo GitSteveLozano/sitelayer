@@ -1,7 +1,15 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { parseScenario, planScenario, type ScenarioEvent } from './index.js'
+import { parseScenario, planScenario, type ScenarioDoc, type ScenarioEvent } from './index.js'
+import {
+  aiCaptureDraftPendingReview,
+  blueprintWithCalibratedPage,
+  composeScenario,
+  projectInProgress,
+  starterFixtures,
+  takeoffDraftWithGeometry,
+} from './library.js'
 
 /**
  * Plan golden snapshots (P1).
@@ -48,5 +56,41 @@ function planShape(file: string) {
 describe('plan golden snapshots', () => {
   it.each(scenarioFiles)('%s plans to a stable shape', (file) => {
     expect(planShape(file)).toMatchSnapshot()
+  })
+})
+
+// NEW renderable-takeoff fixtures (blueprints + calibrated pages + geometry).
+// These add their OWN snapshots; they must never alter the per-file snapshots
+// above (those prove the existing scenarios still plan byte-identically).
+function planShapeDoc(doc: ScenarioDoc) {
+  const plan = planScenario(doc, { companyId: COMPANY_ID, now: NOW })
+  return plan.ops.map((op) => `${op.kind} ${op.label}`)
+}
+
+describe('plan golden snapshots — renderable takeoff fixtures', () => {
+  it('blueprint + calibrated page + manual geometry draft', () => {
+    const doc: ScenarioDoc = {
+      company: { slug: 'render-co', name: 'Render Co' },
+      ...composeScenario(
+        starterFixtures(),
+        projectInProgress('alpha', { customerRef: 'cust-1' }),
+        blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+        takeoffDraftWithGeometry('manual-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+      ),
+    }
+    expect(planShapeDoc(doc)).toMatchSnapshot()
+  })
+
+  it('AI-capture draft pending review with geometry', () => {
+    const doc: ScenarioDoc = {
+      company: { slug: 'render-co', name: 'Render Co' },
+      ...composeScenario(
+        starterFixtures(),
+        projectInProgress('alpha', { customerRef: 'cust-1' }),
+        blueprintWithCalibratedPage('bp', { projectRef: 'alpha' }),
+        aiCaptureDraftPendingReview('ai-1', { projectRef: 'alpha', blueprintRef: 'bp', pageRef: 'bp-p1' }),
+      ),
+    }
+    expect(planShapeDoc(doc)).toMatchSnapshot()
   })
 })

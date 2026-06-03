@@ -398,3 +398,34 @@ exports[`plan golden snapshots > takeoff-bulk.yaml plans to a stable shape 1`] =
   ],
 }
 `;
+
+exports[`plan golden snapshots — renderable takeoff fixtures > AI-capture draft pending review with geometry 1`] = `
+[
+  "company_defaults company_defaults",
+  "query customer:cust-1",
+  "query worker:foreman-1",
+  "query inventory:scaffold",
+  "query project:alpha",
+  "query blueprint_document:bp",
+  "query blueprint_page:bp-p1",
+  "query takeoff_draft:ai-1",
+  "query takeoff_draft:measurement:ai-1:0",
+  "query takeoff_draft:measurement:ai-1:1",
+]
+`;
+
+exports[`plan golden snapshots — renderable takeoff fixtures > blueprint + calibrated page + manual geometry draft 1`] = `
+[
+  "company_defaults company_defaults",
+  "query customer:cust-1",
+  "query worker:foreman-1",
+  "query inventory:scaffold",
+  "query project:alpha",
+  "query blueprint_document:bp",
+  "query blueprint_page:bp-p1",
+  "query takeoff_draft:manual-1",
+  "query takeoff_draft:measurement:manual-1:0",
+  "query takeoff_draft:measurement:manual-1:1",
+  "query takeoff_draft:measurement:manual-1:2",
+]
+`;

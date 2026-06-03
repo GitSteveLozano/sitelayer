@@ -289,6 +289,231 @@ export function bomApproved(ref: string, opts: { projectRef: string; name?: stri
   }
 }
 
+// ---------- Renderable takeoff (blueprints + geometry) ----------
+
+/**
+ * A blueprint document with one calibrated page — the minimum a seeded takeoff
+ * needs so the canvas opens to a real sheet + scale instead of a blank board.
+ * The calibration defaults describe a horizontal 60ft scale bar across the page;
+ * pass `verified: true` (default) to also stamp `scale_verified_at`.
+ */
+export function blueprintWithCalibratedPage(
+  ref: string,
+  opts: {
+    projectRef: string
+    pageRef?: string
+    fileName?: string
+    worldDistance?: number
+    worldUnit?: string
+    verified?: boolean
+  },
+): PartialScenario {
+  return {
+    blueprints: [
+      {
+        ref,
+        project_ref: opts.projectRef,
+        file_name: opts.fileName ?? `${ref}.pdf`,
+        pages: [
+          {
+            ref: opts.pageRef ?? `${ref}-p1`,
+            page_number: 1,
+            calibration: {
+              world_distance: opts.worldDistance ?? 60,
+              world_unit: opts.worldUnit ?? 'ft',
+              x1: 18,
+              y1: 82,
+              x2: 82,
+              y2: 82,
+              verified: opts.verified ?? true,
+            },
+          },
+        ],
+      },
+    ],
+  }
+}
+
+/**
+ * A manual takeoff draft carrying a few real-geometry measurements (a wall-area
+ * polygon, an insulation lineal run, and a window count), all pinned to a
+ * calibrated blueprint page so they render on the canvas. Mirrors the shapes in
+ * `apps/web/.../takeoff-preview-demo-fixtures.ts` but DB-seeds them.
+ */
+export function takeoffDraftWithGeometry(
+  ref: string,
+  opts: { projectRef: string; blueprintRef: string; pageRef: string; name?: string },
+): PartialScenario {
+  return {
+    takeoff_drafts: [
+      {
+        ref,
+        project_ref: opts.projectRef,
+        name: opts.name ?? 'Renderable takeoff',
+        source: 'manual',
+        review_required: false,
+        measurements: [
+          {
+            service_item_code: '09 29 00',
+            quantity: 240,
+            unit: 'sqft',
+            unit_canonical: 'SQFT',
+            geometry_kind: 'polygon',
+            elevation: 'south',
+            blueprint_ref: opts.blueprintRef,
+            page_ref: opts.pageRef,
+            geometry: {
+              kind: 'polygon',
+              points: [
+                { x: 20, y: 24 },
+                { x: 76, y: 24 },
+                { x: 76, y: 38 },
+                { x: 20, y: 38 },
+              ],
+            },
+          },
+          {
+            service_item_code: '07 21 00',
+            quantity: 52,
+            unit: 'lf',
+            unit_canonical: 'LF',
+            geometry_kind: 'lineal',
+            elevation: 'east',
+            blueprint_ref: opts.blueprintRef,
+            page_ref: opts.pageRef,
+            geometry: {
+              kind: 'lineal',
+              points: [
+                { x: 20, y: 70 },
+                { x: 42, y: 76 },
+                { x: 66, y: 72 },
+                { x: 80, y: 62 },
+              ],
+            },
+          },
+          {
+            service_item_code: '08 50 00',
+            quantity: 3,
+            unit: 'ea',
+            unit_canonical: 'EA',
+            geometry_kind: 'count',
+            blueprint_ref: opts.blueprintRef,
+            page_ref: opts.pageRef,
+            geometry: {
+              kind: 'count',
+              points: [
+                { x: 30, y: 48 },
+                { x: 52, y: 48 },
+                { x: 74, y: 48 },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  }
+}
+
+/**
+ * An AI-capture draft sitting in the review queue: `source != manual`,
+ * `review_required = true`, and a `result_json` carrying mixed-confidence
+ * captured quantities (the shape the promote screen reads). Geometry is pinned
+ * to the supplied blueprint page so the review canvas renders.
+ */
+export function aiCaptureDraftPendingReview(
+  ref: string,
+  opts: {
+    projectRef: string
+    blueprintRef: string
+    pageRef: string
+    source?: 'blueprint_vision' | 'roomplan' | 'photogrammetry' | 'drone'
+    name?: string
+  },
+): PartialScenario {
+  const source = opts.source ?? 'blueprint_vision'
+  return {
+    takeoff_drafts: [
+      {
+        ref,
+        project_ref: opts.projectRef,
+        name: opts.name ?? 'AI capture (pending review)',
+        source,
+        kind: 'takeoff',
+        review_required: true,
+        result_json: {
+          pipeline: source,
+          generated_at: T0,
+          quantities: [
+            {
+              service_item_code: '09 29 00',
+              quantity: 512,
+              unit: 'sqft',
+              confidence: 0.93,
+              label: 'great room wall area',
+            },
+            {
+              service_item_code: '12 30 00',
+              quantity: 168,
+              unit: 'sqft',
+              confidence: 0.71,
+              label: 'kitchen footprint',
+            },
+            {
+              service_item_code: '08 50 00',
+              quantity: 8,
+              unit: 'ea',
+              confidence: 0.42,
+              label: 'window openings (low confidence)',
+            },
+          ],
+        },
+        measurements: [
+          {
+            service_item_code: '09 29 00',
+            quantity: 512,
+            unit: 'sqft',
+            unit_canonical: 'SQFT',
+            geometry_kind: 'polygon',
+            blueprint_ref: opts.blueprintRef,
+            page_ref: opts.pageRef,
+            geometry: {
+              kind: 'polygon',
+              points: [
+                { x: 16, y: 18 },
+                { x: 56, y: 18 },
+                { x: 56, y: 54 },
+                { x: 16, y: 54 },
+              ],
+            },
+          },
+          {
+            service_item_code: '08 50 00',
+            quantity: 8,
+            unit: 'ea',
+            unit_canonical: 'EA',
+            geometry_kind: 'count',
+            blueprint_ref: opts.blueprintRef,
+            page_ref: opts.pageRef,
+            geometry: {
+              kind: 'count',
+              points: [
+                { x: 24, y: 18 },
+                { x: 40, y: 18 },
+                { x: 68, y: 18 },
+                { x: 82, y: 30 },
+                { x: 82, y: 40 },
+                { x: 34, y: 82 },
+                { x: 18, y: 66 },
+                { x: 16, y: 36 },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  }
+}
+
 // ---------- Composition ----------
 
 const ARRAY_SECTIONS = [
@@ -301,6 +526,8 @@ const ARRAY_SECTIONS = [
   'estimates',
   'worker_issues',
   'clock_events',
+  'blueprints',
+  'takeoff_conditions',
   'damage_charges',
   'rental_requests',
   'qbo_sync_runs',

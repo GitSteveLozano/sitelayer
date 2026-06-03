@@ -1,5 +1,6 @@
 import { parse as parseYaml } from 'yaml'
 import { getWorkflow, type ApplyEventSequenceArgs } from '@sitelayer/workflows'
+import { buildGeometry, type GeometryInput, type GeometryKind } from './geometry-fixtures.js'
 import { refUuid } from './ids.js'
 import { ScenarioDoc } from './schema.js'
 
@@ -95,6 +96,9 @@ interface RefMaps {
   crewSchedules: Map<string, string>
   takeoffDrafts: Map<string, string>
   captureSessions: Map<string, string>
+  blueprintDocuments: Map<string, string>
+  blueprintPages: Map<string, string>
+  takeoffConditions: Map<string, string>
 }
 
 function newRefMaps(): RefMaps {
@@ -115,6 +119,9 @@ function newRefMaps(): RefMaps {
     crewSchedules: new Map(),
     takeoffDrafts: new Map(),
     captureSessions: new Map(),
+    blueprintDocuments: new Map(),
+    blueprintPages: new Map(),
+    takeoffConditions: new Map(),
   }
 }
 
@@ -698,6 +705,201 @@ function planClockEvents(b: Builder, clockEvents: ScenarioDoc['clock_events']): 
   }
 }
 
+// ---------- Blueprints + calibrated pages ----------
+
+function planBlueprints(b: Builder, blueprints: ScenarioDoc['blueprints']): void {
+  if (!blueprints) return
+  for (const bp of blueprints) {
+    const projectId = mustResolve('project', bp.project_ref, b.refs.projects)
+    const documentId = refUuid('blueprint_document', bp.ref)
+    b.refs.blueprintDocuments.set(bp.ref, documentId)
+    const fileName = bp.file_name ?? `${bp.ref}.pdf`
+    // Opaque deterministic placeholder (matches the prod `<companyId>/<id>/<file>` shape).
+    const storagePath = `${b.companyId}/${documentId}/${fileName}`
+
+    q(
+      b,
+      `blueprint_document:${bp.ref}`,
+      `insert into blueprint_documents
+         (id, company_id, project_id, file_name, storage_path, preview_type, version)
+       values ($1, $2, $3, $4, $5, $6, 1)
+       on conflict (id) do nothing`,
+      [documentId, b.companyId, projectId, fileName, storagePath, bp.preview_type ?? 'storage_path'],
+    )
+
+    for (let i = 0; i < bp.pages.length; i++) {
+      const page = bp.pages[i]!
+      const pageId = refUuid('blueprint_page', page.ref)
+      b.refs.blueprintPages.set(page.ref, pageId)
+      const cal = page.calibration
+      const calibrationSetAt = cal ? b.now.toISOString() : null
+      const scaleVerifiedAt = cal?.verified ? b.now.toISOString() : null
+      q(
+        b,
+        `blueprint_page:${page.ref}`,
+        `insert into blueprint_pages
+           (id, company_id, blueprint_document_id, page_number, storage_path,
+            calibration_world_distance, calibration_world_unit,
+            calibration_x1, calibration_y1, calibration_x2, calibration_y2,
+            calibration_set_at, calibration_set_by, scale_verified_at, scale_verified_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14::timestamptz, $15)
+         on conflict (id) do nothing`,
+        [
+          pageId,
+          b.companyId,
+          documentId,
+          page.page_number ?? i + 1,
+          page.storage_path ?? null,
+          cal?.world_distance ?? null,
+          cal?.world_unit ?? null,
+          cal?.x1 ?? null,
+          cal?.y1 ?? null,
+          cal?.x2 ?? null,
+          cal?.y2 ?? null,
+          calibrationSetAt,
+          cal ? 'seed-scenario' : null,
+          scaleVerifiedAt,
+          cal?.verified ? 'seed-scenario' : null,
+        ],
+      )
+    }
+  }
+}
+
+// ---------- Takeoff conditions (typed templates) ----------
+
+function planTakeoffConditions(b: Builder, conditions: ScenarioDoc['takeoff_conditions']): void {
+  if (!conditions) return
+  for (const c of conditions) {
+    const id = refUuid('takeoff_condition', c.ref)
+    b.refs.takeoffConditions.set(c.ref, id)
+    const kind = c.measurement_kind ?? 'area'
+    const defaultAssemblyId = c.default_assembly_ref ? refUuid('assembly', c.default_assembly_ref) : null
+    q(
+      b,
+      `takeoff_condition:${c.ref}`,
+      `insert into takeoff_conditions
+         (id, company_id, name, color, measurement_kind,
+          height_value, thickness_value, sides, slope_value, default_assembly_id,
+          emit_linear, emit_area, emit_volume, created_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       on conflict (id) do nothing`,
+      [
+        id,
+        b.companyId,
+        c.name,
+        c.color ?? '#2f7d32',
+        kind,
+        c.height_value ?? null,
+        c.thickness_value ?? null,
+        c.sides ?? null,
+        c.slope_value ?? null,
+        defaultAssemblyId,
+        c.emit_linear ?? kind === 'linear',
+        c.emit_area ?? kind === 'area',
+        c.emit_volume ?? kind === 'volume',
+        c.created_by ?? null,
+      ],
+    )
+  }
+}
+
+// ---------- Measurement geometry/extra-column resolution ----------
+
+const GEOMETRY_DEFAULT_KIND: Record<GeometryKind, GeometryKind> = {
+  polygon: 'polygon',
+  lineal: 'lineal',
+  count: 'count',
+  volume: 'volume',
+}
+
+/** Fields a measurement may carry beyond the legacy
+ *  (service_item_code, quantity, unit) trio. Shared by both measurement
+ *  sections so geometry/page/condition handling stays identical. */
+interface MeasurementExtras {
+  geometry_kind?: GeometryKind | undefined
+  geometry?: GeometryInput | undefined
+  page_ref?: string | undefined
+  blueprint_ref?: string | undefined
+  condition_ref?: string | undefined
+  is_deduction?: boolean | undefined
+  elevation?: string | undefined
+  unit_canonical?: string | undefined
+  division_code?: string | undefined
+}
+
+interface ResolvedMeasurementExtras {
+  /** True when ANY renderable/extra field was supplied — gates the wide insert. */
+  enriched: boolean
+  geometryJson: string | null
+  geometryKind: string | null
+  pageId: string | null
+  blueprintId: string | null
+  conditionId: string | null
+  isDeduction: boolean | null
+  elevation: string | null
+  unitCanonical: string | null
+  divisionCode: string | null
+}
+
+function resolveMeasurementExtras(b: Builder, m: MeasurementExtras): ResolvedMeasurementExtras {
+  const hasAny =
+    m.geometry !== undefined ||
+    m.geometry_kind !== undefined ||
+    m.page_ref !== undefined ||
+    m.blueprint_ref !== undefined ||
+    m.condition_ref !== undefined ||
+    m.is_deduction !== undefined ||
+    m.elevation !== undefined ||
+    m.unit_canonical !== undefined ||
+    m.division_code !== undefined
+
+  if (!hasAny) {
+    return {
+      enriched: false,
+      geometryJson: null,
+      geometryKind: null,
+      pageId: null,
+      blueprintId: null,
+      conditionId: null,
+      isDeduction: null,
+      elevation: null,
+      unitCanonical: null,
+      divisionCode: null,
+    }
+  }
+
+  let geometryJson: string | null = null
+  let geometryKind: string | null = m.geometry_kind ?? null
+  if (m.geometry !== undefined) {
+    const kind = m.geometry.kind ?? m.geometry_kind ?? 'polygon'
+    const geometry = buildGeometry({ ...m.geometry, kind: GEOMETRY_DEFAULT_KIND[kind] })
+    geometryJson = JSON.stringify(geometry)
+    geometryKind = geometry.kind
+  }
+
+  const pageId = m.page_ref ? mustResolve('blueprint_page', m.page_ref, b.refs.blueprintPages) : null
+  const blueprintId = m.blueprint_ref
+    ? mustResolve('blueprint_document', m.blueprint_ref, b.refs.blueprintDocuments)
+    : null
+  const conditionId = m.condition_ref
+    ? mustResolve('takeoff_condition', m.condition_ref, b.refs.takeoffConditions)
+    : null
+
+  return {
+    enriched: true,
+    geometryJson,
+    geometryKind,
+    pageId,
+    blueprintId,
+    conditionId,
+    isDeduction: m.is_deduction ?? null,
+    elevation: m.elevation ?? null,
+    unitCanonical: m.unit_canonical ?? null,
+    divisionCode: m.division_code ?? null,
+  }
+}
+
 function planTakeoffMeasurements(b: Builder, spec: ScenarioDoc['takeoff_measurements']): void {
   if (!spec) return
   const projectId = mustResolve('project', spec.project_ref, b.refs.projects)
@@ -714,21 +916,71 @@ function planTakeoffMeasurements(b: Builder, spec: ScenarioDoc['takeoff_measurem
   const code = spec.service_item_code ?? 'EPS'
   const unit = spec.unit ?? 'sqft'
 
+  const extras = resolveMeasurementExtras(b, spec)
+
   const valueClauses: string[] = []
   const values: unknown[] = []
+  if (!extras.enriched) {
+    // Legacy narrow path — byte-identical to the original 7-column insert.
+    for (let i = 0; i < spec.count; i++) {
+      const id = refUuid('takeoff_measurement', `${spec.project_ref}:bulk:${i}`)
+      const qv = 100 + (i % 50)
+      const idx = valueClauses.length * 7
+      valueClauses.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7})`)
+      values.push(id, b.companyId, projectId, draftId, code, qv, unit)
+    }
+    if (valueClauses.length > 0) {
+      q(
+        b,
+        `takeoff_measurements:bulk:${spec.project_ref}`,
+        `insert into takeoff_measurements
+         (id, company_id, project_id, draft_id, service_item_code, quantity, unit)
+       values ${valueClauses.join(', ')}
+       on conflict (id) do nothing`,
+        values,
+      )
+    }
+    return
+  }
+
+  // Wide path — every bulk row carries the spec's shared geometry + columns.
+  const cols = 16
   for (let i = 0; i < spec.count; i++) {
     const id = refUuid('takeoff_measurement', `${spec.project_ref}:bulk:${i}`)
     const qv = 100 + (i % 50)
-    const idx = valueClauses.length * 7
-    valueClauses.push(`($${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7})`)
-    values.push(id, b.companyId, projectId, draftId, code, qv, unit)
+    const idx = valueClauses.length * cols
+    valueClauses.push(
+      `($${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, $${idx + 6}, $${idx + 7}, ` +
+        `coalesce($${idx + 8}::jsonb, '{}'::jsonb), $${idx + 9}, $${idx + 10}, $${idx + 11}, $${idx + 12}, ` +
+        `$${idx + 13}, $${idx + 14}, $${idx + 15}, $${idx + 16})`,
+    )
+    values.push(
+      id,
+      b.companyId,
+      projectId,
+      draftId,
+      code,
+      qv,
+      unit,
+      extras.geometryJson,
+      extras.geometryKind ?? 'polygon',
+      extras.pageId,
+      extras.blueprintId,
+      extras.conditionId,
+      extras.isDeduction ?? false,
+      extras.elevation,
+      extras.unitCanonical,
+      extras.divisionCode,
+    )
   }
   if (valueClauses.length > 0) {
     q(
       b,
       `takeoff_measurements:bulk:${spec.project_ref}`,
       `insert into takeoff_measurements
-         (id, company_id, project_id, draft_id, service_item_code, quantity, unit)
+         (id, company_id, project_id, draft_id, service_item_code, quantity, unit,
+          geometry, geometry_kind, page_id, blueprint_document_id, condition_id,
+          is_deduction, elevation, unit_canonical, division_code)
        values ${valueClauses.join(', ')}
        on conflict (id) do nothing`,
       values,
@@ -993,14 +1245,47 @@ function planTakeoffDraftsRich(b: Builder, drafts: ScenarioDoc['takeoff_drafts']
       for (let i = 0; i < d.measurements.length; i++) {
         const m = d.measurements[i]!
         const id = refUuid('takeoff_measurement', `${d.ref}:${i}`)
+        const extras = resolveMeasurementExtras(b, m)
+        if (!extras.enriched) {
+          // Legacy narrow path — byte-identical to the original 7-column insert.
+          q(
+            b,
+            `takeoff_draft:measurement:${d.ref}:${i}`,
+            `insert into takeoff_measurements
+             (id, company_id, project_id, draft_id, service_item_code, quantity, unit)
+           values ($1, $2, $3, $4, $5, $6, $7)
+           on conflict (id) do nothing`,
+            [id, b.companyId, projectId, draftId, m.service_item_code, m.quantity, m.unit ?? 'sqft'],
+          )
+          continue
+        }
         q(
           b,
           `takeoff_draft:measurement:${d.ref}:${i}`,
           `insert into takeoff_measurements
-             (id, company_id, project_id, draft_id, service_item_code, quantity, unit)
-           values ($1, $2, $3, $4, $5, $6, $7)
+             (id, company_id, project_id, draft_id, service_item_code, quantity, unit,
+              geometry, geometry_kind, page_id, blueprint_document_id, condition_id,
+              is_deduction, elevation, unit_canonical, division_code)
+           values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), $9, $10, $11, $12, $13, $14, $15, $16)
            on conflict (id) do nothing`,
-          [id, b.companyId, projectId, draftId, m.service_item_code, m.quantity, m.unit ?? 'sqft'],
+          [
+            id,
+            b.companyId,
+            projectId,
+            draftId,
+            m.service_item_code,
+            m.quantity,
+            m.unit ?? 'sqft',
+            extras.geometryJson,
+            extras.geometryKind ?? 'polygon',
+            extras.pageId,
+            extras.blueprintId,
+            extras.conditionId,
+            extras.isDeduction ?? false,
+            extras.elevation,
+            extras.unitCanonical,
+            extras.divisionCode,
+          ],
         )
       }
     }
@@ -1740,10 +2025,13 @@ export function parseScenario(yamlText: string): ScenarioDoc {
  *
  * The op order is identical to the legacy `seedScenario` sequence:
  * memberships → company defaults → customers → workers → inventory → projects →
- * rentals → estimates → worker_issues → clock_events → takeoff_measurements →
- * damage_charges → rental_requests → qbo_sync_runs → boms → takeoff_drafts →
- * estimate_lines → material_bills → labor_entries → change_orders →
- * crew_schedules → daily_logs → capture_sessions.
+ * rentals → estimates → worker_issues → clock_events → blueprints →
+ * takeoff_conditions → takeoff_measurements → damage_charges → rental_requests →
+ * qbo_sync_runs → boms → takeoff_drafts → estimate_lines → material_bills →
+ * labor_entries → change_orders → crew_schedules → daily_logs →
+ * capture_sessions. (`blueprints`/`takeoff_conditions` are additive sections
+ * slotted before measurements so `page_id`/`condition_id` refs resolve; a doc
+ * that omits them produces a byte-identical plan to before.)
  */
 export function planScenario(doc: ScenarioDoc, ctx: PlanContext): ScenarioPlan {
   const b: Builder = {
@@ -1763,6 +2051,10 @@ export function planScenario(doc: ScenarioDoc, ctx: PlanContext): ScenarioPlan {
   planEstimates(b, doc.estimates)
   planWorkerIssues(b, doc.worker_issues)
   planClockEvents(b, doc.clock_events)
+  // Renderable-takeoff substrate — blueprints + pages + conditions must be
+  // planned before any measurement that references them (page_id / condition_id).
+  planBlueprints(b, doc.blueprints)
+  planTakeoffConditions(b, doc.takeoff_conditions)
   planTakeoffMeasurements(b, doc.takeoff_measurements)
   planDamageCharges(b, doc.damage_charges)
   planRentalRequests(b, doc.rental_requests)
