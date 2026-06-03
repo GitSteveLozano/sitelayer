@@ -32,6 +32,19 @@ type Measurement = {
   division_code: string | null
   is_deduction: boolean
   assembly_id: string | null
+  condition_id?: string | null
+  geometry?: unknown
+}
+
+/** A takeoff_conditions row the fake executor returns from loadConditionsByMeasurement. */
+type FakeCondition = {
+  id: string
+  measurement_kind: string
+  height_value: string | number | null
+  thickness_value: string | number | null
+  emit_linear: boolean
+  emit_area: boolean
+  emit_volume: boolean
 }
 
 type FakeComponent = {
@@ -53,6 +66,7 @@ function makeExecutor(opts: {
   assemblyDeleted?: boolean
   components?: FakeComponent[]
   pricingConfig?: unknown
+  conditions?: FakeCondition[]
 }) {
   const inserted: { rows: Array<Record<string, unknown>> } = { rows: [] }
   const components = opts.components ?? []
@@ -79,6 +93,10 @@ function makeExecutor(opts: {
       // measurements
       if (/from takeoff_measurements/i.test(sql) && /select service_item_code/i.test(sql)) {
         return { rows: opts.measurements }
+      }
+      // loadConditionsByMeasurement
+      if (/from takeoff_conditions/i.test(sql) && /select id, measurement_kind/i.test(sql)) {
+        return { rows: opts.conditions ?? [] }
       }
       // resolvePrices CTE
       if (/with[\s\S]*project_layer as/i.test(sql)) {
@@ -271,5 +289,123 @@ describe('createEstimateFromMeasurements assembly explosion', () => {
       expect(Number(r.amount)).toBeLessThan(0)
       expect(Number(r.quantity)).toBeLessThan(0)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deep Dive H1 integration proof: condition_id is LOAD-BEARING in the recompute
+// path. A measurement tagged with an emitting condition fans into multiple
+// typed estimate_lines (area + linear + volume) instead of one ignored flat
+// line. Conditions with no emit flags fall through to the flat path unchanged.
+// The same fake executor drives the real createEstimateFromMeasurements.
+// ---------------------------------------------------------------------------
+
+const WALL_POLYGON = {
+  kind: 'polygon',
+  points: [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 5 },
+    { x: 0, y: 5 },
+  ],
+}
+
+// service_item_code 'EIFS' resolves to rate 4.85 in the fake pricing CTE.
+const conditionMeasurement: Measurement = {
+  service_item_code: 'EIFS',
+  quantity: '50', // an area measurement: stored qty = polygon area
+  unit: 'sqft',
+  notes: null,
+  division_code: 'D1',
+  is_deduction: false,
+  assembly_id: null,
+  condition_id: 'cond-1',
+  geometry: WALL_POLYGON,
+}
+
+const wallCondition: FakeCondition = {
+  id: 'cond-1',
+  measurement_kind: 'area',
+  height_value: null,
+  thickness_value: '0.5',
+  emit_linear: true,
+  emit_area: true,
+  emit_volume: true,
+}
+
+describe('createEstimateFromMeasurements condition emission', () => {
+  it('a wall condition (area+linear+volume) fans ONE shape into THREE typed lines', async () => {
+    const { executor, inserted } = makeExecutor({
+      measurements: [conditionMeasurement],
+      conditions: [wallCondition],
+    })
+    const result = await createEstimateFromMeasurements(undefined as unknown as Pool, COMPANY_ID, PROJECT_ID, {
+      draftId: DRAFT_ID,
+      executor,
+    })
+    expect(inserted.rows).toHaveLength(3)
+    const byUnit = new Map(inserted.rows.map((r) => [r.unit, r]))
+    // area 50 sqft, perimeter 30 lf, volume 50×0.5 = 25 cuft
+    expect(Number(byUnit.get('sqft')!.quantity)).toBeCloseTo(50, 2)
+    expect(Number(byUnit.get('lf')!.quantity)).toBeCloseTo(30, 2)
+    expect(Number(byUnit.get('cuft')!.quantity)).toBeCloseTo(25, 2)
+    // every emitted line is flat-priced (kind null, no assembly provenance) at
+    // the resolved EIFS rate 4.85.
+    for (const r of inserted.rows) {
+      expect(r.kind).toBeNull()
+      expect(r.assembly_id).toBeNull()
+      expect(Number(r.rate)).toBeCloseTo(4.85, 2)
+      expect(r.division_code).toBe('D1')
+    }
+    // recompute response carries the typed provenance breakdown.
+    expect(result!.conditionBreakdowns).toHaveLength(3)
+    expect(result!.conditionBreakdowns.map((b) => b.emit_kind).sort()).toEqual(['area', 'linear', 'volume'])
+    expect(result!.conditionBreakdowns.every((b) => b.condition_id === 'cond-1')).toBe(true)
+  })
+
+  it('a deduction wall condition signs every emitted line negative', async () => {
+    const { executor, inserted } = makeExecutor({
+      measurements: [{ ...conditionMeasurement, is_deduction: true }],
+      conditions: [wallCondition],
+    })
+    await createEstimateFromMeasurements(undefined as unknown as Pool, COMPANY_ID, PROJECT_ID, {
+      draftId: DRAFT_ID,
+      executor,
+    })
+    expect(inserted.rows).toHaveLength(3)
+    for (const r of inserted.rows) {
+      expect(Number(r.quantity)).toBeLessThan(0)
+      expect(Number(r.amount)).toBeLessThan(0)
+    }
+  })
+
+  it('a condition with NO emit flags falls back to ONE flat line', async () => {
+    const { executor, inserted } = makeExecutor({
+      measurements: [conditionMeasurement],
+      conditions: [{ ...wallCondition, emit_area: false, emit_linear: false, emit_volume: false }],
+    })
+    const result = await createEstimateFromMeasurements(undefined as unknown as Pool, COMPANY_ID, PROJECT_ID, {
+      draftId: DRAFT_ID,
+      executor,
+    })
+    expect(inserted.rows).toHaveLength(1)
+    expect(Number(inserted.rows[0]!.quantity)).toBeCloseTo(50, 2)
+    expect(inserted.rows[0]!.unit).toBe('sqft')
+    expect(inserted.rows[0]!.assembly_id).toBeNull()
+    expect(result!.conditionBreakdowns).toHaveLength(0)
+  })
+
+  it('a soft-deleted / missing condition row falls back to the flat line', async () => {
+    const { executor, inserted } = makeExecutor({
+      measurements: [conditionMeasurement],
+      conditions: [], // condition_id set but not returned (deleted)
+    })
+    await createEstimateFromMeasurements(undefined as unknown as Pool, COMPANY_ID, PROJECT_ID, {
+      draftId: DRAFT_ID,
+      executor,
+    })
+    expect(inserted.rows).toHaveLength(1)
+    expect(Number(inserted.rows[0]!.quantity)).toBeCloseTo(50, 2)
+    expect(inserted.rows[0]!.unit).toBe('sqft')
   })
 })
