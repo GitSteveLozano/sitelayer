@@ -50,6 +50,58 @@ echo "==> Rollback target:  $TARGET_SHA ($TARGET_IMAGE)"
 echo "==> Current deploy:   ${CURRENT_SHA:-<unknown>}"
 echo "==> Compose file:     $COMPOSE_FILE"
 
+# --- migration-ledger / squash-boundary warning --------------------------------
+# This script swaps the IMAGE + SHA markers only. It does NOT touch the
+# `schema_migrations` ledger and does NOT run/undo migrations. That is correct
+# for an ordinary rollback (migrations are forward-only and the deploy already
+# took a pre-migration pg_dump), but there is ONE sharp edge: the 2026-06-02
+# migration squash (docker/postgres/init/ now holds only 000_baseline.sql).
+#
+# After prod is reconciled to the baseline, the live ledger is "baseline-only"
+# (1 row for 000_baseline.sql, the folded history rows retired). Rolling the
+# CODE back to a PRE-SQUASH SHA gives you a container whose
+# docker/postgres/init/ expects the OLD numbered files (001_..150_...) AND whose
+# code may read columns added by post-baseline migrations — while the DB ledger
+# no longer lists those numbered files. migrate-db.sh on that old image would
+# then try to (re)apply the numbered history against a schema that already has
+# it, and the checksum/immutability gate can trip. The SCHEMA itself is fine
+# (it is at-or-past the baseline); the LEDGER shape is what mismatches.
+#
+# So: a rollback to a pre-squash SHA is NOT a clean image swap. Treat it as an
+# incident-grade operation that needs a manual ledger step.
+SQUASH_BOUNDARY_SHA="${SQUASH_BOUNDARY_SHA:-bc5735f1}"
+echo
+echo "############################################################"
+echo "## MIGRATION LEDGER NOTE (read before continuing):"
+echo "## This rollback swaps the image + SHA markers ONLY. It does"
+echo "## NOT migrate or rewind the schema_migrations ledger."
+echo "## Ordinary same-era rollback: fine (forward-only migrations;"
+echo "## the deploy already took a pre-migration pg_dump)."
+echo "##"
+echo "## SQUASH BOUNDARY: docker/postgres/init/ is now baseline-only"
+echo "## (000_baseline.sql). Rolling back ACROSS that boundary to a"
+echo "## pre-squash SHA (<= ${SQUASH_BOUNDARY_SHA}) faces a"
+echo "## baseline-only ledger and the old image's numbered migrations"
+echo "## (001_..NNN_) will mismatch the ledger. See docs/MIGRATION_BASELINE.md"
+echo "## (§3.3 reconcile) — you must manually reconcile schema_migrations"
+echo "## for that older code BEFORE its next migrate-db.sh run, or deploy"
+echo "## with SKIP_MIGRATIONS=1 and reconcile by hand."
+echo "############################################################"
+echo
+
+# If the target SHA is the known pre-squash baseline SHA, require an explicit
+# acknowledgement so nobody trips the boundary by reflex. Override with
+# ACK_PRE_SQUASH_ROLLBACK=1 (or DRY_RUN=1, which never swaps anyway).
+if [ "$TARGET_SHA" = "$SQUASH_BOUNDARY_SHA" ] \
+  && [ "${ACK_PRE_SQUASH_ROLLBACK:-0}" != "1" ] \
+  && [ "${DRY_RUN:-0}" != "1" ]; then
+  echo "ERROR: target $TARGET_SHA is the pre-squash baseline boundary SHA." >&2
+  echo "       A rollback to it crosses the migration-squash boundary (see the" >&2
+  echo "       note above). Re-run with ACK_PRE_SQUASH_ROLLBACK=1 once you have" >&2
+  echo "       planned the schema_migrations reconcile (docs/MIGRATION_BASELINE.md §3.3)." >&2
+  exit 1
+fi
+
 if [ ! -d "$DOCKER_CONFIG_PATH" ]; then
   echo "WARNING: $DOCKER_CONFIG_PATH not found — registry pull may fail" >&2
 fi

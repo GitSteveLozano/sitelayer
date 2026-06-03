@@ -213,13 +213,74 @@ fi
 
 $COMPOSE -f docker-compose.prod.yml up -d --remove-orphans
 
+health_ok=0
 for attempt in $(seq 1 30); do
   if curl -fsS --resolve sitelayer.sandolab.xyz:443:127.0.0.1 https://sitelayer.sandolab.xyz/health >/dev/null; then
+    health_ok=1
     break
   fi
-  [ "$attempt" -eq 30 ] && { echo "ERROR: health check failed after 30 attempts"; exit 1; }
   sleep 5
 done
+
+if [ "$health_ok" != "1" ]; then
+  echo "############################################################"
+  echo "## ERROR: health check FAILED after the migrate+swap."
+  echo "## Newly-swapped $GIT_SHA is NOT serving /health. Broken"
+  echo "## code is currently LIVE in production."
+  echo "############################################################"
+
+  # Auto-rollback the CODE to the previously-live SHA so prod is not left
+  # broken-and-live. We rollback CODE/IMAGE only — migrations are forward-only
+  # and a pre-migration pg_dump was already taken above; the new schema is
+  # expected to be backward-compatible (expand/backfill/contract per CLAUDE.md),
+  # so the previous image should boot against it. If migrations made a
+  # NON-backward-compatible change, this auto-rollback may also fail health,
+  # in which case we stop loudly for a human. Opt out with
+  # AUTO_ROLLBACK_ON_HEALTH_FAIL=0 to leave prod as-is for manual triage.
+  if [ "${AUTO_ROLLBACK_ON_HEALTH_FAIL:-1}" = "1" ] && [ -n "$previous_sha" ]; then
+    rollback_image="registry.digitalocean.com/sitelayer/sitelayer:${previous_sha}"
+    echo "==> AUTO-ROLLBACK: reverting code to previous SHA $previous_sha ($rollback_image)"
+    echo "    (schema is left at the migrated state; previous image must tolerate it)"
+    if APP_IMAGE="$rollback_image" $COMPOSE -f docker-compose.prod.yml pull api web worker \
+      && docker image inspect "$rollback_image" >/dev/null 2>&1; then
+      # Re-export the build-sha envs so the rolled-back containers report the
+      # correct commit (rule 3: a bare restart loses GIT_SHA/APP_BUILD_SHA).
+      if APP_IMAGE="$rollback_image" \
+        GIT_SHA="$previous_sha" APP_BUILD_SHA="$previous_sha" \
+        SENTRY_RELEASE="$previous_sha" VITE_SENTRY_RELEASE="$previous_sha" \
+        $COMPOSE -f docker-compose.prod.yml up -d --remove-orphans; then
+        rb_ok=0
+        for attempt in $(seq 1 30); do
+          if curl -fsS --resolve sitelayer.sandolab.xyz:443:127.0.0.1 https://sitelayer.sandolab.xyz/health >/dev/null; then
+            rb_ok=1
+            break
+          fi
+          sleep 5
+        done
+        if [ "$rb_ok" = "1" ]; then
+          echo "==> AUTO-ROLLBACK succeeded: prod is back on $previous_sha and healthy."
+          echo "    The failed SHA $GIT_SHA was NOT recorded as successful."
+          echo "    Investigate $GIT_SHA before redeploying."
+          # Do NOT advance the success markers; prod is on previous_sha.
+          exit 1
+        fi
+        echo "## AUTO-ROLLBACK health check ALSO failed — likely a non-backward-"
+        echo "## compatible migration. MANUAL INTERVENTION REQUIRED. Consider"
+        echo "## restoring the pre-migration pg_dump (see scripts/restore-postgres.sh"
+        echo "## and docs/MIGRATION_BASELINE.md). Markers left untouched."
+      else
+        echo "## AUTO-ROLLBACK failed to start the previous image. MANUAL INTERVENTION REQUIRED." >&2
+      fi
+    else
+      echo "## AUTO-ROLLBACK could not pull/find the previous image $rollback_image." >&2
+      echo "## MANUAL INTERVENTION REQUIRED (see scripts/rollback-droplet.sh)." >&2
+    fi
+  else
+    echo "## AUTO-ROLLBACK disabled or no previous SHA recorded; leaving prod as-is."
+    echo "## MANUAL INTERVENTION REQUIRED: run scripts/rollback-droplet.sh or fix forward."
+  fi
+  exit 1
+fi
 
 EXPECTED_SHA="$GIT_SHA" scripts/verify-prod-deploy.sh || true
 
