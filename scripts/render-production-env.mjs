@@ -112,7 +112,7 @@ function render(manifest, { scope, enforce }, env) {
     if (empty) {
       if (entry.required) {
         missing.push(entry)
-        logStatus(enforce ? 'error' : 'warning', `${entry.name} is missing (${entry.source})`)
+        logStatus(enforce ? 'error' : 'warning', `required ${entry.name} is missing (source=${entry.source})`)
       }
       continue
     }
@@ -136,11 +136,32 @@ function render(manifest, { scope, enforce }, env) {
   return `${lines.join('\n')}\n`
 }
 
+/**
+ * Resolve whether required-secret enforcement is active.
+ *
+ * Precedence:
+ *   1. explicit CLI flag (--enforce / --no-enforce) always wins
+ *   2. otherwise the manifest's enforceVariable (default
+ *      PRODUCTION_ENV_RENDER_ENFORCE) — truthy ('1'/'true'/'yes'/'on')
+ *      turns enforcement ON, falsy turns it OFF.
+ *
+ * When enforcement is ON and a `required: true` entry is absent (or matches
+ * a sentinel placeholder), the render throws instead of silently emitting an
+ * env file with a hole in it — so a missing CLERK_WEBHOOK_SECRET /
+ * QBO_WEBHOOK_VERIFIER / ESTIMATE_SHARE_SECRET fails loudly.
+ */
+function resolveEnforce(args, manifest, env) {
+  if (args.enforce !== null) return args.enforce
+  const enforceVariable = manifest.enforceVariable ?? 'PRODUCTION_ENV_RENDER_ENFORCE'
+  const raw = env[enforceVariable]
+  if (raw === undefined || raw === '') return false
+  return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase())
+}
+
 function main() {
   const args = parseArgs(process.argv)
   const manifest = loadManifest(args.manifest)
-  const enforceVariable = manifest.enforceVariable ?? 'PRODUCTION_ENV_RENDER_ENFORCE'
-  const enforce = args.enforce ?? process.env[enforceVariable] === '1'
+  const enforce = resolveEnforce(args, manifest, process.env)
   const outputPath = resolve(process.cwd(), args.output)
   const body = render(manifest, { scope: args.scope, enforce }, process.env)
 

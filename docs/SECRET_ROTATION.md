@@ -31,28 +31,30 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 
 ## Inventory at a glance
 
-| Secret                       | Stored                                                               | Mint via                                                   | If leaked → see |
-| ---------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
-| Deploy SSH key               | Fleet box `~/.ssh/` + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on the fleet box                   | § 6             |
-| Preview/dev/demo SSH key     | Fleet box `~/.ssh/` + preview droplet `authorized_keys`              | `ssh-keygen -t ed25519` on the fleet box                   | § 7             |
-| `DEPLOY_HOST`                | `scripts/deploy-production-local.sh` default / env (hostname/IP)     | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
-| `DIGITALOCEAN_ACCESS_TOKEN`  | `doctl` auth on the fleet box (`~/.config/doctl`)                    | DO Console → API → Tokens                                  | § 10            |
-| `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                          | Clerk dashboard → Configure → API Keys                     | § 1             |
-| `CLERK_JWT_KEY`              | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
-| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → Webhooks                                 | § 1             |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Fleet build env (build-arg); baked into web image                    | Clerk dashboard → Frontend API                             | § 1             |
-| `QBO_CLIENT_ID`              | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → app → Keys & OAuth                     | § 3             |
-| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → Regenerate Client Secret               | § 3             |
-| `QBO_STATE_SECRET`           | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                  | § 3             |
-| `SENTRY_AUTH_TOKEN`          | `~/.env.local` on the fleet box (build-time secret)                  | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
-| `SENTRY_DSN`                 | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `VITE_SENTRY_DSN`            | Fleet build env (build-arg); baked into web image                    | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
-| `DATABASE_URL`               | `/app/sitelayer/.env` on the prod droplet                            | DO managed Postgres → Connection Details → Reset password  | § 9             |
-| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                  | § 5             |
-| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana                  | `openssl rand -base64 32`                                  | § 5             |
-| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet                            | DO Console → API → Spaces Keys                             | § 4             |
-| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet                            | DO Console → Spaces                                        | § 4             |
+| Secret                       | Stored                                                               | Mint via                                                    | If leaked → see |
+| ---------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------- | --------------- |
+| Deploy SSH key               | Fleet box `~/.ssh/` + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on the fleet box                    | § 6             |
+| Preview/dev/demo SSH key     | Fleet box `~/.ssh/` + preview droplet `authorized_keys`              | `ssh-keygen -t ed25519` on the fleet box                    | § 7             |
+| `DEPLOY_HOST`                | `scripts/deploy-production-local.sh` default / env (hostname/IP)     | n/a — private VPC IP / DO reserved IP / hostname            | § 8             |
+| `DIGITALOCEAN_ACCESS_TOKEN`  | `doctl` auth on the fleet box (`~/.config/doctl`)                    | DO Console → API → Tokens                                   | § 10            |
+| `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                          | Clerk dashboard → Configure → API Keys                      | § 1             |
+| `CLERK_JWT_KEY`              | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → API Keys → JWT public key (rotates rare)  | § 1             |
+| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env` on the prod droplet                            | Clerk dashboard → Webhooks                                  | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Fleet build env (build-arg); baked into web image                    | Clerk dashboard → Frontend API                              | § 1             |
+| `QBO_CLIENT_ID`              | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → app → Keys & OAuth                      | § 3             |
+| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` on the prod droplet                            | Intuit dev portal → Regenerate Client Secret                | § 3             |
+| `QBO_STATE_SECRET`           | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                   | § 3             |
+| `ESTIMATE_SHARE_SECRET`      | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                   | § 3a            |
+| `SENTRY_AUTH_TOKEN`          | `~/.env.local` on the fleet box (build-time secret)                  | `sandolabs.sentry.io/settings/auth-tokens/`                 | § 2             |
+| `SENTRY_DSN`                 | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                   | § 2             |
+| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` on the prod droplet                            | Sentry project → Client Keys (Public DSN)                   | § 2             |
+| `VITE_SENTRY_DSN`            | Fleet build env (build-arg); baked into web image                    | Same DSN as `SENTRY_DSN` (web project)                      | § 2             |
+| `DATABASE_URL`               | `/app/sitelayer/.env` on the prod droplet                            | DO managed Postgres → Connection Details → Reset password   | § 9             |
+| `DATABASE_CA_CERT`           | `/app/sitelayer/.env` on the prod droplet (PEM CA bundle)            | DO managed Postgres → Connection Details → Download CA cert | § 9             |
+| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                   | § 5             |
+| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana                  | `openssl rand -base64 32`                                   | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet                            | DO Console → API → Spaces Keys                              | § 4             |
+| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet                            | DO Console → Spaces                                         | § 4             |
 
 ---
 
@@ -143,7 +145,57 @@ doctl compute ssh sitelayer --ssh-command='
 # 5. Old secret auto-invalidates on Intuit side.
 ```
 
-`QBO_STATE_SECRET` (signs OAuth state cookies) — rotate independently with `openssl rand -base64 32`. Drops in-flight OAuth attempts only.
+`QBO_STATE_SECRET` (signs OAuth state cookies) — rotate independently with `openssl rand -base64 32`.
+
+> **⚠️ Rotating `QBO_STATE_SECRET` is NOT "drops in-flight OAuth only" unless
+> `ESTIMATE_SHARE_SECRET` is set as its own value.** `ESTIMATE_SHARE_SECRET`
+> falls back to `QBO_STATE_SECRET` when it is unset (see
+> `apps/api/src/estimate-share-token.ts:resolveShareSecret`). So if prod is
+> running on the fallback, rotating `QBO_STATE_SECRET` ALSO re-signs every
+> public estimate/portal share link and **invalidates every outstanding
+> customer share URL** — not just in-flight OAuth. To make
+> `QBO_STATE_SECRET` rotation safe (in-flight OAuth only), give
+> `ESTIMATE_SHARE_SECRET` its own value FIRST (see § 3a) so the two secrets
+> are decoupled. With `ESTIMATE_SHARE_SECRET` set independently, rotating
+> `QBO_STATE_SECRET` drops in-flight OAuth attempts only.
+
+### 3a. Estimate share-link secret — `ESTIMATE_SHARE_SECRET`
+
+**Grants:** signs the HMAC of public estimate share-link / client-portal
+tokens (`apps/api/src/estimate-share-token.ts`). **Rotating this invalidates
+every outstanding share link** — customers/recipients holding an old URL get a
+404/invalid-token until a new link is issued. It is its OWN required prod secret
+(`ops/env/production.env.json` marks it `required: true`); when unset the code
+falls back to `QBO_STATE_SECRET`, which is the coupling the warning above is about.
+
+```bash
+# 1. Generate (only needed once to decouple from QBO_STATE_SECRET, or on rotation).
+NEW_SHARE_SECRET=$(openssl rand -base64 32)
+
+# 2. Patch prod env in place + recreate api.
+doctl compute ssh sitelayer --ssh-command="
+  sudo -u sitelayer bash -c '
+    cp /app/sitelayer/.env /app/sitelayer/.env.bak.\$(date -u +%Y%m%dT%H%M%SZ) &&
+    if grep -q ^ESTIMATE_SHARE_SECRET= /app/sitelayer/.env; then
+      sed -i \"s|^ESTIMATE_SHARE_SECRET=.*|ESTIMATE_SHARE_SECRET=$NEW_SHARE_SECRET|\" /app/sitelayer/.env;
+    else
+      echo \"ESTIMATE_SHARE_SECRET=$NEW_SHARE_SECRET\" >> /app/sitelayer/.env;
+    fi
+  ' &&
+  cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api
+"
+
+# 3. Verify the API booted without the fallback warning.
+doctl compute ssh sitelayer --ssh-command='
+  docker compose -f /app/sitelayer/docker-compose.prod.yml logs api --tail 200 | grep -i estimate-share || true
+'
+# A clean boot logs nothing here; the warning
+#   "[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET"
+# means it is STILL on the fallback (decoupling did not take).
+
+# 4. Re-issue any share links you need recipients to keep using (old URLs are now dead).
+```
 
 `QBO_CLIENT_ID` is the Intuit-issued public client identifier. Not a secret in the cryptographic sense, but pairs with `QBO_CLIENT_SECRET` and is only re-issued when you create a new Intuit app. If you do that, update `.env` and recreate `api`.
 
@@ -314,6 +366,24 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml logs api --tail 100 | g
 **Trusted-sources gate.** The DO managed Postgres firewall only accepts connections from droplets `566798325` and `566806040`. Even if the URL leaks, an attacker can't connect from outside DO without also pivoting through one of those droplets. Don't relax that.
 
 If leaked, follow `docs/INCIDENT_RESPONSE.md` § 8 first (revoke), then this section (rotate).
+
+**`DATABASE_CA_CERT` — managed Postgres TLS CA bundle.** Not a credential
+(it's a public certificate), but it belongs to this section because it gates
+verified TLS to the DB. When `DATABASE_CA_CERT` is set, the pg client verifies
+the managed-PG server cert against it (`ssl: { ca, rejectUnauthorized: true }`),
+so `DATABASE_SSL_REJECT_UNAUTHORIZED=false` is no longer required. Prefer this
+over `DATABASE_SSL_REJECT_UNAUTHORIZED=false`. Refresh it only when DigitalOcean
+rotates the cluster CA (rare, announced) — download from DO Console → Databases →
+sitelayer-db → Connection Details → Download CA certificate, then patch
+`/app/sitelayer/.env` (the value may be a single line with `\n`-escaped PEM
+newlines) and recreate `api` + `worker`. There is no secret to revoke.
+
+> Wiring note: `resolveDatabaseSslConfig()` in `packages/config` computes the
+> pg `ssl` shape from `DATABASE_CA_CERT` / `DATABASE_SSL_REJECT_UNAUTHORIZED`.
+> The pg `Pool` builders in `apps/api/src/server.ts` and
+> `apps/worker/src/worker.ts` still read `DATABASE_SSL_REJECT_UNAUTHORIZED`
+> directly; finishing the CA path means routing those builders through the
+> helper (TODO tracked in the helper's doc comment).
 
 ---
 
