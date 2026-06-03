@@ -10,6 +10,7 @@ import type { LedgerExecutor } from '../mutation-tx.js'
 import { handleAnalyticsRoutes } from './analytics.js'
 import { handleAuditEscrowRoutes } from './audit-escrow.js'
 import { handleAuditEventRoutes } from './audit-events.js'
+import { handleCompanyExportRoutes } from './company-export.js'
 import { handleDispatchLaneRoutes } from './dispatch-lanes.js'
 import { handleBonusRuleRoutes } from './bonus-rules.js'
 import { handleBlueprintRoutes } from './blueprints.js'
@@ -321,6 +322,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         requireRole: requireRoleStr,
         sendJson,
+      }),
+
+    // Per-tenant data export (admin-only GET /api/company/export) — portability /
+    // offboarding bundle (JSON | CSV). Strictly company-scoped via the GUC +
+    // explicit company_id predicate. See ./company-export.ts.
+    () =>
+      handleCompanyExportRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
+        res: ctx.res,
       }),
 
     // Dispatch lanes (admin-only GET / POST /api/admin/dispatch-lanes)
