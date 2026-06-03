@@ -9,6 +9,24 @@ export interface PageRenderOptions {
   devicePixelRatio?: number
 }
 
+/**
+ * Render a single page-space sub-rect of a page (units = PDF points, origin
+ * top-left) into the supplied canvas. Used by the tiled renderer so a large
+ * architectural sheet renders as a grid of small canvases, each staying under
+ * the iOS/Safari canvas-area cap. The canvas is resized to the rect's pixel
+ * dimensions (`round(rect.width * scale * dpr)` x `round(rect.height * scale *
+ * dpr)`), matching the whole-page `renderPage` blit contract.
+ */
+export interface PageRectRenderOptions {
+  pageNumber: number
+  canvas: HTMLCanvasElement
+  /** Sub-rect of the page to render, in PDF points (top-left origin). */
+  rect: PdfPageRect
+  /** css-px per PDF point (before device-pixel-ratio). */
+  scale: number
+  devicePixelRatio?: number
+}
+
 export interface TextLayerOptions {
   pageNumber: number
   container: HTMLElement
@@ -65,6 +83,13 @@ export interface PdfSearchHandle {
 export interface PdfDocument {
   numPages: number
   renderPage(opts: PageRenderOptions): RenderHandle
+  /**
+   * Render one page-space sub-rect into a canvas (tile rendering). Optional:
+   * present only on engine builds that expose region rendering. Callers must
+   * feature-detect (`typeof doc.renderPageRect === 'function'`) and fall back
+   * to whole-page `renderPage` when absent.
+   */
+  renderPageRect?(opts: PageRectRenderOptions): RenderHandle
   renderTextLayer?(opts: TextLayerOptions): RenderHandle
   getPageSize(pageNumber: number): Promise<{ width: number; height: number }>
   getPageText?(pageNumber: number): Promise<string>

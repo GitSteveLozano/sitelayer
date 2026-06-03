@@ -10,6 +10,7 @@ import { createPdfiumDirectEngine } from '@embedpdf/engines/pdfium'
 import PdfiumWasm from '@embedpdf/pdfium/pdfium.wasm?url'
 import type { PdfBookmarkObject, PdfDocumentObject, PdfPageObject, PdfTextRun } from '@embedpdf/models'
 import type {
+  PageRectRenderOptions,
   PageRenderOptions,
   PdfBookmark,
   PdfDocument,
@@ -94,6 +95,11 @@ export const embedpdfRenderer: PdfRenderer = {
       return pages[index] ?? null
     }
 
+    // Region rendering is optional on the engine surface — older/leaner builds
+    // may not ship renderPageRectRaw. Detect it once so the tiled renderer can
+    // fall back to whole-page rendering when it's missing.
+    const supportsRectRaw = typeof (engine as { renderPageRectRaw?: unknown }).renderPageRectRaw === 'function'
+
     return {
       numPages: doc.pageCount,
 
@@ -143,6 +149,61 @@ export const embedpdfRenderer: PdfRenderer = {
           },
         }
       },
+
+      // Region render: only attached when the engine build exposes
+      // renderPageRectRaw (feature-detected below). The tiled renderer calls
+      // this per tile so each canvas stays under the iOS canvas-area cap;
+      // callers feature-detect via `typeof doc.renderPageRect === 'function'`.
+      ...(supportsRectRaw
+        ? {
+            renderPageRect(opts: PageRectRenderOptions): RenderHandle {
+              let cancelled = false
+              let abortFn: (() => void) | null = null
+
+              const promise = (async () => {
+                const page = pageByNumber(opts.pageNumber)
+                if (!page) throw new Error(`page ${opts.pageNumber} out of range`)
+                if (cancelled) return
+
+                const dpr = opts.devicePixelRatio ?? window.devicePixelRatio ?? 1
+                // Engine rect is page-space points: origin top-left, size in
+                // points. wDev = round(size.width * scaleFactor * dpr).
+                const rect = {
+                  origin: { x: opts.rect.x, y: opts.rect.y },
+                  size: { width: opts.rect.width, height: opts.rect.height },
+                }
+                const task = engine.renderPageRectRaw(doc, page, rect, { scaleFactor: opts.scale, dpr })
+                abortFn = () => {
+                  try {
+                    task.abort({ code: 7, message: 'cancelled' })
+                  } catch {
+                    // already-settled aborts are safe to ignore
+                  }
+                }
+
+                try {
+                  const raw = await task.toPromise()
+                  if (cancelled) return
+                  blitImageData(opts.canvas, raw)
+                } catch (err) {
+                  if (cancelled) return
+                  const message = err instanceof Error ? err.message : String(err)
+                  // swallow abort-style errors — a cancellation is not a failure
+                  if (/abort|cancel/i.test(message)) return
+                  throw err
+                }
+              })()
+
+              return {
+                promise,
+                cancel() {
+                  cancelled = true
+                  if (abortFn) abortFn()
+                },
+              }
+            },
+          }
+        : {}),
 
       async getPageText(pageNumber) {
         const page = pageByNumber(pageNumber)
