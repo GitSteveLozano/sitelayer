@@ -22,6 +22,11 @@ import { assertServiceItemCatalogStatus, rejectionMessageForCatalog } from '../c
 import { buildEstimatePdfInputFromSummary, isReportKind, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
 import { explodeMeasurement, loadAssembliesByMeasurement } from '../assembly-explode.js'
+import {
+  conditionHasEmitFlags,
+  explodeConditionMeasurement,
+  loadConditionsByMeasurement,
+} from '../condition-explode.js'
 import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
 import { summarizeProject } from './projects.js'
 import { listServiceItemProductivity } from './analytics.js'
@@ -237,11 +242,12 @@ export async function createEstimateFromMeasurements(
     division_code: string | null
     is_deduction: boolean
     assembly_id: string | null
+    condition_id: string | null
     geometry: unknown
   }>(
     draftId
-      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
     draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
@@ -286,9 +292,28 @@ export async function createEstimateFromMeasurements(
   const assembliesById = await loadAssembliesByMeasurement(actualExecutor, companyId, measurementsResult.rows)
   const profileConfig =
     assembliesById.size > 0 ? await loadDefaultPricingProfileConfig(actualExecutor, companyId) : null
+
+  // Deep Dive H1: hydrate the conditions referenced by this draft's
+  // measurements so a condition with result-emission flags fans one drawn
+  // shape into multiple typed estimate lines (wall trace → area + LF + volume)
+  // instead of the single ignored flat line. No-op (one query returning zero
+  // rows) when no measurement carries a condition_id — the common case.
+  const conditionsById = await loadConditionsByMeasurement(actualExecutor, companyId, measurementsResult.rows)
   // Surface the per-measurement markup breakdown on the recompute response so
   // the estimate UI can render the transparency panel without a second call.
   const assemblyBreakdowns: Array<{ assembly_id: string; service_item_code: string; markup: unknown }> = []
+  // Deep Dive H1: per-emitted-line condition provenance for the recompute
+  // response (condition_id + emit_kind + the typed quantity/unit). Empty when
+  // no measurement carries an emitting condition. estimate_lines has no column
+  // for the emit kind (kind is constrained to material|labor|sub|freight), so
+  // this breakdown is where the typed provenance surfaces to the UI.
+  const conditionBreakdowns: Array<{
+    condition_id: string
+    service_item_code: string
+    emit_kind: string
+    quantity: number
+    unit: string
+  }> = []
 
   type EstimateLineRow = {
     service_item_code: string
@@ -363,8 +388,61 @@ export async function createEstimateFromMeasurements(
         continue
       }
 
+      // CONDITION-EMIT path (Deep Dive H1). A measurement tagged with a
+      // condition that carries result-emission flags fans into MULTIPLE typed
+      // lines (area sqft + perimeter LF + volume cuft) from one drawn shape,
+      // instead of the single flat line below. Each emitted quantity is priced
+      // through the SAME flat rate-resolution the flat path uses
+      // (priceIndex.get(code)), already SIGNED by is_deduction. Conditions with
+      // no emit flag (conditionHasEmitFlags === false), or whose row is gone /
+      // soft-deleted (absent from conditionsById), fall through to the flat
+      // path so behavior is unchanged for them. Lines carry kind = null +
+      // assembly provenance NULL (they are flat-priced, not assembly
+      // components); the emit_kind provenance lives on the recompute response.
+      const condition = measurement.condition_id ? conditionsById.get(measurement.condition_id) : undefined
+      if (condition && conditionHasEmitFlags(condition)) {
+        const geometry = normalizeGeometry(measurement.geometry)
+        const drivers: MeasurementDrivers | undefined = geometry ? deriveMeasurementDrivers(geometry) : undefined
+        const intents = explodeConditionMeasurement(
+          {
+            service_item_code: measurement.service_item_code,
+            quantity: measurement.quantity,
+            unit: measurement.unit,
+            is_deduction: measurement.is_deduction,
+            geometry: measurement.geometry,
+          },
+          condition,
+          drivers,
+        )
+        for (const intent of intents) {
+          const resolvedRate = priceIndex.get(intent.service_item_code)
+          const lineRate = resolvedRate?.price ?? 0
+          conditionBreakdowns.push({
+            condition_id: intent.condition_id,
+            service_item_code: intent.service_item_code,
+            emit_kind: intent.emit_kind,
+            quantity: intent.quantity,
+            unit: intent.unit,
+          })
+          codes.push(intent.service_item_code)
+          quantities.push(String(intent.quantity))
+          // The emit kind fixes the typed unit (sqft/lf/cuft); the resolved
+          // rate's unit is irrelevant here (a per-sqft rate may price the LF
+          // line — the operator can re-rate per emitted line afterwards).
+          units.push(intent.unit)
+          rates.push(String(lineRate))
+          amounts.push(String(intent.quantity * lineRate))
+          divisions.push(effectiveDivisionCode)
+          assemblyIds.push(null)
+          assemblyComponentIds.push(null)
+          kinds.push(null)
+        }
+        continue
+      }
+
       // FLAT-LINE path (unchanged). Also the safe fallback when an attached
-      // assembly was soft-deleted after attach (absent from assembliesById).
+      // assembly was soft-deleted after attach (absent from assembliesById),
+      // or a condition with no emit flags / a deleted condition row.
       const resolved = priceIndex.get(measurement.service_item_code)
       const rate = resolved?.price ?? 0
       // PlanSwift Phase 1 cutout/deduct: a deduction measurement (e.g. a window
@@ -456,6 +534,10 @@ export async function createEstimateFromMeasurements(
     // PlanSwift Phase 2: per-assembly markup breakdown for the transparency
     // panel (empty when no measurement attaches an assembly).
     assemblyBreakdowns,
+    // Deep Dive H1: per-emitted-line condition provenance (condition_id +
+    // emit_kind + typed quantity/unit). Empty when no measurement carries an
+    // emitting condition.
+    conditionBreakdowns,
   }
 }
 
