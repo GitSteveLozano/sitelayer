@@ -24,3 +24,5 @@ docker-compose.override.yml
 
 # Fleet-local build secrets for deploy-production-local.sh (never commit)
 ops/env/production.build.env
+
+.claude/worktrees/

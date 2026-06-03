@@ -18,3 +18,6 @@ docs/handoff
 # ignores `*`), but on-disk audit artifacts (e.g. findings/*.json, captured HTML)
 # would otherwise make `prettier --check` error and block the LOCAL deploy gate.
 docs/steve-handoff
+
+# Agent worktrees / local Claude state — never lint these
+.claude/
