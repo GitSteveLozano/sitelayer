@@ -109,43 +109,24 @@ import { MEmptyState, MSkeletonList } from '@/components/m-states'
 import { DEmptyState } from '@/components/d'
 import { TakeoffImportSheet } from '../mobile/takeoff-import-sheet'
 
-/** Accept filter for the blueprint file input — PDF plan sets + images.
- * The upload control itself is gated to admin/foreman/office (owner/foreman
- * personas), matching the API role gate on POST /api/projects/:id/blueprints. */
-const BLUEPRINT_UPLOAD_ACCEPT = 'application/pdf,image/*'
-
-type Tool = 'polygon' | 'rect' | 'lineal' | 'arc' | 'count'
-
-// Canvas interaction modes layered over the drawing surface (ported from
-// Steve's Desktop v2 mockup `DCanvasScale` / `DCanvasItemPalette` /
-// `DCanvasEditMeasure` / `DCanvasBulkSelect` in /tmp/steve3/04_app.js).
-//   draw   — default; tap to add points to a draft measurement.
-//   scale  — calibrate the sheet scale from a drawn reference line.
-//   select — marquee / multi-select committed measurements for bulk actions.
-type CanvasMode = 'draw' | 'scale' | 'select' | 'ai-count' | 'ai-takeoff'
-
-const MAX_POLYGON_POINTS = 64
-
-// Cross-sheet callout (dsg__50 "EST CANVAS · CROSS-SHEET REF JUMP"). A detail
-// callout (e.g. "B3") drawn on one sheet references a detail on another. The
-// extraction pipeline that would emit { page_id, tag, target_page_idx, x, y }
-// rows does not exist yet, so the callout POSITIONS + targets are
-// presentational — but the sheet list they jump BETWEEN is the REAL page list,
-// so clicking one genuinely opens the referenced page (same honest GAP as the
-// shipped mobile cross-link `takeoff-cross-link.tsx`).
-type SheetCallout = {
-  tag: string
-  /** board-space (0–100) position of the callout circle on the source sheet */
-  x: number
-  y: number
-  detail: string
-  /** index into the real page list this callout jumps to (clamped at render) */
-  targetPageIdx: number
-}
-const SHEET_CALLOUTS: SheetCallout[] = [
-  { tag: 'A1', x: 22, y: 30, detail: 'Wall section A1', targetPageIdx: 1 },
-  { tag: 'B3', x: 58, y: 48, detail: 'Detail B3 · parapet flashing', targetPageIdx: 2 },
-]
+import {
+  type Tool,
+  type CanvasMode,
+  type SheetCallout,
+  type MobileTool,
+  type MobileMode,
+  type MobileCanvasSurfaceProps,
+  type MobileScopeTotal,
+} from './est-canvas/types'
+import {
+  BLUEPRINT_UPLOAD_ACCEPT,
+  MAX_POLYGON_POINTS,
+  SHEET_CALLOUTS,
+  HEIGHT_PRESETS,
+  pitchInputStyle,
+  stepperBtn,
+  ghostChip,
+} from './est-canvas/constants'
 
 // Desktop capability body — the full-bleed floating-palette command-center
 // takeoff editor. Phase C: rendered by the responsive `TakeoffCanvas` wrapper
@@ -3251,36 +3232,6 @@ function EstCanvasDesktopBody() {
   )
 }
 
-// Ghost-chip button style for UNDO / CLEAR (mono, ink-bordered).
-function ghostChip(disabled: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    padding: '8px 0',
-    background: 'transparent',
-    color: 'var(--m-ink)',
-    border: '2px solid var(--m-ink)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.4 : 1,
-  }
-}
-
-// Compact numeric input for the pitch rise:run driver (H2).
-const pitchInputStyle: React.CSSProperties = {
-  width: 44,
-  padding: '4px 6px',
-  background: 'transparent',
-  color: 'var(--m-ink)',
-  border: '2px solid var(--m-ink)',
-  fontFamily: 'var(--m-num)',
-  fontSize: 11,
-  fontWeight: 700,
-  textAlign: 'center',
-}
-
 /**
  * PlanSwift Phase 2 — attach an assembly recipe to a committed measurement
  * (the "drop assembly onto a takeoff" moment). Selecting an assembly PATCHes
@@ -3471,9 +3422,6 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
 // AI launch / per-item running quantities. Folded in from the former
 // `screens/mobile/takeoff-mobile.tsx` (deleted in Phase C); behavior preserved
 // verbatim. Uses its own lightweight viewBox canvas (no pan/zoom capability).
-type MobileTool = 'polygon' | 'lineal' | 'count'
-type MobileMode = 'manual' | 'draw'
-
 function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }) {
   void companySlug // resource hooks resolve the company from the request layer; kept for shell-prop parity.
   const params = useParams<{ projectId: string }>()
@@ -4981,8 +4929,6 @@ function SegmentedControl({
 // applying a wall height. Presets 8/9/10/12 FT + stepper; "YIELDS AREA" slab
 // shows length × height. Height 0 = off (the trace stays raw length).
 // ---------------------------------------------------------------------------
-const HEIGHT_PRESETS = [8, 9, 10, 12] as const
-
 function WallHeightPanel({
   lengthLabel,
   height,
@@ -5097,43 +5043,11 @@ function WallHeightPanel({
   )
 }
 
-const stepperBtn: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  background: 'transparent',
-  border: '2px solid var(--m-ink)',
-  fontFamily: 'var(--m-font-display)',
-  fontWeight: 800,
-  fontSize: 22,
-  lineHeight: 1,
-  cursor: 'pointer',
-}
-
 // ---------------------------------------------------------------------------
 // Canvas — board-space (0–100) SVG overlay matching the desktop canvas so
 // rows are interchangeable. Touch-friendly: full-width square, tap to drop
 // points. Pinch-zoom is deferred (manual entry covers the no-zoom case).
 // ---------------------------------------------------------------------------
-interface MobileCanvasSurfaceProps {
-  svgRef: React.RefObject<SVGSVGElement | null>
-  tool: MobileTool
-  deduct: boolean
-  onTap: (e: ReactPointerEvent<SVGSVGElement>) => void
-  draftPoints: TakeoffPoint[]
-  measurements: TakeoffMeasurement[]
-  selectedId: string | null
-  /** When non-null the canvas is in bulk-select mode; these ids are highlighted. */
-  bulkIds: Set<string> | null
-  onSelectMeasurement: (id: string) => void
-  sourceImageUrl?: string | null
-  /** EDIT GEOM (msg22): the measurement currently in vertex-drag edit, its live
-   *  working points, the index of the handle being dragged, and the move sink. */
-  editId: string | null
-  editPoints: TakeoffPoint[]
-  editDragIdxRef: React.MutableRefObject<number | null>
-  onEditPoint: (idx: number, p: TakeoffPoint) => void
-}
-
 function MobileCanvasSurface({
   svgRef,
   tool,
@@ -5415,14 +5329,6 @@ function MobileCanvasSurface({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-interface MobileScopeTotal {
-  code: string
-  quantity: number
-  unit: string
-  count: number
-  mixedUnits: boolean
-}
-
 // NOTE: this is kept local (NOT the shared `@/lib/takeoff/canvas-totals`
 // `buildScopeTotals`) because the mobile copy DRIFTED from desktop — it sums
 // `quantity` WITHOUT the `is_deduction` sign that the desktop/server use. Until
