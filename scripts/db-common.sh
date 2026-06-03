@@ -67,25 +67,6 @@ load_database_schema() {
   validate_db_schema_name "$DB_SCHEMA"
 }
 
-# Minimum psql major version the apply path requires. The squashed
-# docker/postgres/init/000_baseline.sql is produced by pg_dump 18, which emits
-# the `\restrict` / `\unrestrict` meta-commands (added in PostgreSQL 18). A
-# psql < 18 ABORTS on those lines ("invalid command \restrict"), silently
-# applying only part of the baseline. So the apply path must run on psql >= 18.
-# Override only if you know your dump predates the \restrict markers.
-MIN_PSQL_MAJOR="${MIN_PSQL_MAJOR:-18}"
-
-# psql_local_major_version
-# Prints the local `psql` client major version (e.g. 16, 18), or nothing if it
-# cannot be determined. `psql --version` prints e.g. "psql (PostgreSQL) 16.14".
-psql_local_major_version() {
-  local raw major
-  raw="$(psql --version 2>/dev/null || true)"
-  # Grab the first dotted version token and take the leading integer.
-  major="$(printf '%s\n' "$raw" | grep -oE '[0-9]+(\.[0-9]+)*' | head -n 1 | cut -d. -f1)"
-  [ -n "$major" ] && printf '%s' "$major"
-}
-
 select_psql_runner() {
   if [ -n "${PSQL_DOCKER_IMAGE:-}" ] || [ -n "${PSQL_DOCKER_NETWORK:-}" ]; then
     PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}"
@@ -98,25 +79,6 @@ select_psql_runner() {
   fi
 
   if command -v psql >/dev/null 2>&1; then
-    # PG18-only meta-commands in the squashed baseline (\restrict/\unrestrict)
-    # make a psql < MIN_PSQL_MAJOR unsafe — it would parse-error mid-apply. If
-    # the local client is too old, prefer the pinned docker postgres:18 psql;
-    # only reject if docker is also unavailable, with a message that names the
-    # exact override knobs.
-    local local_major
-    local_major="$(psql_local_major_version)"
-    if [ -n "$local_major" ] && [ "$local_major" -lt "$MIN_PSQL_MAJOR" ] 2>/dev/null; then
-      if command -v docker >/dev/null 2>&1; then
-        PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}"
-        echo "NOTE: local psql is v${local_major} (< ${MIN_PSQL_MAJOR}); the squashed baseline uses pg_dump-18 \\restrict markers that psql < 18 cannot parse. Falling back to docker ${PSQL_DOCKER_IMAGE}." >&2
-        PSQL_RUNNER="docker"
-        return
-      fi
-      echo "ERROR: local psql is v${local_major} but the squashed baseline (docker/postgres/init/000_baseline.sql) needs psql >= ${MIN_PSQL_MAJOR} to parse its pg_dump-18 \\restrict/\\unrestrict meta-commands." >&2
-      echo "       Fix: install psql >= ${MIN_PSQL_MAJOR}, OR run via the pinned container by setting PSQL_DOCKER_IMAGE=postgres:18-alpine (and PSQL_DOCKER_NETWORK if the DB is reachable only on a docker network)." >&2
-      echo "       Override the floor only if you know your dump predates \\restrict: MIN_PSQL_MAJOR=<n>." >&2
-      exit 1
-    fi
     PSQL_RUNNER="local"
     return
   fi
