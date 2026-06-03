@@ -50,7 +50,7 @@ export interface MobileCanvasSurfaceProps {
    *  working points, the index of the handle being dragged, and the move sink. */
   editId: string | null
   editPoints: TakeoffPoint[]
-  editDragIdxRef: React.MutableRefObject<number | null>
+  editDragIdxRef: React.RefObject<number | null>
   onEditPoint: (idx: number, p: TakeoffPoint) => void
 }
 
