@@ -148,7 +148,12 @@ export async function processDamageChargeInvoicePush(
     Line: linePayload,
   }
 
-  const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice`
+  // Intuit idempotency: append ?requestid=<stable-key> keyed on the damage
+  // charge id (stable across retries of this outbox row). A crash AFTER Intuit
+  // accepts the create but BEFORE we persist qbo_invoice_id would otherwise
+  // mint a duplicate invoice on retry; requestid makes Intuit dedupe upstream.
+  // chargeId is a UUID (URL-safe, <50 chars).
+  const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice?requestid=${encodeURIComponent(chargeId)}`
   const fetchImpl = deps.refreshDeps?.fetchImpl ?? fetch
   const parsed = await withFreshToken<{ Invoice?: { Id?: string } }>(
     connection,

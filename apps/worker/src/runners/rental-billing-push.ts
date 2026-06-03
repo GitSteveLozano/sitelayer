@@ -9,6 +9,7 @@ import {
 } from '@sitelayer/queue'
 import { observeWorkflowEvent } from '../metrics.js'
 import { createQboRentalInvoicePush } from '../qbo-invoice-push.js'
+import { qboCircuitKey } from '../qbo-circuit.js'
 import { withRowTrace } from '../trace.js'
 import { resolveCompanyQboLive } from '../qbo-live.js'
 
@@ -36,11 +37,14 @@ export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger
   // integration_connections.qbo_live_enabled are BOTH true. The decision is
   // resolved per drain so company #2 stays dry-run while company #1 is live.
   const liveBase = createQboRentalInvoicePush()
-  const buildRentalBillingInvoicePush = (live: boolean): RentalBillingInvoicePushFn => {
+  // Breaker key is PER COMPANY (qbo:<companyId>) so one tenant's revoked-token
+  // / outage failures can't open the circuit for every other company's drain.
+  const buildRentalBillingInvoicePush = (live: boolean, companyId: string): RentalBillingInvoicePushFn => {
     const base: RentalBillingInvoicePushFn = live ? liveBase : stubRentalBillingInvoicePush
+    const key = qboCircuitKey(companyId)
     // Continue the originating API trace into the QBO call. See
     // estimate-push.ts for the matching pattern and rationale.
-    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => base(input)))
+    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, key, () => base(input)))
   }
 
   if (process.env.QBO_LIVE_RENTAL_INVOICE === '1') {
@@ -59,7 +63,7 @@ export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger
     const client = await pool.connect()
     try {
       const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_RENTAL_INVOICE')
-      const rentalBillingInvoicePush = buildRentalBillingInvoicePush(live)
+      const rentalBillingInvoicePush = buildRentalBillingInvoicePush(live, companyId)
       const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
       // Mirror POST_SUCCEEDED / POST_FAILED rows into the worker-side
       // counter. `skipped` is the idempotent-replay case (run already

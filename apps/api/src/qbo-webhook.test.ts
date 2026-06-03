@@ -6,6 +6,7 @@ import {
   mapQboEntityType,
   parseQboWebhookPayload,
   verifyQboWebhook,
+  warnIfQboWebhookVerifierMissing,
 } from './qbo-webhook.js'
 
 const TEST_VERIFIER = 'test-verifier-token-1234567890'
@@ -189,5 +190,47 @@ describe('qbo-webhook flattenQboWebhookPayload', () => {
       ],
     })
     expect(flat).toHaveLength(0)
+  })
+})
+
+describe('qbo-webhook warnIfQboWebhookVerifierMissing', () => {
+  function collect() {
+    const messages: string[] = []
+    return { messages, warn: (m: string) => messages.push(m) }
+  }
+
+  it('warns (not crashes) when APP_TIER=prod and verifier is unset', () => {
+    const { messages, warn } = collect()
+    const warned = warnIfQboWebhookVerifierMissing({ APP_TIER: 'prod' }, warn)
+    expect(warned).toBe(true)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatch(/QBO_WEBHOOK_VERIFIER/)
+    expect(messages[0]).toMatch(/503/)
+  })
+
+  it('warns when verifier is whitespace-only in prod', () => {
+    const { messages, warn } = collect()
+    expect(warnIfQboWebhookVerifierMissing({ APP_TIER: 'prod', QBO_WEBHOOK_VERIFIER: '   ' }, warn)).toBe(true)
+    expect(messages).toHaveLength(1)
+  })
+
+  it('does NOT warn when the verifier is set in prod', () => {
+    const { messages, warn } = collect()
+    expect(warnIfQboWebhookVerifierMissing({ APP_TIER: 'prod', QBO_WEBHOOK_VERIFIER: 'secret' }, warn)).toBe(false)
+    expect(messages).toHaveLength(0)
+  })
+
+  it('does NOT warn outside prod even when the verifier is unset', () => {
+    const { messages, warn } = collect()
+    expect(warnIfQboWebhookVerifierMissing({ APP_TIER: 'dev' }, warn)).toBe(false)
+    expect(warnIfQboWebhookVerifierMissing({ APP_TIER: 'local' }, warn)).toBe(false)
+    expect(warnIfQboWebhookVerifierMissing({}, warn)).toBe(false)
+    expect(messages).toHaveLength(0)
+  })
+
+  it('is case-insensitive on APP_TIER', () => {
+    const { messages, warn } = collect()
+    expect(warnIfQboWebhookVerifierMissing({ APP_TIER: 'PROD' }, warn)).toBe(true)
+    expect(messages).toHaveLength(1)
   })
 })

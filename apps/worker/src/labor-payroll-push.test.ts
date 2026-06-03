@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideTimeActivityPayloads } from './labor-payroll-push.js'
+import { decideTimeActivityPayloads, laborTimeActivityRequestId } from './labor-payroll-push.js'
 
 // Unit coverage for the split-vs-merged decision logic that drives the
 // QBO TimeActivity push. The helper is the bridge between the
@@ -106,5 +106,48 @@ describe('decideTimeActivityPayloads', () => {
       const result = decideTimeActivityPayloads({ hours: 10, service_item_code: 'LBR' }, '')
       expect(result).toEqual([{ kind: 'straight', hours: 10, serviceItemCode: 'LBR' }])
     })
+  })
+})
+
+// Intuit idempotency requestid for each TimeActivity in a payroll batch.
+// A batch posts MANY TimeActivities to the same /timeactivity endpoint, so
+// they cannot share one requestid (Intuit would dedupe all but the first).
+// Each must be unique-within-batch BUT stable across a whole-batch retry, so a
+// crash mid-batch (some already accepted by Intuit) replays with the SAME
+// per-line requestid and Intuit returns the originals instead of duplicating.
+describe('laborTimeActivityRequestId', () => {
+  const runId = '4b9a7f10-3c2d-4e5a-8b1c-9f0e1d2c3b4a'
+  const entryA = 'aaaaaaaa-1111-2222-3333-444444444444'
+  const entryB = 'bbbbbbbb-1111-2222-3333-444444444444'
+
+  it('is deterministic: same (run, entry, kind) → same id across retries', () => {
+    expect(laborTimeActivityRequestId(runId, entryA, 'straight')).toBe(
+      laborTimeActivityRequestId(runId, entryA, 'straight'),
+    )
+  })
+
+  it('is unique per straight vs ot part of the same entry', () => {
+    expect(laborTimeActivityRequestId(runId, entryA, 'straight')).not.toBe(
+      laborTimeActivityRequestId(runId, entryA, 'ot'),
+    )
+  })
+
+  it('is unique per entry within the same run', () => {
+    expect(laborTimeActivityRequestId(runId, entryA, 'straight')).not.toBe(
+      laborTimeActivityRequestId(runId, entryB, 'straight'),
+    )
+  })
+
+  it('is unique across runs for the same entry', () => {
+    const otherRun = 'cccccccc-1111-2222-3333-444444444444'
+    expect(laborTimeActivityRequestId(runId, entryA, 'straight')).not.toBe(
+      laborTimeActivityRequestId(otherRun, entryA, 'straight'),
+    )
+  })
+
+  it('stays within Intuit’s 50-char requestid limit and is URL-safe', () => {
+    const id = laborTimeActivityRequestId(runId, entryA, 'straight')
+    expect(id.length).toBeLessThanOrEqual(50)
+    expect(id).toMatch(/^[A-Za-z0-9._-]+$/)
   })
 })

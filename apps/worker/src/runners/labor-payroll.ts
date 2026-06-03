@@ -9,6 +9,7 @@ import {
   stubLaborPayrollPush,
 } from '../labor-payroll-push.js'
 import { processLaborPayrollAutoPost } from '../labor-payroll-auto-post.js'
+import { qboCircuitKey } from '../qbo-circuit.js'
 import { setCompanyGuc } from '../runner-utils.js'
 import { resolveCompanyQboLive } from '../qbo-live.js'
 
@@ -31,9 +32,12 @@ export function createLaborPayrollRunner(deps: {
   // Both push fns are built once at boot; the per-drain resolver selects
   // between them so company #2 stays dry-run while company #1 is live.
   const liveBase = createQboLaborPayrollPush()
-  const buildLaborPayrollPush = (live: boolean): typeof liveBase => {
+  // Breaker key is PER COMPANY (qbo:<companyId>) so one tenant's revoked-token
+  // / outage failures can't open the circuit for every other company's drain.
+  const buildLaborPayrollPush = (live: boolean, companyId: string): typeof liveBase => {
     const base = live ? liveBase : stubLaborPayrollPush
-    return (input) => withCircuitBreaker(qboCircuit, 'qbo', () => base(input))
+    const key = qboCircuitKey(companyId)
+    return (input) => withCircuitBreaker(qboCircuit, key, () => base(input))
   }
   if (process.env.QBO_LIVE_LABOR_PAYROLL === '1') {
     logger.info('[labor-payroll] QBO_LIVE_LABOR_PAYROLL kill switch ON — live per company where qbo_live_enabled=true')
@@ -45,7 +49,7 @@ export function createLaborPayrollRunner(deps: {
     const client = await pool.connect()
     try {
       const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_LABOR_PAYROLL')
-      const laborPayrollPush = buildLaborPayrollPush(live)
+      const laborPayrollPush = buildLaborPayrollPush(live, companyId)
       const summary = await processLaborPayrollPush(client, companyId, laborPayrollPush, 5)
       // POST_SUCCEEDED / POST_FAILED counters. `skipped` rows are
       // idempotent replays (run already had qbo_payroll_batch_ref) —

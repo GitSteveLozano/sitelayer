@@ -140,15 +140,34 @@ export async function withCircuitBreaker<T>(breaker: CircuitBreaker, key: string
 
 /**
  * Lift an HTTP-ish status code into a circuit-tripping signal.
- * 5xx and Network errors trip the breaker; 4xx do not (bad input shouldn't
- * stop the drain — the row is dropped via MUTATION_MAX_RETRIES instead).
+ *
+ * 5xx and Network errors trip the breaker (genuine upstream/Intuit outage);
+ * 4xx do NOT (bad input/auth shouldn't stop the drain — the row is dropped
+ * via MUTATION_MAX_RETRIES instead).
+ *
+ * Auth errors are specifically NOT tripping: a 401/403 from QBO means THAT
+ * tenant's token is bad/revoked, not that Intuit is down. With the per-company
+ * breaker key, tripping on a 401 would still wrongly halt that company's drain
+ * for the cooldown window when the right move is to surface the
+ * reconnect/refresh failure and let the row retry/expire.
+ *
+ * Classification keys on the FIRST HTTP-status-looking token in the message
+ * (our push errors are built as `... returned <status>: <body>`), so a 503
+ * whose body echoes "404" still trips and a 401 whose body echoes "500" still
+ * does NOT — the status, not an incidental number deeper in the body, decides.
+ * Network-class messages have no status token and are matched separately.
  */
 export function isTrippingError(err: unknown): boolean {
   if (err instanceof Error) {
     const message = err.message
+    // The leading HTTP status (if any) is authoritative. 4xx (incl. auth
+    // 401/403) never trips; 5xx trips.
+    const statusMatch = /\b([45]\d\d)\b/.exec(message)
+    if (statusMatch) {
+      return statusMatch[1]!.startsWith('5')
+    }
+    // No status token — fall back to the network-class heuristic.
     if (/network|ECONN|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(message)) return true
-    const statusMatch = /\b(5\d\d)\b/.exec(message)
-    if (statusMatch) return true
   }
   return false
 }

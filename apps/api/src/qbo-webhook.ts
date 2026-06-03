@@ -28,6 +28,34 @@ export type QboWebhookPayload = {
 export type QboWebhookVerifyResult = { ok: true } | { ok: false; status: number; error: string }
 
 /**
+ * Boot-time env-presence check for the QBO inbound webhook.
+ *
+ * The webhook handler returns 503 to Intuit when QBO_WEBHOOK_VERIFIER is unset
+ * (it cannot HMAC-verify the signature without it). In prod that's a silent
+ * outage: Intuit retries, gives up, and inbound entity changes stop arriving —
+ * with no startup signal that the verifier was simply never configured. This
+ * surfaces that misconfiguration as a WARNING at boot (NOT a crash — the rest
+ * of the API is still healthy and other QBO paths work; only the inbound
+ * webhook is degraded). Pure + injectable so it's unit-testable.
+ *
+ * Returns true when it warned (prod + verifier missing), false otherwise.
+ */
+export function warnIfQboWebhookVerifierMissing(
+  env: { APP_TIER?: string; QBO_WEBHOOK_VERIFIER?: string },
+  warn: (message: string) => void,
+): boolean {
+  const tier = (env.APP_TIER ?? '').trim().toLowerCase()
+  const verifier = (env.QBO_WEBHOOK_VERIFIER ?? '').trim()
+  if (tier === 'prod' && !verifier) {
+    warn(
+      '[qbo-webhook] QBO_WEBHOOK_VERIFIER is not set in prod — POST /api/webhooks/qbo will 503 and inbound QBO webhooks will silently stop. Set the verifier in /app/sitelayer/.env and restart.',
+    )
+    return true
+  }
+  return false
+}
+
+/**
  * Map a QBO entity name to the Sitelayer sync_events entity_type taxonomy.
  *
  * Only the four entity types the WhatsApp thread calls out are mirrored; any
