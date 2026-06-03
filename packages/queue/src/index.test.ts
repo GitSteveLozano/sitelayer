@@ -91,7 +91,10 @@ describe('queue processing', () => {
     expect(result.syncEvents[0]?.direction).toBe('inbound')
     expect(queries[0]).toContain('update mutation_outbox')
     expect(queries[0]).toContain('for update skip locked')
-    expect(queries[0]).toContain("next_attempt_at = now() + interval '5 minutes'")
+    // Exponential backoff + jitter (replaced the flat 5-min retry).
+    expect(queries[0]).toMatch(/next_attempt_at = now\(\) \+ \(/)
+    expect(queries[0]).toContain("least(interval '6 hours', interval '5 seconds' * power(2, least(attempt_count, 16)))")
+    expect(queries[0]).toContain('0.5 + random() * 0.5')
     expect(queries[2]).toContain('update sync_events')
     expect(queries[2]).toContain('for update skip locked')
     expect(queries[4]).toContain('update integration_connections')

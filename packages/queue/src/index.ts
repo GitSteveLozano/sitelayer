@@ -314,7 +314,15 @@ export async function processOutboxBatch(
     set
       status = 'processing',
       attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
+      -- Exponential backoff + jitter (was a flat 5 min for every retry). Delay
+      -- doubles per prior attempt off a 5s base, capped at 6h, exponent capped
+      -- at 16 to avoid power() overflow before the dead-letter sweep retires the
+      -- row. 50-100% jitter de-syncs a thundering herd. attempt_count here is the
+      -- pre-increment (prior-attempt) count, so the first retry is ~2.5-5s.
+      next_attempt_at = now() + (
+        least(interval '6 hours', interval '5 seconds' * power(2, least(attempt_count, 16)))
+        * (0.5 + random() * 0.5)
+      ),
       error = null
     where id in (
       select id
@@ -361,7 +369,15 @@ export async function processSyncEventBatch(
     set
       status = 'processing',
       attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
+      -- Exponential backoff + jitter (was a flat 5 min for every retry). Delay
+      -- doubles per prior attempt off a 5s base, capped at 6h, exponent capped
+      -- at 16 to avoid power() overflow before the dead-letter sweep retires the
+      -- row. 50-100% jitter de-syncs a thundering herd. attempt_count here is the
+      -- pre-increment (prior-attempt) count, so the first retry is ~2.5-5s.
+      next_attempt_at = now() + (
+        least(interval '6 hours', interval '5 seconds' * power(2, least(attempt_count, 16)))
+        * (0.5 + random() * 0.5)
+      ),
       error = null
     where id in (
       select id
