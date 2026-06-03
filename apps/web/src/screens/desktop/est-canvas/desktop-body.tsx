@@ -60,7 +60,7 @@ import { DEmptyState } from '@/components/d'
 
 import { type Tool, type CanvasMode, type SheetCallout } from './types'
 import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS, pitchInputStyle, ghostChip } from './constants'
-import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-body-styles'
+import { floatBox, floatHead } from './desktop-body-styles'
 import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
 import { AiReviewOverlay, AiReviewMarkers, buildAiReviewModel } from './ai-review-overlay'
@@ -68,6 +68,10 @@ import { ToolPalette } from './tool-palette'
 import { ViewPalette } from './view-palette'
 import { AiAssistPalette } from './ai-assist-palette'
 import { SheetsPanel } from './sheets-panel'
+import { TopStrip } from './top-strip'
+import { ScaleOverlay } from './scale-overlay'
+import { ItemPalette } from './item-palette'
+import { CopyPanel } from './copy-panel'
 
 import { useTakeoffSession } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
@@ -1827,99 +1831,13 @@ export function EstCanvasDesktopBody() {
       </div>
 
       {/* ---- Top strip: sheet name + DONE / total ---- */}
-      <div
-        style={floatBox({
-          top: 16,
-          left: 16,
-          right: 16,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 16,
-          padding: '12px 16px',
-          boxShadow: '6px 6px 0 var(--m-ink)',
-        })}
-      >
-        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span
-            style={{
-              fontFamily: 'var(--m-num)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: 'var(--m-ink-3)',
-            }}
-          >
-            Takeoff · {activeDraft?.name ?? 'Untitled'}
-          </span>
-          <span
-            style={{
-              fontFamily: 'var(--m-font-display)',
-              fontWeight: 800,
-              fontSize: 18,
-              lineHeight: 1.1,
-              letterSpacing: '-0.02em',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {sheetLabel}
-          </span>
-          {detectedScale ? (
-            <span
-              title={
-                detectedScale.labeled
-                  ? 'Drawing scale detected from the title block'
-                  : 'Possible drawing scale found on this sheet'
-              }
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.04em',
-                color: 'var(--m-accent)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              SCALE {detectedScale.label}
-              {detectedScale.labeled ? '' : ' (?)'}
-            </span>
-          ) : null}
-        </div>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
-          <span style={{ textAlign: 'right' }}>
-            <span
-              style={{
-                display: 'block',
-                fontFamily: 'var(--m-num)',
-                fontSize: 9,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: 'var(--m-ink-3)',
-              }}
-            >
-              Total qty
-            </span>
-            <span
-              style={{
-                fontFamily: 'var(--m-font-display)',
-                fontWeight: 800,
-                fontSize: 22,
-                lineHeight: 1,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {formatQty(grandTotal)}
-            </span>
-          </span>
-          <MButton variant="primary" onClick={() => navigate(`/desktop/estimate/${projectId}`)}>
-            Done →
-          </MButton>
-        </span>
-      </div>
+      <TopStrip
+        draftName={activeDraft?.name ?? 'Untitled'}
+        sheetLabel={sheetLabel}
+        detectedScale={detectedScale}
+        grandTotal={grandTotal}
+        onDone={() => navigate(`/desktop/estimate/${projectId}`)}
+      />
 
       {/* ---- DCanvasCrossRef · "JUMPED FROM …" panel (dsg__50) ----
           Shown after a cross-sheet callout jump: explains which callout was
@@ -2511,123 +2429,17 @@ export function EstCanvasDesktopBody() {
 
       {/* ---- DCanvasScale · scale-calibration overlay (center) ---- */}
       {mode === 'scale' ? (
-        <div
-          style={floatBox({
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            width: 420,
-          })}
-        >
-          <div style={floatHead}>● Set scale · {activeBlueprint?.file_name ?? 'sheet'}</div>
-          <div style={{ padding: 24 }}>
-            <div
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                color: 'var(--m-ink-3)',
-                fontWeight: 600,
-                lineHeight: 1.5,
-              }}
-            >
-              {scalePoints.length < 2
-                ? `CLICK TWO POINTS OF A KNOWN DIMENSION ON THE SHEET (${scalePoints.length}/2), THEN ENTER ITS LENGTH:`
-                : 'ENTER THE REAL-WORLD LENGTH OF THE LINE YOU DREW:'}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
-              <div
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 6,
-                  padding: '12px 14px',
-                  background: 'var(--m-card-soft)',
-                  border: '2px solid var(--m-ink)',
-                }}
-              >
-                <input
-                  value={scaleLength}
-                  onChange={(e) => setScaleLength(e.target.value.replace(/[^\d.]/g, ''))}
-                  inputMode="decimal"
-                  aria-label="Real-world length"
-                  style={{
-                    width: 80,
-                    background: 'transparent',
-                    border: 'none',
-                    outline: 'none',
-                    fontFamily: 'var(--m-font-display)',
-                    fontWeight: 800,
-                    fontSize: 32,
-                    color: 'var(--m-ink)',
-                  }}
-                />
-                <span style={{ fontSize: 16, color: 'var(--m-ink-3)', fontWeight: 700 }}>FT</span>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                {/* Provisional drawing-scale ratio (= 1:N · PROVISIONAL), shown
-                    once a line + length are present — matches design dsg__46. */}
-                {provisionalRatio != null ? (
-                  <div
-                    style={{
-                      fontFamily: 'var(--m-font-display)',
-                      fontSize: 16,
-                      fontWeight: 800,
-                      color: 'var(--m-ink)',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    = 1:{provisionalRatio}
-                  </div>
-                ) : (
-                  <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
-                    {scalePoints.length}/2 PTS
-                  </div>
-                )}
-                <div
-                  style={{
-                    fontFamily: 'var(--m-num)',
-                    fontSize: 10,
-                    color: scalePoints.length >= 2 ? 'var(--m-amber)' : 'var(--m-ink-3)',
-                    fontWeight: 700,
-                    marginTop: 3,
-                  }}
-                >
-                  {scalePoints.length >= 2 ? '● PROVISIONAL' : '○ DRAW LINE'}
-                </div>
-              </div>
-            </div>
-            {scaleError ? (
-              <div style={{ color: 'var(--m-red)', fontSize: 12, fontWeight: 600, marginTop: 10 }}>{scaleError}</div>
-            ) : null}
-            <div
-              style={{
-                padding: '12px 14px',
-                background: 'var(--m-accent)',
-                color: 'var(--m-accent-ink)',
-                marginTop: 16,
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 600,
-                lineHeight: 1.5,
-              }}
-            >
-              AI can detect + verify scale on all sheets at once.
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <MButton
-                variant="ghost"
-                onClick={applyScale}
-                disabled={scalePoints.length < 2 || calibratePage.isPending}
-              >
-                {calibratePage.isPending ? 'Saving…' : 'Apply to sheet'}
-              </MButton>
-              <MButton variant="primary" onClick={() => navigate(`/desktop/scale/${projectId}`)}>
-                AI verify all
-              </MButton>
-            </div>
-          </div>
-        </div>
+        <ScaleOverlay
+          activeBlueprint={activeBlueprint}
+          scalePoints={scalePoints}
+          scaleLength={scaleLength}
+          setScaleLength={setScaleLength}
+          provisionalRatio={provisionalRatio}
+          scaleError={scaleError}
+          applyScale={applyScale}
+          calibratePending={calibratePage.isPending}
+          onAiVerify={() => navigate(`/desktop/scale/${projectId}`)}
+        />
       ) : null}
 
       {/* ---- AI Count / AI Takeoff SETUP overlays (canvas stays visible behind;
@@ -2671,112 +2483,17 @@ export function EstCanvasDesktopBody() {
 
       {/* ---- DCanvasItemPalette · "/"-style scope-item command palette ---- */}
       {itemPaletteOpen ? (
-        <div
-          style={floatBox({
-            top: 120,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: 520,
-          })}
-        >
-          <div
-            style={{
-              padding: '14px 18px',
-              borderBottom: '2px solid var(--m-ink)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              background: 'var(--m-card)',
-            }}
-          >
-            <span
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontWeight: 800,
-                fontSize: 14,
-                color: 'var(--m-accent-ink)',
-                background: 'var(--m-accent)',
-                padding: '2px 8px',
-              }}
-              aria-hidden
-            >
-              /
-            </span>
-            <input
-              autoFocus
-              value={itemQuery}
-              onChange={(e) => setItemQuery(e.target.value)}
-              placeholder="Assign item…"
-              aria-label="Assign scope item"
-              style={{
-                flex: 1,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                fontFamily: 'var(--m-font-display)',
-                fontWeight: 700,
-                fontSize: 18,
-                color: 'var(--m-ink)',
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && paletteItems[0]) {
-                  applyItemPick(paletteItems[0].code)
-                } else if (e.key === 'Escape') {
-                  setItemPaletteOpen(false)
-                  setReassignIds(null)
-                }
-              }}
-            />
-            <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
-              ↑↓ NAVIGATE · ⏎ SELECT
-            </span>
-          </div>
-          {paletteItems.length === 0 ? (
-            <div style={{ padding: '14px 18px', fontSize: 13, color: 'var(--m-ink-3)' }}>No matching items.</div>
-          ) : (
-            paletteItems.map((it, i) => {
-              const hot = it.code === serviceItemCode || (serviceItemCode === '' && i === 0)
-              return (
-                <button
-                  key={it.code}
-                  type="button"
-                  onClick={() => applyItemPick(it.code)}
-                  style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '12px 18px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 14,
-                    background: hot ? 'var(--m-accent)' : 'var(--m-card)',
-                    color: hot ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-                    border: 'none',
-                    borderBottom: '1px solid var(--m-line-2)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: 'var(--m-num)',
-                      fontSize: 9,
-                      fontWeight: 700,
-                      width: 54,
-                      color: hot ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                    }}
-                  >
-                    {it.code}
-                  </span>
-                  <span style={{ flex: 1, fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>
-                    {it.name}
-                  </span>
-                  <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>
-                    {(it.unit ?? '').toUpperCase()}
-                  </span>
-                </button>
-              )
-            })
-          )}
-        </div>
+        <ItemPalette
+          itemQuery={itemQuery}
+          setItemQuery={setItemQuery}
+          paletteItems={paletteItems}
+          serviceItemCode={serviceItemCode}
+          applyItemPick={applyItemPick}
+          closePalette={() => {
+            setItemPaletteOpen(false)
+            setReassignIds(null)
+          }}
+        />
       ) : null}
 
       {/* ---- PlanSwift Phase 2 · attach an assembly recipe to the selected
@@ -2964,88 +2681,21 @@ export function EstCanvasDesktopBody() {
           NEW measurements through `useCreateMeasurement` (same scope/unit/sheet),
           so quantities recompute server-side. Only point-based geometries copy. */}
       {mode === 'select' && copyOpen && copyableTargets.length > 0 ? (
-        <div style={floatBox({ bottom: 110, left: '50%', transform: 'translateX(-50%)', width: 360 })}>
-          <div style={floatHead}>
-            Copy · {copyableTargets.length} {copyableTargets.length === 1 ? 'measurement' : 'measurements'}
-          </div>
-          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
-                OFFSET X (BOARD)
-                <input
-                  type="number"
-                  value={copyDx}
-                  onChange={(e) => setCopyDx(e.target.value)}
-                  style={copyInputStyle}
-                />
-              </label>
-              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
-                OFFSET Y (BOARD)
-                <input
-                  type="number"
-                  value={copyDy}
-                  onChange={(e) => setCopyDy(e.target.value)}
-                  style={copyInputStyle}
-                />
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
-                ARRAY COUNT
-                <input
-                  type="number"
-                  min={1}
-                  value={copyCount}
-                  onChange={(e) => setCopyCount(e.target.value)}
-                  style={copyInputStyle}
-                />
-              </label>
-              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
-                MIRROR
-                <select
-                  value={copyMirror}
-                  onChange={(e) => setCopyMirror(e.target.value as MirrorAxis | 'none')}
-                  style={copyInputStyle}
-                >
-                  <option value="none">None</option>
-                  <option value="x">Flip ↔</option>
-                  <option value="y">Flip ↕</option>
-                </select>
-              </label>
-              <label style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700 }}>
-                ROTATE °
-                <input
-                  type="number"
-                  value={copyRotate}
-                  onChange={(e) => setCopyRotate(e.target.value)}
-                  style={copyInputStyle}
-                />
-              </label>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                type="button"
-                disabled={copyBusy}
-                onClick={() => void runCopyPlan('offset')}
-                style={copyActionStyle(false, copyBusy)}
-              >
-                {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
-              </button>
-              <button
-                type="button"
-                disabled={copyBusy}
-                onClick={() => void runCopyPlan('array')}
-                style={copyActionStyle(false, copyBusy)}
-              >
-                ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
-              </button>
-            </div>
-            <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', lineHeight: 1.4 }}>
-              New measurements keep the same item, unit, and sheet — quantities recompute on save. Mirror / rotate apply
-              to every copy.
-            </div>
-          </div>
-        </div>
+        <CopyPanel
+          targetCount={copyableTargets.length}
+          copyDx={copyDx}
+          setCopyDx={setCopyDx}
+          copyDy={copyDy}
+          setCopyDy={setCopyDy}
+          copyCount={copyCount}
+          setCopyCount={setCopyCount}
+          copyMirror={copyMirror}
+          setCopyMirror={setCopyMirror}
+          copyRotate={copyRotate}
+          setCopyRotate={setCopyRotate}
+          copyBusy={copyBusy}
+          runCopyPlan={runCopyPlan}
+        />
       ) : null}
 
       {/* ---- "/" affordance to open the item palette while drawing ---- */}
