@@ -30,6 +30,7 @@ import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 
 import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { formatQty } from '@/lib/takeoff/canvas-totals'
@@ -133,6 +134,18 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     [activeBlueprint, activePage],
   )
   const sourceImage = useAuthenticatedObjectUrl(blueprintReference?.texturePath)
+  // Phone underlay: render the ORIGINAL PDF via PDFium (the same engine the
+  // desktop body uses) so the phone draws over the real sheet instead of a blank
+  // grid. Falls back to the server-rasterized page image for non-PDF blueprints,
+  // or when the engine is disabled via localStorage['sitelayer.pdf_engine']='image'.
+  const pdfEngineOn = typeof window !== 'undefined' && window.localStorage?.getItem('sitelayer.pdf_engine') !== 'image'
+  const blueprintIsPdf = (activeBlueprint?.file_name ?? '').toLowerCase().endsWith('.pdf')
+  const pdfDocUrl = useAuthenticatedObjectUrl(
+    pdfEngineOn && blueprintIsPdf && activeBlueprint
+      ? `/api/blueprints/${encodeURIComponent(activeBlueprint.id)}/file`
+      : null,
+  )
+  const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
 
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
@@ -931,7 +944,39 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         if (bulkMode) toggleBulk(id)
                         else setSelectedId((cur) => (cur === id ? null : id))
                       }}
-                      sourceImageUrl={sourceImage.url}
+                      underlay={
+                        pdfEngineOn && blueprintIsPdf ? (
+                          pdfDocState.doc ? (
+                            <PdfPageCanvas
+                              doc={pdfDocState.doc}
+                              pageNumber={activePage?.page_number ?? 1}
+                              scale={3}
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                width: '100%',
+                                height: '100%',
+                                objectFit: 'fill',
+                                opacity: 0.7,
+                              }}
+                            />
+                          ) : null
+                        ) : sourceImage.url ? (
+                          <img
+                            src={sourceImage.url}
+                            alt=""
+                            draggable={false}
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'fill',
+                              opacity: 0.7,
+                            }}
+                          />
+                        ) : null
+                      }
                       editId={editId}
                       editPoints={editPoints}
                       editDragIdxRef={editDragIdxRef}
@@ -1347,11 +1392,8 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         lengthValue={linealLength}
                       />
                     ) : null}
-                    {blueprintReference && blueprintReference.kind === 'pdf' ? (
-                      <div style={{ fontSize: 11, color: 'var(--m-ink-3)', padding: '4px 2px 0' }}>
-                        PDF page underlay needs rasterization — draw on the grid, or use Manual qty.
-                      </div>
-                    ) : null}
+                    {/* The phone now renders the real PDF page underlay (PDFium) —
+                        no more blank-grid fallback. */}
                   </div>
                 ) : null}
 

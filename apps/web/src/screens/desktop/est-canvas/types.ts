@@ -43,7 +43,9 @@ export interface MobileCanvasSurfaceProps {
   /** When non-null the canvas is in bulk-select mode; these ids are highlighted. */
   bulkIds: Set<string> | null
   onSelectMeasurement: (id: string) => void
-  sourceImageUrl?: string | null
+  /** Render slot for the page underlay behind the SVG — a PdfPageCanvas (PDFium)
+   *  for PDF blueprints, an <img> for raster, or null for the bare grid. */
+  underlay?: React.ReactNode
   /** EDIT GEOM (msg22): the measurement currently in vertex-drag edit, its live
    *  working points, the index of the handle being dragged, and the move sink. */
   editId: string | null

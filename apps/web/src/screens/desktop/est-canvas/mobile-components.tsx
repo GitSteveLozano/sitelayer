@@ -180,7 +180,7 @@ export function MobileCanvasSurface({
   selectedId,
   bulkIds,
   onSelectMeasurement,
-  sourceImageUrl,
+  underlay,
   editId,
   editPoints,
   editDragIdxRef,
@@ -218,14 +218,7 @@ export function MobileCanvasSurface({
         border: '2px solid var(--m-ink)',
       }}
     >
-      {sourceImageUrl ? (
-        <img
-          src={sourceImageUrl}
-          alt=""
-          draggable={false}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: 0.7 }}
-        />
-      ) : null}
+      {underlay}
       <svg
         ref={svgRef}
         viewBox="0 0 100 100"
