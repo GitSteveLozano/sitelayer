@@ -19,8 +19,17 @@ managed Postgres instance.
 
 ## Detection
 
+> **No Prometheus today.** `/api/metrics` is exposed (gated by
+> `API_METRICS_TOKEN`) but **nothing scrapes it** — there is no Prometheus
+> server and no alerting on these series. The metric names below are real and
+> you can curl `/api/metrics` ad hoc, but treat "graph the gauge" as "curl it
+> twice and eyeball the delta", and rely on Sentry + the `pg_stat_activity`
+> queries below as the live detection surface. Wiring a scraper + alerts is
+> tracked as open work.
+
 - **HTTP error rate:** `sitelayer_http_request_errors_total` rate
-  (anything > 0.5/s sustained is bad).
+  (anything > 0.5/s sustained is bad) — curl `/api/metrics` (not scraped; see
+  note above).
 - **From the droplet:**
 
   ```bash
@@ -64,10 +73,12 @@ managed Postgres instance.
    droplet (e.g. worker, ad-hoc psql). The 30s default shipped in
    `apps/api/src/server.ts` should keep this from being the cause; this
    runbook is for the surprise case.
-5. **DO managed-Postgres `db-s-1vcpu-1gb` connection cap (~25)** — at
-   small sizes the managed instance caps total connections low. API
-   `PG_POOL_MAX=40` _plus_ worker pool _can_ exceed this if both are
-   busy. See "Right-size" below.
+5. **DO managed-Postgres `db-s-1vcpu-2gb` connection cap (~47)** — at
+   small sizes the managed instance caps total connections low. The cluster
+   is `db-s-1vcpu-2gb` (single node), which allows roughly 47 total
+   connections. API `PG_POOL_MAX=40` _plus_ the worker pool _can_ exceed
+   this if both are busy (DO also reserves a handful for the maintenance /
+   `doadmin` user). See "Right-size" below.
 
 ## Mitigation (in order)
 
@@ -108,16 +119,22 @@ managed Postgres instance.
    GitHub Actions `production` environment:
 
    ```bash
-   ssh sitelayer@165.245.230.3 \
+   # Resolve the prod droplet first — prefer the reserved IP, which
+   # survives droplet replacement (the bare public IPv4 can change on a
+   # resize/reprovision). `doctl compute ssh sitelayer` works too.
+   PROD_HOST=159.203.51.158   # reserved IP for droplet sitelayer (566798325)
+   ssh sitelayer@"$PROD_HOST" \
      "sed -i 's/^PG_POOL_MAX=.*/PG_POOL_MAX=60/' /app/sitelayer/.env && \
       cd /app/sitelayer && \
       GIT_SHA=\$(cat .last_successful_deployed_sha) \
         docker compose -f docker-compose.prod.yml up -d --force-recreate api worker"
    ```
 
-   Lower when the managed-Postgres connection cap is being hit. Raise
-   only after confirming the managed instance can take more (resize to
-   `db-s-1vcpu-2gb` or larger if needed — `doctl databases list`).
+   Lower when the managed-Postgres connection cap is being hit (~47 on the
+   current `db-s-1vcpu-2gb` tier). Raise only after confirming the managed
+   instance can take more (resize to `db-s-2vcpu-4gb` or larger if needed —
+   `doctl databases list`). Note: adding RAM does NOT add PITR — that needs
+   a standby node; see `docs/DR_RESTORE.md`.
 
 5. **Resize the managed instance** as a last resort. Raises connection
    cap and gives more RAM for buffer cache. Done from the DO console or
@@ -149,11 +166,13 @@ doctl compute ssh sitelayer --ssh-command="
 # /health green, API error rate dropped:
 curl -fsS https://sitelayer.sandolab.xyz/health
 curl -fsS -H "Authorization: Bearer $API_METRICS_TOKEN" \
-  https://sitelayer.sandolab.xyz/api/metrics | grep http_request_errors_total
+  https://sitelayer.sandolab.xyz/api/metrics | grep sitelayer_http_request_errors_total
 ```
 
 ## Post-incident
 
 File a postmortem using [POSTMORTEM_TEMPLATE.md](./POSTMORTEM_TEMPLATE.md).
 The high-value follow-ups are usually (a) the missing index or unbounded
-query, (b) a Prometheus alert on `pg_stat_activity` total > 70% of cap.
+query, (b) standing up a Prometheus scraper for `/api/metrics` (none today)
+plus an alert on `pg_stat_activity` total > 70% of cap (~47 on the
+`db-s-1vcpu-2gb` tier).

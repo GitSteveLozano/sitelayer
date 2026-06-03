@@ -89,4 +89,4 @@ single-region degradation, UptimeRobot fires loud on global outage.
 
 - [`docs/INCIDENT_RESPONSE.md`](./INCIDENT_RESPONSE.md) — broader on-call orientation
 - [`docs/RUNBOOK_CONNECTION_POOL.md`](./RUNBOOK_CONNECTION_POOL.md) — 503/pool-exhaustion triage
-- [`BACKUP_STRATEGY.md`](../BACKUP_STRATEGY.md) — backup-timer monitoring (separate from UptimeRobot)
+- [`BACKUP_STRATEGY.md`](./BACKUP_STRATEGY.md) — backup-timer monitoring (separate from UptimeRobot)
