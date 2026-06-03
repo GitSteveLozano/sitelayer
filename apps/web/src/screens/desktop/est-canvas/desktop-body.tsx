@@ -63,6 +63,7 @@ import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS, pitchInput
 import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-body-styles'
 import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
+import { AiReviewOverlay, AiReviewMarkers, buildAiReviewModel } from './ai-review-overlay'
 
 import { useTakeoffSession } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
@@ -486,6 +487,26 @@ export function EstCanvasDesktopBody() {
   const [showCallouts, setShowCallouts] = useState(false)
   const [jumpedFrom, setJumpedFrom] = useState<{ pageId: string; label: string } | null>(null)
 
+  // --- On-canvas AI review (capturing.reviewing) ---------------------------
+  // "AI proposes, human ratifies ON the plan." When the machine is in
+  // `capturing.reviewing` (reachable in dev via `?seed=ai-reviewing`) the
+  // editable review surface renders: a synced LIST panel (`AiReviewOverlay`) +
+  // canvas markers (`AiReviewMarkers`) for proposals that carry geometry. The
+  // overlay is strictly gated to this state, so the draw / scale / select
+  // surfaces are untouched. `reviewSelectedId` is the LOCAL shared selection
+  // that syncs the list row ↔ canvas marker (clicking either highlights both);
+  // the machine already owns the authoritative `capture.decisions` / `showLow`.
+  const isReviewing = session.matches({ capturing: 'reviewing' })
+  const isPromoting = session.matches({ capturing: 'promoting' })
+  const [reviewSelectedId, setReviewSelectedId] = useState<string | null>(null)
+  // Build the marker view-model off the same machine slices the overlay reads,
+  // so the list and the canvas markers stay in lockstep (same bucketing,
+  // ordering, and show-low filter). Cheap; only meaningful while reviewing.
+  const reviewModel = useMemo(
+    () => buildAiReviewModel(sctx.capture.result, sctx.capture.decisions, sctx.capture.showLow),
+    [sctx.capture.result, sctx.capture.decisions, sctx.capture.showLow],
+  )
+
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
   }, [serviceItemCode, items])
@@ -499,19 +520,26 @@ export function EstCanvasDesktopBody() {
   // The START_* entries are all only valid from `idle`, so a cross-mode flip
   // (e.g. select → draw) must CANCEL back to idle FIRST. xstate processes both
   // events synchronously in this tick, so CANCEL → idle → START_DRAW → drawing
-  // lands in one pass. Runs only on a `mode` flip; `session`/`sdispatch` are
-  // stable for the machine's lifetime. (react-hooks/exhaustive-deps is not
-  // enabled here.)
+  // lands in one pass.
+  //
+  // SCOPE GUARD: `capturing` (configuring/running/reviewing/promoting) is a
+  // MACHINE-driven mode with no local `CanvasMode` peer — a `?seed=ai-reviewing`
+  // boots straight into `capturing.reviewing`. The sync effect must NOT CANCEL
+  // out of it (that would tear down the AI-review overlay on mount), so it
+  // no-ops while the machine is capturing. Re-running on `sessionValue` re-parks
+  // the surface once review ends (CANCEL/PROMOTE → idle → draw).
+  const sessionValue = session.value
   const target =
     mode === 'draw' ? 'drawing' : mode === 'scale' ? 'calibrating' : mode === 'select' ? 'selecting' : 'idle'
   useEffect(() => {
+    if (session.matches('capturing')) return
     if (session.matches(target)) return
     if (!session.matches('idle')) sdispatch({ type: 'CANCEL' })
     if (target === 'drawing') sdispatch({ type: 'START_DRAW' })
     else if (target === 'calibrating') sdispatch({ type: 'START_CALIBRATION' })
     else if (target === 'selecting') sdispatch({ type: 'START_SELECT' })
     // target === 'idle' → the CANCEL above already landed us there.
-  }, [mode])
+  }, [mode, sessionValue])
 
   // Mirror the scope item into the machine draft so its commit guard + future
   // wired actors see the same scope the UI persists with. (react-hooks/
@@ -1787,6 +1815,17 @@ export function EstCanvasDesktopBody() {
                   ) : null
                 })()
               : null}
+            {/* On-canvas AI-review markers (capturing.reviewing/promoting only).
+                Shares the board <svg> transform with the underlay + committed
+                measurements; proposals with no geometry render nothing here
+                (list-only). */}
+            {isReviewing || isPromoting ? (
+              <AiReviewMarkers
+                model={reviewModel}
+                selectedId={reviewSelectedId}
+                onSelect={(id) => setReviewSelectedId((cur) => (cur === id ? null : id))}
+              />
+            ) : null}
           </svg>
         </div>
       </div>
@@ -2785,6 +2824,26 @@ export function EstCanvasDesktopBody() {
           onReviewDraft={(id, captureMode) =>
             navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id, mode: captureMode } })
           }
+        />
+      ) : null}
+
+      {/* ---- On-canvas AI review (capturing.reviewing) ----
+          The synced LIST half of the review surface. Strictly gated to the
+          machine's reviewing state, so the draw / scale / select surfaces are
+          behavior-preserving. Accept/Reject record `capture.decisions` via
+          REVIEW_DECISION; "Promote accepted" dispatches PROMOTE with the
+          accepted ids (persistence stays on the existing hybrid path — the
+          machine's promoteCaptured actor is unwired, so PROMOTE simply lands the
+          UI in `promoting`); the show-low toggle filters by `capture.showLow`. */}
+      {isReviewing || isPromoting ? (
+        <AiReviewOverlay
+          result={sctx.capture.result}
+          decisions={sctx.capture.decisions}
+          showLow={sctx.capture.showLow}
+          selectedId={reviewSelectedId}
+          onSelect={setReviewSelectedId}
+          dispatch={sdispatch}
+          promoting={isPromoting}
         />
       ) : null}
 
