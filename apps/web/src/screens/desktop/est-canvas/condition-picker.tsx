@@ -76,7 +76,6 @@ export function ConditionPicker({
             style={{
               width: 12,
               height: 12,
-              borderRadius: 3,
               background: activeCondition.color,
               border: '1px solid var(--m-line)',
               flex: '0 0 auto',
@@ -100,10 +99,9 @@ export function ConditionPicker({
               fontFamily: 'var(--m-num)',
               fontSize: 12,
               padding: '4px 8px',
-              border: '1px solid var(--m-line)',
-              borderRadius: 6,
-              background: 'var(--m-surface)',
-              color: 'var(--m-ink-1)',
+              border: '2px solid var(--m-ink)',
+              background: 'var(--m-card)',
+              color: 'var(--m-ink)',
             }}
           />
           <input
@@ -111,7 +109,7 @@ export function ConditionPicker({
             value={newConditionColor}
             onChange={(e) => setNewConditionColor(e.target.value)}
             title="Condition color"
-            style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--m-line)', borderRadius: 6 }}
+            style={{ width: 32, height: 28, padding: 0, border: '2px solid var(--m-ink)' }}
           />
           <MSelect
             value={newConditionKind}

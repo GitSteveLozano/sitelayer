@@ -173,7 +173,10 @@ export function AiReviewMarkers({ model, selectedId, onSelect }: AiReviewMarkers
         const isRejected = p.decision === 'reject'
         const isAccepted = p.decision === 'accept'
         const stroke = isAccepted ? 'var(--m-accent)' : isRejected ? 'var(--m-red)' : 'var(--m-ink)'
-        const fill = isAccepted ? 'rgba(217,144,74,0.30)' : 'rgba(255,212,0,0.18)'
+        // Canvas-fill convention (mirrors the desktop-body / mobile-components SVG
+        // markers): the accent is the v2 yellow #FFD400 = rgb(255,212,0). Accepted
+        // reads a stronger accent wash, the default a lighter one.
+        const fill = isAccepted ? 'rgba(255,212,0,0.30)' : 'rgba(255,212,0,0.18)'
         // Low confidence reads dashed/translucent per the AI-layer rule.
         const dashed = p.bucket === 'low'
         return (
@@ -294,7 +297,7 @@ export function AiReviewOverlay({
                 style={{
                   padding: '10px 14px',
                   borderBottom: '1px solid var(--m-line-2)',
-                  background: isSelected ? 'var(--m-accent-wash, rgba(217,144,74,0.12))' : 'transparent',
+                  background: isSelected ? 'rgba(255,212,0,0.12)' : 'transparent',
                   borderLeft: isSelected ? '3px solid var(--m-accent)' : '3px solid transparent',
                   // Low confidence reads translucent/dashed to mirror the canvas marker.
                   opacity: p.decision === 'reject' ? 0.5 : isLow ? 0.82 : 1,
@@ -471,7 +474,7 @@ function reviewActionStyle(active: boolean, kind: 'accept' | 'reject'): React.CS
     padding: '7px 8px',
     border: '2px solid var(--m-ink)',
     background: active ? accent : 'var(--m-card)',
-    color: active ? (kind === 'accept' ? 'var(--m-accent-ink)' : 'var(--m-paper)') : 'var(--m-ink)',
+    color: active ? (kind === 'accept' ? 'var(--m-accent-ink)' : 'var(--m-sand)') : 'var(--m-ink)',
     fontFamily: 'var(--m-num)',
     fontSize: 11,
     fontWeight: 800,

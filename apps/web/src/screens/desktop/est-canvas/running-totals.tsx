@@ -80,7 +80,6 @@ export function RunningTotals({
                     style={{
                       width: 10,
                       height: 10,
-                      borderRadius: 3,
                       background: row.condition.color,
                       border: '1px solid var(--m-line)',
                       flex: '0 0 auto',

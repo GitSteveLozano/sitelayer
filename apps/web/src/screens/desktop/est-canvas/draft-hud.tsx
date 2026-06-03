@@ -162,9 +162,7 @@ export function DraftHud({
           title="Snap new points to nearby vertices and to horizontal/vertical"
           style={{
             ...ghostChip(false),
-            ...(snapEnabled
-              ? { background: 'var(--m-ink)', color: 'var(--m-paper)', borderColor: 'var(--m-ink)' }
-              : {}),
+            ...(snapEnabled ? { background: 'var(--m-ink)', color: 'var(--m-sand)', borderColor: 'var(--m-ink)' } : {}),
           }}
         >
           SNAP {snapEnabled ? 'ON' : 'OFF'}
@@ -176,7 +174,7 @@ export function DraftHud({
             title="Cutout: subtract this area from the net (e.g. a window or door opening)"
             style={{
               ...ghostChip(false),
-              ...(deduct ? { background: 'var(--m-red)', color: 'var(--m-paper)', borderColor: 'var(--m-red)' } : {}),
+              ...(deduct ? { background: 'var(--m-red)', color: 'var(--m-sand)', borderColor: 'var(--m-red)' } : {}),
             }}
           >
             DEDUCT {deduct ? 'ON' : 'OFF'}
