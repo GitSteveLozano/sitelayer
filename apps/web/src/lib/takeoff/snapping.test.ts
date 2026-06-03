@@ -6,6 +6,7 @@ import {
   buildSnapIndex,
   closestPointOnSegment,
   collectSnapCandidates,
+  resolveDraftPoint,
   snapPoint,
   SNAP_GRID_CELL,
 } from './snapping'
@@ -439,5 +440,74 @@ describe('applyOrtho', () => {
     const raw = { x: 40, y: 11 }
     expect(applyOrtho(prev, raw, 0)).toEqual(raw)
     expect(applyOrtho(prev, raw, -3)).toEqual(raw)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveDraftPoint — the shared canvas placement contract (both bodies)
+// ---------------------------------------------------------------------------
+
+describe('resolveDraftPoint', () => {
+  const opts = { toleranceBoard: 1.8, orthoThresholdDeg: 7, draftPoints: [] as { x: number; y: number }[] }
+
+  it('snaps a tap near an existing endpoint onto that endpoint', () => {
+    // A tap just shy of the wall's (10,10) corner latches exactly onto it.
+    const index = indexFor([wall()])
+    const placed = resolveDraftPoint({ x: 10.4, y: 9.7 }, index, opts)
+    expect(placed.x).toBeCloseTo(10, 9)
+    expect(placed.y).toBeCloseTo(10, 9)
+  })
+
+  it('snaps onto a segment midpoint when only the midpoint is in range', () => {
+    const index = indexFor([wall()]) // midpoint at (20,10)
+    const placed = resolveDraftPoint({ x: 20.2, y: 10.3 }, index, opts)
+    expect(placed.x).toBeCloseTo(20, 9)
+    expect(placed.y).toBeCloseTo(10, 9)
+  })
+
+  it('projects onto an existing wall body when off the vertices', () => {
+    const index = indexFor([wall()])
+    const placed = resolveDraftPoint({ x: 15, y: 9.4 }, index, opts)
+    expect(placed.x).toBeCloseTo(15, 9)
+    expect(placed.y).toBeCloseTo(10, 9) // projected up onto y=10
+  })
+
+  it('falls back to a nearby in-progress draft vertex when no committed geometry is near', () => {
+    // Empty index (no committed measurements) — only a draft vertex is in range.
+    const index = indexFor([])
+    const placed = resolveDraftPoint({ x: 40.5, y: 40.4 }, index, {
+      ...opts,
+      draftPoints: [{ x: 40, y: 40 }],
+    })
+    expect(placed).toEqual({ x: 40, y: 40 })
+  })
+
+  it('committed geometry wins over a draft vertex at equal-ish distance', () => {
+    // An endpoint at (10,10) and a draft vertex at (12,10); tap at (10.5,10)
+    // is nearer the endpoint and the endpoint (content) takes priority anyway.
+    const index = indexFor([wall()])
+    const placed = resolveDraftPoint({ x: 10.5, y: 10 }, index, {
+      ...opts,
+      draftPoints: [{ x: 12, y: 10 }],
+    })
+    expect(placed.x).toBeCloseTo(10, 9)
+    expect(placed.y).toBeCloseTo(10, 9)
+  })
+
+  it('ortho-locks to horizontal off the last draft point when nothing else is near', () => {
+    const index = indexFor([])
+    // Last draft point at (50,50); a near-horizontal drag locks y to 50.
+    const placed = resolveDraftPoint({ x: 70, y: 50.5 }, index, {
+      ...opts,
+      draftPoints: [{ x: 50, y: 50 }],
+    })
+    expect(placed.x).toBeCloseTo(70, 9)
+    expect(placed.y).toBeCloseTo(50, 9)
+  })
+
+  it('returns the raw point unchanged when nothing is in range and there is no prior point', () => {
+    const index = indexFor([])
+    const raw = { x: 80, y: 80 }
+    expect(resolveDraftPoint(raw, index, opts)).toEqual(raw)
   })
 })

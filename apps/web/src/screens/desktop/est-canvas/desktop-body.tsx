@@ -45,6 +45,7 @@ import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
 import { useCanvasViewport } from '@/lib/takeoff/use-canvas-viewport'
 import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
@@ -963,54 +964,33 @@ export function EstCanvasDesktopBody() {
     zoom,
   ])
 
-  // All committed vertices on this sheet — snap targets so a new measurement
-  // can latch onto the corner of an existing one (PlanSwift vertex snapping).
-  const committedVertices = useMemo<TakeoffPoint[]>(() => {
-    const out: TakeoffPoint[] = []
-    for (const m of blueprintMeasurements) {
-      const geo = m.geometry as MeasurementGeometry
-      if (geo.points) for (const p of geo.points) out.push({ x: p.x, y: p.y })
-    }
-    return out
-  }, [blueprintMeasurements])
+  // Snap-to-content index over every committed measurement on this sheet:
+  // endpoints, segment midpoints, and on-segment projections. This is the
+  // shared engine (`@/lib/takeoff/snapping`) that supersedes the old
+  // vertex-only snap — a new measurement now latches to the corner, the middle,
+  // OR anywhere along an existing wall, not just its drawn vertices. Memoized
+  // so a per-tap `snapToContent` call doesn't rebuild candidates each time.
+  const snapIndex = useSnapping(blueprintMeasurements)
 
-  // Snap a raw board-space point: first to a nearby existing vertex, else lock
-  // to horizontal/vertical from the previous draft point when within a small
-  // angular threshold. Pure — returns the raw point unchanged when snap is off
-  // or nothing is in range.
+  // Tolerance for snap-to-content, in board units (0–100 space). Sits in the
+  // 1.5–2.0 sweet spot: tight enough that a deliberate gap survives, loose
+  // enough that an estimator aiming at a corner reliably latches onto it.
+  const SNAP_TOLERANCE_BOARD = 1.8
+  // Angular threshold for the ortho ("straight wall") assist, in degrees.
+  const ORTHO_THRESHOLD_DEG = 7
+
+  // Snap a raw board-space point via the shared resolver: latch onto committed
+  // geometry (endpoint > midpoint > on-segment), else a nearby in-progress
+  // draft vertex (so a polygon closes onto its own start — the engine only sees
+  // committed measurements), else lock to H / V / 45° from the previous draft
+  // point. With snap OFF the raw point passes through unchanged.
   const snapPoint = (raw: TakeoffPoint): TakeoffPoint => {
     if (!snapEnabled) return raw
-    const SNAP_VERTEX_DIST = 1.4 // board units (0–100 space)
-    let best: TakeoffPoint | null = null
-    let bestD = SNAP_VERTEX_DIST
-    for (const p of draftPoints) {
-      const d = Math.hypot(p.x - raw.x, p.y - raw.y)
-      if (d < bestD) {
-        bestD = d
-        best = p
-      }
-    }
-    for (const p of committedVertices) {
-      const d = Math.hypot(p.x - raw.x, p.y - raw.y)
-      if (d < bestD) {
-        bestD = d
-        best = p
-      }
-    }
-    if (best) return { x: best.x, y: best.y }
-    const prev = draftPoints[draftPoints.length - 1]
-    if (prev) {
-      const dx = raw.x - prev.x
-      const dy = raw.y - prev.y
-      const adx = Math.abs(dx)
-      const ady = Math.abs(dy)
-      const tanThreshold = Math.tan((6 * Math.PI) / 180) // ~6°
-      if (adx > 0.01 || ady > 0.01) {
-        if (ady <= adx * tanThreshold) return { x: raw.x, y: prev.y } // horizontal lock
-        if (adx <= ady * tanThreshold) return { x: prev.x, y: raw.y } // vertical lock
-      }
-    }
-    return raw
+    return resolveDraftPoint(raw, snapIndex, {
+      toleranceBoard: SNAP_TOLERANCE_BOARD,
+      orthoThresholdDeg: ORTHO_THRESHOLD_DEG,
+      draftPoints,
+    })
   }
 
   // Undo/redo over draft vertices is now owned by the machine: UNDO_POINT pops
