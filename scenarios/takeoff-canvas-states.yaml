@@ -38,10 +38,38 @@ customers:
   - { ref: cust, name: Canvas QA Customer }
 
 projects:
-  - { ref: manual, name: 'Manual takeoff — calibrated', customer_ref: cust, division_code: D4, status: active, lifecycle_state: estimating }
-  - { ref: uncal, name: 'Manual takeoff — uncalibrated', customer_ref: cust, division_code: D4, status: active, lifecycle_state: estimating }
-  - { ref: ai, name: 'AI takeoff — pending review', customer_ref: cust, division_code: D4, status: active, lifecycle_state: estimating }
-  - { ref: empty, name: 'Empty canvas — blueprint, no measurements', customer_ref: cust, division_code: D4, status: active, lifecycle_state: estimating }
+  - {
+      ref: manual,
+      name: 'Manual takeoff — calibrated',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: uncal,
+      name: 'Manual takeoff — uncalibrated',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: ai,
+      name: 'AI takeoff — pending review',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: empty,
+      name: 'Empty canvas — blueprint, no measurements',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
 
 blueprints:
   - ref: bp-manual
@@ -77,7 +105,14 @@ blueprints:
         calibration: { world_distance: 30, world_unit: ft, x1: 10, y1: 90, x2: 40, y2: 90, verified: true }
 
 takeoff_conditions:
-  - { ref: cond-wall, name: 'Exterior wall (EIFS)', color: '#2f7d32', measurement_kind: area, emit_area: true, emit_linear: true }
+  - {
+      ref: cond-wall,
+      name: 'Exterior wall (EIFS)',
+      color: '#2f7d32',
+      measurement_kind: area,
+      emit_area: true,
+      emit_linear: true,
+    }
 
 takeoff_drafts:
   - ref: manual-draft
