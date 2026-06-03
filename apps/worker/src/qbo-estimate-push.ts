@@ -144,7 +144,12 @@ export function createQboEstimatePush(refreshDeps: RefreshDeps = {}): EstimatePu
       Line: linePayload,
     }
 
-    const url = `${baseUrl}/v3/company/${connection.provider_account_id}/estimate`
+    // Intuit idempotency: append ?requestid=<stable-key> keyed on the estimate
+    // push id (same across every retry of this outbox row). A crash AFTER
+    // Intuit accepts the create but BEFORE we persist qbo_estimate_id would
+    // otherwise duplicate the estimate on retry; requestid makes Intuit dedupe
+    // upstream and return the original. pushId is a UUID (URL-safe, <50 chars).
+    const url = `${baseUrl}/v3/company/${connection.provider_account_id}/estimate?requestid=${encodeURIComponent(pushId)}`
     const fetchImpl = refreshDeps.fetchImpl ?? fetch
     let qboAttempt = 0
     const parsed = await withFreshToken<QboEstimateCreateResponse>(

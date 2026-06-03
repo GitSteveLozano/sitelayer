@@ -8,6 +8,7 @@ import {
   type QboPullSummary,
 } from '@sitelayer/queue'
 import { createQboPull } from '../qbo-pull.js'
+import { qboCircuitKey } from '../qbo-circuit.js'
 import { withRowTrace } from '../trace.js'
 import { resolveCompanyQboLive } from '../qbo-live.js'
 
@@ -26,14 +27,17 @@ export function createQboPullRunner(deps: { pool: Pool; logger: Logger; qboCircu
   // cluster-wide kill switch; the live decision is resolved per company at
   // drain time (global-env-on AND integration_connections.qbo_live_enabled).
   const liveBase = createQboPull()
-  const buildQboPull = (live: boolean): QboPullFn => {
+  // Breaker key is PER COMPANY (qbo:<companyId>) so one tenant's revoked-token
+  // / outage failures can't open the circuit for every other company's drain.
+  const buildQboPull = (live: boolean, companyId: string): QboPullFn => {
     const base: QboPullFn = live ? liveBase : stubQboPull
+    const key = qboCircuitKey(companyId)
     // Wrap the QBO pull (and the circuit breaker around it) inside the row's
     // originating Sentry trace, same as the estimate-push runner. withRowTrace
     // continues the trace when the claimed mutation_outbox row carries
     // sentry_trace + baggage so the external HTTP calls inherit the originating
     // API request's trace_id.
-    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => base(input)))
+    return (input) => withRowTrace(input, () => withCircuitBreaker(qboCircuit, key, () => base(input)))
   }
 
   if (process.env.QBO_LIVE_QBO_PULL === '1') {
@@ -48,7 +52,7 @@ export function createQboPullRunner(deps: { pool: Pool; logger: Logger; qboCircu
     const client = await pool.connect()
     try {
       const live = await resolveCompanyQboLive(client, companyId, 'QBO_LIVE_QBO_PULL')
-      const qboPull = buildQboPull(live)
+      const qboPull = buildQboPull(live, companyId)
       return await processQboPull(client, companyId, qboPull, 1)
     } finally {
       client.release()

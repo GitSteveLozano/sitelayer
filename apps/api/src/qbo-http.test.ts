@@ -11,7 +11,7 @@ vi.mock('./instrument.js', () => ({
   },
 }))
 
-import { qboFetch, qboGet, qboPost } from './qbo-http.js'
+import { appendQboRequestId, qboFetch, qboGet, qboPost, sanitizeQboRequestId } from './qbo-http.js'
 import { Sentry } from './instrument.js'
 
 type FetchMock = ReturnType<typeof vi.fn>
@@ -237,5 +237,82 @@ describe('qboPost', () => {
       Accept: 'application/json',
     })
     expect(JSON.parse(init.body)).toEqual({ Line: [{ Amount: 100 }] })
+  })
+
+  it('appends ?requestid=<key> when an idempotency key is supplied', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { Estimate: { Id: '7' } }))
+    installSentrySpy()
+
+    await qboPost('https://sandbox.qbo.test', '/estimate', 'realm-9', 'token-xyz', {}, 'run-1234-abcd')
+
+    const [url] = fetchMock.mock.calls[0]!
+    expect(url).toBe('https://sandbox.qbo.test/v3/company/realm-9/estimate?requestid=run-1234-abcd')
+  })
+
+  it('omits ?requestid when the key is null/undefined (back-compat)', async () => {
+    // Fresh Response per call — a Response body can only be read once.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, {})))
+    installSentrySpy()
+
+    await qboPost('https://sandbox.qbo.test', '/estimate', 'r', 't', {}, null)
+    await qboPost('https://sandbox.qbo.test', '/estimate', 'r', 't', {})
+
+    expect(fetchMock.mock.calls[0]![0]).toBe('https://sandbox.qbo.test/v3/company/r/estimate')
+    expect(fetchMock.mock.calls[1]![0]).toBe('https://sandbox.qbo.test/v3/company/r/estimate')
+  })
+
+  it('is deterministic: same key → same requestid across retries', async () => {
+    // A crash/retry of the SAME logical create must reproduce the SAME
+    // requestid byte-for-byte, otherwise Intuit can't dedupe it.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, {})))
+    installSentrySpy()
+
+    await qboPost('https://sandbox.qbo.test', '/invoice', 'r', 't', {}, 'rental_billing_run:post:abc')
+    await qboPost('https://sandbox.qbo.test', '/invoice', 'r', 't', {}, 'rental_billing_run:post:abc')
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(fetchMock.mock.calls[1]![0])
+  })
+})
+
+describe('sanitizeQboRequestId', () => {
+  it('passes through URL-safe tokens (UUIDs) unchanged', () => {
+    const uuid = '4b9a7f10-3c2d-4e5a-8b1c-9f0e1d2c3b4a'
+    expect(sanitizeQboRequestId(uuid)).toBe(uuid)
+  })
+
+  it('replaces unsafe chars (e.g. outbox key colons) with hyphens', () => {
+    expect(sanitizeQboRequestId('rental_billing_run:post:abc')).toBe('rental_billing_run-post-abc')
+  })
+
+  it('collapses runs of hyphens and trims leading/trailing ones', () => {
+    expect(sanitizeQboRequestId('::a  b::')).toBe('a-b')
+  })
+
+  it('caps the token at Intuit’s 50-char limit', () => {
+    const long = 'x'.repeat(120)
+    expect(sanitizeQboRequestId(long)).toHaveLength(50)
+  })
+
+  it('is deterministic for the same input', () => {
+    const input = 'labor_payroll_run:post:9999'
+    expect(sanitizeQboRequestId(input)).toBe(sanitizeQboRequestId(input))
+  })
+})
+
+describe('appendQboRequestId', () => {
+  it('uses ? when the URL has no query string', () => {
+    expect(appendQboRequestId('https://q.test/invoice', 'k')).toBe('https://q.test/invoice?requestid=k')
+  })
+
+  it('uses & when the URL already has a query string', () => {
+    expect(appendQboRequestId('https://q.test/invoice?minorversion=70', 'k')).toBe(
+      'https://q.test/invoice?minorversion=70&requestid=k',
+    )
+  })
+
+  it('returns the URL unchanged for a falsy or all-unsafe key', () => {
+    expect(appendQboRequestId('https://q.test/invoice', null)).toBe('https://q.test/invoice')
+    expect(appendQboRequestId('https://q.test/invoice', '')).toBe('https://q.test/invoice')
+    expect(appendQboRequestId('https://q.test/invoice', '::')).toBe('https://q.test/invoice')
   })
 })

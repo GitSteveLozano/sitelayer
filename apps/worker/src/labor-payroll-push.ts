@@ -357,6 +357,38 @@ export function decideTimeActivityPayloads(
 }
 
 /**
+ * Build a deterministic Intuit `requestid` for a single TimeActivity within a
+ * labor-payroll batch.
+ *
+ * A payroll batch posts MANY TimeActivities to the same /timeactivity endpoint,
+ * so they CANNOT share one requestid (Intuit would dedupe all but the first).
+ * Each must be unique within the batch BUT stable across a whole-batch retry,
+ * so a crash mid-batch (some TimeActivities already accepted by Intuit) replays
+ * with the SAME per-line requestid and Intuit returns the originals instead of
+ * minting duplicates. The tuple (runId, labor_entry id, straight|ot) uniquely
+ * and deterministically identifies one TimeActivity: the worker emits at most
+ * one 'straight' and one 'ot' part per entry (see decideTimeActivityPayloads).
+ *
+ * Sanitized to URL-safe chars and capped at Intuit's 50-char requestid limit.
+ * Because UUIDs alone already consume 36 chars, we hash-fold the composite into
+ * a compact, collision-resistant token rather than naively concatenating
+ * (which would overflow 50 chars and get truncated to a non-unique prefix).
+ */
+export function laborTimeActivityRequestId(runId: string, entryId: string, kind: 'straight' | 'ot'): string {
+  const composite = `${runId}:${entryId}:${kind}`
+  // FNV-1a 32-bit — small, dependency-free, deterministic. Combined with the
+  // short kind suffix it keeps the token well under 50 chars and unique per
+  // (run, entry, kind) tuple.
+  let hash = 0x811c9dc5
+  for (let i = 0; i < composite.length; i += 1) {
+    hash ^= composite.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, '0')
+  return `ta-${runId.slice(0, 8)}-${entryId.slice(0, 8)}-${kind}-${hex}`
+}
+
+/**
  * Build the live QBO TimeActivity push fn for the labor-payroll workflow.
  * Returned fn loads the connection + employee mappings via the supplied tx
  * client (so the row locks held during the worker tx apply), then POSTs
@@ -451,7 +483,7 @@ export function createQboLaborPayrollPush(refreshDeps: RefreshDeps = {}): LaborP
     }
 
     const fetchImpl = refreshDeps.fetchImpl ?? fetch
-    const url = `${baseUrl}/v3/company/${connection.provider_account_id}/timeactivity`
+    const timeActivityUrl = `${baseUrl}/v3/company/${connection.provider_account_id}/timeactivity`
     const postedIds: string[] = []
 
     // Cache for per-entry service_item_code → QBO Item id lookups. The
@@ -537,6 +569,9 @@ export function createQboLaborPayrollPush(refreshDeps: RefreshDeps = {}): LaborP
         }
         if (itemRef) timeActivityPayload.ItemRef = itemRef
 
+        // Intuit idempotency: unique-per-line, stable-across-retry requestid.
+        const requestId = laborTimeActivityRequestId(runId, entry.id, part.kind)
+        const url = `${timeActivityUrl}?requestid=${encodeURIComponent(requestId)}`
         const parsed = await withFreshToken<QboTimeActivityCreateResponse>(
           connection,
           client,

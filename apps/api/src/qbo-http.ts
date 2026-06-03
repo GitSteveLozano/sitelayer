@@ -12,6 +12,44 @@ function qboShouldRetry(status: number): boolean {
   return status === 429 || (status >= 500 && status < 600)
 }
 
+/**
+ * Sanitize a caller-supplied idempotency key into a value safe to use as
+ * Intuit's `requestid` query parameter.
+ *
+ * Intuit dedupes create POSTs that carry the same `requestid` within a
+ * rolling window: a crash/retry after Intuit accepted the create returns the
+ * SAME object instead of minting a duplicate invoice/estimate/TimeActivity.
+ * The token must be a non-empty string; Intuit caps it at 50 chars. We strip
+ * everything that isn't URL-path-safe (`[A-Za-z0-9._-]`) so a UUID, an outbox
+ * idempotency key like `rental_billing_run:post:<id>`, or a run id all reduce
+ * to a stable, deterministic token. The SAME input always yields the SAME
+ * output, which is the whole point — a retry must reproduce the key byte for
+ * byte to be deduped upstream.
+ */
+export function sanitizeQboRequestId(key: string): string {
+  return key
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50)
+}
+
+/**
+ * Append Intuit's `?requestid=<key>` idempotency token to a QBO create URL.
+ *
+ * Pure + deterministic: a falsy/empty key (after sanitization) returns the
+ * URL unchanged so callers that have no stable key degrade to today's
+ * non-idempotent behavior rather than sending `?requestid=`. Preserves any
+ * existing query string by switching the separator to `&`.
+ */
+export function appendQboRequestId(url: string, requestId: string | null | undefined): string {
+  if (!requestId) return url
+  const token = sanitizeQboRequestId(requestId)
+  if (!token) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}requestid=${encodeURIComponent(token)}`
+}
+
 export async function qboFetch<T>(url: string, init: RequestInit): Promise<T> {
   let lastStatus = 0
   let lastStatusText = ''
@@ -64,8 +102,17 @@ export async function qboPost<T>(
   realmId: string,
   accessToken: string,
   body: unknown,
+  /**
+   * Optional deterministic idempotency key. When supplied it is appended as
+   * Intuit's `?requestid=<key>` so a crash/retry after Intuit accepted the
+   * create is deduped UPSTREAM at Intuit instead of minting a duplicate
+   * invoice/estimate/TimeActivity. Pass the caller's stable key (e.g. the
+   * mutation_outbox idempotency key or the run id) — NOT a per-attempt value.
+   */
+  requestId?: string | null,
 ): Promise<T> {
-  return qboFetch<T>(`${baseUrl}/v3/company/${realmId}${endpoint}`, {
+  const url = appendQboRequestId(`${baseUrl}/v3/company/${realmId}${endpoint}`, requestId)
+  return qboFetch<T>(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,

@@ -171,7 +171,14 @@ export function createQboRentalInvoicePush(refreshDeps: RefreshDeps = {}): Renta
       Line: linePayload,
     }
 
-    const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice`
+    // Intuit idempotency: append ?requestid=<stable-key>. The key is the
+    // billing run id, which is the same across every retry of this outbox row
+    // (the caller already gates on rental_billing_runs.qbo_invoice_id before
+    // calling, but a crash AFTER Intuit accepts the create — before we persist
+    // the id — would otherwise mint a duplicate invoice on the retry). With
+    // requestid, Intuit dedupes that retry upstream and returns the original
+    // Invoice instead of a second one. runId is a UUID (URL-safe, <50 chars).
+    const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice?requestid=${encodeURIComponent(runId)}`
     const fetchImpl = refreshDeps.fetchImpl ?? fetch
     let qboAttempt = 0
     const parsed = await withFreshToken<QboInvoiceCreateResponse>(

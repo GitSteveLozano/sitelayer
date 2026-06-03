@@ -71,6 +71,23 @@ describe('isTrippingError', () => {
     expect(isTrippingError(new Error('400 bad request'))).toBe(false)
     expect(isTrippingError(new Error('404 not found'))).toBe(false)
   })
+  it('does NOT trip on auth 401/403 (bad token is the tenant’s problem, not an outage)', () => {
+    expect(isTrippingError(new Error('qbo invoice POST returned 401: token expired'))).toBe(false)
+    expect(isTrippingError(new Error('qbo returned 401 even after refresh for connection abc'))).toBe(false)
+    expect(isTrippingError(new Error('qbo refresh returned 403: forbidden — connection marked auth_error'))).toBe(false)
+  })
+  it('does NOT mis-classify a 4xx whose body echoes a 5xx-looking number as an outage', () => {
+    // Auth/4xx is checked first, so an Intuit error payload embedded in a 401
+    // message that happens to contain "500" must NOT open the circuit.
+    expect(isTrippingError(new Error('401 Unauthorized: {"Fault":{"Error":[{"code":"500"}]}}'))).toBe(false)
+  })
+  it('still trips on a genuine 5xx', () => {
+    expect(isTrippingError(new Error('qbo invoice POST returned 503: Service Unavailable'))).toBe(true)
+  })
+  it('classifies on the LEADING status: a 5xx whose body echoes a 4xx still trips', () => {
+    // The status, not an incidental number deeper in the body, decides.
+    expect(isTrippingError(new Error('qbo invoice POST returned 503: {"hint":"see error 404 docs"}'))).toBe(true)
+  })
   it('does NOT trip on non-Error', () => {
     expect(isTrippingError('something')).toBe(false)
     expect(isTrippingError(null)).toBe(false)

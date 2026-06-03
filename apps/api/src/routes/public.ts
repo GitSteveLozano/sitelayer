@@ -12,10 +12,17 @@ import {
   flattenQboWebhookPayload,
   parseQboWebhookPayload,
   verifyQboWebhook,
+  warnIfQboWebhookVerifierMissing,
 } from '../qbo-webhook.js'
 import { renderMetrics } from '../metrics.js'
 
 const logger = createLogger('api:public')
+
+// Boot-time env-presence WARNING (not a crash): in prod, an unset
+// QBO_WEBHOOK_VERIFIER makes POST /api/webhooks/qbo return 503 and inbound
+// QBO webhooks silently stop. This module is imported once at API startup
+// (server.ts), so this runs at boot. See warnIfQboWebhookVerifierMissing.
+warnIfQboWebhookVerifierMissing(process.env, (message) => logger.warn(message))
 
 /**
  * Extract the primary email from a Clerk user payload. Clerk sends an
