@@ -78,6 +78,29 @@ fi
 echo "==> Deploying $GIT_SHA -> $TIER ($HOST) via preview droplet $PREVIEW_BOX"
 START=$(date +%s)
 
+# --- per-tier deploy lock ----------------------------------------------------
+# The fleet auto-deploy watcher (scripts/fleet-auto-deploy.sh) fires this same
+# entrypoint every ~2 minutes. Without a lock, a manual `scripts/deploy.sh dev`
+# and the watcher's `deploy.sh dev` can run the SSH deploy CONCURRENTLY against
+# the SAME source-mounted preview checkout (/app/previews/<slug>) — the rsync
+# + git reset on the droplet would interleave and corrupt the shared checkout.
+# Take a non-blocking flock keyed PER TIER (so a dev deploy never blocks a demo
+# deploy) around the remote deploy, exactly like deploy-production-local.sh's
+# /tmp/sitelayer-production-deploy.lock. Override the path with DEPLOY_LOCK_FILE.
+#
+# NOTE: this is the LOCAL (fleet-side) lock. The watcher's own outer flock
+# (/tmp/sitelayer-autodeploy.lock) serializes its whole poll, but a HAND-run
+# deploy.sh does not hold that lock — so this per-tier lock is what actually
+# serializes a manual deploy against a watcher deploy of the same tier.
+DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/sitelayer-${TIER}-deploy.lock}"
+exec 8>"$DEPLOY_LOCK_FILE"
+if ! flock -n 8; then
+  echo "ERROR: another $TIER deploy is already running (lock: $DEPLOY_LOCK_FILE)."
+  echo "       Wait for it to finish, or pause the auto-deploy watcher"
+  echo "       (touch ~/.cache/sitelayer-autodeploy/PAUSED) before hand-deploying."
+  exit 1
+fi
+
 ssh -o BatchMode=yes "$PREVIEW_USER@$PREVIEW_BOX" \
   "DEPLOY_SHA='$GIT_SHA' SLUG='$SLUG' HOST='$HOST' TIER='$TIER' SHARED='$SHARED' bash -s" <<'REMOTE'
 set -euo pipefail
