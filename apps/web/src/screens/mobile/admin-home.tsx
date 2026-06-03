@@ -303,6 +303,16 @@ function AdminHomeMobile({ bootstrap }: AdminHomeProps) {
                 meta={`${activeProjects.length} ${pl(activeProjects.length, 'project', 'projects')}`}
               />
             </MKpiRow>
+            <MSectionH>System</MSectionH>
+            <MListInset>
+              <MListRow
+                leading={<MI.Settings size={18} />}
+                headline="Background jobs"
+                supporting="Worker periodic-job + queue health"
+                chev
+                onTap={() => navigate('/admin/jobs')}
+              />
+            </MListInset>
           </>
         )}
       </MBody>

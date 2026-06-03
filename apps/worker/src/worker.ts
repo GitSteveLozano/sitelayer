@@ -29,6 +29,7 @@ import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
 import { createLaneHealthKeeper } from './runners/lane-health-keeper.js'
+import { recordJobRun } from './runners/job-runs.js'
 import { runIfLaneActive } from './dispatch-lanes.js'
 import { createAuditEscrowTickRunner } from './runners/audit-escrow-tick.js'
 import { startMeshTraceForwarder } from './runners/mesh-trace-forward.js'
@@ -760,6 +761,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
 // fully-quiet cluster.
 // ---------------------------------------------------------------------------
 async function heartbeat(): Promise<{ idle: boolean }> {
+  const heartbeatStartedAt = Date.now()
   const companies = await listActiveCompanies(pool, activeCompanySlugOverride)
   if (companies.length === 0) {
     logger.info({ company_slug: activeCompanySlugOverride ?? '(all)' }, '[worker] waiting for company slug')
@@ -770,6 +772,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   // Company-agnostic notification drain — once per heartbeat. The worker pulls
   // notifications across ALL tenants in a single batch, so this must NOT run
   // per company.
+  const notificationDrainStartedAt = Date.now()
+  let notificationDrainErrored = false
   const notifications = await runIfLaneActive(
     pool,
     logger,
@@ -781,9 +785,27 @@ async function heartbeat(): Promise<{ idle: boolean }> {
           scope: 'notification_drain',
           entity_type: 'notification',
         })
+        notificationDrainErrored = true
         return { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 }
       }),
     { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 },
+  )
+  // Best-effort run-ledger record (GLOBAL table, no RLS GUC). Never throws.
+  await recordJobRun(
+    pool,
+    'notification_drain',
+    {
+      status: notificationDrainErrored ? 'error' : 'ok',
+      durationMs: Date.now() - notificationDrainStartedAt,
+      metadata: {
+        processed: notifications.processed,
+        sent: notifications.sent,
+        failed: notifications.failed,
+        deferred: notifications.deferred,
+        hydrated: notifications.hydrated,
+      },
+    },
+    logger,
   )
 
   // Drain every active company. Sequential to keep pool pressure bounded.
@@ -795,20 +817,62 @@ async function heartbeat(): Promise<{ idle: boolean }> {
 
   // Daily prune of long-applied mutation_outbox / sync_events rows (process-
   // local cadence gate, company-agnostic). Once per heartbeat.
+  const queuePruneStartedAt = Date.now()
+  let queuePruneErrored = false
   const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
     logger.error({ err: error }, '[worker] queue_prune failed')
     captureWithEntityContext(error, { scope: 'queue_prune' })
+    queuePruneErrored = true
     return { ran: false, mutation_outbox: 0, sync_events: 0 }
   })
+  // Best-effort run-ledger record. The cadence gate makes a no-run the common
+  // case — record it as 'skipped' (gate didn't fire), 'error' on failure,
+  // else 'ok'. GLOBAL table, no RLS GUC. Never throws.
+  await recordJobRun(
+    pool,
+    'queue_prune',
+    {
+      status: queuePruneErrored ? 'error' : queuePruneSummary.ran ? 'ok' : 'skipped',
+      durationMs: Date.now() - queuePruneStartedAt,
+      metadata: {
+        ran: queuePruneSummary.ran,
+        mutation_outbox: queuePruneSummary.mutation_outbox,
+        sync_events: queuePruneSummary.sync_events,
+      },
+    },
+    logger,
+  )
 
   // Lane health keeper: every heartbeat (gated by its own 30s interval
   // internally) evaluates QBO circuit + outbox backlog and flips lane states.
   // Maintains the global dispatch_lanes table; company-agnostic, runs once.
+  const laneHealthStartedAt = Date.now()
+  let laneHealthErrored = false
   const laneHealthSummary = await laneHealthKeeper.maybeRun().catch((error) => {
     logger.error({ err: error }, '[worker] lane-health-keeper failed')
     captureWithEntityContext(error, { scope: 'lane_health_keeper' })
+    laneHealthErrored = true
     return { ran: false, qbo_state: 'error', outbox_pending: 0, sync_pending: 0, changes: [] }
   })
+  // Best-effort run-ledger record. The internal 30s gate makes a no-run common
+  // — 'skipped' when the gate didn't fire, 'error' on failure, else 'ok'.
+  // GLOBAL table, no RLS GUC. Never throws.
+  await recordJobRun(
+    pool,
+    'lane_health_keeper',
+    {
+      status: laneHealthErrored ? 'error' : laneHealthSummary.ran ? 'ok' : 'skipped',
+      durationMs: Date.now() - laneHealthStartedAt,
+      metadata: {
+        ran: laneHealthSummary.ran,
+        qbo_state: laneHealthSummary.qbo_state,
+        outbox_pending: laneHealthSummary.outbox_pending,
+        sync_pending: laneHealthSummary.sync_pending,
+        changes: laneHealthSummary.changes.length,
+      },
+    },
+    logger,
+  )
   if (laneHealthSummary.ran && laneHealthSummary.changes.length > 0) {
     logger.info(
       { changes: laneHealthSummary.changes, qbo_state: laneHealthSummary.qbo_state },
@@ -836,6 +900,20 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   pingHeartbeat()
 
   const idle = !anyCompanyBusy && notifications.processed === 0 && !queuePruneSummary.ran
+
+  // Best-effort run-ledger record for the heartbeat loop itself — recorded
+  // once at the end of each heartbeat. GLOBAL table, no RLS GUC. Never throws.
+  await recordJobRun(
+    pool,
+    'worker_heartbeat',
+    {
+      status: 'ok',
+      durationMs: Date.now() - heartbeatStartedAt,
+      metadata: { idle, companies: companies.length },
+    },
+    logger,
+  )
+
   return { idle }
 }
 

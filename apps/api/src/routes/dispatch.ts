@@ -73,6 +73,7 @@ import { handleWorkerRoutes } from './workers.js'
 import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleAdminRoutes } from './admin.js'
+import { handleAdminJobsRoutes } from './admin-jobs.js'
 import { handleCompanyRoleRoutes } from './company-roles.js'
 import { makeScenarioApplyRunner } from '../admin-scenarios.js'
 import { seedCompanyDefaults } from '../onboarding.js'
@@ -209,6 +210,20 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
 
   const routes: Array<() => Promise<boolean>> = [
+    // Read-only platform-admin job-fleet + queue-health (/api/admin/jobs) —
+    // powers the read-only /admin/jobs page. Gated IDENTICALLY to the other
+    // /api/admin/* routes (authorizePlatformAdmin on the raw identity). MUST be
+    // wired BEFORE handleAdminRoutes: that handler claims the whole /api/admin/*
+    // namespace and 404s unknown subpaths, so /api/admin/jobs must reach here
+    // first. Reads the GLOBAL public.job_runs + cross-tenant queue summaries
+    // with the plain pool (no app.company_id GUC).
+    () =>
+      handleAdminJobsRoutes(req, url, {
+        pool,
+        identity,
+        sendJson,
+      }),
+
     // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin
     // on the raw (pre-act-as) identity. Placed first; its namespace is distinct.
     () =>

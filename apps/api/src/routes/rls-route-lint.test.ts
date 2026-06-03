@@ -65,6 +65,14 @@ const RAW_QUERY_REVIEWED: Readonly<Record<string, string>> = {
   // impersonation_sessions across tenants BY DESIGN.
   'admin.ts': 'platform-admin cross-tenant surface (authorizePlatformAdmin)',
 
+  // Read-only platform-admin job-fleet + queue-health (/api/admin/jobs) — gated
+  // by authorizePlatformAdmin before any query. Reads the GLOBAL public.job_runs
+  // table (no company_id column, like dispatch_lanes) and INTENTIONALLY
+  // cross-tenant mutation_outbox/sync_events status summaries (platform-admin
+  // fleet view, aggregated across all companies BY DESIGN).
+  'admin-jobs.ts':
+    'platform-admin cross-tenant surface (authorizePlatformAdmin): global job_runs + cross-tenant queue summaries',
+
   // Tenant ROOT registry. companies has no company_id column; the
   // company_memberships lookup IS the pre-GUC resolution path (you cannot bind
   // app.company_id until you have resolved which company the request is for).

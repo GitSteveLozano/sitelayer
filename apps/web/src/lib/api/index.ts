@@ -443,6 +443,17 @@ export {
 } from './audit'
 
 export {
+  adminJobsQueryKeys,
+  fetchAdminJobs,
+  useAdminJobs,
+  type AdminJobRun,
+  type AdminJobStatus,
+  type AdminJobsQueues,
+  type AdminJobsResponse,
+  type AdminQueueHealth,
+} from './admin-jobs'
+
+export {
   dispatchLaneQueryKeys,
   fetchDispatchLanes,
   pauseDispatchLane,
