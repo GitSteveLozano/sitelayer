@@ -38,6 +38,28 @@ for remaining single-tenant assumptions after the worker went multi-company
    is the backstop. Never run a bare `pool.query` against a `company_id` table
    without one of: (a) the GUC bound, or (b) an explicit `company_id =` predicate.
 
+   **Why this is the REAL control (and FORCE RLS alone is not):** the
+   `company_isolation` policy is permissive —
+   `app_current_company_id() IS NULL OR company_id = app_current_company_id()`.
+   When the GUC is unbound that **IS-NULL escape** makes the policy `TRUE` for
+   every row, so a bare query **sees ALL tenants even with RLS ENABLED + FORCED.**
+   FORCE only stops the table owner from bypassing RLS; it does not make an
+   unbound query safe. Route-level GUC binding (or the explicit `company_id`
+   predicate) is what actually isolates tenants. See `docs/SECURITY_RLS.md`.
+
+   **Enforced statically across the WHOLE route directory** by
+   `apps/api/src/routes/rls-route-lint.test.ts` (unit stage, no DB): it scans
+   every `apps/api/src/routes/*.ts`, fails on any raw `pool.query` that binds
+   neither the GUC nor a `company_id` predicate, and ratchets new files (a
+   brand-new handler with a raw, unscoped query fails) so cross-tenant exposure
+   cannot grow silently as the route count climbs. The narrower 20-route
+   `rls-phase3-audit.test.ts` only inspects hand-picked high-impact routes; the
+   lint covers the long tail. The only exempt files are on the lint's documented
+   `RAW_QUERY_REVIEWED` allowlist: the tenant-registry surface (companies has no
+   `company_id`), the platform-admin cross-tenant surface, documented
+   append-only/debug reads, and global non-company tables (e.g. `clerk_users`,
+   `dispatch_lanes`).
+
 2. **Never hardcode a company.** No `'la-operations'`, no default-company UUID, no
    `ACTIVE_COMPANY_SLUG`/`ACTIVE_USER_ID` constant in a runtime decision. Resolve
    the company from the request (`x-sitelayer-company-id` / `x-sitelayer-company-slug`
@@ -79,6 +101,20 @@ for remaining single-tenant assumptions after the worker went multi-company
    intentionally reads across tenants (`/api/admin/*`) MUST go through
    `authorizePlatformAdmin` first. Regular entity routes resolve exactly one
    company and never widen.
+
+   **The per-tenant data export is the inverse — strictly single-company.**
+   `GET /api/company/export` (`apps/api/src/routes/company-export.ts`,
+   admin-only) is portability/offboarding table-stakes for a paying pilot and a
+   precursor to per-tenant restore: it bundles the **requesting** company's rows
+   as JSON (default) or CSV (`?format=csv`). It is belt-and-suspenders scoped —
+   the whole read runs inside `withCompanyClient(companyId, …)` (GUC bound) AND
+   every per-table `select` carries an explicit `where company_id = $1`. The
+   exported table set is discovered from the live catalog (every `public` table
+   with a `company_id` column) MINUS `EXPORT_TABLE_DENYLIST` (append-only audit/
+   queue ledgers, integration secrets, bootstrap/provisioning internals), so the
+   export tracks schema growth without ever shipping operational/secret rows.
+   This is NOT a cross-tenant route and does NOT use `authorizePlatformAdmin` —
+   it never widens past the caller's own company.
 
 8. **Schema changes are expand → backfill → contract** and forward-only. Add a new
    numbered migration in `docker/postgres/init/` (never edit an applied one — the

@@ -1,5 +1,51 @@
 # Row-Level Security (RLS)
 
+## ⚠️ FORCE RLS does NOT protect an unbound bare query (read this first)
+
+The single most important thing to understand about this codebase's tenancy
+model: **`FORCE ROW LEVEL SECURITY` is NOT, by itself, the cross-tenant
+control.** The `company_isolation` policy is deliberately permissive:
+
+```sql
+USING (app_current_company_id() IS NULL OR company_id = app_current_company_id())
+```
+
+That `app_current_company_id() IS NULL OR ...` branch — the **IS-NULL escape** —
+means that when the `app.company_id` GUC is **unbound**, the policy evaluates to
+`TRUE` for every row and the query **sees ALL tenants**. FORCE only changes WHO
+the policy applies to (it stops the table owner from bypassing RLS); it does
+**not** make an unbound query safe. A bare `pool.query('select * from projects')`
+with no GUC bound and no explicit `company_id` predicate is a full cross-tenant
+read even with RLS ENABLED + FORCED.
+
+**The real control is route-level GUC binding.** Every company-scoped read/write
+must do ONE of:
+
+1. **Bind the GUC** — go through `withCompanyClient(companyId, …)` (reads) or
+   `withMutationTx(companyId, …)` (writes). Both run `SELECT set_config('app.company_id', $companyId, true)` (SET LOCAL) so the policy's
+   equality branch is the one that fires and rows are scoped to the company.
+2. **Carry an explicit `where company_id = $1` predicate** (app-layer scoping
+   per `docs/MULTI_TENANCY.md` RULE 1). FORCE RLS is then the backstop, not the
+   primary control.
+
+Never run a bare `pool.query` against a `company_id` table with neither. The
+permissive clause exists so legacy/debug tooling (`psql`, replay scripts) keeps
+working with no GUC; that same clause is exactly why an unbound app query leaks.
+
+This is enforced statically by **two gates**:
+
+- **`apps/api/src/routes/rls-route-lint.test.ts`** (unit stage, no DB) scans
+  **every** `apps/api/src/routes/*.ts` and FAILS on any raw `pool.query(` (incl.
+  `pool.query<T>(`) that binds neither the GUC nor a `company_id` predicate,
+  unless the file is on its documented `RAW_QUERY_REVIEWED` allowlist
+  (registry / platform-admin / append-only-debug / global-table surface). It
+  ALSO ratchets new files: a brand-new handler with a raw, unscoped query fails
+  rather than silently widening cross-tenant exposure. This is broader than the
+  20-route `rls-phase3-audit.test.ts` below, which only inspects hand-picked
+  high-impact routes.
+- **`apps/api/src/routes/rls-phase3-audit.test.ts`** (the 20-route static audit
+  - the live forced-coverage audit) — see below.
+
 ## Status
 
 **Phase 3 — company-scoped surface ENFORCED + gated (current).** RLS is
@@ -190,6 +236,21 @@ DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
 The pure pass/fail logic also has database-free unit coverage in
 `apps/api/src/routes/rls-force-audit.test.ts` (runs in the unit stage).
 
+### The whole-directory route lint (no DB, unit stage)
+
+`apps/api/src/routes/rls-route-lint.test.ts` complements the 20-route audit by
+scanning **every** handler in `apps/api/src/routes/`. Because the
+`company_isolation` policy keeps the IS-NULL escape (see the top of this doc), a
+raw `pool.query` whose GUC is unbound AND that lacks a `company_id` predicate is
+a cross-tenant leak — and the 20-route audit would never look at a brand-new
+96th route file. The lint fails on any such bare-unscoped query and ratchets new
+files: a new handler with a raw, unscoped query fails unless it is wired through
+`withCompanyClient` / `withMutationTx`, carries an explicit `where company_id =
+$1`, or is added to the file's documented `RAW_QUERY_REVIEWED` allowlist (only
+the tenant-registry, platform-admin, documented append-only-debug, or global
+non-company-table surface qualifies). It is pure static analysis, so it runs in
+the unit stage with no Postgres.
+
 ## When you add a new company-scoped table
 
 Add the policy AND enable+force RLS in the same migration that creates the
@@ -239,8 +300,12 @@ reasoning.
 ## Open work
 
 - Drop the `app_current_company_id() IS NULL OR ...` permissive clause
-  once every read goes through a scoped client; tighten the policy to a
-  strict equality check.
+  (the IS-NULL escape) once every read goes through a scoped client; tighten the
+  policy to a strict equality check. Until then, FORCE RLS is NOT the
+  cross-tenant control on its own — route-level GUC binding (or an explicit
+  `company_id` predicate) is, and `rls-route-lint.test.ts` is what enforces it
+  across the whole route directory. Removing the IS-NULL branch is the durable
+  fix; the lint is the interim ratchet.
 - Provision a non-superuser app role in the integration gate so the
   runtime probe (`CONSTRAINED_DB_URL`) runs by default (currently
   `sitelayer` is BYPASSRLS in the docker-compose integration check, so the
