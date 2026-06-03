@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   calculateLinealLengthScaled,
   calculatePolygonAreaScaled,
@@ -63,6 +63,9 @@ import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-
 import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
 
+import { useTakeoffSession } from '@/machines/takeoff-session'
+import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
+
 // Desktop command-center takeoff body — extracted verbatim from est-canvas.tsx
 // (behavior preserved). Mounted by TakeoffCanvas at/above the 1024px gate.
 
@@ -75,7 +78,41 @@ import { AssemblyAttachPanel } from './assembly-panel'
 export function EstCanvasDesktopBody() {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const projectId = params.projectId ?? ''
+  // Desktop resolves the company from the request layer (no companySlug prop);
+  // the machine context only uses it for identity, so an empty slug is fine.
+  const companySlug = ''
+
+  // --- Session machine (CORE canvas state owner) ----------------------------
+  // The `takeoff-session` statechart is the single source of truth for the
+  // CORE command-center slices on desktop: `tool` + in-progress draft `points`
+  // (+ redo), the two-point `calibration` slice (scale points + typed length),
+  // and the committed-measurement `selection` (single / marquee bulk / reassign
+  // / vertex-edit). Reads come off `session.context.draft` / `.calibration` /
+  // `.selection`; writes dispatch machine events. Everything the machine does
+  // NOT model stays local (hybrid): blueprint/page selection, upload, the AI
+  // setup panels, copy/array/mirror panel, conditions form, sheet callouts,
+  // pitch/deduct/snap toggles, toasts, and the `useCanvasViewport` pan/zoom
+  // capability. The dep actors stay unwired — COMMIT / calibrate / edit / etc.
+  // persist via the EXISTING TanStack-Query mutation hooks, then dispatch the
+  // matching machine event to reset the UI slice (so behavior is identical and
+  // the async actor wiring is a clean follow-up rather than a risky rewrite).
+  //
+  // `?seed=<name>` (dev/test only) boots the machine straight into a named
+  // state via resolveTakeoffSeed — a tester lands mid-polygon-draw / scale /
+  // select with no clicks. Never honored in production.
+  const seedName = searchParams.get('seed')
+  const initialSeed = useMemo(() => {
+    if (!seedName || import.meta.env.MODE === 'production') return null
+    if (!(TAKEOFF_SEED_NAMES as readonly string[]).includes(seedName)) return null
+    return resolveTakeoffSeed(seedName, { projectId, companySlug, blueprintId: null, pageId: null, draftId: null })
+    // Captured ONCE at mount (empty deps); the live blueprint/page/draft picker
+    // re-syncs ids below. (react-hooks/exhaustive-deps is not enabled here.)
+  }, [])
+
+  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed })
+  const { context: sctx, dispatch: sdispatch } = session
 
   // --- Drafts (reuse mobile data layer; default to active/first) -----------
   const drafts = useTakeoffDrafts(projectId)
@@ -252,14 +289,53 @@ export function EstCanvasDesktopBody() {
   const createCondition = useCreateCondition()
 
   // --- Entry state (identical semantics to mobile draw mode) ----------------
-  const [tool, setTool] = useState<Tool>('polygon')
+  // `tool` is the machine draft tool, narrowed to the desktop `Tool` union
+  // (the machine adds `volume`, which the desktop surface never selects).
+  const tool = sctx.draft.tool as Tool
+  // SET_TOOL resets the in-progress draft points in the machine (the old
+  // setDraftPoints([]) is now implicit). Keep the draw surface live so the
+  // next tap places a point.
+  const setTool = (next: Tool) => {
+    sdispatch({ type: 'SET_TOOL', tool: next })
+    if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
+  }
   const [serviceItemCode, setServiceItemCode] = useState('')
   // Which division performs this scope item (Cavy, WhatsApp:227-229). An item
   // can be curated to several divisions (e.g. EPS under EIFS, or under a
   // different division on a non-EIFS job); the picker below lets the estimator
   // choose. Defaults to the item's first curated division.
   const [divisionCode, setDivisionCode] = useState('')
-  const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
+  // The in-progress draft vertices live in the machine. `setDraftPoints`
+  // keeps the useState setter shape (value | updater) the call sites use:
+  // an EMPTY/whole-replacement set re-enters drawing (CANCEL drops points →
+  // START_DRAW), a single append is a PLACE_POINT, and a one-vertex pop is
+  // an UNDO_POINT, so the machine's draft slice stays authoritative.
+  const draftPoints = sctx.draft.points
+  const setDraftPoints = (next: TakeoffPoint[] | ((prev: TakeoffPoint[]) => TakeoffPoint[])) => {
+    const value = typeof next === 'function' ? next(draftPoints) : next
+    if (value.length === 0) {
+      // Clear the in-progress draft while staying on the draw surface.
+      sdispatch({ type: 'CANCEL' })
+      sdispatch({ type: 'START_DRAW' })
+      return
+    }
+    if (value.length === draftPoints.length + 1) {
+      // A single appended point (the tap path) → PLACE_POINT.
+      if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
+      sdispatch({ type: 'PLACE_POINT', point: value[value.length - 1]! })
+      return
+    }
+    if (value.length === draftPoints.length - 1) {
+      // A single popped point (undo path) → UNDO_POINT.
+      sdispatch({ type: 'UNDO_POINT' })
+      return
+    }
+    // A whole-set replacement (RECT box → 4 corners, ARC tessellation). Reset
+    // then place each vertex so the machine ends with exactly `value`.
+    sdispatch({ type: 'CANCEL' })
+    sdispatch({ type: 'START_DRAW' })
+    for (const p of value) sdispatch({ type: 'PLACE_POINT', point: p })
+  }
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -274,39 +350,87 @@ export function EstCanvasDesktopBody() {
   const { containerRef, zoom, pan, handMode, setHandMode, spaceHeld, panning, zoomBy, resetView } = viewport
 
   // --- Canvas interaction states (Desktop v2 mockup ports) -----------------
-  const [mode, setMode] = useState<CanvasMode>('draw')
+  // `mode` ('draw' | 'scale' | 'select' | 'ai-count' | 'ai-takeoff') has no
+  // clean 1:1 with the machine's exclusive modes — ai-count/ai-takeoff are
+  // overlay-panel launchers that don't drive draft/calibration/selection — so
+  // it stays a thin local notion. A sync effect (below) parks the machine in
+  // the matching mode: draw→drawing, scale→calibrating, select→selecting, the
+  // AI overlays→idle. Lazy-init from the boot snapshot so a `?seed=` lands on
+  // the right tab WITHOUT the sync effect cancelling the seeded slice on mount.
+  const [mode, setMode] = useState<CanvasMode>(() =>
+    session.matches('calibrating') ? 'scale' : session.matches('selecting') ? 'select' : 'draw',
+  )
   // Scale-calibration overlay (DCanvasScale): the real-world length the user
-  // types for the reference line they drew. Provisional until applied.
-  const [scaleLength, setScaleLength] = useState('24')
-  // The two board-space points of the reference line clicked in SCALE mode.
-  const [scalePoints, setScalePoints] = useState<TakeoffPoint[]>([])
+  // types for the reference line they drew. Provisional until applied. Lives
+  // in the machine's calibration slice (lengthText); the SET_SCALE_LENGTH
+  // event only lands in `calibrating`, so the typed value is mirrored locally
+  // for editing and pushed to the machine while in scale mode.
+  const scaleLength = sctx.calibration.lengthText || '24'
+  const setScaleLength = (next: string) => sdispatch({ type: 'SET_SCALE_LENGTH', lengthText: next })
+  // The two board-space reference points live in the machine's calibration
+  // slice. `setScalePoints` keeps the useState setter shape: a single appended
+  // point (or a third click that restarts the pair) is a PLACE_SCALE_POINT;
+  // an empty set restarts calibration.
+  const scalePoints = sctx.calibration.points
+  const setScalePoints = (next: TakeoffPoint[] | ((prev: TakeoffPoint[]) => TakeoffPoint[])) => {
+    const value = typeof next === 'function' ? next(scalePoints) : next
+    if (value.length === 0) {
+      sdispatch({ type: 'START_CALIBRATION' })
+      return
+    }
+    // The call site only ever appends/restarts a single point at a time
+    // (prev.length >= 2 ? [p] : [...prev, p]); PLACE_SCALE_POINT models both
+    // (two-max, a third click restarts the line).
+    if (!session.matches('calibrating')) sdispatch({ type: 'START_CALIBRATION' })
+    sdispatch({ type: 'PLACE_SCALE_POINT', point: value[value.length - 1]! })
+  }
   const [scaleError, setScaleError] = useState<string | null>(null)
   const calibratePage = useCalibratePage()
   // Item command-palette (DCanvasItemPalette): "/"-triggered scope-item picker.
   const [itemPaletteOpen, setItemPaletteOpen] = useState(false)
   const [itemQuery, setItemQuery] = useState('')
-  // When set, the next item picked in the palette REASSIGNS these committed
-  // measurements instead of setting the draft item (REASSIGN actions).
-  const [reassignIds, setReassignIds] = useState<string[] | null>(null)
+  // Selection slices all live in the machine's `selection` slice. When set,
+  // the next item picked in the palette REASSIGNS these committed measurements
+  // instead of setting the draft item (REASSIGN actions). The machine's
+  // START_REASSIGN sets `reassignIds` (and is scoped to `selecting`, preserving
+  // selectedId/bulkIds); clearing reassign-only sends START_REASSIGN with [] so
+  // the marquee selection survives a palette-Escape (the old behavior). When
+  // not in `selecting` (e.g. the draw-mode "/" affordance) there is nothing to
+  // clear and the event is a no-op. A `[]` reassignIds reads as "not pending"
+  // (applyItemPick guards on `length > 0`).
+  const reassignIds = sctx.selection.reassignIds
+  const setReassignIds = (next: string[] | null) => {
+    sdispatch({ type: 'START_REASSIGN', ids: next ?? [] })
+  }
   // Edit popover (DCanvasEditMeasure): the single committed measurement that
-  // is currently selected for reassign / duplicate / delete.
-  const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
+  // is currently selected for reassign / duplicate / delete (machine
+  // selection.selectedId — mirrored by BULK_SELECT when the set lands at size
+  // 1, so the desktop never single-selects through a standalone setter).
+  const selectedMeasurementId = sctx.selection.selectedId
   // Bulk-select toolbar (DCanvasBulkSelect): the set of measurements picked
-  // while in marquee/select mode.
-  const [bulkSelected, setBulkSelected] = useState<Set<string>>(() => new Set())
+  // while in marquee/select mode. The machine holds `bulkIds` as an array; the
+  // desktop reads it as a Set and `setBulkSelected` mirrors the useState setter
+  // shape (value | updater) by funneling through BULK_SELECT.
+  const bulkSelected = useMemo(() => new Set(sctx.selection.bulkIds), [sctx.selection.bulkIds])
+  const setBulkSelected = (next: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    const value = typeof next === 'function' ? next(new Set(sctx.selection.bulkIds)) : next
+    sdispatch({ type: 'BULK_SELECT', ids: Array.from(value) })
+  }
   // Interactive vertex-drag edit (dsg__48 "EDIT MEASUREMENT"). When EDIT GEOM
   // is engaged on a single selected measurement, its committed vertices become
   // draggable handles. `editGeomId` is the measurement under edit; `editPoints`
   // is the working (unsaved) point set; `editDragIdx` is the vertex currently
-  // being dragged. Dropping a vertex PATCHes the new geometry (server recomputes
-  // the quantity) — no redraw-from-scratch round trip.
-  const [editGeomId, setEditGeomId] = useState<string | null>(null)
-  const [editPoints, setEditPoints] = useState<TakeoffPoint[]>([])
+  // being dragged. Both live in the machine's selection slice; dropping a
+  // vertex PATCHes the new geometry (server recomputes the quantity) — no
+  // redraw-from-scratch round trip.
+  const editGeomId = sctx.selection.editGeomId
+  const editPoints = sctx.selection.editPoints ?? []
   const editDragIdxRef = useRef<number | null>(null)
-  // Redo stack for draft points (PlanSwift-style undo/redo): UNDO pushes the
-  // popped vertex here, REDO pops it back. Any new vertex / tool change / save
-  // clears it (you can't redo into a diverged draft).
-  const [redoStack, setRedoStack] = useState<TakeoffPoint[]>([])
+  // Redo stack for draft points (PlanSwift-style undo/redo) lives in the
+  // machine's draft.redo slice. UNDO pushes the popped vertex there (handled by
+  // the draft setters / UNDO_POINT), REDO pops it back. Any new vertex / tool
+  // change / save clears it (you can't redo into a diverged draft).
+  const redoStack = sctx.draft.redo
   // Vertex + ortho snapping toggle. When on, a tapped point snaps to a nearby
   // existing vertex or locks to horizontal/vertical from the previous point —
   // the precision PlanSwift drawing-surface behaviour. Persisted per-operator.
@@ -364,6 +488,38 @@ export function EstCanvasDesktopBody() {
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
   }, [serviceItemCode, items])
+
+  // Park the machine in the mode that matches the canvas surface: 'draw' →
+  // `drawing` (so PLACE_POINT lands), 'scale' → `calibrating` (so the two-point
+  // calibration events land), 'select' → `selecting` (so the edit/copy
+  // sub-states are reachable). The AI overlays ('ai-count' / 'ai-takeoff')
+  // don't drive any machine slice, so they park the machine in `idle`.
+  //
+  // The START_* entries are all only valid from `idle`, so a cross-mode flip
+  // (e.g. select → draw) must CANCEL back to idle FIRST. xstate processes both
+  // events synchronously in this tick, so CANCEL → idle → START_DRAW → drawing
+  // lands in one pass. Runs only on a `mode` flip; `session`/`sdispatch` are
+  // stable for the machine's lifetime. (react-hooks/exhaustive-deps is not
+  // enabled here.)
+  const target =
+    mode === 'draw' ? 'drawing' : mode === 'scale' ? 'calibrating' : mode === 'select' ? 'selecting' : 'idle'
+  useEffect(() => {
+    if (session.matches(target)) return
+    if (!session.matches('idle')) sdispatch({ type: 'CANCEL' })
+    if (target === 'drawing') sdispatch({ type: 'START_DRAW' })
+    else if (target === 'calibrating') sdispatch({ type: 'START_CALIBRATION' })
+    else if (target === 'selecting') sdispatch({ type: 'START_SELECT' })
+    // target === 'idle' → the CANCEL above already landed us there.
+  }, [mode])
+
+  // Mirror the scope item into the machine draft so its commit guard + future
+  // wired actors see the same scope the UI persists with. (react-hooks/
+  // exhaustive-deps is not enabled here — mirror on scope change only.)
+  useEffect(() => {
+    if (serviceItemCode && sctx.draft.serviceItemCode !== serviceItemCode) {
+      sdispatch({ type: 'SET_SERVICE_ITEM', serviceItemCode })
+    }
+  }, [serviceItemCode])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
   // Keep the chosen division valid for the selected item — reset to its first
@@ -425,8 +581,8 @@ export function EstCanvasDesktopBody() {
     // the calibration overlay drive instead. Only draw mode appends points.
     if (mode !== 'draw') {
       if (mode === 'select') {
+        // BULK_SELECT([]) clears bulkIds AND selectedId in one event.
         setBulkSelected(new Set())
-        setSelectedMeasurementId(null)
       } else if (mode === 'scale') {
         // SCALE mode: click two points of a known dimension to define the
         // reference line. A third click restarts the pair.
@@ -447,7 +603,7 @@ export function EstCanvasDesktopBody() {
     const local = screenToBoardPoint(svg, e.clientX, e.clientY)
     if (!local) return
     const snapped = snapPoint({ x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) })
-    setRedoStack([])
+    // PLACE_POINT (via setDraftPoints' append path) clears draft.redo itself.
     setDraftPoints((prev) => [...prev, { x: round2(snapped.x), y: round2(snapped.y) }])
   }
 
@@ -485,6 +641,11 @@ export function EstCanvasDesktopBody() {
         x2: b.x,
         y2: b.y,
       })
+      // APPLY_CALIBRATION-equivalent UI reset through the machine: the page
+      // calibration already persisted above via the existing calibratePage
+      // hook (hybrid dep wiring — the machine's calibratePage actor stays
+      // unwired). setScalePoints([]) re-enters calibration with an empty point
+      // set; switching to draw mode then parks the machine in `drawing`.
       setScalePoints([])
       setMode('draw')
     } catch (err) {
@@ -548,8 +709,8 @@ export function EstCanvasDesktopBody() {
         e.currentTarget.setPointerCapture?.(e.pointerId)
         boxStartRef.current = p
         setBoxRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+        // CANCEL→START_DRAW (via setDraftPoints' empty path) also clears redo.
         setDraftPoints([])
-        setRedoStack([])
       }
       return
     }
@@ -578,7 +739,7 @@ export function EstCanvasDesktopBody() {
     const dragIdx = editDragIdxRef.current
     if (dragIdx !== null) {
       const p = clientToBoard(e.clientX, e.clientY)
-      if (p) setEditPoints((prev) => prev.map((pt, i) => (i === dragIdx ? { x: p.x, y: p.y } : pt)))
+      if (p) sdispatch({ type: 'DRAG_VERTEX', index: dragIdx, point: { x: p.x, y: p.y } })
       return
     }
     const boxStart = boxStartRef.current
@@ -624,11 +785,11 @@ export function EstCanvasDesktopBody() {
               inside.add(m.id)
             }
           }
+          // BULK_SELECT mirrors selectedId to the lone id when size === 1
+          // (else null) — the same rule the old explicit set encoded.
           setBulkSelected(inside)
-          setSelectedMeasurementId(inside.size === 1 ? (Array.from(inside)[0] ?? null) : null)
         } else {
           setBulkSelected(new Set())
-          setSelectedMeasurementId(null)
         }
       }
       return
@@ -700,8 +861,10 @@ export function EstCanvasDesktopBody() {
         // is picked. NULL keeps the legacy shape-first behavior unchanged.
         condition_id: activeConditionId,
       })
+      // COMMIT-equivalent UI reset through the machine: persistence already
+      // happened above via the existing create hook (hybrid dep wiring). The
+      // empty setDraftPoints path (CANCEL→START_DRAW) also clears draft.redo.
       setDraftPoints([])
-      setRedoStack([])
       setSavedToast(
         'queued' in res && res.queued
           ? 'Saved offline — will sync when you reconnect.'
@@ -850,19 +1013,18 @@ export function EstCanvasDesktopBody() {
     return raw
   }
 
-  // Undo/redo over draft vertices. UNDO pops the last point and stashes it so
-  // REDO can replay it; REDO pulls the most-recent stashed point back on.
+  // Undo/redo over draft vertices is now owned by the machine: UNDO_POINT pops
+  // the last point and stashes it in draft.redo, REDO_POINT replays it. Both
+  // are only accepted in `drawing.placing`, so enter the draw surface first if
+  // a seed/idle left us elsewhere.
   const undoPoint = () => {
-    const last = draftPoints[draftPoints.length - 1]
-    if (!last) return
-    setRedoStack((r) => [...r, last])
-    setDraftPoints((p) => p.slice(0, -1))
+    if (draftPoints.length === 0) return
+    sdispatch({ type: 'UNDO_POINT' })
   }
   const redoPoint = () => {
-    const next = redoStack[redoStack.length - 1]
-    if (!next) return
-    setRedoStack((r) => r.slice(0, -1))
-    setDraftPoints((p) => [...p, next])
+    if (redoStack.length === 0) return
+    if (session.matches('idle')) sdispatch({ type: 'START_DRAW' })
+    sdispatch({ type: 'REDO_POINT' })
   }
   const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
@@ -965,13 +1127,12 @@ export function EstCanvasDesktopBody() {
   // mirrors the single case so the polygon highlight + edit bar share state.
   const onMeasurementClick = (id: string) => {
     if (mode !== 'select') return
-    setBulkSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      setSelectedMeasurementId(next.size === 1 ? (Array.from(next)[0] ?? null) : null)
-      return next
-    })
+    // Toggle membership; BULK_SELECT mirrors selectedId to the lone id when the
+    // set lands at size 1 (else null), so the single-edit bar shares state.
+    const next = new Set(bulkSelected)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setBulkSelected(next)
   }
 
   // In SELECT mode a pointer-down that lands on a measurement must NOT start a
@@ -982,10 +1143,9 @@ export function EstCanvasDesktopBody() {
   }
 
   const clearSelection = () => {
-    setSelectedMeasurementId(null)
-    setBulkSelected(new Set())
-    setEditGeomId(null)
-    setEditPoints([])
+    // CLEAR_SELECTION resets the whole machine selection slice (selectedId +
+    // bulkIds + reassignIds + editGeomId + editPoints) in one go.
+    sdispatch({ type: 'CLEAR_SELECTION' })
     editDragIdxRef.current = null
     setCopyOpen(false)
   }
@@ -1104,13 +1264,20 @@ export function EstCanvasDesktopBody() {
     const geo = selectedMeasurement.geometry as MeasurementGeometry
     const pts = geo.points
     if (!pts || pts.length === 0) return
-    setEditGeomId(selectedMeasurement.id)
-    setEditPoints(pts.map((p) => ({ x: p.x, y: p.y })))
+    // START_EDIT_GEOM seeds the working edit point set; while in `selecting`
+    // the scoped handler also drives the editingVertex sub-state.
+    sdispatch({
+      type: 'START_EDIT_GEOM',
+      measurementId: selectedMeasurement.id,
+      points: pts.map((p) => ({ x: p.x, y: p.y })),
+    })
   }
 
   const cancelEditGeom = () => {
-    setEditGeomId(null)
-    setEditPoints([])
+    // APPLY_EDIT clears the working edit slice (editGeomId/editPoints). The
+    // actual persist is the component's job (hybrid), so cancel and apply both
+    // reduce to "drop the working edit set" at the machine level.
+    sdispatch({ type: 'APPLY_EDIT' })
     editDragIdxRef.current = null
   }
 
@@ -1149,7 +1316,7 @@ export function EstCanvasDesktopBody() {
         if (!m) continue
         patchMeasurement.mutate({ id, service_item_code: code, expected_version: m.version })
       }
-      setReassignIds(null)
+      // clearSelection resets the whole selection slice, reassignIds included.
       clearSelection()
     } else {
       setServiceItemCode(code)
@@ -1803,15 +1970,15 @@ export function EstCanvasDesktopBody() {
                     return
                   if (isDraw) {
                     setMode('draw')
+                    // SET_TOOL resets the in-progress draft (points + redo).
                     setTool(value)
                   } else {
                     setMode(t.mode)
+                    // Leaving the draw surface: drop any in-progress draft.
+                    setDraftPoints([])
                   }
-                  setDraftPoints([])
-                  setRedoStack([])
-                  setSelectedMeasurementId(null)
-                  setBulkSelected(new Set())
-                  cancelEditGeom()
+                  // Clear the whole machine selection slice + the copy panel.
+                  clearSelection()
                 }}
                 style={{
                   width: 56,
@@ -2228,8 +2395,8 @@ export function EstCanvasDesktopBody() {
             <button
               type="button"
               onClick={() => {
+                // CANCEL→START_DRAW (empty path) drops the draft points + redo.
                 setDraftPoints([])
-                setRedoStack([])
               }}
               disabled={draftPoints.length === 0}
               style={ghostChip(draftPoints.length === 0)}
