@@ -147,29 +147,40 @@ describe('createWorkRequestStaleRunner', () => {
       expect(headers?.['X-Mesh-Component']).toBe('sitelayer-worker')
       expect(headers?.['X-Mesh-Signature']).toMatch(/^sha256=[0-9a-f]+$/)
       expect(headers?.['X-Mesh-Timestamp']).toMatch(/^\d+$/)
-      const body = JSON.parse(String(firstInit?.body)) as {
-        source: string
-        event_type: string
-        subject: { type: string; id: string }
-        status: string
-        severity: string
-        metadata: { company_id: string; route: string | null }
+      // The wire-shape is now the @operator/projectkit ProjectEventEnvelope:
+      // the observation fields live in events[0] (event_type) + its payload.
+      type ObservationEnvelope = {
+        contract_version: string
+        project_key: string
+        events: Array<{
+          event_type: string
+          payload: {
+            source: string
+            subject: { type: string; id: string }
+            status: string
+            severity: string
+            metadata: { company_id: string; route: string | null }
+          }
+        }>
       }
-      expect(body.source).toBe('sitelayer')
-      expect(body.event_type).toBe('work_item_obstructed')
-      expect(body.subject).toEqual({ type: 'work_item', id: '00000000-0000-4000-8000-000000000001' })
-      expect(body.status).toBe('review_stale')
-      expect(body.severity).toBe('high')
-      expect(body.metadata.company_id).toBe('company-1')
-      expect(body.metadata.route).toBe('/projects/p-1/estimate-push/x')
-      const secondBody = JSON.parse(String((fetchImpl.mock.calls[1]?.[1] as RequestInit | undefined)?.body)) as {
-        status: string
-        severity: string
-        metadata: { route: string | null }
-      }
-      expect(secondBody.status).toBe('proposal_expired')
-      expect(secondBody.severity).toBe('normal')
-      expect(secondBody.metadata.route).toBeNull()
+      const envelope = JSON.parse(String(firstInit?.body)) as ObservationEnvelope
+      expect(envelope.contract_version).toBe('1.0.0')
+      expect(envelope.project_key).toBe('sitelayer')
+      const event = envelope.events[0]!
+      expect(event.event_type).toBe('work_item_obstructed')
+      expect(event.payload.source).toBe('sitelayer')
+      expect(event.payload.subject).toEqual({ type: 'work_item', id: '00000000-0000-4000-8000-000000000001' })
+      expect(event.payload.status).toBe('review_stale')
+      expect(event.payload.severity).toBe('high')
+      expect(event.payload.metadata.company_id).toBe('company-1')
+      expect(event.payload.metadata.route).toBe('/projects/p-1/estimate-push/x')
+      const secondEnvelope = JSON.parse(
+        String((fetchImpl.mock.calls[1]?.[1] as RequestInit | undefined)?.body),
+      ) as ObservationEnvelope
+      const secondEvent = secondEnvelope.events[0]!
+      expect(secondEvent.payload.status).toBe('proposal_expired')
+      expect(secondEvent.payload.severity).toBe('normal')
+      expect(secondEvent.payload.metadata.route).toBeNull()
     } finally {
       if (originalUrl === undefined) delete process.env.MESH_OBSERVATION_INGRESS_URL
       else process.env.MESH_OBSERVATION_INGRESS_URL = originalUrl

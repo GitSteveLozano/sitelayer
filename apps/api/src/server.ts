@@ -22,6 +22,7 @@ import { resolveBlueprintVisionMode } from './takeoff-capture-pipelines/blueprin
 import { isAiChatEnabled } from './mesh-dispatcher.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
+import { handleSignalRoutes } from './routes/signal.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
@@ -791,6 +792,19 @@ const server = http.createServer(async (req, res) => {
                 readRawBody: () => readRawBody(req),
               })
               if (publicHandled) return
+
+              // Same-origin @operator/projectkit ingest proxy (POST /api/signal).
+              // TELEMETRY only — the browser beacon posts a ProjectEventEnvelope
+              // here; this validates against the contract and forwards to the
+              // configured subscriber (SIGNAL_SINK_URL). Pre-auth: the public
+              // beacon carries no Bearer. Inert (204) when SIGNAL_SINK_URL unset.
+              const signalHandled = await handleSignalRoutes(req, url, {
+                res,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
+                getCorsOrigin: () => getCorsOrigin(req),
+              })
+              if (signalHandled) return
 
               // Public client-portal routes (sales loop + rentals catalog). No
               // Clerk auth — recipients hold an HMAC-signed share token. Handled
