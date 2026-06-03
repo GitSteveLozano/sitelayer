@@ -83,28 +83,13 @@ fi
 # web:bundle-budget runs inside verify-local's build stage; the redundant
 # post-build invocation below is kept harmless but the gate already covers it.
 #
-# Break-glass: FORCE_DEPLOY_UNCHECKED=1 (mapped to SKIP_VERIFY) skips the gate
-# entirely with a loud warning.
-if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ] || [ "${SKIP_VERIFY:-0}" = "1" ]; then
-  echo "############################################################"
-  echo "## WARNING: FORCE_DEPLOY_UNCHECKED=1 — local Quality gate SKIPPED."
-  echo "## Shipping UNVERIFIED SHA $FULL_SHA ($GIT_SHA) to prod."
-  echo "## Lint/typecheck/tests/integration may be red for this commit."
-  echo "############################################################"
-else
-  echo "==> Running local verification gate for $GIT_SHA (scripts/verify-local.sh — standard: static+build+unit+integration)..."
-  if ! bash scripts/verify-local.sh; then
-    echo "ERROR: local verification gate FAILED for $GIT_SHA."
-    echo "       Fix the failures and redeploy, or set FORCE_DEPLOY_UNCHECKED=1 to override."
-    exit 1
-  fi
-  echo "==> Local verification gate passed for $GIT_SHA."
-fi
-
-echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"
+# --- host build deps + prod build-time env (set BEFORE the gate) -------------
+# BUILD ONCE: the gate (verify-local stage_build) runs `npm run build`; by
+# exporting the prod VITE_*/SENTRY_* env here, the bundle the GATE compiles is
+# the prod bundle we ship — so we do NOT recompile after the gate (saves a full
+# monorepo build). stage_build sets no VITE_* of its own (verified), so these
+# exports are what it bakes.
 START=$(date +%s)
-
-# --- build on the fleet host (fast, incremental ~26s) -----------------------
 mkdir -p "$CACHE_DIR"
 HOST_DEPS_STAMP="$CACHE_DIR/host-deps.sha256"
 lock_now="$(sha256sum package-lock.json | awk '{print $1}')"
@@ -114,22 +99,41 @@ if [ ! -d node_modules ] || [ "${lock_now}" != "$(cat "$HOST_DEPS_STAMP" 2>/dev/
   printf '%s\n' "$lock_now" > "$HOST_DEPS_STAMP"
 fi
 
-echo "==> Building on the fleet host (incremental)..."
-VITE_API_URL="${VITE_API_URL:-}" \
-VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}" \
-VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}" \
-VITE_USER_ID="${VITE_USER_ID:-demo-user}" \
-VITE_APP_TIER="${VITE_APP_TIER:-prod}" \
-VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" \
-VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}" \
-VITE_SENTRY_RELEASE="$GIT_SHA" \
-VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}" \
-VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}" \
-VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
-SENTRY_RELEASE="$GIT_SHA" GIT_SHA="$GIT_SHA" APP_BUILD_SHA="$GIT_SHA" \
+export VITE_API_URL="${VITE_API_URL:-}"
+export VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}"
+export VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}"
+export VITE_USER_ID="${VITE_USER_ID:-demo-user}"
+export VITE_APP_TIER="${VITE_APP_TIER:-prod}"
+export VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}"
+export VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}"
+export VITE_SENTRY_RELEASE="$GIT_SHA"
+export VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}"
+export VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}"
+export VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}"
+export SENTRY_RELEASE="$GIT_SHA" GIT_SHA="$GIT_SHA" APP_BUILD_SHA="$GIT_SHA"
+
+# Break-glass: FORCE_DEPLOY_UNCHECKED=1 (mapped to SKIP_VERIFY) skips the gate.
+if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ] || [ "${SKIP_VERIFY:-0}" = "1" ]; then
+  echo "############################################################"
+  echo "## WARNING: FORCE_DEPLOY_UNCHECKED=1 — local Quality gate SKIPPED."
+  echo "## Shipping UNVERIFIED SHA $FULL_SHA ($GIT_SHA) to prod."
+  echo "## Lint/typecheck/tests/integration may be red for this commit."
+  echo "############################################################"
+  echo "==> Building on the fleet host (gate skipped, so compiling here)..."
   npm run build
-# Web bundle-budget guard (part of the local gate; runs here against the
-# freshly-built dist, before we package the image).
+else
+  echo "==> Running local verification gate for $GIT_SHA (scripts/verify-local.sh — standard); its build stage compiles the prod dist we ship..."
+  if ! bash scripts/verify-local.sh; then
+    echo "ERROR: local verification gate FAILED for $GIT_SHA."
+    echo "       Fix the failures and redeploy, or set FORCE_DEPLOY_UNCHECKED=1 to override."
+    exit 1
+  fi
+  echo "==> Gate passed; reusing the gate-built prod dist (build-once)."
+fi
+
+echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"
+
+# Web bundle-budget guard (the gate's build stage already runs it; cheap recheck).
 if [ "${FORCE_DEPLOY_UNCHECKED:-0}" != "1" ]; then
   npm run web:bundle-budget
 fi
@@ -138,13 +142,22 @@ find apps/web/dist -name '*.map' -type f -delete 2>/dev/null || true
 
 # --- package + push the THIN image (deps stage cached on the persistent builder) ---
 doctl registry login >/dev/null
+# Persistent docker-container builder: keeps the deps-layer cache + the npm
+# cache mount warm between deploys (the "~26s incremental" path). NEVER `rm` it.
+# --bootstrap so a freshly-created one is ready without a cold first build.
 docker buildx inspect sitelayer-builder >/dev/null 2>&1 \
-  || docker buildx create --name sitelayer-builder --driver docker-container >/dev/null
+  || docker buildx create --name sitelayer-builder --driver docker-container --bootstrap >/dev/null
 
+# Registry cache (:buildcache tag — protected from the GC prune above) is
+# cold-start insurance: it lets a fresh builder / a second fleet box restore the
+# prebuilt deps stage instead of re-running `npm ci`. mode=max caches the
+# intermediate `deps` stage. On the warm local builder it's a cheap no-op.
 docker buildx build \
   --builder sitelayer-builder \
   --target runtime \
   --build-arg GIT_SHA="$GIT_SHA" \
+  --cache-from type=registry,ref="${REGISTRY}:buildcache" \
+  --cache-to type=registry,ref="${REGISTRY}:buildcache",mode=max,image-manifest=true,oci-mediatypes=true \
   -t "$APP_IMAGE" \
   -t "${REGISTRY}:main" \
   --push \

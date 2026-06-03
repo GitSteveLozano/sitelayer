@@ -306,12 +306,18 @@ stage_integration() {
 
   echo "  -> starting isolated postgres ($container) on host port $VERIFY_PG_PORT"
   "$DOCKER" rm -f "$container" >/dev/null 2>&1 || true
+  # Ephemeral throwaway test DB: data dir on tmpfs (RAM) + durability knobs off.
+  # The DB is destroyed at the end of every run, so fsync/full_page_writes/
+  # synchronous_commit buy nothing but cost wall-clock on the migrate + insert
+  # heavy integration suite. (tmpfs covers PG18's /var/lib/postgresql/<ver> dir.)
   "$DOCKER" run -d --name "$container" \
     -e POSTGRES_DB=sitelayer \
     -e POSTGRES_USER=sitelayer \
     -e POSTGRES_PASSWORD=sitelayer \
     -p "127.0.0.1:${VERIFY_PG_PORT}:5432" \
-    "$VERIFY_PG_IMAGE" >/dev/null || return 1
+    --tmpfs /var/lib/postgresql \
+    "$VERIFY_PG_IMAGE" \
+    -c fsync=off -c full_page_writes=off -c synchronous_commit=off >/dev/null || return 1
 
   wait_for_pg "$container" "$VERIFY_PG_PORT" || return 1
 

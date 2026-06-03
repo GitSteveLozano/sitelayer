@@ -23,20 +23,26 @@ ENV SENTRY_RELEASE=$GIT_SHA
 RUN apk add --no-cache poppler-utils
 
 # Prod node_modules (incl. the @sitelayer/* workspace symlinks) from deps.
-COPY --from=deps /app/node_modules ./node_modules
+# --chown sets `node` ownership DURING the copy (near-free) instead of a later
+# `chown -R /app`, which previously walked the entire node_modules tree and took
+# ~258s per build (and rewrote the whole layer). See the targeted chown below.
+COPY --chown=node:node --from=deps /app/node_modules ./node_modules
 # Root manifest for `npm start -w @sitelayer/api`.
-COPY package*.json ./
+COPY --chown=node:node package*.json ./
 # Prebuilt dist + manifests from the build context (compiled on the host).
 # COPY --parents globs EVERY workspace — no fragile per-package list to drift
 # (a missing list entry is what crashed the e4672585 prod deploy). The
 # node_modules @sitelayer/* symlinks resolve into these copied dirs.
-COPY --parents apps/*/package.json apps/*/dist packages/*/package.json packages/*/dist ./
+COPY --chown=node:node --parents apps/*/package.json apps/*/dist packages/*/package.json packages/*/dist ./
 # capture-catalog reads this seed.yaml at runtime (lives under src/, not dist/).
-COPY packages/capture-catalog/src/seed.yaml ./packages/capture-catalog/src/seed.yaml
+COPY --chown=node:node packages/capture-catalog/src/seed.yaml ./packages/capture-catalog/src/seed.yaml
 
 # Run as the unprivileged `node` user (uid 1000). The blueprint_storage volume
 # mounts at /app/storage/blueprints — pre-create it with node ownership.
-RUN mkdir -p /app/storage/blueprints && chown -R node:node /app
+# Only the (empty) storage tree needs a recursive chown; everything else was
+# already copied with --chown=node:node above, so we avoid the expensive
+# `chown -R /app` over node_modules.
+RUN mkdir -p /app/storage/blueprints && chown -R node:node /app/storage
 USER node
 
 CMD ["npm", "start", "-w", "@sitelayer/api"]

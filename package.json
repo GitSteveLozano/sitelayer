@@ -12,7 +12,7 @@
     "dev:api": "npm run dev --workspace @sitelayer/api",
     "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
-    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/logger && npm run build --workspace @sitelayer/workflows && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/scenario && npm run build --workspace @sitelayer/capture-schema && npm run build --workspace @sitelayer/capture-catalog && npm run build --workspace @sitelayer/formula-evaluator && npm run build --workspace @sitelayer/pipe-blueprint && npm run build --workspace @sitelayer/pipe-roomplan && npm run build --workspace @sitelayer/pipe-photogrammetry && npm run build --workspace @sitelayer/pipe-drone && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
+    "build": "bash scripts/build-parallel.sh",
     "db:migrate": "scripts/migrate-db.sh",
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
@@ -56,7 +56,8 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
-    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web/dist"
+    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web/dist",
+    "build:serial": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/logger && npm run build --workspace @sitelayer/workflows && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/scenario && npm run build --workspace @sitelayer/capture-schema && npm run build --workspace @sitelayer/capture-catalog && npm run build --workspace @sitelayer/formula-evaluator && npm run build --workspace @sitelayer/pipe-blueprint && npm run build --workspace @sitelayer/pipe-roomplan && npm run build --workspace @sitelayer/pipe-photogrammetry && npm run build --workspace @sitelayer/pipe-drone && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
