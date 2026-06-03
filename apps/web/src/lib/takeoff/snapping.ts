@@ -349,6 +349,70 @@ export function applyOrtho(prev: TakeoffPoint, raw: TakeoffPoint, thresholdDeg: 
 }
 
 // ---------------------------------------------------------------------------
+// Draft-point resolution (the canvas placement contract)
+// ---------------------------------------------------------------------------
+
+/** Options for `resolveDraftPoint` — the per-canvas snap tuning. */
+export interface ResolveDraftPointOptions {
+  /** Snap-to-content tolerance in board units (0–100). */
+  toleranceBoard: number
+  /** Ortho-lock angular threshold in degrees (0 disables the lock). */
+  orthoThresholdDeg: number
+  /**
+   * The in-progress draft vertices. The snap index only sees COMMITTED
+   * geometry, so these are checked separately as endpoint latch points — this
+   * is what lets a polygon close onto its own start vertex.
+   */
+  draftPoints: readonly TakeoffPoint[]
+}
+
+/**
+ * Resolve a raw board point to the point that should actually be placed, the
+ * single rule shared by the desktop and mobile takeoff canvases:
+ *
+ *   1. Snap to committed geometry (endpoint > midpoint > on-segment) via the
+ *      prebuilt `index` — the biggest accuracy win.
+ *   2. Otherwise snap to the nearest in-progress draft vertex within tolerance
+ *      (the index can't see drafts; this closes polygons onto their own start).
+ *   3. Otherwise lock to horizontal / vertical / 45° relative to the last draft
+ *      point (the "straight wall" assist).
+ *
+ * Returns the raw point unchanged when nothing is in range. Callers gate the
+ * whole thing behind their snap toggle (pass the raw point straight through
+ * when snap is off). Pure.
+ */
+export function resolveDraftPoint(
+  raw: TakeoffPoint,
+  index: SnapIndex,
+  options: ResolveDraftPointOptions,
+): TakeoffPoint {
+  const { toleranceBoard, orthoThresholdDeg, draftPoints } = options
+
+  // 1) Committed geometry — the new, strictly-better snap-to-content behavior.
+  const content = snapPoint(raw, index, toleranceBoard)
+  if (content.snapped) return content.point
+
+  // 2) Nearest in-progress draft vertex (endpoint latch the index can't hold).
+  let bestDraft: TakeoffPoint | null = null
+  let bestDist = Number.isFinite(toleranceBoard) && toleranceBoard > 0 ? toleranceBoard : 0
+  for (const p of draftPoints) {
+    const dx = p.x - raw.x
+    const dy = p.y - raw.y
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d < bestDist) {
+      bestDist = d
+      bestDraft = p
+    }
+  }
+  if (bestDraft) return { x: bestDraft.x, y: bestDraft.y }
+
+  // 3) Ortho lock relative to the last placed draft point.
+  const prev = draftPoints[draftPoints.length - 1]
+  if (prev) return applyOrtho(prev, raw, orthoThresholdDeg)
+  return { x: raw.x, y: raw.y }
+}
+
+// ---------------------------------------------------------------------------
 // Thin React hook (the only React in this module)
 // ---------------------------------------------------------------------------
 

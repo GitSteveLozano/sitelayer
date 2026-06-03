@@ -30,6 +30,7 @@ import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
+import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 
 import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/takeoff/copy-transform'
@@ -257,6 +258,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const editDragIdxRef = useRef<number | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
+  // Snap-to-content toggle. Shares the same `localStorage['sitelayer.snap']`
+  // key the desktop canvas reads, so disabling snap on one surface disables it
+  // on the other. Default ON. When ON, a tapped draft point latches onto
+  // existing committed geometry (endpoint / midpoint / on-segment) and locks to
+  // horizontal / vertical / 45° from the previous point.
+  const snapEnabled = typeof localStorage !== 'undefined' ? localStorage.getItem('sitelayer.snap') !== 'off' : true
+
   // Default the scope item once the catalog loads.
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
@@ -325,9 +333,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
     const local = screenToBoardPoint(svg, e.clientX, e.clientY)
     if (!local) return
+    // Snap to existing committed geometry (+ ortho) before committing the
+    // vertex; `snapDraftPoint` is a no-op when the snap toggle is off.
+    const snapped = snapDraftPoint({ x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) })
     sdispatch({
       type: 'PLACE_POINT',
-      point: { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) },
+      point: { x: round2(snapped.x), y: round2(snapped.y) },
     })
   }
 
@@ -499,6 +510,31 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const canvasMeasurements = draftMeasurements.filter(
     (m) => activeBlueprint && m.blueprint_document_id === activeBlueprint.id,
   )
+
+  // Snap-to-content index over the committed measurements visible on this
+  // sheet. The shared engine (`@/lib/takeoff/snapping`) supplies endpoint /
+  // midpoint / on-segment latching; `onCanvasTap` runs raw board points through
+  // `snapDraftPoint` before dispatching PLACE_POINT so a new vertex closes onto
+  // existing geometry instead of landing a fraction of a unit off.
+  const snapIndex = useSnapping(canvasMeasurements)
+  // Board-unit tolerance (0–100 space) and ortho ("straight wall") threshold,
+  // matching the desktop canvas.
+  const SNAP_TOLERANCE_BOARD = 1.8
+  const ORTHO_THRESHOLD_DEG = 7
+
+  // Resolve a raw board point for placement via the shared resolver: latch onto
+  // committed geometry (endpoint > midpoint > on-segment), else a nearby
+  // in-progress draft vertex (so a polygon can close onto its own start — the
+  // engine only sees committed measurements), else lock to H / V / 45° from the
+  // last draft point. With snap OFF the raw point passes through unchanged.
+  const snapDraftPoint = (raw: { x: number; y: number }): { x: number; y: number } => {
+    if (!snapEnabled) return raw
+    return resolveDraftPoint(raw, snapIndex, {
+      toleranceBoard: SNAP_TOLERANCE_BOARD,
+      orthoThresholdDeg: ORTHO_THRESHOLD_DEG,
+      draftPoints,
+    })
+  }
   const bulkSelected = canvasMeasurements.filter((m) => bulkIds.has(m.id))
   const bulkPolys = bulkSelected.filter((m) => (m.geometry as { kind?: string }).kind === 'polygon').length
   const bulkTotal = round2(bulkSelected.reduce((s, m) => s + (Number(m.quantity) || 0), 0))
