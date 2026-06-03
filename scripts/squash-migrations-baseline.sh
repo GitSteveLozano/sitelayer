@@ -193,18 +193,71 @@ dump_schema_from() {
     -U sitelayer -d sitelayer
 }
 
-# table_counts_from <container-name>
+# table_counts_from <container-name> [gated-ids]
 # Emits sorted "tablename|rowcount" for every public base table EXCEPT the
 # migration ledger (schema_migrations, which the baseline deliberately omits).
 # Used to PROVE seed-data equivalence: the history DB and the baseline-built DB
 # must have identical per-table row counts. This catches both data LOSS (a
 # seeded table the baseline forgot) and NON-idempotency (a re-apply that
 # duplicated rows in a table lacking a unique constraint).
+#
+# When [gated-ids] (newline-separated tier-gated company UUIDs) is supplied, the
+# count EXCLUDES rows belonging to those tenants — symmetrically with the
+# tier-gating applied to the baseline seed data — so the equivalence proof
+# compares apples to apples: the history DB still has the e2e-fixtures rows, the
+# baseline DB does not, and both sides are counted with the gated rows removed.
+# Exclusion is generic: the `companies` table is filtered by `id`, every other
+# table that has a `company_id` column is filtered by `company_id`.
 table_counts_from() {
   local name="$1"
+  local gated_ids="${2:-}"
+
+  # Build a per-table count expression. For each public base table, the WHERE
+  # clause subtracts gated rows: `companies` by id, anything with a company_id
+  # column by company_id, everything else counts in full. Built in SQL via
+  # pg_tables × information_schema.columns so it adapts to schema growth.
+  #
+  # The gated UUID set is materialized server-side as a text[] (via
+  # string_to_array of a comma-joined, shell-quoted-safe list) and referenced by
+  # an unnest subquery — NOT inlined as a literal IN-list inside the format()
+  # template. That avoids the nested single-quote trap (a literal '<uuid>' inside
+  # a single-quoted format() template would terminate the template early).
   local gen
-  gen="$("$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAc \
-    "SELECT coalesce(string_agg(format('SELECT %L AS t, count(*) AS c FROM %I.%I', tablename, schemaname, tablename), ' UNION ALL '), 'SELECT NULL::text AS t, 0 AS c WHERE false') FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'")"
+  if [ -n "$gated_ids" ]; then
+    # Comma-join the ids (UUIDs are [0-9a-f-], so no escaping needed) for
+    # string_to_array. Empty entries are dropped by the IS NOT NULL guard below.
+    local id_csv
+    id_csv="$(printf '%s' "$gated_ids" | sed '/^$/d' | paste -sd, -)"
+    gen="$("$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAc "
+      WITH gated AS (
+        SELECT unnest(string_to_array('$id_csv', ',')) AS id
+      )
+      SELECT coalesce(string_agg(
+        format(
+          'SELECT %L AS t, count(*) AS c FROM %I.%I%s',
+          t.tablename, t.schemaname, t.tablename,
+          CASE
+            WHEN t.tablename = 'companies'
+              THEN ' WHERE id::text NOT IN (SELECT id FROM gated)'
+            WHEN EXISTS (
+              SELECT 1 FROM information_schema.columns col
+              WHERE col.table_schema = t.schemaname
+                AND col.table_name = t.tablename
+                AND col.column_name = 'company_id'
+            ) THEN ' WHERE company_id IS NULL OR company_id::text NOT IN (SELECT id FROM gated)'
+            ELSE ''
+          END
+        ), ' UNION ALL '),
+        'SELECT NULL::text AS t, 0 AS c WHERE false')
+      FROM pg_tables t
+      WHERE t.schemaname = 'public' AND t.tablename <> 'schema_migrations'")"
+    # The per-table SELECTs reference the `gated` CTE, so the final query must
+    # re-declare it before running them.
+    gen="WITH gated AS (SELECT unnest(string_to_array('$id_csv', ',')) AS id) $gen"
+  else
+    gen="$("$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAc \
+      "SELECT coalesce(string_agg(format('SELECT %L AS t, count(*) AS c FROM %I.%I', tablename, schemaname, tablename), ' UNION ALL '), 'SELECT NULL::text AS t, 0 AS c WHERE false') FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'")"
+  fi
   "$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAF '|' -c "$gen ORDER BY 1" | sed '/^$/d' | sort
 }
 
@@ -397,6 +450,34 @@ build_baseline() {
   log "candidate baseline written ($(wc -l <"$BASELINE_OUT") lines)"
 }
 
+# Tier-gated tenant slugs: companies that exist ONLY for testing/demo/E2E and
+# must NEVER be carried into a fresh PROD tier by the baseline. Migration 072
+# stands up `e2e-fixtures` (company + one membership per role); the baseline's
+# seed-data section would otherwise inject that company AND its admin-role
+# membership rows into any DB built from the baseline — including a brand-new
+# PROD bring-up, silently planting e2e/demo admin credentials in production.
+# Override with SQUASH_TIER_GATED_SLUGS="slug1 slug2 ..." to add demo tenants.
+TIER_GATED_SLUGS="${SQUASH_TIER_GATED_SLUGS:-e2e-fixtures}"
+
+# tier_gated_company_ids <container-name>
+# Emits the UUIDs of every tier-gated company present in the DB (one per line).
+# These ids are dynamic (migration 072 lets the company id default to
+# gen_random_uuid()), so we must discover them at dump time rather than
+# hard-coding them. Empty output (no such company) is fine.
+tier_gated_company_ids() {
+  local name="$1"
+  local slug_list="" slug
+  for slug in $TIER_GATED_SLUGS; do
+    # single-quote each slug for the SQL IN-list; slugs are [a-z0-9-] so this is safe.
+    if [ -n "$slug_list" ]; then slug_list="$slug_list, "; fi
+    slug_list="$slug_list'$slug'"
+  done
+  [ -n "$slug_list" ] || return 0
+  "$DOCKER" exec "$name" psql -U sitelayer -d sitelayer -tAc \
+    "SELECT id FROM public.companies WHERE slug IN ($slug_list)" 2>/dev/null \
+    | sed '/^$/d'
+}
+
 # append_seed_data_from <container-name> <out-path>
 # The schema-only baseline above reproduces tables/indexes/constraints/etc. but
 # NOT the rows that data-seeding migrations INSERT (e.g. 094_dispatch_lanes,
@@ -409,8 +490,22 @@ build_baseline() {
 #   --exclude-table-data=schema_migrations  the migration LEDGER is managed by the
 #                                    per-environment cutover, NOT carried in the baseline.
 # pg_dump emits the rows in FK-dependency order, so a fresh apply is safe.
+#
+# TIER-GATING: after the dump, every INSERT line that references a tier-gated
+# company UUID (the e2e-fixtures tenant + its memberships + any future fixture
+# rows tied to it) is filtered OUT, so a baseline applied to a fresh PROD tier
+# never injects e2e/demo admin rows. The filter is by UUID (post-filter) rather
+# than --exclude-table-data because the gated rows live in shared tables
+# (companies, company_memberships, ...) alongside rows we DO want to keep
+# (la-operations, beta-build). It is also dependency-safe — unlike DELETEing the
+# company from the source DB, which could trip the non-cascading FKs
+# (audit_escrow_entries RESTRICT, workflow_event_log) if a future fixture seeds
+# them.
 append_seed_data_from() {
   local name="$1" out="$2"
+  local gated_ids
+  gated_ids="$(tier_gated_company_ids "$name")"
+
   {
     printf '\n\n'
     cat <<'DATAHDR'
@@ -420,6 +515,10 @@ append_seed_data_from() {
 -- pg_dump --data-only --inserts --on-conflict-do-nothing; the schema_migrations
 -- ledger is EXCLUDED (the per-environment cutover manages that row). Idempotent:
 -- ON CONFLICT DO NOTHING makes a re-apply / mark-applied a no-op.
+--
+-- TIER-GATED: rows tied to test/demo/E2E tenants (e.g. the e2e-fixtures company
+-- from migration 072 and its role memberships) are EXCLUDED, so applying this
+-- baseline to a fresh PROD tier never injects e2e/demo admin credentials.
 DATAHDR
     printf '\n'
     "$DOCKER" exec "$name" pg_dump \
@@ -431,7 +530,8 @@ DATAHDR
       --no-privileges \
       --schema=public \
       --exclude-table-data=schema_migrations \
-      -U sitelayer -d sitelayer
+      -U sitelayer -d sitelayer \
+      | filter_tier_gated_rows "$gated_ids"
     # pg_dump emits `set_config('search_path', '', false)` so its fully-qualified
     # statements run with an empty search_path. That setting LEAKS past the
     # \i 000_baseline.sql in scripts/migrate-db.sh's wrapper, whose next line
@@ -441,6 +541,32 @@ DATAHDR
     printf '\n-- Restore default search_path (pg_dump left it empty for qualified DDL/DML).\n'
     printf "SELECT pg_catalog.set_config('search_path', 'public', false);\n"
   } >>"$out"
+
+  if [ -n "$gated_ids" ]; then
+    log "tier-gated $(printf '%s\n' "$gated_ids" | grep -c .) test/demo tenant(s) OUT of the baseline seed data (slugs: $TIER_GATED_SLUGS)"
+  else
+    log "no tier-gated tenants present in the history DB (nothing to exclude)"
+  fi
+}
+
+# filter_tier_gated_rows <newline-separated-uuids>
+# Reads a pg_dump --inserts data section on stdin and drops every INSERT line
+# that references one of the given company UUIDs. Each seeded row for a
+# tier-gated tenant (the company row itself, its memberships, and any other
+# fixture row carrying that company_id) contains the UUID literally in its
+# VALUES list, so a fixed-string match on the id is sufficient and precise.
+# With no ids, this is a transparent pass-through.
+filter_tier_gated_rows() {
+  local ids="$1"
+  if [ -z "$ids" ]; then
+    cat
+    return 0
+  fi
+  # grep -F -v with one pattern per id removes any line containing an id. Build
+  # the pattern file on the fly so multiple gated tenants are handled at once.
+  local patterns
+  patterns="$(printf '%s\n' "$ids" | sed '/^$/d')"
+  grep -F -v -f <(printf '%s\n' "$patterns")
 }
 
 # ============================================================================
@@ -509,17 +635,24 @@ verify_baseline() {
   # has had the baseline applied TWICE (the idempotency check above), so any
   # non-idempotent / duplicated row OR any dropped seed row shows up here as a
   # count mismatch against the full-history DB.
-  log "comparing seed-data row counts (history vs baseline)"
-  local hist_counts base_counts data_diff
-  hist_counts="$(table_counts_from "$HISTORY_CONTAINER")"
+  #
+  # The history DB still holds the tier-gated tenant rows (e2e-fixtures) while
+  # the baseline deliberately omits them, so count the HISTORY side with the
+  # gated rows excluded too — otherwise the gating would (correctly) show up as a
+  # count mismatch and mask any REAL data-loss/idempotency regression. The
+  # baseline DB has no gated rows to exclude, so its count is unfiltered.
+  log "comparing seed-data row counts (history vs baseline; tier-gated rows excluded both sides)"
+  local hist_counts base_counts data_diff gated_ids
+  gated_ids="$(tier_gated_company_ids "$HISTORY_CONTAINER")"
+  hist_counts="$(table_counts_from "$HISTORY_CONTAINER" "$gated_ids")"
   base_counts="$(table_counts_from "$BASELINE_CONTAINER")"
   if ! data_diff="$(diff <(printf '%s\n' "$hist_counts") <(printf '%s\n' "$base_counts"))"; then
     printf '\n'
     warn "===================== DATA EQUIVALENCE FAILED ===================="
-    warn "Per-table row counts differ between the full-history DB and a DB built"
-    warn "from ONLY the baseline. '<' = history, '>' = baseline. A missing seed"
-    warn "table means data loss; a higher baseline count means a non-idempotent"
-    warn "INSERT. Do NOT adopt this baseline."
+    warn "Per-table row counts differ between the full-history DB (tier-gated rows"
+    warn "excluded) and a DB built from ONLY the baseline. '<' = history, '>' ="
+    warn "baseline. A missing seed table means data loss; a higher baseline count"
+    warn "means a non-idempotent INSERT. Do NOT adopt this baseline."
     warn "================================================================"
     printf '%s\n' "$data_diff" >&2
     return 1
