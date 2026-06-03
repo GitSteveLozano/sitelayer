@@ -35,6 +35,8 @@ import {
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
+import { ACTIVE_COMPANY_STORAGE_KEY } from '@/lib/api/client'
+import type { MembershipsResponse } from '@/components/shell/CompanySwitcher'
 // Lazy: the control-plane probe and the feedback-capture dock (which pulls in
 // the rrweb recorder → vendor-rrweb) are owner-only diagnostics. Keeping them
 // out of the static graph holds the desktop-workspace lazy chunk under budget;
@@ -303,6 +305,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   // static CRUMB map). It reads as the "New takeoff" entry step (dsg__44/45).
   const ingestCrumb = /^\/desktop\/ingest\/[^/]+\/?$/.test(location.pathname) ? 'New takeoff · Reading plan set' : null
   const [wearingOpen, setWearingOpen] = useState(false)
+  const [companyOpen, setCompanyOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
   const [notifOpen, setNotifOpen] = useState(false)
@@ -340,6 +343,34 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     enabled: bootstrapProp === null && Boolean(companySlug),
   })
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
+
+  // Company switch — multi-company operators (a sub building for several GCs,
+  // or the dev act-as fixtures that span tenants) need an in-app way to change
+  // the active company. Desktop had none, so it lived only in localStorage. We
+  // reuse the same `/api/me/memberships` source + localStorage-write+reload
+  // contract as the mobile CompanySwitcher; the menu item only appears when
+  // there's an actual choice (>= 2 companies).
+  const membershipsQuery = useQuery<MembershipsResponse>({
+    queryKey: ['me', 'memberships'],
+    queryFn: () => request<MembershipsResponse>('/api/me/memberships'),
+    staleTime: 5 * 60_000,
+  })
+  const memberships = membershipsQuery.data?.memberships ?? []
+  const canSwitchCompany = memberships.length >= 2
+  const switchCompany = (slug: string) => {
+    setCompanyOpen(false)
+    if (!slug || slug === companySlug) return
+    try {
+      window.localStorage.setItem(ACTIVE_COMPANY_STORAGE_KEY, slug)
+    } catch {
+      // localStorage can throw in private-browsing / sandboxed iframes; without
+      // it the switch can't survive the reload, so bail rather than reload into
+      // the old company silently.
+      console.warn('[desktop-workspace] localStorage unavailable; cannot persist company switch')
+      return
+    }
+    window.location.reload()
+  }
   // Avatar initials: the signed-in user's name first (design shows 'MD' for
   // Mike Davis), then the active company mark, then the 'SL' fallback. The
   // user-name source is Clerk (`useUserInitials`); in local dev / before a
@@ -641,6 +672,74 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           </div>
         </div>
       ) : null}
+      {companyOpen ? (
+        <div
+          role="menu"
+          aria-label="Switch company"
+          style={{
+            position: 'fixed',
+            top: 56,
+            right: 24,
+            width: 240,
+            zIndex: 60,
+            background: 'var(--m-sand)',
+            border: '2px solid var(--m-ink)',
+            boxShadow: 'var(--m-shadow-offset)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              padding: '10px 12px 6px',
+            }}
+          >
+            Switch company · {memberships.length}
+          </div>
+          {memberships.map((m) => {
+            const selected = m.company_slug === companySlug
+            return (
+              <button
+                key={m.company_id}
+                type="button"
+                role="menuitem"
+                aria-current={selected || undefined}
+                onClick={() => switchCompany(m.company_slug)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  background: selected ? 'var(--m-card-soft)' : 'transparent',
+                  border: 'none',
+                  borderTop: '1px solid var(--m-line-2)',
+                  color: 'var(--m-ink)',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    style={{ display: 'block', fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}
+                  >
+                    {m.company_name}
+                  </span>
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--m-ink-3)' }}>{m.role}</span>
+                </span>
+                {selected ? (
+                  <span aria-hidden style={{ color: 'var(--m-ink)', fontSize: 13 }}>
+                    ●
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
       <DTopbar
         crumb={crumb}
         actions={
@@ -752,6 +851,19 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
             },
             danger: false,
           },
+          ...(canSwitchCompany
+            ? [
+                {
+                  label: 'Switch company',
+                  sub: `${memberships.length} companies`,
+                  onClick: () => {
+                    setAvatarOpen(false)
+                    setCompanyOpen(true)
+                  },
+                  danger: false,
+                },
+              ]
+            : []),
           { label: 'Sign out', sub: undefined, onClick: signOut, danger: true },
         ].map((it) => (
           <button

@@ -36,9 +36,10 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Pool } from 'pg'
-import { applyScenario, parseScenario, type SeedSummary } from '@sitelayer/scenario'
+import { applyScenario, parseScenario, refUuid, type ScenarioDoc, type SeedSummary } from '@sitelayer/scenario'
 import { loadAppConfig, TierConfigError, type AppTier } from '../apps/api/src/tier.js'
 import { seedCompanyDefaults } from '../apps/api/src/onboarding.js'
+import { createBlueprintStorage, getBlueprintMimeType, readStorageEnv } from '../apps/api/src/storage.js'
 
 // ---------- DB connection ----------
 
@@ -61,6 +62,36 @@ function getPoolConfig(connectionString: string, tier: AppTier) {
   return { connectionString, options: `-c app.tier=${tier}` }
 }
 
+// ---------- Blueprint bytes ----------
+
+/**
+ * Persist real blueprint bytes for any blueprint that declares a `source_file`
+ * (a repo-relative PDF). The planner only inserts the blueprint_documents row +
+ * a deterministic storage_path; without the actual bytes the canvas falls back
+ * to the empty grid. We write to the SAME key the planner stored —
+ * `${companyId}/${documentId}/${fileName}`, where the document id is the same
+ * deterministic `refUuid('blueprint_document', ref)` the planner used — so
+ * `GET /api/blueprints/:id/file` serves it. `createBlueprintStorage` selects the
+ * same backend the API uses (local FS for dev/demo, Spaces when configured).
+ */
+async function writeBlueprintSourceFiles(
+  blueprints: ScenarioDoc['blueprints'],
+  summary: SeedSummary,
+  tier: AppTier,
+): Promise<void> {
+  const sourced = (blueprints ?? []).filter((bp) => bp.source_file)
+  if (sourced.length === 0) return
+  const storage = await createBlueprintStorage(readStorageEnv(process.env, tier))
+  for (const bp of sourced) {
+    const documentId = refUuid('blueprint_document', bp.ref)
+    const fileName = bp.file_name ?? `${bp.ref}.pdf`
+    const storagePath = `${summary.company_id}/${documentId}/${fileName}`
+    const bytes = readFileSync(path.resolve(bp.source_file!))
+    await storage.put(storagePath, bytes, getBlueprintMimeType(fileName))
+    process.stderr.write(`[seed-scenario] blueprint ${bp.ref}: stored ${bytes.length}B → ${storagePath}\n`)
+  }
+}
+
 // ---------- Main ----------
 
 export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
@@ -77,6 +108,7 @@ export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
     try {
       await client.query('begin')
       const summary = await applyScenario(client, doc, { seedCompanyDefaults })
+      await writeBlueprintSourceFiles(doc.blueprints, summary, config.tier)
       await client.query('commit')
       return summary
     } catch (err) {

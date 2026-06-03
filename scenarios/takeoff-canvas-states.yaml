@@ -76,6 +76,13 @@ blueprints:
     project_ref: manual
     file_name: floor-plan.pdf
     preview_type: pdf
+    # Real plan set from the repo — the seeder stores the actual PDF bytes so
+    # the canvas renders the drawing, not the empty grid. NOTE: the manual draft
+    # geometry below is synthetic board-space (0-100) tuned to a flat page; it
+    # renders OVER this real sheet but is not traced to its actual walls. The
+    # point is a real underlay + the measurement/condition engine, not a
+    # pixel-perfect trace.
+    source_file: blueprints_sample/blueprints_example.pdf
     pages:
       - ref: pg-manual
         page_number: 1
@@ -85,12 +92,14 @@ blueprints:
     project_ref: uncal
     file_name: floor-plan.pdf
     preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
     pages:
       - { ref: pg-uncal, page_number: 1 } # deliberately NO calibration
   - ref: bp-ai
     project_ref: ai
     file_name: elevations.pdf
     preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
     pages:
       - ref: pg-ai
         page_number: 1
@@ -99,6 +108,7 @@ blueprints:
     project_ref: empty
     file_name: site.pdf
     preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
     pages:
       - ref: pg-empty
         page_number: 1

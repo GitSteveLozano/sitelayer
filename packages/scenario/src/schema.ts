@@ -180,6 +180,12 @@ const blueprint = z.object({
   project_ref: z.string(),
   file_name: z.string().optional(),
   preview_type: z.string().optional(),
+  // Optional repo-relative path to a real PDF (e.g. `blueprints_sample/foo.pdf`).
+  // When set, the seeder reads the bytes and stores them at the blueprint's
+  // deterministic storage_path so the canvas renders the real plan instead of
+  // the empty grid. Metadata-only blueprints (no source_file) keep the old
+  // placeholder behaviour.
+  source_file: z.string().optional(),
   pages: z.array(blueprintPage),
 })
 
