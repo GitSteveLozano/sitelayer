@@ -1,9 +1,47 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { HttpError } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+
+// POST /api/projects/:id/scaffold-tags wire-format. Mirrors the inline
+// `s()` / `n()` coercers — text fields are string-or-null, numerics are
+// string-or-number. The route still trims/coerces defensively; the schema
+// only rejects malformed shapes (e.g. `label: { ... }`) up front.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const ScaffoldTagCreateBodySchema = z
+  .object({
+    label: z.string().optional(),
+    qr_token: StringOrNullSchema.optional(),
+    structure_type: StringOrNullSchema.optional(),
+    erected_on: StringOrNullSchema.optional(),
+    height_m: NumericInputSchema.nullish(),
+    load_class: StringOrNullSchema.optional(),
+    lat: NumericInputSchema.nullish(),
+    lng: NumericInputSchema.nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+// POST /api/scaffold-tags/:id/inspections wire-format. checklist / photo_refs
+// are free-form JSON blobs persisted verbatim (coalesce to '[]'::jsonb in
+// SQL), so they stay `unknown` here.
+const ScaffoldInspectionCreateBodySchema = z
+  .object({
+    status: z.string().optional(),
+    inspector_name: StringOrNullSchema.optional(),
+    checklist: z.unknown().optional(),
+    photo_refs: z.unknown().optional(),
+    defects: StringOrNullSchema.optional(),
+    remediation: StringOrNullSchema.optional(),
+    next_due_on: StringOrNullSchema.optional(),
+    notes: z.string().nullish(),
+  })
+  .loose()
 
 /**
  * QR scaffold tags + inspections. Tags are project-scoped, identified by
@@ -75,7 +113,12 @@ export async function handleScaffoldTagRoutes(
   if (req.method === 'POST' && projectTagsMatch) {
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const projectId = projectTagsMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ScaffoldTagCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const label = s(body.label)
     if (!label) {
       ctx.sendJson(400, { error: 'label is required' })
@@ -139,7 +182,12 @@ export async function handleScaffoldTagRoutes(
   if (req.method === 'POST' && tagInspectMatch) {
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const tagId = tagInspectMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ScaffoldInspectionCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const status = s(body.status)
     if (!status || !['pass', 'fail', 'tagged_out'].includes(status)) {
       ctx.sendJson(400, { error: 'status must be pass|fail|tagged_out' })

@@ -1,8 +1,39 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
+
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+// POST /api/takeoff/measurements/:id/tags wire-format. Mirrors the inline
+// coercion (service_item_code required; quantity/rate string-or-number with
+// finite >= 0 checks downstream). Permissive: malformed shapes (e.g.
+// `service_item_code: { ... }`) are rejected up front.
+const TakeoffTagCreateBodySchema = z
+  .object({
+    service_item_code: z.string().optional(),
+    quantity: NumericInputSchema.nullish(),
+    rate: NumericInputSchema.nullish(),
+    unit: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+// PATCH /api/takeoff/tags/:tagId wire-format. All fields optional (partial
+// patch via the dynamic `sets[]` builder). sort_order is only applied when
+// it is a literal number (`typeof === 'number'`), so it's typed number-only.
+const TakeoffTagPatchBodySchema = z
+  .object({
+    service_item_code: z.string().nullish(),
+    quantity: NumericInputSchema.nullish(),
+    rate: NumericInputSchema.nullish(),
+    unit: z.string().nullish(),
+    notes: z.string().nullish(),
+    sort_order: z.number().nullish(),
+  })
+  .loose()
 
 export type TakeoffTagRouteCtx = {
   pool: Pool
@@ -92,7 +123,12 @@ export async function handleTakeoffTagRoutes(
       ctx.sendJson(400, { error: 'measurement id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffTagCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const code = typeof body.service_item_code === 'string' ? body.service_item_code.trim() : ''
     if (!code) {
       ctx.sendJson(400, { error: 'service_item_code is required' })
@@ -170,7 +206,12 @@ export async function handleTakeoffTagRoutes(
       ctx.sendJson(400, { error: 'tag id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffTagPatchBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const sets: string[] = []
     const params: unknown[] = [ctx.company.id, tagId]
     const push = (col: string, raw: unknown, transform?: (v: unknown) => unknown) => {

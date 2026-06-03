@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import {
@@ -13,8 +14,69 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// Permissive wire-format schemas — fields optional/nullish so the existing
+// partial-create / partial-PATCH semantics are unchanged; downstream String()
+// / Number() / isValidDateInput still coerce + validate defensively. Numerics
+// accept string-or-number. No `.strict()` — `.loose()` lets unknown keys
+// through. The /invoice route reads no body, so it has no schema.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const RentalCreateBodySchema = z
+  .object({
+    item_description: z.string().nullish(),
+    delivered_on: z.string().nullish(),
+    returned_on: z.string().nullish(),
+    daily_rate: NumericInputSchema.nullish(),
+    invoice_cadence_days: NumericInputSchema.nullish(),
+    project_id: z.string().nullish(),
+    customer_id: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const RentalPatchBodySchema = z
+  .object({
+    item_description: z.string().nullish(),
+    daily_rate: NumericInputSchema.nullish(),
+    delivered_on: z.string().nullish(),
+    returned_on: z.union([z.string(), z.null()]).optional(),
+    invoice_cadence_days: NumericInputSchema.nullish(),
+    notes: z.string().nullish(),
+    project_id: z.union([z.string(), z.null()]).optional(),
+    customer_id: z.union([z.string(), z.null()]).optional(),
+    status: z.union([z.string(), z.null()]).optional(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const RentalReturnBodySchema = z
+  .object({
+    qty_good: NumericInputSchema.nullish(),
+    qty_damaged: NumericInputSchema.nullish(),
+    qty_lost: NumericInputSchema.nullish(),
+    original_qty: NumericInputSchema.nullish(),
+    damage_photos: z.array(z.unknown()).nullish(),
+    damage_charges_cents: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const RentalTransferBodySchema = z
+  .object({
+    to_project_id: z.string().nullish(),
+    transferred_at: z.string().nullish(),
+  })
+  .loose()
+
+const RentalDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 export type RentalRouteCtx = {
   pool: Pool
@@ -178,7 +240,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
 
   if (req.method === 'POST' && url.pathname === '/api/rentals') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const itemDescription = String(body.item_description ?? '').trim()
     if (!itemDescription) {
       ctx.sendJson(400, { error: 'item_description is required' })
@@ -264,7 +331,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'rental id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     if (body.delivered_on !== undefined && body.delivered_on !== null && !isValidDateInput(body.delivered_on)) {
       ctx.sendJson(400, { error: 'delivered_on must be YYYY-MM-DD' })
       return true
@@ -360,7 +432,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'rental id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalDeleteBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     return deleteVersionedEntity({
       ctx,
       body,
@@ -480,7 +557,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     const rentalId = returnMatch[1]!
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalReturnBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const qtyGood = Number(body.qty_good ?? 0)
     const qtyDamaged = Number(body.qty_damaged ?? 0)
     const qtyLost = Number(body.qty_lost ?? 0)
@@ -586,7 +668,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     const rentalId = transferMatch[1]!
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalTransferBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const toProjectId = typeof body.to_project_id === 'string' ? body.to_project_id : null
     if (!toProjectId) {
       ctx.sendJson(400, { error: 'to_project_id required' })

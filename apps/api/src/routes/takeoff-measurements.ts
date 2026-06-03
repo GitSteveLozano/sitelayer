@@ -1,15 +1,49 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
 import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
 import { recordMutationLedger, withCompanyClient } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { resolveDefaultDraftId } from './takeoff-drafts.js'
 import { assertBlueprintPagesBelongToProject } from './takeoff-write.js'
 
 const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
+
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+// PATCH /api/takeoff/measurements/:id wire-format. Every column is optional
+// (partial patch). `geometry` is a deep polygon/lineal/volume blob handed
+// to `normalizeGeometry` downstream, so it stays `unknown` here; the schema
+// only types the scalar control fields + version. Permissive on purpose —
+// the handler keeps its own null/undefined/'' discrimination.
+const TakeoffMeasurementPatchBodySchema = z
+  .object({
+    service_item_code: z.string().nullish(),
+    quantity: NumericInputSchema.nullish(),
+    unit: z.string().nullish(),
+    notes: z.string().nullish(),
+    blueprint_document_id: z.string().nullish(),
+    page_id: z.string().nullish(),
+    geometry: z.unknown().optional(),
+    elevation: z.string().nullish(),
+    is_deduction: z.boolean().nullish(),
+    assembly_id: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+// DELETE /api/takeoff/measurements/:id wire-format. The body, when present,
+// only carries the optimistic-concurrency version fields.
+const TakeoffMeasurementDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 export type TakeoffMeasurementRouteCtx = {
   pool: Pool
@@ -103,7 +137,12 @@ export async function handleTakeoffMeasurementRoutes(
       ctx.sendJson(400, { error: 'measurement id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffMeasurementPatchBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     let geometryJson: string | null = null
     let quantity: unknown = body.quantity ?? null
     if (body.geometry !== undefined && body.geometry !== null && body.geometry !== '') {
@@ -333,7 +372,12 @@ export async function handleTakeoffMeasurementRoutes(
       ctx.sendJson(400, { error: 'measurement id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffMeasurementDeleteBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     return deleteVersionedEntity({
       ctx,
       body,

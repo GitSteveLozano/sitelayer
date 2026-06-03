@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
-import { HttpError } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import {
   appendPortalCaptureEvents,
@@ -25,6 +26,24 @@ import {
 // ---------------------------------------------------------------------------
 // Public (portal) routes — no Clerk auth, no company scoping by header.
 // ---------------------------------------------------------------------------
+
+// POST /api/portal/estimates/:token/accept wire-format. Permissive — the route
+// still enforces signer_name presence, the data:image/* prefix, and the 1.5MB
+// size cap on signature_data_url. The schema only rejects non-string shapes.
+const PortalAcceptBodySchema = z
+  .object({
+    signer_name: z.string().nullish(),
+    signature_data_url: z.string().nullish(),
+  })
+  .loose()
+
+// POST /api/portal/estimates/:token/decline wire-format. decline_reason is
+// required + trimmed + length-capped downstream; permissive on shape only.
+const PortalDeclineBodySchema = z
+  .object({
+    decline_reason: z.string().nullish(),
+  })
+  .loose()
 
 export type PublicEstimateShareCtx = {
   pool: Pool
@@ -266,7 +285,12 @@ export async function handlePublicEstimateShareRoutes(
   const acceptMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/accept$/)
   if (req.method === 'POST' && acceptMatch) {
     const token = decodeURIComponent(acceptMatch[1] ?? '')
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(PortalAcceptBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const signer_name = typeof body.signer_name === 'string' ? body.signer_name.trim() : ''
     const signature_data_url = typeof body.signature_data_url === 'string' ? body.signature_data_url.trim() : ''
     if (!signer_name) {
@@ -373,7 +397,12 @@ export async function handlePublicEstimateShareRoutes(
   const declineMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/decline$/)
   if (req.method === 'POST' && declineMatch) {
     const token = decodeURIComponent(declineMatch[1] ?? '')
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(PortalDeclineBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const decline_reason = typeof body.decline_reason === 'string' ? body.decline_reason.trim().slice(0, 2000) : ''
     if (!decline_reason) {
       ctx.sendJson(400, { error: 'decline_reason is required' })

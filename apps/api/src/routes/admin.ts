@@ -1,6 +1,8 @@
 import type { IncomingMessage } from 'node:http'
+import { z } from 'zod'
 import type { Identity } from '../auth.js'
 import type { AppTier } from '../tier.js'
+import { parseJsonBody } from '../http-utils.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { actorTokenMinterFromEnv, type ActorTokenMinter } from '../clerk-actor-token.js'
 import {
@@ -36,6 +38,34 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const DEFAULT_IMPERSONATION_TTL_SECONDS = 600
 const MAX_IMPERSONATION_TTL_SECONDS = 3600
 const MIN_IMPERSONATION_TTL_SECONDS = 60
+
+// Permissive wire-format schemas for the admin mutations. Every field stays
+// optional/nullish; only the scalar control fields the handlers read are
+// type-asserted, and `.loose()` keeps unknown keys. The handlers keep their own
+// trim / slug-pattern / isDemoRole / clampTtl validation downstream.
+const ScenarioTargetBodySchema = z
+  .object({
+    target: z.string().nullish(),
+  })
+  .loose()
+
+const DemoLinkBodySchema = z
+  .object({
+    // `role` is validated against the demo-role allowlist by `isDemoRole`
+    // downstream, so keep it permissive here (don't pre-reject the enum).
+    role: z.unknown().nullish(),
+    name: z.string().nullish(),
+  })
+  .loose()
+
+const ImpersonateBodySchema = z
+  .object({
+    user_id: z.string().nullish(),
+    reason: z.string().nullish(),
+    expires_in_seconds: z.union([z.number(), z.string()]).nullish(),
+    mode: z.string().nullish(),
+  })
+  .loose()
 
 export interface AdminRouteDeps {
   /** The request pool — the real `pg.Pool` satisfies this structurally. */
@@ -141,7 +171,12 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       return true
     }
     const slug = decodeURIComponent(applyMatch[1]!)
-    const body = deps.readBody ? await deps.readBody() : {}
+    const parsedApply = parseJsonBody(ScenarioTargetBodySchema, deps.readBody ? await deps.readBody() : {})
+    if (!parsedApply.ok) {
+      sendJson(400, { error: parsedApply.error })
+      return true
+    }
+    const body = parsedApply.value
     const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : undefined
     if (target !== undefined && !COMPANY_SLUG_PATTERN.test(target)) {
       sendJson(400, { error: 'target must be a valid company slug' })
@@ -193,7 +228,12 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       return true
     }
     const slug = decodeURIComponent(resetMatch[1]!)
-    const body = deps.readBody ? await deps.readBody() : {}
+    const parsedReset = parseJsonBody(ScenarioTargetBodySchema, deps.readBody ? await deps.readBody() : {})
+    if (!parsedReset.ok) {
+      sendJson(400, { error: parsedReset.error })
+      return true
+    }
+    const body = parsedReset.value
     const target = typeof body.target === 'string' && body.target.trim() ? body.target.trim() : undefined
     if (target !== undefined && !COMPANY_SLUG_PATTERN.test(target)) {
       sendJson(400, { error: 'target must be a valid company slug' })
@@ -223,7 +263,12 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
       sendJson(409, { error: 'demo link generation is only available on the demo tier' })
       return true
     }
-    const body = deps.readBody ? await deps.readBody() : {}
+    const parsedDemoLink = parseJsonBody(DemoLinkBodySchema, deps.readBody ? await deps.readBody() : {})
+    if (!parsedDemoLink.ok) {
+      sendJson(400, { error: parsedDemoLink.error })
+      return true
+    }
+    const body = parsedDemoLink.value
     if (!isDemoRole(body.role)) {
       sendJson(400, { error: `role must be one of ${DEMO_ROLES.join(', ')}` })
       return true
@@ -363,7 +408,12 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
 
 async function handleImpersonateStart(deps: AdminRouteDeps, actorSub: string): Promise<boolean> {
   const { pool, sendJson } = deps
-  const body = deps.readBody ? await deps.readBody() : {}
+  const parsed = parseJsonBody(ImpersonateBodySchema, deps.readBody ? await deps.readBody() : {})
+  if (!parsed.ok) {
+    sendJson(400, { error: parsed.error })
+    return true
+  }
+  const body = parsed.value
 
   const userId = typeof body.user_id === 'string' ? body.user_id.trim() : ''
   const reason = typeof body.reason === 'string' ? body.reason.trim() : ''

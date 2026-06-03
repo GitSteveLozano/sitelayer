@@ -1,10 +1,22 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { LOST_REASON_CODES, type LostReasonCode } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// PUT /api/projects/:id/lost-reason wire-format. `reason` is further checked
+// against LOST_REASON_CODES downstream; `lost_value` is string-or-number to
+// match the `Number(body.lost_value)` binding. `.loose()` keeps unknown keys.
+const LostReasonUpsertBodySchema = z
+  .object({
+    reason: z.string().optional(),
+    note: z.string().nullish(),
+    lost_value: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 export type ProjectLostReasonRouteCtx = {
   pool: Pool
@@ -97,7 +109,12 @@ export async function handleProjectLostReasonRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(LostReasonUpsertBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     if (!isLostReasonCode(body.reason)) {
       ctx.sendJson(400, { error: `reason must be one of: ${LOST_REASON_CODES.join(', ')}` })
       return true

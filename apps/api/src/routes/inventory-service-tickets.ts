@@ -1,9 +1,10 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
 
 export type InventoryServiceTicketRouteCtx = {
   pool: Pool
@@ -34,6 +35,25 @@ const ALLOWED_TRANSITIONS: Record<TicketStatus, readonly TicketStatus[]> = {
 function isTicketStatus(value: unknown): value is TicketStatus {
   return typeof value === 'string' && (TICKET_STATUSES as readonly string[]).includes(value)
 }
+
+// POST /api/inventory/service-tickets wire-format. Permissive: the route still
+// enforces the uuid shape on inventory_item_id and trims notes; the schema only
+// rejects malformed field types up front.
+const ServiceTicketCreateBodySchema = z
+  .object({
+    inventory_item_id: z.string().optional(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+// PATCH /api/inventory/service-tickets/:id wire-format. `status` is validated
+// against the lifecycle enum by isTicketStatus downstream; the schema only
+// rejects a non-string status shape early.
+const ServiceTicketPatchBodySchema = z
+  .object({
+    status: z.string().optional(),
+  })
+  .loose()
 
 type ServiceTicketRow = {
   id: string
@@ -124,7 +144,12 @@ export async function handleInventoryServiceTicketRoutes(
   if (url.pathname === '/api/inventory/service-tickets' && req.method === 'POST') {
     if (!ctx.requireRole(['admin', 'office'])) return true
 
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(ServiceTicketCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const inventoryItemId = typeof body.inventory_item_id === 'string' ? body.inventory_item_id : ''
     if (!isValidUuid(inventoryItemId)) {
       ctx.sendJson(400, { error: 'inventory_item_id must be a valid uuid' })
@@ -177,7 +202,12 @@ export async function handleInventoryServiceTicketRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(ServiceTicketPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     if (!isTicketStatus(body.status)) {
       ctx.sendJson(400, { error: `status must be one of ${TICKET_STATUSES.join(', ')}` })
       return true

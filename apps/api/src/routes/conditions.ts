@@ -1,8 +1,33 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// Wire-format for the takeoff-condition CRUD bodies. Both create and PATCH
+// keep their own field-level coercion (parseOptionalDriver, Number(...),
+// HEX_COLOR_RE, etc.) — these schemas only reject malformed shapes up front
+// and stay fully permissive: every field optional/nullish, drivers
+// string-or-number to match parseOptionalDriver's "5" alongside 5 acceptance,
+// no unknown-key rejection.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const ConditionBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    measurement_kind: z.string().nullish(),
+    color: z.string().nullish(),
+    height_value: NumericInputSchema.nullish(),
+    thickness_value: NumericInputSchema.nullish(),
+    slope_value: NumericInputSchema.nullish(),
+    sides: NumericInputSchema.nullish(),
+    default_assembly_id: z.union([z.string(), z.null()]).optional(),
+    emit_linear: z.boolean().nullish(),
+    emit_area: z.boolean().nullish(),
+    emit_volume: z.boolean().nullish(),
+  })
+  .loose()
 
 export type ConditionRouteCtx = {
   pool: Pool
@@ -95,7 +120,12 @@ export async function handleConditionRoutes(
 
   if (req.method === 'POST' && collectionMatch) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedCreate = parseJsonBody(ConditionBodySchema, await ctx.readBody())
+    if (!parsedCreate.ok) {
+      ctx.sendJson(400, { error: parsedCreate.error })
+      return true
+    }
+    const body = parsedCreate.value
 
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!name) {
@@ -228,7 +258,12 @@ export async function handleConditionRoutes(
       ctx.sendJson(400, { error: 'condition id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(ConditionBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
 
     const sets: string[] = []
     const params: unknown[] = [ctx.company.id, conditionId]

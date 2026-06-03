@@ -1,8 +1,51 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { buildPaginationMeta, isValidDateInput, parseExpectedVersion, parsePagination } from '../http-utils.js'
+import {
+  buildPaginationMeta,
+  isValidDateInput,
+  parseExpectedVersion,
+  parseJsonBody,
+  parsePagination,
+} from '../http-utils.js'
+
+// Numeric fields flow through the pg driver verbatim or via coalesce; tag them
+// string-or-number to match the legacy `body.x ?? default` binding.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+// POST /api/labor-entries wire-format. Permissive — the route still enforces
+// the required-field presence loop, the YYYY-MM-DD check on occurred_on, and the
+// service_item/division xref. The schema only rejects malformed field shapes.
+const LaborEntryCreateBodySchema = z
+  .object({
+    project_id: z.string().optional(),
+    service_item_code: z.string().optional(),
+    hours: NumericInputSchema.nullish(),
+    occurred_on: z.string().optional(),
+    worker_id: z.union([z.string(), z.null()]).optional(),
+    sqft_done: NumericInputSchema.nullish(),
+    status: z.string().nullish(),
+    division_code: z.union([z.string(), z.null()]).optional(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+// PATCH /api/labor-entries/:id wire-format. Every column optional; downstream
+// coalesce + the case-when division guard handle the partial-update semantics.
+const LaborEntryPatchBodySchema = z
+  .object({
+    service_item_code: z.union([z.string(), z.null()]).optional(),
+    hours: NumericInputSchema.nullish(),
+    occurred_on: z.string().nullish(),
+    worker_id: z.union([z.string(), z.null()]).optional(),
+    sqft_done: NumericInputSchema.nullish(),
+    status: z.string().nullish(),
+    division_code: z.union([z.string(), z.null()]).optional(),
+  })
+  .loose()
 
 export type LaborEntryRouteCtx = {
   pool: Pool
@@ -42,8 +85,13 @@ export async function handleLaborEntryRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/labor-entries') {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody()
-    const required = ['project_id', 'service_item_code', 'hours', 'occurred_on']
+    const parsedBody = parseJsonBody(LaborEntryCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    const required = ['project_id', 'service_item_code', 'hours', 'occurred_on'] as const
     for (const key of required) {
       if (body[key] === undefined || body[key] === null || body[key] === '') {
         ctx.sendJson(400, { error: `${key} is required` })
@@ -156,7 +204,12 @@ export async function handleLaborEntryRoutes(
       ctx.sendJson(400, { error: 'labor entry id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(LaborEntryPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const patchServiceItemCode =
       body.service_item_code === undefined || body.service_item_code === null ? null : String(body.service_item_code)
     const patchDivisionCode =

@@ -11,11 +11,12 @@ import {
   type TimeReviewWorkflowState,
 } from '@sitelayer/workflows'
 import type { PermissionAction } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
 import {
   detectTimeAnomalies,
   type ClockEventInput,
@@ -263,6 +264,19 @@ function buildReducerEvent(
   return { type: 'REOPEN', reopened_at: nowIso, reviewer_user_id: actorUserId, reason: reason ?? '' }
 }
 
+// POST /api/time-review-runs wire-format. PERMISSIVE: the route already
+// enforces the YYYY-MM-DD / uuid shapes downstream (isValidDateInput /
+// isValidUuid), so the schema only types the three fields the handler reads
+// and rejects e.g. `period_start: { ... }` up front. `.loose()` so unknown
+// keys pass through untouched.
+const TimeReviewRunCreateBodySchema = z
+  .object({
+    period_start: z.string().optional(),
+    period_end: z.string().optional(),
+    project_id: z.string().nullish(),
+  })
+  .loose()
+
 /**
  * Time review run routes (Sitemap.html § t-approve).
  *
@@ -355,7 +369,12 @@ export async function handleTimeReviewRunRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/time-review-runs') {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(TimeReviewRunCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const periodStart = typeof body.period_start === 'string' ? body.period_start.trim() : ''
     const periodEnd = typeof body.period_end === 'string' ? body.period_end.trim() : ''
     if (!isValidDateInput(periodStart) || !isValidDateInput(periodEnd)) {

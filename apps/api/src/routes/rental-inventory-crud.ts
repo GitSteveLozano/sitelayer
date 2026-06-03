@@ -1,7 +1,8 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
+import { z } from 'zod'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { assertKeyInCompany } from '../storage.js'
 import {
@@ -67,6 +68,79 @@ const MOVEMENT_PHOTO_COLUMNS = `
   id, company_id, inventory_movement_id, storage_key, mime_type, size_bytes, created_at
 `
 
+// Permissive wire-format schemas — every field optional/nullish so existing
+// partial-create / partial-PATCH semantics survive; downstream
+// optionalString / parseNonNegativeNumber / normalizeEnum still coerce
+// defensively. Numerics accept string-or-number. No `.strict()` — `.loose()`
+// passes unknown keys through. The multipart photo-upload route is NOT
+// covered here (it streams via busboy, not ctx.readBody()).
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const InventoryItemCreateBodySchema = z
+  .object({
+    code: z.string().nullish(),
+    description: z.string().nullish(),
+    category: z.string().nullish(),
+    unit: z.string().nullish(),
+    default_rental_rate: NumericInputSchema.nullish(),
+    replacement_value: NumericInputSchema.nullish(),
+    tracking_mode: z.string().nullish(),
+    active: z.boolean().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const InventoryItemPatchBodySchema = z
+  .object({
+    code: z.string().nullish(),
+    description: z.string().nullish(),
+    category: z.string().nullish(),
+    unit: z.string().nullish(),
+    default_rental_rate: NumericInputSchema.nullish(),
+    replacement_value: NumericInputSchema.nullish(),
+    tracking_mode: z.string().nullish(),
+    active: z.boolean().nullish(),
+    notes: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const InventoryItemDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const InventoryLocationCreateBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    project_id: z.string().nullish(),
+    location_type: z.string().nullish(),
+    is_default: z.boolean().nullish(),
+  })
+  .loose()
+
+const InventoryMovementCreateBodySchema = z
+  .object({
+    inventory_item_id: z.string().nullish(),
+    quantity: NumericInputSchema.nullish(),
+    from_location_id: z.string().nullish(),
+    to_location_id: z.string().nullish(),
+    project_id: z.string().nullish(),
+    occurred_on: z.string().nullish(),
+    worker_id: z.string().nullish(),
+    scan_payload: z.string().nullish(),
+    scanned_at: z.string().nullish(),
+    lat: NumericInputSchema.nullish(),
+    lng: NumericInputSchema.nullish(),
+    movement_type: z.string().nullish(),
+    ticket_number: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
 export async function handleRentalInventoryCrudRoutes(
   req: http.IncomingMessage,
   url: URL,
@@ -90,7 +164,12 @@ export async function handleRentalInventoryCrudRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/inventory/items') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryItemCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const code = String(body.code ?? '').trim()
     const description = String(body.description ?? '').trim()
     if (!code || !description) {
@@ -147,7 +226,12 @@ export async function handleRentalInventoryCrudRoutes(
   if (req.method === 'PATCH' && url.pathname.match(/^\/api\/inventory\/items\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const itemId = url.pathname.split('/')[4] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryItemPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     return patchVersionedEntity({
       ctx,
       body,
@@ -209,7 +293,12 @@ export async function handleRentalInventoryCrudRoutes(
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/inventory\/items\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const itemId = url.pathname.split('/')[4] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryItemDeleteBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     return deleteVersionedEntity({
       ctx,
       body,
@@ -261,7 +350,12 @@ export async function handleRentalInventoryCrudRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/inventory/locations') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryLocationCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const name = String(body.name ?? '').trim()
     if (!name) {
       ctx.sendJson(400, { error: 'name is required' })
@@ -374,7 +468,12 @@ export async function handleRentalInventoryCrudRoutes(
     // context; admin/foreman/office can post any movement (e.g. yard
     // adjustments without a scan).
     if (!ctx.requireRole(['admin', 'foreman', 'office', 'worker'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryMovementCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const itemId = optionalString(body.inventory_item_id)
     const quantity = parsePositiveNumber(body.quantity)
     if (!itemId || quantity === null) {

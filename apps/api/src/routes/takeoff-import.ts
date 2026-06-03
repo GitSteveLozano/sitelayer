@@ -1,9 +1,27 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
+
+// POST /api/projects/:id/takeoff/import wire-format. The endpoint accepts
+// JSON-shaped rows (the client parses CSV in the browser). Only the
+// top-level shape is typed here — each row object is validated/coerced
+// per-field in the loop below (service_item_code required, quantity finite
+// >= 0, etc.), so the items stay loose objects. The schema rejects e.g.
+// `rows: "x"` (non-array) up front without tightening the row contract.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+
+const TakeoffImportBodySchema = z
+  .object({
+    rows: z.array(z.object({}).loose()).optional(),
+    source_label: StringOrNullSchema.optional(),
+    page_id: StringOrNullSchema.optional(),
+    draft_id: StringOrNullSchema.optional(),
+  })
+  .loose()
 
 export type TakeoffImportRouteCtx = {
   pool: Pool
@@ -58,7 +76,12 @@ export async function handleTakeoffImportRoutes(
     return true
   }
 
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(TakeoffImportBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return true
+  }
+  const body = parsed.value
   const rawRows = body.rows
   if (!Array.isArray(rawRows) || rawRows.length === 0) {
     ctx.sendJson(400, { error: 'rows[] is required and must be non-empty' })

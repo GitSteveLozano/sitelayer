@@ -2,7 +2,30 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import type { PermissionAction } from '@sitelayer/domain'
+import { z } from 'zod'
+import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+
+// PUT/DELETE wire-format. `service_item_code` is required downstream (the
+// handlers 400 on a blank one); `rate` is string-or-number to match the
+// `Number(body.rate)` binding; `unit` is optional and inherits the catalog
+// unit when omitted. `.loose()` keeps unknown keys so callers aren't
+// tightened — the inline String(...)/Number(...) coercion stays.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const PricingOverrideUpsertBodySchema = z
+  .object({
+    service_item_code: z.string().optional(),
+    rate: NumericInputSchema.nullish(),
+    unit: z.string().nullish(),
+  })
+  .loose()
+
+const PricingOverrideDeleteBodySchema = z
+  .object({
+    service_item_code: z.string().optional(),
+  })
+  .loose()
 
 // Per-project and per-customer service-item rate overrides — the WRITE side of
 // the pricing chain the resolver (apps/api/src/pricing.ts) already reads:
@@ -76,7 +99,12 @@ async function upsertOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
   // requireRole gate above for built-in roles; the overlay is where a custom
   // role (or a matrix change demoting a base off edit_pricing_book) narrows it.
   if (!ctx.requirePermission('edit_pricing_book')) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(PricingOverrideUpsertBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const serviceItemCode = String(body.service_item_code ?? '').trim()
   if (!serviceItemCode) {
     ctx.sendJson(400, { error: 'service_item_code is required' })
@@ -149,7 +177,12 @@ async function deleteOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
   if (!ctx.requireRole(['admin', 'office'])) return
   // LAYER 2: edit_pricing_book — removing an override edits the rate book too.
   if (!ctx.requirePermission('edit_pricing_book')) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(PricingOverrideDeleteBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const serviceItemCode = String(body.service_item_code ?? '').trim()
   if (!serviceItemCode) {
     ctx.sendJson(400, { error: 'service_item_code is required' })

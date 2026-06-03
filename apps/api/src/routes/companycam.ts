@@ -1,7 +1,23 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
+
+// POST /api/integrations/companycam/pins wire-format. The handler trims
+// every field via `s()` and enforces the required pair below; the schema only
+// rejects malformed shapes (e.g. `project_id: { ... }`) up front and stays
+// permissive (string-or-null, no unknown-key rejection).
+const StringOrNullSchema = z.union([z.string(), z.null()])
+
+const CompanyCamPinBodySchema = z
+  .object({
+    external_project_id: StringOrNullSchema.optional(),
+    project_id: StringOrNullSchema.optional(),
+    label: StringOrNullSchema.optional(),
+  })
+  .loose()
 
 /**
  * CompanyCam connector — one-way photo mirror.
@@ -63,7 +79,12 @@ export async function handleCompanyCamRoutes(
   const pinMatch = url.pathname.match(/^\/api\/integrations\/companycam\/pins$/)
   if (req.method === 'POST' && pinMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedPin = parseJsonBody(CompanyCamPinBodySchema, await ctx.readBody())
+    if (!parsedPin.ok) {
+      ctx.sendJson(400, { error: parsedPin.error })
+      return true
+    }
+    const body = parsedPin.value
     const externalProjectId = s(body.external_project_id)
     const projectId = s(body.project_id)
     if (!externalProjectId || !projectId) {

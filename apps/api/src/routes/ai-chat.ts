@@ -1,11 +1,32 @@
 import type http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { dispatchChatResponseToMesh, isAiChatEnabled } from '../mesh-dispatcher.js'
 import { publish as publishChatResponse, subscribe as subscribeChatResponse } from '../chat-response-bus.js'
+
+// Permissive wire-format schemas. The chat body is structured-but-deep; the
+// handler already does its own array/length/origin-allowlist validation, so the
+// schema only asserts the top-level shapes it reads (`messages` an array of
+// loose objects, `operatorContext` a loose object) and keeps everything
+// optional + `.loose()` so valid packets aren't rejected. The respond webhook
+// body is a plain scalar shape.
+const ChatBodySchema = z
+  .object({
+    messages: z.array(z.record(z.string(), z.unknown())).optional(),
+    operatorContext: z.record(z.string(), z.unknown()).nullish(),
+  })
+  .loose()
+
+const ChatRespondBodySchema = z
+  .object({
+    body: z.string().nullish(),
+    model: z.string().nullish(),
+  })
+  .loose()
 
 /**
  * POST /api/ai/chat — operator-context chat staging endpoint.
@@ -162,13 +183,21 @@ export async function handleAiChatRoutes(req: http.IncomingMessage, url: URL, ct
     return true
   }
 
-  let body: IncomingBody
+  let raw: Record<string, unknown>
   try {
-    body = (await ctx.readBody()) as IncomingBody
+    raw = await ctx.readBody()
   } catch {
     ctx.sendJson(400, { error: 'invalid JSON body' })
     return true
   }
+  const parsedBody = parseJsonBody(ChatBodySchema, raw)
+  if (!parsedBody.ok) {
+    ctx.sendJson(400, { error: parsedBody.error })
+    return true
+  }
+  // The schema validates the top-level shapes; the deep packet/message fields
+  // are still read defensively below, so reuse the existing IncomingBody view.
+  const body = parsedBody.value as IncomingBody
 
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
     ctx.sendJson(400, { error: 'messages array is required and non-empty' })
@@ -609,13 +638,19 @@ async function handleAiChatRespondWebhook(
     return true
   }
 
-  let body: WebhookBody
+  let raw: Record<string, unknown>
   try {
-    body = (await ctx.readBody()) as WebhookBody
+    raw = await ctx.readBody()
   } catch {
     ctx.sendJson(400, { error: 'invalid JSON body' })
     return true
   }
+  const parsedBody = parseJsonBody(ChatRespondBodySchema, raw)
+  if (!parsedBody.ok) {
+    ctx.sendJson(400, { error: parsedBody.error })
+    return true
+  }
+  const body = parsedBody.value as WebhookBody
   const responseBody = typeof body.body === 'string' ? body.body.trim() : ''
   if (!responseBody) {
     ctx.sendJson(400, { error: 'body field is required and non-empty' })

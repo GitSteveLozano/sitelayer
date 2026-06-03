@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import ExcelJS from 'exceljs'
+import { z } from 'zod'
 import {
   compareBidVsScope,
   deriveMeasurementDrivers,
@@ -16,7 +17,7 @@ import {
   withMutationTx,
   type LedgerExecutor,
 } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { assertServiceItemCatalogStatus, rejectionMessageForCatalog } from '../catalog.js'
 import { buildEstimatePdfInputFromSummary, isReportKind, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
@@ -43,6 +44,43 @@ export type EstimateRouteCtx = {
   /** Stream a non-JSON file body (CORS headers applied by the ctx owner). */
   sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
 }
+
+// Numeric fields arrive as number or numeric string and are re-validated with
+// Number()/Number.isFinite downstream; tag them string-or-number so the schema
+// rejects only non-scalar shapes (e.g. quantity: {}).
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+// PATCH /api/estimate-lines/:id wire-format. Permissive — the route enforces the
+// non-negative-number checks, the expected_amount optimistic guard, and the
+// catalog gate downstream. draft_id is unused here; only qty/rate/expected.
+const EstimateLinePatchBodySchema = z
+  .object({
+    quantity: NumericInputSchema.nullish(),
+    rate: NumericInputSchema.nullish(),
+    expected_amount: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+// PUT /api/service-items/:code/divisions wire-format. division_codes is an
+// array of strings; the route already trims + de-dups + validates membership.
+// Kept permissive: the element type is left as unknown[] so the existing
+// "must be an array" + per-element string filter stays the authority.
+const ServiceItemDivisionsPutBodySchema = z
+  .object({
+    division_codes: z.array(z.unknown()).nullish(),
+  })
+  .loose()
+
+// POST /api/projects/:id/estimate/margin wire-format. The route reads only the
+// SET_MARGIN control event + target_margin_pct, then re-validates both
+// (event === 'SET_MARGIN', target in [0, 1)) before repricing. Kept permissive
+// so the existing lenient parse (empty body tolerated) is unchanged.
+const EstimateMarginBodySchema = z
+  .object({
+    event: z.string().nullish(),
+    target_margin_pct: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? '' : String(value)
@@ -698,7 +736,12 @@ export async function handleEstimateRoutes(
       ctx.sendJson(400, { error: 'estimate line id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(EstimateLinePatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
 
     const hasQuantity = body.quantity !== undefined && body.quantity !== null && body.quantity !== ''
     const hasRate = body.rate !== undefined && body.rate !== null && body.rate !== ''
@@ -842,7 +885,12 @@ export async function handleEstimateRoutes(
       ctx.sendJson(400, { error: 'project id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const rawBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    // Preserve the lenient "empty body tolerated" behavior: a malformed scalar
+    // shape falls back to {} so the explicit SET_MARGIN / target checks below
+    // remain the authority on the response shape.
+    const parsedMargin = parseJsonBody(EstimateMarginBodySchema, rawBody)
+    const body: z.infer<typeof EstimateMarginBodySchema> = parsedMargin.ok ? parsedMargin.value : {}
     if (body.event !== undefined && body.event !== 'SET_MARGIN') {
       ctx.sendJson(400, { error: `unsupported event ${String(body.event)} — only SET_MARGIN is accepted` })
       return true
@@ -1064,7 +1112,12 @@ export async function handleEstimateRoutes(
     }
     if (req.method === 'PUT') {
       if (!ctx.requireRole(['admin', 'office'])) return true
-      const body = await ctx.readBody()
+      const parsedBody = parseJsonBody(ServiceItemDivisionsPutBodySchema, await ctx.readBody())
+      if (!parsedBody.ok) {
+        ctx.sendJson(400, { error: parsedBody.error })
+        return true
+      }
+      const body = parsedBody.value
       const rawCodes = Array.isArray(body.division_codes) ? body.division_codes : null
       if (!rawCodes) {
         ctx.sendJson(400, { error: 'division_codes must be an array' })

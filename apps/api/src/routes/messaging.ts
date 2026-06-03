@@ -2,10 +2,36 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { Broadcast, ProjectMessage, ProjectMessageMeta, ProjectMessageSummary } from '@sitelayer/domain'
 import { BROADCAST_AUDIENCES } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/projects/:id/messages wire-format. `body` is the required
+// message text (the route trims + rejects empty); `author_role` is a
+// free string tag; `meta` stays a `z.unknown()` passthrough because the
+// existing `parseMessageMeta` helper owns the object/non-object
+// discrimination (open ProjectMessageMeta shape — no key rejection).
+const ProjectMessageCreateBodySchema = z
+  .object({
+    body: z.string().optional(),
+    author_role: z.string().optional(),
+    meta: z.unknown().optional(),
+  })
+  .loose()
+
+// POST /api/broadcasts wire-format. `body` is the required announcement
+// text; `audience` is validated against BROADCAST_AUDIENCES downstream;
+// `project_id` is uuid-checked downstream. Permissive — every field
+// optional, no unknown-key rejection.
+const BroadcastCreateBodySchema = z
+  .object({
+    body: z.string().optional(),
+    audience: z.string().optional(),
+    project_id: z.string().optional(),
+  })
+  .loose()
 
 export type MessagingRouteCtx = {
   pool: Pool
@@ -73,7 +99,12 @@ export async function handleMessagingRoutes(
     }
     if (req.method === 'POST') {
       if (!ctx.requireRole(['admin', 'foreman', 'office', 'member', 'bookkeeper'])) return true
-      const body = await ctx.readBody()
+      const parsed = parseJsonBody(ProjectMessageCreateBodySchema, await ctx.readBody())
+      if (!parsed.ok) {
+        ctx.sendJson(400, { error: parsed.error })
+        return true
+      }
+      const body = parsed.value
       const text = typeof body.body === 'string' ? body.body.trim() : ''
       const authorRole = typeof body.author_role === 'string' ? body.author_role : ''
       const meta = parseMessageMeta(body.meta)
@@ -237,7 +268,12 @@ export async function handleMessagingRoutes(
     if (req.method === 'POST') {
       // Owner/office only — broadcast is a one-way owner announcement.
       if (!ctx.requireRole(['admin', 'office'])) return true
-      const body = await ctx.readBody()
+      const parsed = parseJsonBody(BroadcastCreateBodySchema, await ctx.readBody())
+      if (!parsed.ok) {
+        ctx.sendJson(400, { error: parsed.error })
+        return true
+      }
+      const body = parsed.value
       const text = typeof body.body === 'string' ? body.body.trim() : ''
       const audience = typeof body.audience === 'string' ? body.audience : 'all'
       const projectId = typeof body.project_id === 'string' && isValidUuid(body.project_id) ? body.project_id : null

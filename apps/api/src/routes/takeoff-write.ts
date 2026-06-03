@@ -1,9 +1,10 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { HttpError, isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
   loadServiceItemCatalogIndex,
@@ -46,6 +47,33 @@ type PreparedTakeoffMeasurementInput = {
   // Additive — existing readers ignore it; the tag flow stays the fallback.
   conditionId: string | null
 }
+
+// POST /api/projects/:id/takeoff/measurement + /measurements wire-format.
+// Deliberately PERMISSIVE: the schema only types the scalar control fields
+// the route reads directly (`expected_version` / `version` / `draft_id`).
+// The single-measurement body IS the measurement input (every other key is
+// passed straight to `prepareTakeoffMeasurementInput`), and the batch body's
+// per-measurement objects are validated by that same deep parser — so both
+// schemas stay `.loose()` and keep the measurement payload `unknown` rather
+// than risk narrowing what the SPA already sends.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const TakeoffMeasurementBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+    draft_id: z.string().nullish(),
+  })
+  .loose()
+
+const TakeoffMeasurementsBodySchema = z
+  .object({
+    measurements: z.array(z.unknown()).optional(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+    draft_id: z.string().nullish(),
+  })
+  .loose()
 
 const ELEVATION_VOCAB = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
@@ -267,7 +295,12 @@ export async function handleTakeoffWriteRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(TakeoffMeasurementBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const measurementInput = prepareTakeoffMeasurementInput(body)
 
@@ -415,7 +448,12 @@ export async function handleTakeoffWriteRoutes(
   if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/measurements$/)) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(TakeoffMeasurementsBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const measurements = Array.isArray(body.measurements) ? body.measurements : []
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
 

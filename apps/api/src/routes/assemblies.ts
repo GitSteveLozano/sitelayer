@@ -1,12 +1,64 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import { validateFormula, MEASUREMENT_DRIVER_VARS } from '@sitelayer/formula-evaluator'
 import type { MeasurementDrivers } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { explodeMeasurement, type LoadedAssembly } from '../assembly-explode.js'
 import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
+
+// Permissive wire-format schemas. Numerics are string-or-number, the formula /
+// driver fields stay `unknown` because `parseFormulaFields` / `parseDriversBody`
+// do the deep validation downstream; `.loose()` keeps unknown keys so the SPA's
+// payloads aren't narrowed. Required-field enforcement (non-empty name, etc.)
+// stays in the handlers.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const AssemblyCreateBodySchema = z
+  .object({
+    service_item_code: z.string().optional(),
+    name: z.string().optional(),
+    description: z.string().nullish(),
+    unit: z.string().nullish(),
+  })
+  .loose()
+
+const AssemblyPatchBodySchema = z
+  .object({
+    name: z.string().optional(),
+    service_item_code: z.string().optional(),
+    description: z.string().nullish(),
+    unit: z.string().optional(),
+  })
+  .loose()
+
+const AssemblyExplodeBodySchema = z
+  .object({
+    measurement_quantity: NumericInputSchema.nullish(),
+    measurement_unit: z.string().nullish(),
+    is_deduction: z.boolean().nullish(),
+    drivers: z.unknown().nullish(),
+  })
+  .loose()
+
+// Component create/patch share the scalar fields; the formula / vars / include_when
+// fields are left `unknown` for parseFormulaFields to validate (it returns
+// HttpError(400) on bad input, so we must not pre-reject valid shapes here).
+const AssemblyComponentBodySchema = z
+  .object({
+    kind: z.string().optional(),
+    name: z.string().optional(),
+    quantity_per_unit: NumericInputSchema.nullish(),
+    unit: z.string().nullish(),
+    unit_cost: NumericInputSchema.nullish(),
+    waste_pct: NumericInputSchema.nullish(),
+    quantity_formula: z.unknown().nullish(),
+    formula_vars: z.unknown().nullish(),
+    include_when: z.unknown().nullish(),
+  })
+  .loose()
 
 export type AssemblyRouteCtx = {
   pool: Pool
@@ -215,7 +267,12 @@ export async function handleAssemblyRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/assemblies') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(AssemblyCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const serviceItem = typeof body.service_item_code === 'string' ? body.service_item_code.trim() : ''
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!serviceItem) {
@@ -265,7 +322,12 @@ export async function handleAssemblyRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(AssemblyPatchBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const sets: string[] = []
     const values: unknown[] = [ctx.company.id, id]
     if (body.name !== undefined) {
@@ -375,7 +437,12 @@ export async function handleAssemblyRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(AssemblyExplodeBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const measurementQuantity = Number(body.measurement_quantity)
     if (!Number.isFinite(measurementQuantity) || measurementQuantity < 0) {
       ctx.sendJson(400, { error: 'measurement_quantity must be a non-negative number' })
@@ -472,7 +539,12 @@ export async function handleAssemblyRoutes(
       ctx.sendJson(400, { error: 'assembly id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(AssemblyComponentBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const kind = typeof body.kind === 'string' ? body.kind.trim() : ''
     const name = typeof body.name === 'string' ? body.name.trim() : ''
     if (!['material', 'labor', 'sub', 'freight'].includes(kind)) {
@@ -583,7 +655,12 @@ export async function handleAssemblyRoutes(
     }
 
     if (req.method === 'PATCH') {
-      const body = await ctx.readBody()
+      const parsed = parseJsonBody(AssemblyComponentBodySchema, await ctx.readBody())
+      if (!parsed.ok) {
+        ctx.sendJson(400, { error: parsed.error })
+        return true
+      }
+      const body = parsed.value
       const sets: string[] = []
       const values: unknown[] = [ctx.company.id, assemblyId, componentId]
       if (body.kind !== undefined) {

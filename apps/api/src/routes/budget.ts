@@ -1,8 +1,18 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/projects/:id/budget/freeze wire-format — the only body-bearing
+// route here (variance + list are GETs). `note` is optional/nullish; the
+// handler keeps its own trim + slice. `.loose()` keeps unknown keys.
+const BudgetFreezeBodySchema = z
+  .object({
+    note: z.string().nullish(),
+  })
+  .loose()
 
 export type BudgetRouteCtx = {
   pool: Pool
@@ -188,7 +198,15 @@ export async function handleBudgetRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'project id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsed = parseJsonBody(
+      BudgetFreezeBodySchema,
+      await ctx.readBody().catch(() => ({}) as Record<string, unknown>),
+    )
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim().slice(0, 500) : null
 
     let result: { snapshot: BudgetSnapshotRow; lines: BudgetSnapshotLineRow[] } | null

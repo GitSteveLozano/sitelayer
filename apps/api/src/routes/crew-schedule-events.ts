@@ -14,10 +14,25 @@ import {
 } from '@sitelayer/workflows'
 import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { z } from 'zod'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+
+// PATCH /api/schedules/:id wire-format (drag-to-reschedule). The handler keeps
+// its own coercion (isValidDateInput, parseExpectedVersion); the schema only
+// rejects malformed shapes up front and stays permissive — version fields are
+// string-or-number to match parseExpectedVersion's "5" alongside 5 acceptance.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const CrewSchedulePatchBodySchema = z
+  .object({
+    scheduled_for: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 // Crew-schedule workflow surface — mirrors the rental-billing-state and
 // time-review-runs route shape (see docs/DETERMINISTIC_WORKFLOWS.md).
@@ -395,7 +410,12 @@ export async function handleCrewScheduleEventRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(CrewSchedulePatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     const scheduledFor = typeof body.scheduled_for === 'string' ? body.scheduled_for.trim() : null
     if (scheduledFor != null && !isValidDateInput(scheduledFor)) {
       ctx.sendJson(400, { error: 'scheduled_for must be YYYY-MM-DD' })

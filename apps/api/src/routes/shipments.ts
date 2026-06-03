@@ -16,6 +16,37 @@ import {
   type ShipmentWorkflowSnapshot,
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
+import { z } from 'zod'
+import { parseJsonBody } from '../http-utils.js'
+
+// POST /api/projects/:id/shipments wire-format. Mirrors the inline `s()`
+// coercer — every field is string-or-null and trimmed/defaulted downstream.
+// The schema rejects malformed shapes (e.g. `driver: { ... }`) up front
+// without tightening the permissive create semantics.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+
+const ShipmentCreateBodySchema = z
+  .object({
+    bom_id: StringOrNullSchema.optional(),
+    source_branch_id: StringOrNullSchema.optional(),
+    destination_location_id: StringOrNullSchema.optional(),
+    direction: StringOrNullSchema.optional(),
+    scheduled_for: StringOrNullSchema.optional(),
+    driver: StringOrNullSchema.optional(),
+    ticket_number: StringOrNullSchema.optional(),
+    notes: StringOrNullSchema.optional(),
+  })
+  .loose()
+
+// POST /api/shipments/:id/lines wire-format. Only the top-level `lines[]`
+// shape is typed here — each line object is validated/coerced per-field
+// inside the loop (s()/num() + the inventory_item_id XOR catalog_part_id
+// rule), so the items stay loose objects.
+const ShipmentLinesBodySchema = z
+  .object({
+    lines: z.array(z.object({}).loose()).optional(),
+  })
+  .loose()
 
 /**
  * Shipments — CRUD + deterministic-workflow surface. The reducer
@@ -206,7 +237,12 @@ export async function handleShipmentRoutes(
   if (req.method === 'POST' && projectShipmentsMatch) {
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const projectId = projectShipmentsMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ShipmentCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into shipments (
@@ -270,7 +306,12 @@ export async function handleShipmentRoutes(
   if (req.method === 'POST' && linesMatch) {
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const id = linesMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ShipmentLinesBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const lines = Array.isArray(body.lines) ? (body.lines as Array<Record<string, unknown>>) : null
     if (!lines || lines.length === 0) {
       ctx.sendJson(400, { error: 'lines[] required' })

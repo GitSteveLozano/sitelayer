@@ -1,8 +1,23 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// PUT /api/qbo/custom-fields wire-format. entity_type is further checked
+// against ALLOWED_ENTITIES, field_name + qbo_definition_id are required
+// downstream; qbo_label/notes are optional. The schema rejects non-string
+// shapes up front; `.loose()` keeps unknown keys.
+const QboCustomFieldUpsertBodySchema = z
+  .object({
+    entity_type: z.string().optional(),
+    field_name: z.string().optional(),
+    qbo_definition_id: z.string().optional(),
+    qbo_label: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
 
 export type QboCustomFieldRouteCtx = {
   pool: Pool
@@ -64,7 +79,12 @@ export async function handleQboCustomFieldRoutes(
 
   if (req.method === 'PUT' && url.pathname === '/api/qbo/custom-fields') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(QboCustomFieldUpsertBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const entityType = typeof body.entity_type === 'string' ? body.entity_type.trim() : ''
     const fieldName = typeof body.field_name === 'string' ? body.field_name.trim() : ''
     const definitionId = typeof body.qbo_definition_id === 'string' ? body.qbo_definition_id.trim() : ''

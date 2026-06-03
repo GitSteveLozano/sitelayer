@@ -1,8 +1,9 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import { getRequestContext } from '@sitelayer/logger'
 import { resolveShareSecret, verifyShareToken } from '../estimate-share-token.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   appendPortalCaptureEvents,
@@ -78,6 +79,26 @@ async function resolveShareLink(
   return { ok: true, link }
 }
 
+// POST /api/portal/rentals/:share_token/reserve wire-format. `items` is a
+// non-empty array whose elements are coerced per-element downstream
+// (`(item ?? {}) as Record<string, unknown>` → defensive field reads), so
+// it stays an open `z.unknown()` array — operator review is the source of
+// truth for partial/typo'd entries. The scalar contact/date fields are
+// typed only to reject malformed shapes (e.g. `contact_email: { ... }`);
+// the existing `typeof ... === 'string'` guards continue downstream.
+// Permissive — every field optional, no unknown-key rejection.
+const PortalRentalReserveBodySchema = z
+  .object({
+    items: z.array(z.unknown()).optional(),
+    requested_start: z.string().optional(),
+    requested_end: z.string().optional(),
+    contact_name: z.string().optional(),
+    contact_email: z.string().optional(),
+    contact_phone: z.string().optional(),
+    notes: z.string().optional(),
+  })
+  .loose()
+
 export async function handlePortalRentalRoutes(
   req: http.IncomingMessage,
   url: URL,
@@ -128,7 +149,12 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(PortalRentalReserveBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const items = Array.isArray(body.items) ? body.items : []
     if (items.length === 0) {
       ctx.sendJson(400, { error: 'items array is required and must be non-empty' })

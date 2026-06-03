@@ -1,7 +1,8 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
+import { z } from 'zod'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import {
   JOB_RENTAL_CONTRACT_COLUMNS,
@@ -17,6 +18,61 @@ import {
   type JobRentalLineRow,
   type RentalInventoryRouteCtx,
 } from './rental-inventory.types.js'
+
+// Permissive wire-format schemas — fields stay optional/nullish to match the
+// existing defensive coercion downstream (optionalString / parseNumber etc.);
+// the schema only rejects clearly-malformed shapes (e.g. `quantity: {}`) up
+// front. Numerics accept string-or-number because the parse helpers already
+// coerce both. No `.strict()` — unknown keys pass through (`.loose()`).
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const RentalContractLineCreateBodySchema = z
+  .object({
+    inventory_item_id: z.string().nullish(),
+    quantity: NumericInputSchema.nullish(),
+    agreed_rate: NumericInputSchema.nullish(),
+    rate_unit: z.string().nullish(),
+    on_rent_date: z.string().nullish(),
+    off_rent_date: z.string().nullish(),
+    billable: z.boolean().nullish(),
+    taxable: z.boolean().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const RentalContractLinePatchBodySchema = z
+  .object({
+    quantity: NumericInputSchema.nullish(),
+    agreed_rate: NumericInputSchema.nullish(),
+    rate_unit: z.string().nullish(),
+    on_rent_date: z.string().nullish(),
+    off_rent_date: z.string().nullish(),
+    billable: z.boolean().nullish(),
+    taxable: z.boolean().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const RentalContractLineDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const RentalRateTierCreateBodySchema = z
+  .object({
+    rate_unit: z.string().nullish(),
+    min_days: NumericInputSchema.nullish(),
+    max_days: NumericInputSchema.nullish(),
+    rate: NumericInputSchema.nullish(),
+    sort_order: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 /**
  * Handle the rental contract line-item CRUD surface — lines under a contract
@@ -60,7 +116,12 @@ export async function handleRentalContractLinesRoutes(
   if (req.method === 'POST' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/lines$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const contractId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalContractLineCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const itemId = optionalString(body.inventory_item_id)
     const quantity = parsePositiveNumber(body.quantity)
     if (!itemId || quantity === null) {
@@ -142,7 +203,12 @@ export async function handleRentalContractLinesRoutes(
   if (req.method === 'PATCH' && url.pathname.match(/^\/api\/rental-contract-lines\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const lineId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalContractLinePatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     return patchVersionedEntity({
       ctx,
       body,
@@ -208,7 +274,12 @@ export async function handleRentalContractLinesRoutes(
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/rental-contract-lines\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const lineId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalContractLineDeleteBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     return deleteVersionedEntity({
       ctx,
       body,
@@ -275,7 +346,12 @@ export async function handleRentalContractLinesRoutes(
   if (req.method === 'POST' && tierBaseMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const lineId = tierBaseMatch[1]!
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalRateTierCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const rateUnit = String(body.rate_unit ?? '').trim()
     const minDays = Number(body.min_days)
     const maxDaysRaw = body.max_days

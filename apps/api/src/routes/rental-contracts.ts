@@ -1,8 +1,9 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
+import { z } from 'zod'
 import { calculateJobRentalBillingRun, initialJobRentalNextBillingDate } from '@sitelayer/domain'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
 import {
   JOB_RENTAL_CONTRACT_COLUMNS,
@@ -21,6 +22,50 @@ import {
   type RentalBillingRunRow,
   type RentalInventoryRouteCtx,
 } from './rental-inventory.types.js'
+
+// Permissive wire-format schemas — every field optional/nullish to preserve
+// the existing partial-create / partial-PATCH semantics; downstream
+// optionalString / parseNumber still coerce defensively. Numerics accept
+// string-or-number. No `.strict()` — `.loose()` lets unknown keys through.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const RentalContractCreateBodySchema = z
+  .object({
+    billing_start_date: z.string().nullish(),
+    billing_cycle_days: NumericInputSchema.nullish(),
+    customer_id: z.string().nullish(),
+    billing_mode: z.string().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const RentalContractPatchBodySchema = z
+  .object({
+    customer_id: z.string().nullish(),
+    billing_cycle_days: NumericInputSchema.nullish(),
+    billing_mode: z.string().nullish(),
+    billing_start_date: z.string().nullish(),
+    next_billing_date: z.string().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const RentalBillingRunPreviewBodySchema = z
+  .object({
+    reference_date: z.string().nullish(),
+  })
+  .loose()
+
+const RentalBillingRunCreateBodySchema = z
+  .object({
+    reference_date: z.string().nullish(),
+    force: z.boolean().nullish(),
+  })
+  .loose()
 
 /**
  * Handle the rental contract CRUD surface — contracts and the
@@ -63,7 +108,12 @@ export async function handleRentalContractsRoutes(
   if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/rental-contracts$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalContractCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const project = await loadProject(ctx.pool, ctx.company.id, projectId)
     if (!project) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -120,7 +170,12 @@ export async function handleRentalContractsRoutes(
   if (req.method === 'PATCH' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const contractId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalContractPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     if (body.billing_start_date !== undefined && !isValidDateInput(body.billing_start_date)) {
       ctx.sendJson(400, { error: 'billing_start_date must be YYYY-MM-DD' })
       return true
@@ -181,7 +236,12 @@ export async function handleRentalContractsRoutes(
 
   if (req.method === 'POST' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/billing-runs\/preview$/)) {
     const contractId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalBillingRunPreviewBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const referenceDate = optionalString(body.reference_date) ?? todayISO()
     if (!isValidDateInput(referenceDate)) {
       ctx.sendJson(400, { error: 'reference_date must be YYYY-MM-DD' })
@@ -221,7 +281,12 @@ export async function handleRentalContractsRoutes(
   if (req.method === 'POST' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/billing-runs$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const contractId = url.pathname.split('/')[3] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(RentalBillingRunCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const referenceDate = optionalString(body.reference_date) ?? todayISO()
     if (!isValidDateInput(referenceDate)) {
       ctx.sendJson(400, { error: 'reference_date must be YYYY-MM-DD' })

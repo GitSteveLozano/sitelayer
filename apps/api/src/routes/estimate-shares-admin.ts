@@ -6,9 +6,10 @@ import {
   transitionEstimateShareWorkflow,
   type EstimateShareWorkflowSnapshot,
 } from '@sitelayer/workflows'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken } from '../estimate-share-token.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   PORTAL_ESTIMATES_PATH_PREFIX,
@@ -85,6 +86,20 @@ function shareRowToSnapshot(row: EstimateShareRow): EstimateShareWorkflowSnapsho
 // Authenticated routes
 // ---------------------------------------------------------------------------
 
+// POST /api/projects/:id/estimate/share wire-format. Permissive: the route
+// already trims + validates recipient_email and bounds expires_in_days; the
+// schema only rejects malformed field *shapes* up front. expires_in_days is
+// string-or-number to match the legacy `Number(rawExpiry)` coercion.
+const EstimateShareCreateBodySchema = z
+  .object({
+    recipient_email: z.string().optional(),
+    recipient_name: z.string().optional(),
+    message: z.string().nullish(),
+    include_signed_link: z.boolean().nullish(),
+    expires_in_days: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
+
 export type EstimateShareRouteCtx = {
   pool: Pool
   company: ActiveCompany
@@ -108,7 +123,12 @@ export async function handleEstimateShareRoutes(
   if (req.method === 'POST' && createMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = createMatch[1] ?? ''
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(EstimateShareCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const recipient_email = typeof body.recipient_email === 'string' ? body.recipient_email.trim() : ''
     const recipient_name = typeof body.recipient_name === 'string' ? body.recipient_name.trim() : ''
     // Compose fields (D10 SEND-TO-CLIENT composer). message is the editable

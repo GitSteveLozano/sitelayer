@@ -1,11 +1,28 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import type { Identity } from '../auth.js'
+import { parseJsonBody } from '../http-utils.js'
 import { parseTraceIdFromSentryTraceHeader } from '../debug-trace.js'
 import { observeSupportPacket } from '../metrics.js'
+
+// POST /api/support-packets wire-format. The body is deliberately
+// free-form: `client` carries an arbitrary client-side diagnostic blob
+// and the whole body is the fallback when `client` is absent
+// (`supportJsonRecord(body.client ?? body)` sanitizes + bounds it
+// downstream). So this schema only types the one scalar control field
+// (`problem`) and stays `.loose()` so the capture payload passes through
+// untouched — it is purely an up-front shape guard against e.g.
+// `problem: { ... }`.
+const SupportPacketCreateBodySchema = z
+  .object({
+    problem: z.string().nullish(),
+    client: z.unknown().optional(),
+  })
+  .loose()
 
 export type JsonRecord = Record<string, unknown>
 
@@ -708,7 +725,12 @@ async function recordSupportPacketAccess(
 }
 
 async function createSupportPacket(ctx: SupportPacketRouteCtx) {
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(SupportPacketCreateBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const problemSource = typeof body.problem === 'string' ? body.problem : ''
   const problem = problemSource.trim() ? redactString(problemSource.trim(), 4000) : null
   const client = supportJsonRecord(body.client ?? body)

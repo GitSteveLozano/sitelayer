@@ -1,8 +1,28 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { randomBytes } from 'node:crypto'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
+
+// POST /api/customer-portal-links wire-format. The handler keeps its own
+// coercion (`s()` trim-to-null, the `allows` map/filter against
+// ALLOWED_KINDS); the schema only rejects malformed shapes up front and stays
+// permissive — every field optional/nullish, `allows` an opaque array the
+// existing map(String).filter(...) owns, no unknown-key rejection.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+
+const CustomerPortalLinkCreateBodySchema = z
+  .object({
+    customer_id: StringOrNullSchema.optional(),
+    project_id: StringOrNullSchema.optional(),
+    allows: z.array(z.unknown()).optional(),
+    recipient_email: StringOrNullSchema.optional(),
+    recipient_name: StringOrNullSchema.optional(),
+    expires_at: StringOrNullSchema.optional(),
+  })
+  .loose()
 
 /**
  * Admin-side customer portal links — issue, revoke, and inspect.
@@ -63,7 +83,12 @@ export async function handleCustomerPortalRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/customer-portal-links') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedCreate = parseJsonBody(CustomerPortalLinkCreateBodySchema, await ctx.readBody())
+    if (!parsedCreate.ok) {
+      ctx.sendJson(400, { error: parsedCreate.error })
+      return true
+    }
+    const body = parsedCreate.value
     const customerId = s(body.customer_id)
     const projectId = s(body.project_id)
     if (!customerId && !projectId) {

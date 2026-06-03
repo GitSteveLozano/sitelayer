@@ -1,9 +1,41 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { CostLibraryImportError, parsePriceBook, type ParsedCostLibraryRow } from '../cost-library-import.js'
+
+// Wire-format for the cost-library JSON bodies. Both handlers keep their own
+// field-level coercion (optionalString / optionalRate / parsePriceBook); these
+// schemas only reject malformed shapes up front and stay permissive: every
+// field optional/nullish, rates string-or-number to match optionalRate's "5"
+// alongside 5 acceptance, and the import `rows[]` stays an opaque array of
+// records that the existing deep `normalizePreParsedRow` parser owns.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const CostLibraryCreateBodySchema = z
+  .object({
+    code: z.string().nullish(),
+    trade: z.string().nullish(),
+    name: z.string().nullish(),
+    unit: z.string().nullish(),
+    region: z.string().nullish(),
+    source: z.string().nullish(),
+    material_rate: NumericInputSchema.nullish(),
+    labor_rate: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const CostLibraryImportBodySchema = z
+  .object({
+    format: z.string().nullish(),
+    content: z.string().nullish(),
+    rows: z.array(z.record(z.string(), z.unknown())).optional(),
+    source: z.string().nullish(),
+    region: z.string().nullish(),
+  })
+  .loose()
 
 export type CostLibraryRouteCtx = {
   pool: Pool
@@ -116,7 +148,12 @@ export async function handleCostLibraryRoutes(
   // --- create one row --------------------------------------------------------
   if (req.method === 'POST' && collectionMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedCreate = parseJsonBody(CostLibraryCreateBodySchema, await ctx.readBody())
+    if (!parsedCreate.ok) {
+      ctx.sendJson(400, { error: parsedCreate.error })
+      return true
+    }
+    const body = parsedCreate.value
 
     const code = optionalString(body.code, 128)
     if (!code) {
@@ -143,7 +180,12 @@ export async function handleCostLibraryRoutes(
   // --- import a price book ----------------------------------------------------
   if (req.method === 'POST' && importMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedImport = parseJsonBody(CostLibraryImportBodySchema, await ctx.readBody())
+    if (!parsedImport.ok) {
+      ctx.sendJson(400, { error: parsedImport.error })
+      return true
+    }
+    const body = parsedImport.value
 
     const rawFormat = typeof body.format === 'string' ? body.format.trim().toLowerCase() : ''
     const format = rawFormat === 'xlsx' || rawFormat === 'csv' ? (rawFormat as 'csv' | 'xlsx') : null

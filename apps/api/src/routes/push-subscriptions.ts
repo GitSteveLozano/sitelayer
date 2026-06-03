@@ -1,8 +1,22 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/push/subscriptions wire-format. endpoint/p256dh/auth are required
+// downstream (the handler 400s on any blank one); user_agent is optional and
+// falls back to the request header. The schema only rejects non-string
+// shapes up front; `.loose()` keeps unknown keys.
+const PushSubscriptionCreateBodySchema = z
+  .object({
+    endpoint: z.string().optional(),
+    p256dh: z.string().optional(),
+    auth: z.string().optional(),
+    user_agent: z.string().nullish(),
+  })
+  .loose()
 
 export type PushSubscriptionRouteCtx = {
   pool: Pool
@@ -54,7 +68,12 @@ export async function handlePushSubscriptionRoutes(
   }
 
   if (req.method === 'POST' && url.pathname === '/api/push/subscriptions') {
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(PushSubscriptionCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
     const p256dh = typeof body.p256dh === 'string' ? body.p256dh.trim() : ''
     const auth = typeof body.auth === 'string' ? body.auth.trim() : ''

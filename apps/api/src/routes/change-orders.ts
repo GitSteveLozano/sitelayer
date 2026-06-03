@@ -11,10 +11,26 @@ import {
   type ChangeOrderWorkflowSnapshot,
   type ChangeOrderWorkflowState,
 } from '@sitelayer/workflows'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/projects/:id/change-orders wire-format. The handler trims
+// `description`, requires a finite `value_delta`, and defaults
+// `schedule_impact_days` to 0; the schema only rejects malformed shapes up
+// front (e.g. `description: { ... }`) while staying permissive — numerics are
+// string-or-number to match the `Number(body.x)` coercion below.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const ChangeOrderCreateBodySchema = z
+  .object({
+    description: z.string().optional(),
+    value_delta: NumericInputSchema.nullish(),
+    schedule_impact_days: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 export type ChangeOrderRouteCtx = {
   pool: Pool
@@ -156,7 +172,12 @@ export async function handleChangeOrderRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(ChangeOrderCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const description = typeof body.description === 'string' ? body.description.trim() : ''
     const valueDelta = Number(body.value_delta)
     const scheduleImpact = Number.isFinite(Number(body.schedule_impact_days)) ? Number(body.schedule_impact_days) : 0

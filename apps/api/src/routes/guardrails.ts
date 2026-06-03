@@ -1,10 +1,28 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { Guardrail, GuardrailStatus, GuardrailType } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/guardrails/:id/snooze wire-format. The route still validates
+// snoozed_until is a parseable ISO date; the schema only rejects a non-string
+// shape early.
+const GuardrailSnoozeBodySchema = z
+  .object({
+    snoozed_until: z.string().nullish(),
+  })
+  .loose()
+
+// POST /api/guardrails/:id/mute wire-format. muted_reason is required and
+// trimmed downstream; permissive on shape only.
+const GuardrailMuteBodySchema = z
+  .object({
+    muted_reason: z.string().nullish(),
+  })
+  .loose()
 
 export type GuardrailRouteCtx = {
   pool: Pool
@@ -234,7 +252,12 @@ export async function handleGuardrailRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(GuardrailSnoozeBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const snoozedUntil = typeof body.snoozed_until === 'string' ? body.snoozed_until.trim() : ''
     if (!snoozedUntil || Number.isNaN(Date.parse(snoozedUntil))) {
       ctx.sendJson(400, { error: 'snoozed_until must be an ISO date string' })
@@ -257,7 +280,12 @@ export async function handleGuardrailRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(GuardrailMuteBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const mutedReason = typeof body.muted_reason === 'string' ? body.muted_reason.trim() : ''
     if (!mutedReason) {
       ctx.sendJson(400, { error: 'muted_reason is required' })

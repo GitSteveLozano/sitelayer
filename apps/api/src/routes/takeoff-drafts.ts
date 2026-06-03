@@ -1,11 +1,12 @@
 import type http from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 import type { Pool } from 'pg'
 import { getRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { currentTraceHeaders, recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordCostLog } from '../cost-log.js'
-import { isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import type { TakeoffResult } from '@sitelayer/capture-schema'
 import {
   BlueprintUploadError,
@@ -88,6 +89,46 @@ const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status,
 // migration 122 column default).
 const ALLOWED_DRAFT_KINDS = new Set(['takeoff', 'count'])
 const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
+
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+// POST /api/projects/:projectId/takeoff-drafts/:draftId/promote wire-format.
+// Only the top-level shape is typed: `quantity_ids` is filtered + trimmed
+// per-entry downstream and `service_item_code_overrides` is an arbitrary
+// id→code map validated key-by-key in the handler, so it stays `unknown`.
+// The schema rejects e.g. `quantity_ids: "x"` (non-array) at the boundary.
+const TakeoffDraftPromoteBodySchema = z
+  .object({
+    quantity_ids: z.array(z.unknown()).optional(),
+    service_item_code_overrides: z.unknown().optional(),
+  })
+  .loose()
+
+// POST /api/projects/:projectId/takeoff-drafts (manual draft create).
+const TakeoffDraftCreateBodySchema = z
+  .object({
+    name: z.string().optional(),
+    type: z.string().optional(),
+  })
+  .loose()
+
+// PATCH /api/takeoff-drafts/:id — rename / archive. All fields optional;
+// the handler resolves name/status/version null-vs-absent semantics itself.
+const TakeoffDraftPatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    status: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+// POST /api/takeoff-drafts/:id/duplicate — optional override name.
+const TakeoffDraftDuplicateBodySchema = z
+  .object({
+    name: z.string().nullish(),
+  })
+  .loose()
 
 /**
  * Resolve the canonical `service_item_code` for a captured `TakeoffQuantity`.
@@ -711,7 +752,12 @@ export async function handleTakeoffDraftRoutes(
       return true
     }
 
-    const body = await ctx.readBody()
+    const parsedPromote = parseJsonBody(TakeoffDraftPromoteBodySchema, await ctx.readBody())
+    if (!parsedPromote.ok) {
+      ctx.sendJson(400, { error: parsedPromote.error })
+      return true
+    }
+    const body = parsedPromote.value
     const rawIds = Array.isArray(body.quantity_ids) ? body.quantity_ids : null
     if (!rawIds || rawIds.length === 0) {
       ctx.sendJson(400, { error: 'quantity_ids (non-empty array) is required' })
@@ -992,7 +1038,12 @@ export async function handleTakeoffDraftRoutes(
       ctx.sendJson(400, { error: 'project id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedCreate = parseJsonBody(TakeoffDraftCreateBodySchema, await ctx.readBody())
+    if (!parsedCreate.ok) {
+      ctx.sendJson(400, { error: parsedCreate.error })
+      return true
+    }
+    const body = parsedCreate.value
     const name = String(body.name ?? '').trim()
     if (!name) {
       ctx.sendJson(400, { error: 'name is required' })
@@ -1045,7 +1096,12 @@ export async function handleTakeoffDraftRoutes(
       ctx.sendJson(400, { error: 'draft id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(TakeoffDraftPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const nameRaw = body.name === undefined ? null : String(body.name).trim()
     const statusRaw = body.status === undefined ? null : String(body.status).trim()
@@ -1116,7 +1172,12 @@ export async function handleTakeoffDraftRoutes(
       ctx.sendJson(400, { error: 'draft id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedDup = parseJsonBody(TakeoffDraftDuplicateBodySchema, await ctx.readBody())
+    if (!parsedDup.ok) {
+      ctx.sendJson(400, { error: parsedDup.error })
+      return true
+    }
+    const body = parsedDup.value
     const explicitName = body.name === undefined ? null : String(body.name).trim()
 
     const duplicated = await withMutationTx(async (client) => {

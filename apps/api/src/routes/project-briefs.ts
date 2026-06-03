@@ -1,7 +1,24 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+
+// POST /api/projects/:id/briefs wire-format. `goal` + `effective_date` are
+// required downstream (the handler 400s on blank/invalid). steps/crew/
+// materials are JSON arrays the handler runs through `parseJsonArray`
+// (anything non-array falls back to []); typed as arrays here without
+// validating inner shape. `.loose()` keeps unknown keys.
+const ProjectBriefCreateBodySchema = z
+  .object({
+    goal: z.string().optional(),
+    effective_date: z.string().optional(),
+    steps: z.array(z.unknown()).nullish(),
+    crew: z.array(z.unknown()).nullish(),
+    materials: z.array(z.unknown()).nullish(),
+  })
+  .loose()
 
 /**
  * Foreman morning brief routes (`fm-brief`). The brief is a write-only
@@ -70,7 +87,12 @@ export async function handleProjectBriefRoutes(
   if (req.method === 'POST' && createMatch) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const projectId = createMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ProjectBriefCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const goal = typeof body.goal === 'string' ? body.goal.trim() : ''
     if (!goal) {
       ctx.sendJson(400, { error: 'goal is required' })

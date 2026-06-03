@@ -12,11 +12,25 @@ import {
   type LaborPayrollWorkflowState,
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// POST /api/labor-payroll-runs wire-format. The route already enforces
+// YYYY-MM-DD on period_start/period_end and a uuid-shaped
+// time_review_run_id; the schema only rejects malformed shapes up front
+// (e.g. `period_start: { ... }`). Kept permissive — every field optional;
+// the existing typeof/trim guards continue downstream.
+const LaborPayrollRunCreateBodySchema = z
+  .object({
+    period_start: z.string().optional(),
+    period_end: z.string().optional(),
+    time_review_run_id: z.string().nullish(),
+  })
+  .loose()
 
 /**
  * Labor payroll workflow routes.
@@ -388,7 +402,12 @@ export async function handleLaborPayrollRunRoutes(
   // -------------------------------------------------------------------------
   if (req.method === 'POST' && url.pathname === '/api/labor-payroll-runs') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(LaborPayrollRunCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const periodStart = typeof body.period_start === 'string' ? body.period_start.trim() : ''
     const periodEnd = typeof body.period_end === 'string' ? body.period_end.trim() : ''
     const timeReviewRunId =

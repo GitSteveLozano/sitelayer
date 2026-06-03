@@ -13,8 +13,23 @@ import { isMultipartRequest, parseBlueprintMultipart, type BlueprintMultipartRes
 import type { PdfPageRasterizer } from '../blueprint-rasterize.js'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, parseExpectedVersion } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity } from '../versioned-update.js'
+
+// DELETE /api/blueprints/:id wire-format. Deep parsing is delegated to
+// `deleteVersionedEntity`, which only reads the optimistic-version control
+// fields off the body — so we type just those (string-or-number) and keep
+// `.loose()` for everything else. The multipart-bearing POST/PATCH/versions
+// handlers in this module are intentionally left raw (multipart + multi-alias
+// bodies are out of scope for the JSON request-validation boundary).
+const NumericInputSchema = z.union([z.number(), z.string()])
+const BlueprintDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 type BlueprintDocumentRow = {
   id: string
@@ -745,7 +760,12 @@ export async function handleBlueprintRoutes(
       ctx.sendJson(400, { error: 'blueprint id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BlueprintDeleteBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     return deleteVersionedEntity({
       ctx,
       body,

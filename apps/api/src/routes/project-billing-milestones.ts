@@ -1,9 +1,44 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// Wire-format for the milestone routes. Both bodies are multi-alias: POST
+// dispatches on milestones[] / label / (default ladder) and PATCH builds a
+// dynamic SET from whichever optional fields are present. The existing deep
+// coercers (`coerceMilestoneInput`, `parseOptionalMoney`, `isMilestoneStatus`)
+// stay the source of truth — these schemas only reject malformed top-level
+// shapes up front (e.g. `milestones: 7`, `label: {...}`). `milestones[]`
+// entries are typed as objects without validating their inner shape (the
+// coercer owns that). `.loose()` keeps unknown keys.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const MilestoneCreateBodySchema = z
+  .object({
+    milestones: z.array(z.record(z.string(), z.unknown())).optional(),
+    label: z.string().optional(),
+    pct: NumericInputSchema.nullish(),
+    amount: NumericInputSchema.nullish(),
+    sort_order: NumericInputSchema.nullish(),
+    status: z.string().optional(),
+    estimate_push_id: z.union([z.string(), z.null()]).optional(),
+    contract_value: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const MilestonePatchBodySchema = z
+  .object({
+    status: z.string().optional(),
+    label: z.string().optional(),
+    pct: NumericInputSchema.nullish(),
+    amount: NumericInputSchema.nullish(),
+    sort_order: NumericInputSchema.nullish(),
+    estimate_push_id: z.union([z.string(), z.null()]).optional(),
+  })
+  .loose()
 
 export type ProjectBillingMilestoneRouteCtx = {
   pool: Pool
@@ -195,7 +230,12 @@ export async function handleProjectBillingMilestoneRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(MilestoneCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
 
     // Resolve the milestone set to insert. Precedence:
     //   1. body.milestones[] — explicit set
@@ -282,7 +322,12 @@ export async function handleProjectBillingMilestoneRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(MilestonePatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
 
     // Build the SET clause from the supplied fields. `status` drives the
     // invoiced_at / paid_at stamping (manual mark-invoiced / mark-paid).

@@ -1,9 +1,20 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { enqueueNotificationRow } from '../notifications.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+
+// POST /api/payment-reminders wire-format. `project_ids` is the only
+// field; typed as an optional array of strings so a malformed shape
+// (e.g. `project_ids: "abc"` or an object) is rejected up front. The
+// existing per-element uuid filter + non-empty check stays downstream.
+const PaymentReminderBodySchema = z
+  .object({
+    project_ids: z.array(z.string()).optional(),
+  })
+  .loose()
 
 export type PaymentReminderRouteCtx = {
   pool: Pool
@@ -31,7 +42,12 @@ export async function handlePaymentReminderRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/payment-reminders') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(PaymentReminderBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const ids = Array.isArray(body.project_ids)
       ? body.project_ids.filter((x): x is string => typeof x === 'string' && isValidUuid(x))
       : []

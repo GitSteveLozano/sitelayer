@@ -1,7 +1,19 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+
+// POST /api/projects/:id/assignments wire-format. Both fields are validated
+// downstream (clerk_user_id non-empty; role ∈ foreman|worker) — the schema
+// just rejects non-string shapes up front. `.loose()` keeps unknown keys.
+const AssignmentCreateBodySchema = z
+  .object({
+    clerk_user_id: z.string().optional(),
+    role: z.string().optional(),
+  })
+  .loose()
 
 export type ProjectAssignmentRouteCtx = {
   pool: Pool
@@ -93,7 +105,12 @@ export async function handleProjectAssignmentRoutes(
       ctx.sendJson(404, { error: 'project not found' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(AssignmentCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const assignee = String(body.clerk_user_id ?? '').trim()
     const role = String(body.role ?? '').trim()
     if (!assignee) {

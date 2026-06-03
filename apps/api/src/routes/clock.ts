@@ -2,11 +2,56 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { haversineDistanceMeters, isInsideGeofence } from '@sitelayer/domain'
 import type { PermissionAction } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid, parseOptionalNumber } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody, parseOptionalNumber } from '../http-utils.js'
 import { parseClockEventPhotoMultipart, ClockEventPhotoUploadError } from '../clock-event-photo-upload.js'
 import type { BlueprintStorage } from '../storage.js'
+
+// Wire-format schemas for the JSON clock routes. Every field is optional or
+// nullish to preserve the existing permissive coercion (parseOptionalNumber,
+// parseClockSource, String(...).trim(), etc.); the schemas only reject
+// malformed shapes (e.g. `lat: { ... }`) up front. Numerics are
+// string-or-number to match parseOptionalNumber's "5" alongside 5 acceptance.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const ClockInBodySchema = z
+  .object({
+    lat: NumericInputSchema.nullish(),
+    lng: NumericInputSchema.nullish(),
+    accuracy_m: NumericInputSchema.nullish(),
+    notes: z.string().nullish(),
+    source: z.string().nullish(),
+    worker_id: z.union([z.string(), z.null()]).optional(),
+    project_id: z.union([z.string(), z.null()]).optional(),
+  })
+  .loose()
+
+const ClockOutBodySchema = z
+  .object({
+    lat: NumericInputSchema.nullish(),
+    lng: NumericInputSchema.nullish(),
+    accuracy_m: NumericInputSchema.nullish(),
+    notes: z.string().nullish(),
+    source: z.string().nullish(),
+    auto_out_reason: z.string().nullish(),
+    worker_id: z.union([z.string(), z.null()]).optional(),
+  })
+  .loose()
+
+const ClockVoidBodySchema = z
+  .object({
+    reason: z.string().nullish(),
+  })
+  .loose()
+
+const ClockPhotoReviewBodySchema = z
+  .object({
+    status: z.string().nullish(),
+    note: z.string().nullish(),
+  })
+  .loose()
 
 export type ClockRouteCtx = {
   pool: Pool
@@ -119,7 +164,12 @@ function computeCorrectibleUntil(
  */
 export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx: ClockRouteCtx): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/clock/in') {
-    const body = await ctx.readBody()
+    const parsedIn = parseJsonBody(ClockInBodySchema, await ctx.readBody())
+    if (!parsedIn.ok) {
+      ctx.sendJson(400, { error: parsedIn.error })
+      return true
+    }
+    const body = parsedIn.value
     const lat = parseOptionalNumber(body.lat)
     const lng = parseOptionalNumber(body.lng)
     if (lat === null || lng === null) {
@@ -354,7 +404,12 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
   }
 
   if (req.method === 'POST' && url.pathname === '/api/clock/out') {
-    const body = await ctx.readBody()
+    const parsedOut = parseJsonBody(ClockOutBodySchema, await ctx.readBody())
+    if (!parsedOut.ok) {
+      ctx.sendJson(400, { error: parsedOut.error })
+      return true
+    }
+    const body = parsedOut.value
     const lat = parseOptionalNumber(body.lat)
     const lng = parseOptionalNumber(body.lng)
     const accuracy = parseOptionalNumber(body.accuracy_m)
@@ -604,7 +659,13 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const rawVoidBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsedVoid = parseJsonBody(ClockVoidBodySchema, rawVoidBody)
+    if (!parsedVoid.ok) {
+      ctx.sendJson(400, { error: parsedVoid.error })
+      return true
+    }
+    const body = parsedVoid.value
     const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
 
     const existing = await withCompanyClient(ctx.company.id, (c) =>
@@ -753,7 +814,13 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       return true
     }
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const rawReviewBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsedReview = parseJsonBody(ClockPhotoReviewBodySchema, rawReviewBody)
+    if (!parsedReview.ok) {
+      ctx.sendJson(400, { error: parsedReview.error })
+      return true
+    }
+    const body = parsedReview.value
     const status = body.status === 'approved' || body.status === 'rejected' ? body.status : null
     if (!status) {
       ctx.sendJson(400, { error: 'status must be "approved" or "rejected"' })

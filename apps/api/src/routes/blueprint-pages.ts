@@ -1,9 +1,40 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { assertKeyInCompany, getBlueprintMimeType, StorageError, type BlueprintStorage } from '../storage.js'
+
+// Permissive wire-format schemas. Numerics are string-or-number (the handlers
+// run their own Number()/Number.isFinite + range checks downstream); `.loose()`
+// keeps unknown keys. Required-field enforcement (integer page_number, distinct
+// calibration points, etc.) stays in the handlers.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const BlueprintPageCreateBodySchema = z
+  .object({
+    page_number: NumericInputSchema.nullish(),
+    storage_path: z.string().nullish(),
+  })
+  .loose()
+
+const BlueprintPageCalibrateBodySchema = z
+  .object({
+    world_distance: NumericInputSchema.nullish(),
+    world_unit: z.string().nullish(),
+    x1: NumericInputSchema.nullish(),
+    y1: NumericInputSchema.nullish(),
+    x2: NumericInputSchema.nullish(),
+    y2: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const BlueprintPageVerifyBodySchema = z
+  .object({
+    verified: z.boolean().nullish(),
+  })
+  .loose()
 
 export type BlueprintPageRouteCtx = {
   pool: Pool
@@ -101,7 +132,12 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'document id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BlueprintPageCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const pageNumber = Number(body.page_number)
     if (!Number.isInteger(pageNumber) || pageNumber < 1) {
       ctx.sendJson(400, { error: 'page_number must be an integer >= 1' })
@@ -215,7 +251,12 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'page id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BlueprintPageCalibrateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const distance = Number(body.world_distance)
     const unit = typeof body.world_unit === 'string' ? body.world_unit.trim() : 'in'
     const x1 = Number(body.x1)
@@ -287,7 +328,12 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'page id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BlueprintPageVerifyBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     // Default to verifying; only an explicit `false` un-verifies.
     const verified = body.verified === undefined ? true : body.verified === true
 

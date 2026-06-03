@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
-import { HttpError } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { withMutationTx } from '../mutation-tx.js'
 import {
   TRACKING_MODES,
@@ -11,6 +12,20 @@ import {
 } from './rental-inventory.types.js'
 
 const INVENTORY_IMPORT_LIMIT = 1000
+
+// Permissive wire-format schema for the bulk CSV upsert. This is a JSON
+// (not multipart) body whose only control field is `items` — an array of
+// per-row records. The per-row shape is intentionally dynamic (CSV columns
+// vary) so each entry stays a loose record; the existing per-row code
+// already coerces every field defensively (optionalString /
+// parseNonNegativeNumber / normalizeEnum). The schema only enforces the
+// top-level "items must be an array of objects" control shape up front. No
+// `.strict()`.
+const InventoryItemImportBodySchema = z
+  .object({
+    items: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .loose()
 
 /**
  * Handle the inventory CSV import surface.
@@ -27,7 +42,12 @@ export async function handleRentalInventoryCsvRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/inventory/items/import') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(InventoryItemImportBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const items = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : null
     if (!items) {
       ctx.sendJson(400, { error: 'items must be an array' })

@@ -1,9 +1,22 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { renderXlsxSingleSheet, type XlsxCell } from '../xlsx-writer.js'
 import { splitStraightAndOt, DEFAULT_OVERTIME_HOUR_THRESHOLD } from '@sitelayer/domain'
+
+// POST /api/labor-payroll-runs/:id/exports wire-format. `format` is the
+// only field; the route validates it against ALLOWED_FORMATS downstream
+// (with the existing String(...).trim() coercion). The schema rejects a
+// non-string `format` shape up front. Permissive — no unknown-key
+// rejection, field optional so the existing `?? ''` default path holds.
+const PayrollExportCreateBodySchema = z
+  .object({
+    format: z.string().optional(),
+  })
+  .loose()
 
 /**
  * Payroll exports: XLSX / CSV / Xero CSV / Payworks CSV / Gusto CSV / ADP CSV / JSON.
@@ -56,7 +69,12 @@ export async function handlePayrollExportRoutes(
   if (req.method === 'POST' && listMatch) {
     if (!ctx.requireRole(['admin', 'office', 'bookkeeper'])) return true
     const runId = listMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(PayrollExportCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const format = String(body.format ?? '').trim()
     if (!ALLOWED_FORMATS.has(format)) {
       ctx.sendJson(400, { error: `format must be one of: ${[...ALLOWED_FORMATS].join(', ')}` })

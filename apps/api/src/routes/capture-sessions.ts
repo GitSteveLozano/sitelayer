@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
 import { getRequestContext } from '@sitelayer/logger'
 import { CaptureArtifactUploadError, parseCaptureArtifactMultipart } from '../capture-artifact-upload.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -16,7 +17,7 @@ import {
   type WorkItemLane,
   type WorkItemSeverity,
 } from '../context-handoff.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
@@ -341,9 +342,73 @@ function shouldAutoDispatchTrustedCapture(
   return true
 }
 
+// Permissive wire-format schemas. Every field stays optional/nullish and the
+// object/scalar fields the handlers coerce defensively (via optionalText /
+// jsonRecord / parsedEnumValue, which never throw) are typed `unknown` so the
+// schema can never 400 a payload the handler would otherwise accept. The two
+// well-defined collection fields (`events`, `artifacts`) are typed as arrays of
+// loose objects — a non-array there already 400s in the handler. `.loose()`
+// keeps unknown keys. The multipart upload handler is intentionally NOT routed
+// through a schema.
+const CaptureSessionUpsertBodySchema = z
+  .object({
+    id: z.unknown().nullish(),
+    capture_session_id: z.unknown().nullish(),
+    retention_days: z.union([z.number(), z.string()]).nullish(),
+    mode: z.unknown().nullish(),
+    consent_version: z.unknown().nullish(),
+    route_path: z.unknown().nullish(),
+    device_kind: z.unknown().nullish(),
+    platform: z.unknown().nullish(),
+    viewport: z.unknown().nullish(),
+    app_build_sha: z.unknown().nullish(),
+    consent_scope: z.unknown().nullish(),
+    metadata: z.unknown().nullish(),
+  })
+  .loose()
+
+const CaptureSessionPatchBodySchema = z
+  .object({
+    status: z.unknown().nullish(),
+    route_path: z.unknown().nullish(),
+    metadata: z.unknown().nullish(),
+  })
+  .loose()
+
+const CaptureSessionEventsBodySchema = z
+  .object({
+    events: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .loose()
+
+const CaptureSessionArtifactsBodySchema = z
+  .object({
+    artifacts: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .loose()
+
+const CaptureSessionFinalizeBodySchema = z
+  .object({
+    lane: z.unknown().nullish(),
+    severity: z.unknown().nullish(),
+    title: z.unknown().nullish(),
+    summary: z.unknown().nullish(),
+    problem: z.unknown().nullish(),
+    route_path: z.unknown().nullish(),
+    route: z.unknown().nullish(),
+    client_request_id: z.unknown().nullish(),
+    category: z.unknown().nullish(),
+  })
+  .loose()
+
 async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
   if (!ctx.requireRole(CREATE_ROLES)) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(CaptureSessionUpsertBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const id = optionalText(body.id ?? body.capture_session_id, 80)
   if (!id || !isValidUuid(id)) {
     ctx.sendJson(400, { error: 'capture_session_id must be a uuid' })
@@ -431,7 +496,12 @@ async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
 
 async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(CaptureSessionPatchBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const status = body.status === undefined ? null : parsedEnumValue(body.status, STATUSES)
   if (body.status !== undefined && !status) {
     ctx.sendJson(400, { error: 'invalid capture session status' })
@@ -516,7 +586,12 @@ async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
 
 async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(CaptureSessionEventsBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const rawEvents = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : []
   if (rawEvents.length === 0) {
     ctx.sendJson(400, { error: 'events array is required' })
@@ -590,7 +665,12 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
 
 async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(CaptureSessionArtifactsBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const rawArtifacts = Array.isArray(body.artifacts) ? body.artifacts.slice(0, MAX_ARTIFACTS) : []
   if (rawArtifacts.length === 0) {
     ctx.sendJson(400, { error: 'artifacts array is required' })
@@ -855,7 +935,12 @@ async function getCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
 
 async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
-  const body = await ctx.readBody()
+  const parsed = parseJsonBody(CaptureSessionFinalizeBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const body = parsed.value
   const existing = await getFinalizedCaptureWorkItem(ctx.company.id, id)
   if (existing) {
     ctx.sendJson(200, finalizedWorkItemResponse(existing, true))

@@ -1,9 +1,10 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
@@ -233,6 +234,44 @@ function dispatchDailyLogSubmit(
   })
 }
 
+// Wire-format schemas for the JSON daily-log write bodies. Each handler keeps
+// its own field-level coercion (isValidUuid / isValidDateInput, JSON.stringify
+// of the jsonb columns, the typeof === 'number' expected_version read); these
+// schemas only reject malformed shapes up front and stay permissive — the
+// free-form jsonb columns (scope_progress / weather / schedule_deviations /
+// crew_summary) keep an opaque z.unknown() so any JSON shape still round-trips,
+// and no unknown keys are rejected.
+const DailyLogCreateBodySchema = z
+  .object({
+    project_id: z.string().nullish(),
+    occurred_on: z.string().nullish(),
+  })
+  .loose()
+
+const DailyLogPatchBodySchema = z
+  .object({
+    expected_version: z.number().nullish(),
+    scope_progress: z.unknown().optional(),
+    weather: z.unknown().optional(),
+    notes: z.string().nullish(),
+    schedule_deviations: z.unknown().optional(),
+    crew_summary: z.unknown().optional(),
+    photo_keys: z.array(z.unknown()).optional(),
+  })
+  .loose()
+
+const DailyLogSubmitBodySchema = z
+  .object({
+    expected_version: z.number().nullish(),
+  })
+  .loose()
+
+const DailyLogPhotoDeleteBodySchema = z
+  .object({
+    key: z.string().nullish(),
+  })
+  .loose()
+
 /**
  * Foreman daily logs (Sitemap.html § fm-log).
  *
@@ -365,7 +404,12 @@ export async function handleDailyLogRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/daily-logs') {
     if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsedCreate = parseJsonBody(DailyLogCreateBodySchema, await ctx.readBody())
+    if (!parsedCreate.ok) {
+      ctx.sendJson(400, { error: parsedCreate.error })
+      return true
+    }
+    const body = parsedCreate.value
     const projectId = typeof body.project_id === 'string' ? body.project_id.trim() : ''
     if (!isValidUuid(projectId)) {
       ctx.sendJson(400, { error: 'project_id is required and must be a valid uuid' })
@@ -426,7 +470,12 @@ export async function handleDailyLogRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(DailyLogPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     const expectedVersion = typeof body.expected_version === 'number' ? body.expected_version : null
     const versionOk = await ctx.checkVersion(
       'daily_logs',
@@ -578,7 +627,12 @@ export async function handleDailyLogRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedSubmit = parseJsonBody(DailyLogSubmitBodySchema, await ctx.readBody())
+    if (!parsedSubmit.ok) {
+      ctx.sendJson(400, { error: parsedSubmit.error })
+      return true
+    }
+    const body = parsedSubmit.value
     const expectedVersion = typeof body.expected_version === 'number' ? body.expected_version : null
     const versionOk = await ctx.checkVersion(
       'daily_logs',
@@ -769,7 +823,12 @@ export async function handleDailyLogRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedDelete = parseJsonBody(DailyLogPhotoDeleteBodySchema, await ctx.readBody())
+    if (!parsedDelete.ok) {
+      ctx.sendJson(400, { error: parsedDelete.error })
+      return true
+    }
+    const body = parsedDelete.value
     const key = typeof body.key === 'string' ? body.key.trim() : ''
     if (!key) {
       ctx.sendJson(400, { error: 'key is required' })

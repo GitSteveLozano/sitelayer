@@ -1,8 +1,50 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { isValidUuid, parseJsonBody } from '../http-utils.js'
+
+// Permissive wire-format schemas. Every field stays optional/nullish; only the
+// scalar control fields actually read by each handler are type-constrained, and
+// `.loose()` keeps unknown keys so existing callers aren't tightened. The
+// downstream code keeps its own trim / uuid / numeric-range validation.
+const InsightDismissBodySchema = z
+  .object({
+    reason: z.string().nullish(),
+  })
+  .loose()
+
+const TakeoffToBidBodySchema = z
+  .object({
+    project_id: z.string().optional(),
+  })
+  .loose()
+
+const VoiceToLogBodySchema = z
+  .object({
+    daily_log_id: z.string().optional(),
+    transcript: z.string().optional(),
+    source: z.string().optional(),
+  })
+  .loose()
+
+const BidFollowUpBodySchema = z
+  .object({
+    age_days: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
+
+// `suggestions[]` carries per-pipeline shapes the handler iterates + validates
+// element-by-element, so the schema only asserts it is an array of objects and
+// types the scalar control fields.
+const TakeoffAiSuggestionsBodySchema = z
+  .object({
+    suggestions: z.array(z.record(z.string(), z.unknown())).optional(),
+    source_run_id: z.string().nullish(),
+    produced_by: z.string().nullish(),
+  })
+  .loose()
 
 export type AiInsightRouteCtx = {
   pool: Pool
@@ -89,7 +131,12 @@ export async function handleAiInsightRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(InsightDismissBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
     const updated = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query<InsightRow>(
@@ -162,7 +209,12 @@ export async function handleAiInsightRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/ai/agents/takeoff-to-bid') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffToBidBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const projectId = typeof body.project_id === 'string' ? body.project_id.trim() : ''
     if (!isValidUuid(projectId)) {
       ctx.sendJson(400, { error: 'project_id is required and must be a valid uuid' })
@@ -208,7 +260,12 @@ export async function handleAiInsightRoutes(
     // Foreman dictates the day's narrative; the agent drafts the
     // structured fields. Foreman role can trigger; admin/office too.
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(VoiceToLogBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const dailyLogId = typeof body.daily_log_id === 'string' ? body.daily_log_id.trim() : ''
     const transcript = typeof body.transcript === 'string' ? body.transcript : ''
     const source = body.source === 'voice' ? 'voice' : 'text'
@@ -272,7 +329,15 @@ export async function handleAiInsightRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/ai/agents/bid-follow-up') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsed = parseJsonBody(
+      BidFollowUpBodySchema,
+      await ctx.readBody().catch(() => ({}) as Record<string, unknown>),
+    )
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const ageDaysRaw = Number(body.age_days)
     const ageDays = Number.isFinite(ageDaysRaw) && ageDaysRaw > 0 && ageDaysRaw < 365 ? Math.floor(ageDaysRaw) : 14
 
@@ -354,7 +419,12 @@ export async function handleAiInsightRoutes(
       ctx.sendJson(400, { error: 'project_id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(TakeoffAiSuggestionsBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const suggestions = Array.isArray(body.suggestions) ? (body.suggestions as Array<Record<string, unknown>>) : null
     if (!suggestions || suggestions.length === 0) {
       ctx.sendJson(400, { error: 'suggestions[] required' })

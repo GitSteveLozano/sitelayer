@@ -1,7 +1,9 @@
 import type http from 'node:http'
+import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 
 export type NotificationPreferenceRouteCtx = {
   pool: Pool
@@ -22,6 +24,22 @@ const PREFERENCE_COLUMNS = `
 
 const ALLOWED_CHANNELS = ['push', 'sms', 'email', 'off'] as const
 type Channel = (typeof ALLOWED_CHANNELS)[number]
+
+// PUT /api/notification-preferences wire-format. Every field is optional;
+// `parseChannel` already coerces unknown channel values to the 'push'
+// fallback and the route validates the sms/email contact pairing
+// downstream. The schema only rejects malformed shapes (e.g.
+// `email: { ... }`) up front. Permissive — no unknown-key rejection.
+const NotificationPreferenceUpsertBodySchema = z
+  .object({
+    channel_assignment_change: z.string().optional(),
+    channel_time_review_ready: z.string().optional(),
+    channel_daily_log_reminder: z.string().optional(),
+    channel_clock_anomaly: z.string().optional(),
+    sms_phone: z.string().nullish(),
+    email: z.string().nullish(),
+  })
+  .loose()
 
 function parseChannel(value: unknown, fallback: Channel): Channel {
   if (typeof value === 'string' && (ALLOWED_CHANNELS as readonly string[]).includes(value)) {
@@ -105,7 +123,12 @@ export async function handleNotificationPreferenceRoutes(
   }
 
   if (req.method === 'PUT' && url.pathname === '/api/notification-preferences') {
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(NotificationPreferenceUpsertBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const channels = {
       channel_assignment_change: parseChannel(body.channel_assignment_change, 'push'),
       channel_time_review_ready: parseChannel(body.channel_time_review_ready, 'push'),

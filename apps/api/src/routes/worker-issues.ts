@@ -1,8 +1,9 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { PermissionAction } from '@sitelayer/domain'
+import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withCompanyClient } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
@@ -238,13 +239,38 @@ function buildWorkflowResponse(row: WorkflowIssueRow) {
   }
 }
 
+// POST /api/worker-issues wire-format. PERMISSIVE: the route re-parses every
+// field through tolerant helpers (parseKind / parseSeverity / parseMaterial*)
+// that already coerce or fall back, so the schema only types the fields the
+// handler reads and rejects e.g. `message: { ... }` up front. `.loose()` so
+// unknown keys pass through untouched. material_quantity stays string-or-number
+// to match `parseMaterialQuantity`'s Number(...) coercion.
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const WorkerIssueCreateBodySchema = z
+  .object({
+    kind: z.string().optional(),
+    message: z.string().optional(),
+    project_id: z.string().nullish(),
+    severity: z.string().nullish(),
+    material_label: z.string().nullish(),
+    material_quantity: NumericInputSchema.nullish(),
+    material_unit: z.string().nullish(),
+  })
+  .loose()
+
 export async function handleWorkerIssueRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: WorkerIssueRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/worker-issues') {
-    const body = await ctx.readBody()
+    const parsedBody = parseJsonBody(WorkerIssueCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
     const kind = parseKind(body.kind)
     if (!kind) {
       ctx.sendJson(400, { error: `kind must be one of ${ALLOWED_KINDS.join(', ')}` })
