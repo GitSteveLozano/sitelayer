@@ -3,7 +3,16 @@
 set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-/app/sitelayer/.env}"
-TIMER_MONITOR_SPECS="${TIMER_MONITOR_SPECS:-sitelayer-postgres-backup.service:129600 sitelayer-postgres-offsite.service:129600 sitelayer-blueprint-backup.service:129600 sitelayer-restore-drill.service:691200}"
+# Watched units MUST match the names the installers actually create:
+#   sitelayer-postgres-backup   (install-postgres-backup-systemd.sh)  — daily logical pg_dump
+#   sitelayer-postgres-offsite  (install-postgres-backup-systemd.sh)  — daily off-host rsync copy
+#   sitelayer-blueprint-backup  (install-blueprint-backup-systemd.sh) — daily blueprint-volume copy
+#   sitelayer-restore-drill     (install-postgres-backup-systemd.sh)  — weekly restore drill
+#   sitelayer-offregion-backup  (ops/systemd/sitelayer-offregion-backup.*) — daily off-REGION pg_dump -> Spaces
+# Threshold seconds: daily units 129600 (36h, ~12h grace over a 06:00 run +
+# randomized delay); weekly restore drill 691200 (8d). Do NOT list ghost names
+# here — a watched-but-uninstalled unit fails the monitor forever.
+TIMER_MONITOR_SPECS="${TIMER_MONITOR_SPECS:-sitelayer-postgres-backup.service:129600 sitelayer-postgres-offsite.service:129600 sitelayer-blueprint-backup.service:129600 sitelayer-offregion-backup.service:129600 sitelayer-restore-drill.service:691200}"
 SENTRY_ENVIRONMENT="${SENTRY_ENVIRONMENT:-production}"
 
 read_env_value() {
