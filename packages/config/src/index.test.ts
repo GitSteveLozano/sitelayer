@@ -1,8 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadAppConfig, loadLocalEnv, parseEnvLine, postgresOptionsForTier, TierConfigError } from './index.js'
+import {
+  isProdPointedAtQboSandbox,
+  loadAppConfig,
+  loadLocalEnv,
+  parseEnvLine,
+  postgresOptionsForTier,
+  resolveDatabaseSslConfig,
+  TierConfigError,
+  warnIfProdPointedAtQboSandbox,
+} from './index.js'
 
 const localDatabaseUrl = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
 const prodDatabaseUrl = 'postgres://sitelayer_prod_app:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
@@ -83,6 +92,120 @@ describe('loadAppConfig', () => {
       DATABASE_URL_PROD_RO: prodReadOnlyUrl,
     })
     expect(config.databaseUrlProdRo).toBe(prodReadOnlyUrl)
+  })
+})
+
+describe('QBO sandbox-in-prod guard', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('detects prod tier pointed at the sandbox base URL', () => {
+    expect(
+      isProdPointedAtQboSandbox({
+        APP_TIER: 'prod',
+        QBO_BASE_URL: 'https://sandbox-quickbooks.api.intuit.com',
+      }),
+    ).toBe(true)
+  })
+
+  it('treats an unset QBO_BASE_URL with sandbox/blank QBO_ENVIRONMENT as sandbox', () => {
+    expect(isProdPointedAtQboSandbox({ APP_TIER: 'prod' })).toBe(true)
+    expect(isProdPointedAtQboSandbox({ APP_TIER: 'prod', QBO_ENVIRONMENT: 'sandbox' })).toBe(true)
+  })
+
+  it('does not flag prod against the production base URL', () => {
+    expect(
+      isProdPointedAtQboSandbox({
+        APP_TIER: 'prod',
+        QBO_BASE_URL: 'https://quickbooks.api.intuit.com',
+        QBO_ENVIRONMENT: 'production',
+      }),
+    ).toBe(false)
+  })
+
+  it('does not flag non-prod tiers even on the sandbox URL', () => {
+    expect(
+      isProdPointedAtQboSandbox({
+        APP_TIER: 'dev',
+        QBO_BASE_URL: 'https://sandbox-quickbooks.api.intuit.com',
+      }),
+    ).toBe(false)
+  })
+
+  it('emits a loud console.warn when prod is wired to the sandbox', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fired = warnIfProdPointedAtQboSandbox({
+      APP_TIER: 'prod',
+      QBO_BASE_URL: 'https://sandbox-quickbooks.api.intuit.com',
+    })
+    expect(fired).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/APP_TIER=prod but QBO_BASE_URL points at the QBO SANDBOX/)
+  })
+
+  it('stays silent for a correctly configured prod', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fired = warnIfProdPointedAtQboSandbox({
+      APP_TIER: 'prod',
+      QBO_BASE_URL: 'https://quickbooks.api.intuit.com',
+      QBO_ENVIRONMENT: 'production',
+    })
+    expect(fired).toBe(false)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('fires the warning through loadAppConfig at boot for a prod+sandbox config', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    loadAppConfig({
+      APP_TIER: 'prod',
+      DATABASE_URL: prodDatabaseUrl,
+      DO_SPACES_BUCKET: 'sitelayer-blueprints-prod',
+      QBO_BASE_URL: 'https://sandbox-quickbooks.api.intuit.com',
+    })
+    expect(warn.mock.calls.some((call) => /QBO SANDBOX/.test(String(call[0])))).toBe(true)
+  })
+})
+
+describe('resolveDatabaseSslConfig', () => {
+  it('prefers a CA bundle and verifies the cert', () => {
+    const ssl = resolveDatabaseSslConfig({
+      DATABASE_CA_CERT: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+    })
+    expect(ssl).toEqual({
+      mode: 'verify-ca',
+      ca: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+      rejectUnauthorized: true,
+    })
+  })
+
+  it('un-escapes \\n in a single-line CA bundle', () => {
+    const ssl = resolveDatabaseSslConfig({
+      DATABASE_CA_CERT: '-----BEGIN CERTIFICATE-----\\nMIIB\\n-----END CERTIFICATE-----',
+    })
+    expect(ssl.mode).toBe('verify-ca')
+    if (ssl.mode === 'verify-ca') {
+      expect(ssl.ca).toBe('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----')
+    }
+  })
+
+  it('falls back to no-verify when the reject flag is false and no CA is set', () => {
+    expect(resolveDatabaseSslConfig({ DATABASE_SSL_REJECT_UNAUTHORIZED: 'false' })).toEqual({
+      mode: 'no-verify',
+      rejectUnauthorized: false,
+    })
+  })
+
+  it('prefers the CA bundle even when the reject flag is false', () => {
+    const ssl = resolveDatabaseSslConfig({
+      DATABASE_CA_CERT: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+      DATABASE_SSL_REJECT_UNAUTHORIZED: 'false',
+    })
+    expect(ssl.mode).toBe('verify-ca')
+  })
+
+  it('defaults to rejectUnauthorized:true', () => {
+    expect(resolveDatabaseSslConfig({})).toEqual({ mode: 'reject-unauthorized', rejectUnauthorized: true })
   })
 })
 

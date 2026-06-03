@@ -20,6 +20,8 @@ function runRenderer(envOverrides = {}, extraArgs = []) {
       QBO_CLIENT_ID: 'qbo-client-id',
       QBO_CLIENT_SECRET: 'qbo-client-secret',
       QBO_STATE_SECRET: 'qbo-state-secret',
+      QBO_WEBHOOK_VERIFIER: 'qbo-webhook-verifier',
+      ESTIMATE_SHARE_SECRET: 'estimate-share-secret',
       CLERK_SECRET_KEY: 'clerk-secret-key',
       CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\\nabc\\n-----END PUBLIC KEY-----',
       CLERK_ISSUER: 'https://clerk.sandolab.xyz',
@@ -90,5 +92,44 @@ test('fails when enforcement is enabled and required values are missing', () => 
   const result = runRenderer({ CLERK_WEBHOOK_SECRET: '' }, ['--enforce'])
 
   assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /Production env render failed: CLERK_WEBHOOK_SECRET/)
+  assert.match(result.stderr, /Production env render failed:.*CLERK_WEBHOOK_SECRET/)
+})
+
+test('renders ESTIMATE_SHARE_SECRET as its own value (not coupled to QBO_STATE_SECRET)', () => {
+  const result = runRenderer({
+    QBO_STATE_SECRET: 'qbo-state-secret',
+    ESTIMATE_SHARE_SECRET: 'dedicated-share-secret',
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.body, /ESTIMATE_SHARE_SECRET='dedicated-share-secret'/)
+  assert.match(result.body, /QBO_STATE_SECRET='qbo-state-secret'/)
+})
+
+test('fails under enforcement when ESTIMATE_SHARE_SECRET is absent (no silent QBO fallback)', () => {
+  const result = runRenderer({ ESTIMATE_SHARE_SECRET: '' }, ['--enforce'])
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Production env render failed:.*ESTIMATE_SHARE_SECRET/)
+})
+
+test('fails under enforcement when QBO_WEBHOOK_VERIFIER is absent', () => {
+  const result = runRenderer({ QBO_WEBHOOK_VERIFIER: '' }, ['--enforce'])
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Production env render failed:.*QBO_WEBHOOK_VERIFIER/)
+})
+
+test('PRODUCTION_ENV_RENDER_ENFORCE=1 enforces required secrets without the --enforce flag', () => {
+  const result = runRenderer({ PRODUCTION_ENV_RENDER_ENFORCE: '1', CLERK_WEBHOOK_SECRET: '' })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Production env render failed:.*CLERK_WEBHOOK_SECRET/)
+})
+
+test('PRODUCTION_ENV_RENDER_ENFORCE=0 leaves enforcement off (warning only)', () => {
+  const result = runRenderer({ PRODUCTION_ENV_RENDER_ENFORCE: '0', CLERK_WEBHOOK_SECRET: '' })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /CLERK_WEBHOOK_SECRET is missing/)
 })

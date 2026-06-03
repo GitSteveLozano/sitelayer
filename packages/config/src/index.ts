@@ -203,6 +203,51 @@ function ribbonForTier(tier: AppTier): AppConfig['ribbon'] {
   }
 }
 
+/**
+ * Detect the "prod app pointed at the QBO sandbox" footgun.
+ *
+ * `QBO_BASE_URL` defaults to the sandbox base in several worker push paths and
+ * in the production env manifest. If APP_TIER=prod boots with a sandbox base
+ * URL, every QBO live-push silently targets the sandbox company — a pilot
+ * blocker that produces no errors, just data that never reaches the customer's
+ * real QuickBooks. This is intentionally a string match on `sandbox` so it
+ * also catches `sandbox-quickbooks.api.intuit.com` and any sandbox host
+ * variant.
+ */
+export function isProdPointedAtQboSandbox(env: NodeJS.ProcessEnv = process.env): boolean {
+  const tier = (env.APP_TIER ?? '').trim().toLowerCase()
+  if (tier !== 'prod') return false
+  const baseUrl = (env.QBO_BASE_URL ?? '').trim().toLowerCase()
+  if (baseUrl) return baseUrl.includes('sandbox')
+  // No explicit QBO_BASE_URL: fall back to QBO_ENVIRONMENT, which defaults to
+  // 'sandbox' everywhere, so an unset environment is still the sandbox base.
+  const qboEnv = (env.QBO_ENVIRONMENT ?? 'sandbox').trim().toLowerCase()
+  return qboEnv !== 'production'
+}
+
+/**
+ * Emit a loud, single boot-time warning when APP_TIER=prod is configured
+ * against the QBO sandbox base URL. Returns true if the warning fired so
+ * callers/tests can assert on it. Uses console.warn (not throw) because a
+ * legitimate prod deployment may run with QBO live-push flags off while
+ * sandbox creds are still wired — but the operator must SEE it.
+ */
+export function warnIfProdPointedAtQboSandbox(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!isProdPointedAtQboSandbox(env)) return false
+  const baseUrl = (env.QBO_BASE_URL ?? '').trim() || `(unset; QBO_ENVIRONMENT=${env.QBO_ENVIRONMENT ?? 'sandbox'})`
+  console.warn(
+    '************************************************************************\n' +
+      '[qbo] *** WARNING: APP_TIER=prod but QBO_BASE_URL points at the QBO SANDBOX ***\n' +
+      `[qbo] QBO_BASE_URL=${baseUrl}\n` +
+      '[qbo] Every live QBO push will target the SANDBOX company, not the\n' +
+      "[qbo] customer's real QuickBooks. Set QBO_BASE_URL to\n" +
+      '[qbo] https://quickbooks.api.intuit.com (and QBO_ENVIRONMENT=production)\n' +
+      '[qbo] before enabling any QBO_LIVE_* flag.\n' +
+      '************************************************************************',
+  )
+  return true
+}
+
 export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const tier = parseTier(env.APP_TIER, env.NODE_ENV)
   const flags = parseFlags(env.FEATURE_FLAGS)
@@ -211,6 +256,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   assertDatabaseMatchesTier(tier, databaseUrl)
   assertSpacesMatchesTier(tier, spacesBucket)
+  warnIfProdPointedAtQboSandbox(env)
 
   let databaseUrlProdRo: string | null = null
   if (flags.has('read-prod-ro')) {
@@ -247,6 +293,58 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     spacesBucket,
     ribbon: ribbonForTier(tier),
   }
+}
+
+/**
+ * Resolved Postgres TLS config for the pg client `ssl` option.
+ *
+ * - `disabled`: no TLS handling injected (callers pass the connection string
+ *   through unchanged — e.g. local docker Postgres with no sslmode).
+ * - otherwise the shape maps directly onto pg's `ssl` PoolConfig field:
+ *   `{ ca, rejectUnauthorized }`.
+ */
+export type DatabaseSslConfig =
+  | { mode: 'disabled' }
+  | { mode: 'verify-ca'; ca: string; rejectUnauthorized: true }
+  | { mode: 'reject-unauthorized'; rejectUnauthorized: true }
+  | { mode: 'no-verify'; rejectUnauthorized: false }
+
+/**
+ * Build the pg `ssl` config from env, preferring a CA bundle over the blunt
+ * `rejectUnauthorized:false` escape hatch.
+ *
+ * Precedence:
+ *   1. `DATABASE_CA_CERT` set  -> verify the managed-PG server cert against it
+ *      (`ssl: { ca, rejectUnauthorized: true }`). This is the secure path and
+ *      means `DATABASE_SSL_REJECT_UNAUTHORIZED=false` is no longer required.
+ *   2. `DATABASE_SSL_REJECT_UNAUTHORIZED=false` (and no CA) -> legacy
+ *      no-verify TLS (`ssl: { rejectUnauthorized: false }`).
+ *   3. default -> `rejectUnauthorized: true` (verify against the system trust
+ *      store; the caller decides whether to attach `ssl` at all based on
+ *      sslmode in the connection string).
+ *
+ * NOTE: the pg `Pool` is currently constructed in apps/api/src/server.ts
+ * (`getPoolConfig`) and apps/worker/src/worker.ts, which read
+ * `DATABASE_SSL_REJECT_UNAUTHORIZED` directly. To finish wiring the CA-bundle
+ * path, those builders should call `resolveDatabaseSslConfig(process.env)` and
+ * spread the resulting `{ ca, rejectUnauthorized }` into the pg `ssl` option
+ * instead of hand-rolling `{ rejectUnauthorized: false }`.
+ * TODO(pool-wiring): replace the inline ssl construction in server.ts /
+ * worker.ts with this helper (those files are owned by other agents in the
+ * current split; this helper + manifest + docs + .env.example are the
+ * config-side contract).
+ */
+export function resolveDatabaseSslConfig(env: NodeJS.ProcessEnv = process.env): DatabaseSslConfig {
+  const ca = env.DATABASE_CA_CERT?.trim()
+  if (ca) {
+    // CA cert may arrive with escaped newlines (single-line dotenv value).
+    const normalizedCa = ca.replace(/\\n/g, '\n')
+    return { mode: 'verify-ca', ca: normalizedCa, rejectUnauthorized: true }
+  }
+  if (env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'false') {
+    return { mode: 'no-verify', rejectUnauthorized: false }
+  }
+  return { mode: 'reject-unauthorized', rejectUnauthorized: true }
 }
 
 export function postgresOptionsForTier(tier: AppTier, currentOptions?: string): string {
