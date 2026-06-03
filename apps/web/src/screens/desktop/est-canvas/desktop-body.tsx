@@ -64,6 +64,10 @@ import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-
 import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
 import { AiReviewOverlay, AiReviewMarkers, buildAiReviewModel } from './ai-review-overlay'
+import { ToolPalette } from './tool-palette'
+import { ViewPalette } from './view-palette'
+import { AiAssistPalette } from './ai-assist-palette'
+import { SheetsPanel } from './sheets-panel'
 
 import { useTakeoffSession } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
@@ -1088,14 +1092,6 @@ export function EstCanvasDesktopBody() {
     return Number.isFinite(ratio) && ratio > 0 ? Math.round(ratio) : null
   }, [scalePoints, scaleLength, pageSize])
 
-  // Per-page calibration status for the floating SHEETS panel (design dsg__06 /
-  // dsg__46). A page is VERIFIED once it carries a saved calibration; the page
-  // actively being calibrated reads SETTING; the rest are UNCAL.
-  const pageScaleStatus = (p: BlueprintPage): { label: string; tone: 'green' | 'amber' | 'ink' } => {
-    if (mode === 'scale' && p.id === activePage?.id) return { label: 'SETTING…', tone: 'amber' }
-    return p.calibration_set_at ? { label: '✓ VERIFIED', tone: 'green' } : { label: 'UNCAL', tone: 'ink' }
-  }
-
   // --- Cross-sheet callout jump (dsg__50) ----------------------------------
   // Resolve a callout against the REAL page list (clamped) so a jump opens an
   // actual sheet even though the callout coordinates are presentational.
@@ -1945,144 +1941,26 @@ export function EstCanvasDesktopBody() {
       ) : null}
 
       {/* ---- TOOL palette (top-left, below the strip) ---- */}
-      <div style={floatBox({ top: 92, left: 16, width: 56 })}>
-        <div style={{ ...floatHead, padding: '8px 0', textAlign: 'center' }}>TOOL</div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {(
-            [
-              { kind: 'draw', tool: 'polygon', label: 'POLY' },
-              { kind: 'draw', tool: 'rect', label: 'RECT' },
-              { kind: 'draw', tool: 'lineal', label: 'LIN' },
-              { kind: 'draw', tool: 'arc', label: 'ARC' },
-              { kind: 'draw', tool: 'count', label: 'PT' },
-              { kind: 'draw', tool: 'tap', label: 'TAP' },
-              // SCALE / SEL are interaction modes (DCanvasScale / DCanvasBulkSelect),
-              // not new geometry tools — they layer overlays over the same canvas.
-              { kind: 'mode', mode: 'scale', label: 'SCALE' },
-              { kind: 'mode', mode: 'select', label: 'SEL' },
-            ] as const
-          ).map((t, i, arr) => {
-            const isDraw = t.kind === 'draw'
-            // RECT is a real drag-rectangle area tool; TAP is an alias for the
-            // count tool (mobile-surface naming). All other draw buttons map
-            // 1:1 to their geometry tool.
-            const value: Tool = isDraw ? (t.tool === 'tap' ? 'count' : (t.tool as Tool)) : 'polygon'
-            const on = isDraw
-              ? mode === 'draw' &&
-                ((t.tool === 'polygon' && tool === 'polygon') ||
-                  (t.tool === 'rect' && tool === 'rect') ||
-                  (t.tool === 'lineal' && tool === 'lineal') ||
-                  (t.tool === 'arc' && tool === 'arc') ||
-                  (t.tool === 'count' && tool === 'count') ||
-                  // TAP highlights when the count tool is active.
-                  (t.tool === 'tap' && tool === 'count'))
-              : mode === t.mode
-            return (
-              <button
-                key={t.label}
-                type="button"
-                onClick={() => {
-                  // Don't silently discard a drawn-but-unsaved measurement when
-                  // switching tools/modes (e.g. after a failed save, clicking
-                  // SEL used to wipe the polygon with no warning).
-                  if (draftPoints.length > 0 && !window.confirm('Discard the unsaved measurement you are drawing?'))
-                    return
-                  if (isDraw) {
-                    setMode('draw')
-                    // SET_TOOL resets the in-progress draft (points + redo).
-                    setTool(value)
-                  } else {
-                    setMode(t.mode)
-                    // Leaving the draw surface: drop any in-progress draft.
-                    setDraftPoints([])
-                  }
-                  // Clear the whole machine selection slice + the copy panel.
-                  clearSelection()
-                }}
-                style={{
-                  width: 56,
-                  height: 48,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: on ? 'var(--m-accent)' : 'var(--m-sand)',
-                  color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                  border: 'none',
-                  borderTop: t.kind === 'mode' && arr[i - 1]?.kind === 'draw' ? '2px solid var(--m-ink)' : 'none',
-                  borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 10,
-                  fontWeight: 800,
-                  letterSpacing: '0.04em',
-                  cursor: 'pointer',
-                }}
-              >
-                {t.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
+      <ToolPalette
+        mode={mode}
+        tool={tool}
+        draftPoints={draftPoints}
+        setMode={setMode}
+        setTool={setTool}
+        setDraftPoints={setDraftPoints}
+        clearSelection={clearSelection}
+      />
 
       {/* ---- VIEW palette (zoom + pan), below the TOOL palette ---- */}
-      <div style={floatBox({ top: 456, left: 16, width: 56 })}>
-        <div style={{ ...floatHead, padding: '8px 0', textAlign: 'center' }}>VIEW</div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {(
-            [
-              { label: '＋', title: 'Zoom in', onClick: () => zoomBy(1.25) },
-              { label: `${Math.round(zoom * 100)}%`, title: 'Reset view', onClick: resetView, small: true },
-              { label: '－', title: 'Zoom out', onClick: () => zoomBy(0.8) },
-              { label: '⤢', title: 'Fit to screen', onClick: resetView },
-              {
-                label: '✋',
-                title: 'Pan (or hold Space / middle-drag)',
-                onClick: () => setHandMode((h) => !h),
-                toggle: 'hand' as const,
-              },
-              {
-                // Cross-sheet callout overlay (dsg__50): show the detail-reference
-                // circles so a click jumps to the referenced sheet.
-                label: 'REF',
-                title: 'Cross-sheet detail callouts — click a circle to jump',
-                onClick: () => setShowCallouts((s) => !s),
-                toggle: 'refs' as const,
-              },
-            ] as const
-          ).map((b, i, arr) => {
-            const active =
-              'toggle' in b ? (b.toggle === 'hand' ? handMode : b.toggle === 'refs' ? showCallouts : false) : false
-            return (
-              <button
-                key={b.title}
-                type="button"
-                title={b.title}
-                aria-label={b.title}
-                aria-pressed={'toggle' in b ? active : undefined}
-                onClick={b.onClick}
-                style={{
-                  width: 56,
-                  height: 40,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: active ? 'var(--m-accent)' : 'var(--m-sand)',
-                  color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-                  border: 'none',
-                  borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 'small' in b && b.small ? 10 : 16,
-                  fontWeight: 800,
-                  letterSpacing: '0.02em',
-                  cursor: 'pointer',
-                }}
-              >
-                {b.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
+      <ViewPalette
+        zoom={zoom}
+        zoomBy={zoomBy}
+        resetView={resetView}
+        handMode={handMode}
+        setHandMode={setHandMode}
+        showCallouts={showCallouts}
+        setShowCallouts={setShowCallouts}
+      />
 
       {/* ---- AI ASSIST palette (top-right, left of the item palette) ----
           Launcher for the AI setup flows. The setup routes
@@ -2090,63 +1968,7 @@ export function EstCanvasDesktopBody() {
           already exist in desktop-workspace.tsx; this palette is what makes
           them reachable from the working takeoff canvas. (DEstTakeoffCanvas
           top-right "● AI ASSIST" palette in Steve's Desktop v2 mockup.) */}
-      <div style={floatBox({ top: 92, right: 312, width: 220 })}>
-        <div style={floatHead}>● AI Assist</div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {(
-            [
-              { label: 'AUTO-COUNT A SYMBOL', mode: 'ai-count' as const },
-              { label: 'AUTO-TAKEOFF JOB', mode: 'ai-takeoff' as const },
-            ] as const
-          ).map((b, i, arr) => (
-            <button
-              key={b.label}
-              type="button"
-              onClick={() => {
-                // Don't silently discard an in-progress (drawn but unsaved) measurement.
-                if (draftPoints.length > 0 && !window.confirm('Discard the unsaved measurement you are drawing?'))
-                  return
-                setMode(b.mode)
-              }}
-              disabled={!projectId}
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                padding: '12px 14px',
-                background: 'var(--m-sand)',
-                color: 'var(--m-ink)',
-                border: 'none',
-                borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 800,
-                letterSpacing: '0.04em',
-                cursor: projectId ? 'pointer' : 'default',
-                opacity: projectId ? 1 : 0.4,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span
-                style={{
-                  fontFamily: 'var(--m-num)',
-                  fontWeight: 800,
-                  fontSize: 11,
-                  color: 'var(--m-accent-ink)',
-                  background: 'var(--m-accent)',
-                  padding: '1px 6px',
-                  flexShrink: 0,
-                }}
-                aria-hidden
-              >
-                AI
-              </span>
-              {b.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <AiAssistPalette projectId={projectId} draftPoints={draftPoints} setMode={setMode} />
 
       {/* ---- ITEM / quantities palette (right) ---- */}
       <div style={floatBox({ top: 92, right: 16, width: 280, maxHeight: 'calc(100% - 108px)', overflow: 'auto' })}>
@@ -3055,46 +2877,7 @@ export function EstCanvasDesktopBody() {
           (dsg__46), surfacing each page's calibration state. Only shown when the
           active blueprint actually has pages. */}
       {activeBlueprint && pages.length > 0 ? (
-        <div style={floatBox({ bottom: 110, right: 16, width: 200, maxHeight: 240, overflow: 'auto' })}>
-          <div style={floatHead}>Sheets · {mode === 'scale' ? 'Scale' : pages.length}</div>
-          <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {pages.map((p) => {
-              const isActive = p.id === activePage?.id
-              const st = pageScaleStatus(p)
-              const statusColor =
-                st.tone === 'green' ? 'var(--m-green)' : st.tone === 'amber' ? 'var(--m-amber)' : 'var(--m-ink-3)'
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setPageId(p.id)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    padding: '6px 10px',
-                    border: '2px solid var(--m-ink)',
-                    background: isActive ? 'var(--m-accent)' : 'var(--m-card)',
-                    color: isActive ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-                    fontFamily: 'var(--m-num)',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    letterSpacing: '0.04em',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span>{`pg ${p.page_number}`}</span>
-                  {mode === 'scale' ? (
-                    <span style={{ fontSize: 9, color: isActive ? 'var(--m-accent-ink)' : statusColor }}>
-                      {st.label}
-                    </span>
-                  ) : null}
-                </button>
-              )
-            })}
-          </div>
-        </div>
+        <SheetsPanel pages={pages} activePage={activePage} mode={mode} setPageId={setPageId} />
       ) : null}
 
       {/* ---- DCanvasBulkSelect · marquee multi-selection toolbar (2+) ---- */}
