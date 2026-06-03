@@ -59,7 +59,7 @@ import { MButton, MPill, MSelect } from '@/components/m'
 import { DEmptyState } from '@/components/d'
 
 import { type Tool, type CanvasMode, type SheetCallout } from './types'
-import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS, pitchInputStyle, ghostChip } from './constants'
+import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS } from './constants'
 import { floatBox, floatHead } from './desktop-body-styles'
 import { EstCanvasDesktopLoading } from './desktop-loading'
 import { AssemblyAttachPanel } from './assembly-panel'
@@ -72,6 +72,9 @@ import { TopStrip } from './top-strip'
 import { ScaleOverlay } from './scale-overlay'
 import { ItemPalette } from './item-palette'
 import { CopyPanel } from './copy-panel'
+import { ConditionPicker } from './condition-picker'
+import { DraftHud } from './draft-hud'
+import { RunningTotals } from './running-totals'
 
 import { useTakeoffSession } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
@@ -1951,95 +1954,22 @@ export function EstCanvasDesktopBody() {
             </MSelect>
           ) : null}
 
-          {/* Condition picker (Takeoff Deep Dive H1) — pick a reusable typed
-              template the next draw is tagged against, or create one inline.
-              "None" keeps the legacy shape-first flow (condition_id null), so
-              the existing tag/service-item path below is always the fallback. */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: 'var(--m-ink-3)',
-              }}
-            >
-              Condition
-            </span>
-            <MSelect
-              value={activeConditionId ?? ''}
-              onChange={(e) => setActiveConditionId(e.target.value ? e.target.value : null)}
-            >
-              <option value="">None (legacy)</option>
-              {conditions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} · {c.measurement_kind}
-                </option>
-              ))}
-            </MSelect>
-            <MButton variant="ghost" size="sm" onClick={() => setConditionFormOpen((v) => !v)}>
-              {conditionFormOpen ? 'Close' : '+ New'}
-            </MButton>
-            {activeCondition ? (
-              <span
-                aria-hidden
-                title={activeCondition.name}
-                style={{
-                  width: 12,
-                  height: 12,
-                  borderRadius: 3,
-                  background: activeCondition.color,
-                  border: '1px solid var(--m-line)',
-                  flex: '0 0 auto',
-                }}
-              />
-            ) : null}
-          </label>
-
-          {/* Inline create-condition form (minimal: name + color + kind). The
-              deeper condition-first draw flow — driver-derived multi-result
-              emission, default-assembly auto-attach — is a flagged follow-up. */}
-          {conditionFormOpen ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                value={newConditionName}
-                onChange={(e) => setNewConditionName(e.target.value)}
-                placeholder="Condition name"
-                maxLength={120}
-                style={{
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 12,
-                  padding: '4px 8px',
-                  border: '1px solid var(--m-line)',
-                  borderRadius: 6,
-                  background: 'var(--m-surface)',
-                  color: 'var(--m-ink-1)',
-                }}
-              />
-              <input
-                type="color"
-                value={newConditionColor}
-                onChange={(e) => setNewConditionColor(e.target.value)}
-                title="Condition color"
-                style={{ width: 32, height: 28, padding: 0, border: '1px solid var(--m-line)', borderRadius: 6 }}
-              />
-              <MSelect
-                value={newConditionKind}
-                onChange={(e) => setNewConditionKind(e.target.value as ConditionMeasurementKind)}
-              >
-                <option value="area">area</option>
-                <option value="linear">linear</option>
-                <option value="count">count</option>
-                <option value="volume">volume</option>
-              </MSelect>
-              <MButton size="sm" onClick={onCreateCondition} disabled={createCondition.isPending}>
-                {createCondition.isPending ? 'Saving…' : 'Create'}
-              </MButton>
-            </div>
-          ) : null}
+          <ConditionPicker
+            conditions={conditions}
+            activeConditionId={activeConditionId}
+            setActiveConditionId={setActiveConditionId}
+            activeCondition={activeCondition}
+            conditionFormOpen={conditionFormOpen}
+            setConditionFormOpen={setConditionFormOpen}
+            newConditionName={newConditionName}
+            setNewConditionName={setNewConditionName}
+            newConditionColor={newConditionColor}
+            setNewConditionColor={setNewConditionColor}
+            newConditionKind={newConditionKind}
+            setNewConditionKind={setNewConditionKind}
+            onCreateCondition={onCreateCondition}
+            createPending={createCondition.isPending}
+          />
 
           {/* Scope item selector */}
           <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
@@ -2082,264 +2012,35 @@ export function EstCanvasDesktopBody() {
             </label>
           ) : null}
 
-          {/* Live measurement readout (big-number) */}
-          <div
-            style={{
-              padding: '12px 14px',
-              background: 'var(--m-ink)',
-              color: 'var(--m-sand)',
-              border: '2px solid var(--m-ink)',
-            }}
-          >
-            <div
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                color: 'var(--m-accent)',
-              }}
-            >
-              {tool === 'polygon'
-                ? `POLY · ${draftPoints.length} PTS`
-                : tool === 'rect'
-                  ? `RECT · ${draftPoints.length ? 'DRAWN' : 'DRAG'}`
-                  : tool === 'arc'
-                    ? `ARC · ${draftPoints.length}/3`
-                    : tool === 'lineal'
-                      ? `LIN · ${draftPoints.length} PTS`
-                      : `PT · ${draftPoints.length}`}
-            </div>
-            <div
-              style={{
-                fontFamily: 'var(--m-font-display)',
-                fontWeight: 800,
-                fontSize: 32,
-                lineHeight: 1,
-                marginTop: 4,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {tool === 'count' ? `${draftPoints.length}` : formatQty(draftQuantity)}
-              <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                {tool === 'polygon'
-                  ? unitForItem
-                  : tool === 'lineal'
-                    ? unitForItem
-                    : draftPoints.length === 1
-                      ? 'CT'
-                      : 'CTS'}
-              </span>
-            </div>
-          </div>
+          <DraftHud
+            tool={tool}
+            draftPoints={draftPoints}
+            draftQuantity={draftQuantity}
+            unitForItem={unitForItem}
+            redoStack={redoStack}
+            snapEnabled={snapEnabled}
+            setSnapEnabled={setSnapEnabled}
+            deduct={deduct}
+            setDeduct={setDeduct}
+            isAreaTool={isAreaTool}
+            pitchAppliesToTool={pitchAppliesToTool}
+            pitchRise={pitchRise}
+            setPitchRise={setPitchRise}
+            pitchRun={pitchRun}
+            setPitchRun={setPitchRun}
+            activePitch={activePitch}
+            pitchFactor={pitchFactor}
+            undoPoint={undoPoint}
+            redoPoint={redoPoint}
+            clearDraft={() => setDraftPoints([])}
+            onSave={onSave}
+            canSave={canSave}
+            createPending={create.isPending}
+            error={error}
+            savedToast={savedToast}
+          />
 
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              type="button"
-              onClick={undoPoint}
-              disabled={draftPoints.length === 0}
-              style={ghostChip(draftPoints.length === 0)}
-            >
-              UNDO
-            </button>
-            <button
-              type="button"
-              onClick={redoPoint}
-              disabled={redoStack.length === 0}
-              style={ghostChip(redoStack.length === 0)}
-            >
-              REDO
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                // CANCEL→START_DRAW (empty path) drops the draft points + redo.
-                setDraftPoints([])
-              }}
-              disabled={draftPoints.length === 0}
-              style={ghostChip(draftPoints.length === 0)}
-            >
-              CLEAR
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setSnapEnabled((on) => {
-                  const next = !on
-                  try {
-                    localStorage.setItem('sitelayer.snap', next ? 'on' : 'off')
-                  } catch {
-                    /* private mode */
-                  }
-                  return next
-                })
-              }
-              title="Snap new points to nearby vertices and to horizontal/vertical"
-              style={{
-                ...ghostChip(false),
-                ...(snapEnabled
-                  ? { background: 'var(--m-ink)', color: 'var(--m-paper)', borderColor: 'var(--m-ink)' }
-                  : {}),
-              }}
-            >
-              SNAP {snapEnabled ? 'ON' : 'OFF'}
-            </button>
-            {isAreaTool ? (
-              <button
-                type="button"
-                onClick={() => setDeduct((on) => !on)}
-                title="Cutout: subtract this area from the net (e.g. a window or door opening)"
-                style={{
-                  ...ghostChip(false),
-                  ...(deduct
-                    ? { background: 'var(--m-red)', color: 'var(--m-paper)', borderColor: 'var(--m-red)' }
-                    : {}),
-                }}
-              >
-                DEDUCT {deduct ? 'ON' : 'OFF'}
-              </button>
-            ) : null}
-          </div>
-
-          {/* Pitch / slope driver (H2). Rise:run drives the slope factor
-              √(rise²+run²)/run applied to the scaled area/length so sloped
-              cladding/gables read true surface area. Blank/0 ⇒ flat ⇒ ×1.0. */}
-          {pitchAppliesToTool ? (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
-                color: 'var(--m-ink-3)',
-              }}
-            >
-              <span title="Roof/slope pitch — rise in run (e.g. 6 in 12). Blank = flat.">PITCH</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={0}
-                step={1}
-                value={pitchRise}
-                onChange={(e) => setPitchRise(e.target.value)}
-                placeholder="rise"
-                aria-label="Pitch rise"
-                style={pitchInputStyle}
-              />
-              <span style={{ color: 'var(--m-ink)' }}>:</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                step={1}
-                value={pitchRun}
-                onChange={(e) => setPitchRun(e.target.value)}
-                placeholder="run"
-                aria-label="Pitch run"
-                style={pitchInputStyle}
-              />
-              <span style={{ color: activePitch && pitchFactor > 1 ? 'var(--m-amber)' : 'var(--m-ink-3)' }}>
-                ×{round2(pitchFactor)}
-              </span>
-            </div>
-          ) : null}
-
-          <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
-            {create.isPending
-              ? 'Saving…'
-              : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
-          </MButton>
-
-          {error ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{error}</div> : null}
-          {savedToast ? <div style={{ fontSize: 12, color: 'var(--m-green)' }}>{savedToast}</div> : null}
-
-          {/* Running totals by scope item */}
-          <div
-            style={{
-              borderTop: '2px solid var(--m-ink)',
-              paddingTop: 10,
-              fontFamily: 'var(--m-num)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: 'var(--m-ink-3)',
-            }}
-          >
-            Running quantities
-          </div>
-          {totals.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--m-ink-3)', lineHeight: 1.5 }}>
-              No measurements yet. Draw on the canvas to add one.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {totals.map((t) => (
-                <div
-                  key={t.code}
-                  style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{t.code}</span>
-                  <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
-                    {formatQty(t.quantity)} {t.mixedUnits ? 'mixed' : t.unit}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Condition legend (Takeoff Deep Dive H1) — per-condition drawn
-              count + quantity, color-keyed to the canvas. Only shows when at
-              least one measurement was drawn against a condition. */}
-          {conditionLegend.length > 0 ? (
-            <>
-              <div
-                style={{
-                  borderTop: '2px solid var(--m-ink)',
-                  paddingTop: 10,
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  color: 'var(--m-ink-3)',
-                }}
-              >
-                Conditions
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {conditionLegend.map((row) => (
-                  <div
-                    key={row.condition.id}
-                    style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}
-                  >
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 3,
-                          background: row.condition.color,
-                          border: '1px solid var(--m-line)',
-                          flex: '0 0 auto',
-                        }}
-                      />
-                      {row.condition.name}
-                    </span>
-                    <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontSize: 13 }}>
-                      {row.count}× · {formatQty(row.quantity)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
+          <RunningTotals totals={totals} conditionLegend={conditionLegend} />
         </div>
       </div>
 
