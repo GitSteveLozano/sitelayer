@@ -59,6 +59,7 @@ import { DEmptyState } from '@/components/d'
 
 import { type Tool, type CanvasMode, type SheetCallout } from './types'
 import { BLUEPRINT_UPLOAD_ACCEPT, MAX_POLYGON_POINTS, SHEET_CALLOUTS, pitchInputStyle, ghostChip } from './constants'
+import { floatBox, floatHead, copyInputStyle, copyActionStyle } from './desktop-body-styles'
 import { AssemblyAttachPanel } from './assembly-panel'
 
 // Desktop command-center takeoff body — extracted verbatim from est-canvas.tsx
@@ -1183,52 +1184,6 @@ export function EstCanvasDesktopBody() {
     : 'No drawing — grid only'
 
   const canvasCursor = panning ? 'grabbing' : handMode || spaceHeld ? 'grab' : 'crosshair'
-
-  // Floating-palette shared chrome (translated from template .dt-float / .dt-float-head).
-  const floatBox = (extra: React.CSSProperties): React.CSSProperties => ({
-    position: 'absolute',
-    background: 'var(--m-sand)',
-    border: '2px solid var(--m-ink)',
-    boxShadow: '6px 6px 0 var(--m-ink)',
-    ...extra,
-  })
-  const floatHead: React.CSSProperties = {
-    padding: '10px 14px',
-    borderBottom: '2px solid var(--m-ink)',
-    background: 'var(--m-ink)',
-    color: 'var(--m-accent)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-  }
-  // Shared field + action styling for the copy/array/mirror panel (H6).
-  const copyInputStyle: React.CSSProperties = {
-    display: 'block',
-    width: '100%',
-    marginTop: 4,
-    padding: '6px 8px',
-    border: '2px solid var(--m-ink)',
-    background: 'var(--m-card)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 12,
-    fontWeight: 700,
-    color: 'var(--m-ink)',
-  }
-  const copyActionStyle = (danger: boolean): React.CSSProperties => ({
-    flex: 1,
-    padding: '10px 8px',
-    border: '2px solid var(--m-ink)',
-    background: 'var(--m-accent)',
-    color: danger ? 'var(--m-red)' : 'var(--m-accent-ink)',
-    fontFamily: 'var(--m-num)',
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    cursor: copyBusy ? 'not-allowed' : 'pointer',
-    opacity: copyBusy ? 0.6 : 1,
-  })
 
   return (
     <div className="d-content-full" style={{ position: 'relative' }}>
@@ -3097,7 +3052,7 @@ export function EstCanvasDesktopBody() {
                 type="button"
                 disabled={copyBusy}
                 onClick={() => void runCopyPlan('offset')}
-                style={copyActionStyle(false)}
+                style={copyActionStyle(false, copyBusy)}
               >
                 {copyBusy ? 'COPYING…' : 'COPY OFFSET'}
               </button>
@@ -3105,7 +3060,7 @@ export function EstCanvasDesktopBody() {
                 type="button"
                 disabled={copyBusy}
                 onClick={() => void runCopyPlan('array')}
-                style={copyActionStyle(false)}
+                style={copyActionStyle(false, copyBusy)}
               >
                 ARRAY ×{Math.max(1, Math.floor(Number(copyCount) || 1))}
               </button>
