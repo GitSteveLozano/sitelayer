@@ -72,7 +72,10 @@ The gap between these two layers is the whole subject of this doc.
   (`large-v3`, GPU, `POST /transcribe` + `/health` on **:5678**), unit
   `systemd/voice-tools-whisper.service`, config `config/voice-tools.env`. Clients
   `bin/vt-record`, `vt-stream`. This is the operator's day-to-day STT. Dockerized
-  Sitelayer workers should use `CAPTURE_ARTIFACT_WHISPER_URL=http://host.docker.internal:5678`;
+  Sitelayer workers should only use `CAPTURE_ARTIFACT_WHISPER_URL=http://host.docker.internal:5678`
+  on a host where Whisper is actually provisioned. For dev/prod droplets, audio
+  STT is handled by the local GPU media worker described in
+  `docs/CAPTURE_LOCAL_GPU_MEDIA_WORKER_DECISION_2026-06-04.md`;
   direct host workers can use `http://127.0.0.1:5678`.
 - **Gemini CLI multimodal.** `gemini-video` skill (`~/.claude/skills/gemini-video/SKILL.md`,
   vendored in dotfiles) — `gemini -p "<prompt> @<file>"`, handles webm/mp4/mov +
@@ -346,7 +349,7 @@ Ordered, lane-disjoint:
 
 ## Source map (verified paths)
 
-- STT: `~/projects/voice-tools/lib/whisper-server.py` (:5678), `systemd/voice-tools-whisper.service`, `config/voice-tools.env`, `bin/vt-record`/`vt-stream`; Docker workers use `http://host.docker.internal:5678`
+- STT: `~/projects/voice-tools/lib/whisper-server.py` (:5678), `systemd/voice-tools-whisper.service`, `config/voice-tools.env`, `bin/vt-record`/`vt-stream`; same-host Docker workers can use `http://host.docker.internal:5678`, while dev/prod use the local GPU media-worker path.
 - Media capture brain: `~/projects/capture/bin/capture-analyze` (`VT_CAPTURE_VIDEO_MODEL=gemini-3.1-flash-lite`, `VT_CAPTURE_VIDEO_API`, `VT_CAPTURE_CLAUDE_MODEL`), `lib/capture_streams.py`
 - Gemini CLI: `~/.claude/skills/gemini-video/SKILL.md`
 - Sitelayer weak processor: `apps/worker/src/runners/capture-artifact-analysis.ts` (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE`)

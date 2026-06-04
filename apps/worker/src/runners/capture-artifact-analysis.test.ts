@@ -76,6 +76,7 @@ afterEach(() => {
   delete process.env.CAPTURE_ARTIFACT_WHISPER_URL
   delete process.env.CAPTURE_ARTIFACT_WHISPER_PAYLOAD_MODE
   delete process.env.CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS
+  delete process.env.CAPTURE_ARTIFACT_WHISPER_UNAVAILABLE_POLICY
   delete process.env.CAPTURE_ARTIFACT_ANALYSIS_AUTO_DISPATCH
   delete process.env.MEDIA_UNDERSTANDING_ENGINE
   vi.restoreAllMocks()
@@ -660,10 +661,53 @@ describe('createCaptureArtifactAnalysisRunner', () => {
     expect(metadata.analyzer).toBe('local-whisper-v1')
   })
 
-  it('marks audio artifacts skipped when local whisper is unavailable', async () => {
+  it('leaves audio artifacts retryable when local whisper is unavailable', async () => {
     process.env.CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE = 'local-whisper'
     process.env.CAPTURE_ARTIFACT_WHISPER_URL = 'http://127.0.0.1:5678'
     process.env.CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS = '100'
+    const fetchSpy = vi.fn(async () => {
+      throw new Error('connect ECONNREFUSED 127.0.0.1:5678')
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const rows = [
+      {
+        id: 'artifact-audio',
+        capture_session_id: '00000000-0000-4000-8000-000000000123',
+        work_item_id: 'work-1',
+        kind: 'audio',
+        storage_key: 'co-1/capture-sessions/session-1/audio.webm',
+        content_type: 'audio/webm',
+        byte_size: 128,
+        content_hash: 'sha256:audio',
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: {},
+        retention_expires_at: null,
+      },
+    ]
+    const handler: QueryHandler = (sql) => {
+      if (sql.includes('from capture_artifacts')) return { rows, rowCount: rows.length }
+      if (sql.includes('insert into context_handoff_events')) return { rows: [], rowCount: 1 }
+      return { rows: [] }
+    }
+    const { pool, clients } = makeFakePool(handler)
+    const runner = createCaptureArtifactAnalysisRunner({
+      pool,
+      storage: storage({ get: vi.fn(async () => Buffer.from('fake webm bytes')) }),
+    })
+
+    await expect(runner.forceAnalyze('co-1')).resolves.toEqual({ ran: true, analyzed: 0, skipped: 0, failed: 1 })
+
+    const insert = clients[0]?.calls.find((call) => call.sql.includes('insert into context_handoff_events'))
+    expect(insert).toBeUndefined()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('can explicitly mark audio artifacts skipped when local whisper is unavailable', async () => {
+    process.env.CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE = 'local-whisper'
+    process.env.CAPTURE_ARTIFACT_WHISPER_URL = 'http://127.0.0.1:5678'
+    process.env.CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS = '100'
+    process.env.CAPTURE_ARTIFACT_WHISPER_UNAVAILABLE_POLICY = 'skip'
     const fetchSpy = vi.fn(async () => {
       throw new Error('connect ECONNREFUSED 127.0.0.1:5678')
     })

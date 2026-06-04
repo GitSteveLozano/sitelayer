@@ -104,6 +104,7 @@ const ANALYZABLE_KINDS = new Set(['transcript', 'text', 'rrweb', 'canvas_geometr
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: false })
 const AUDIO_ANALYSIS_MODES = ['off', 'local-whisper'] as const
 const WHISPER_PAYLOAD_MODES = ['base64', 'path'] as const
+const WHISPER_UNAVAILABLE_POLICIES = ['retry', 'skip'] as const
 // 'gemini' is a superset of 'frames-only': it still extracts + stores frames,
 // then runs a MediaProcessor.understand() pass over them (subscription CLI by
 // default, cash API opt-in). Default stays 'off' so prod is untouched.
@@ -675,6 +676,14 @@ async function analyzeAudioArtifact(
   try {
     transcript = await transcribeWithLocalWhisper(row, bytes)
   } catch (error) {
+    const unavailablePolicy = readMode(
+      'CAPTURE_ARTIFACT_WHISPER_UNAVAILABLE_POLICY',
+      WHISPER_UNAVAILABLE_POLICIES,
+      'retry',
+    )
+    if (unavailablePolicy === 'retry') {
+      throw new Error(`local whisper unavailable: ${errorMessage(error)}`, { cause: error })
+    }
     return {
       ...skippedAnalysis(row, `local whisper unavailable: ${errorMessage(error)}`),
       analyzer: 'local-whisper-v1',

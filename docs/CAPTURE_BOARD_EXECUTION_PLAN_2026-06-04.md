@@ -97,11 +97,14 @@ So the **real remaining frontier is the STT config/verification lane**, not the 
   `apps/web/src/lib/api/admin-issue-board.ts`, and `/admin` now has an `Issues`
   tab. Keep this platform-admin-only; do not relax company RLS.
 
-- **L2 — STT quick win.** Flip `CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE` `off→local-whisper`
-  so finalized audio artifacts transcribe via the already-running fleet whisper
-  (`:5678`, `$0`) and the transcript reconciles onto the issue. For Docker workers,
-  use `CAPTURE_ARTIFACT_WHISPER_URL=http://host.docker.internal:5678`; for a direct
-  host worker, `http://127.0.0.1:5678` is fine. The write-back
+- **L2 — STT quick win.** Run the local GPU media worker with
+  `CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE=local-whisper` so finalized audio artifacts
+  transcribe via Taylor's workstation `voice-tools` Whisper service (`:5678`, `$0`)
+  and the transcript reconciles onto the issue. For same-host Docker workers,
+  `CAPTURE_ARTIFACT_WHISPER_URL=http://host.docker.internal:5678` is valid only
+  when Whisper is actually running on that host; dev/prod droplets default audio
+  STT off and rely on `npm run capture:media-worker`. For a direct host worker,
+  `http://127.0.0.1:5678` is fine. The write-back
   machinery (`refreshAnalysisReadiness`, finalized-work-item sweep) already exists in
   `capture-artifact-analysis.ts`; this is config + a verify, not a build. **Cheapest
   win; do first.**
@@ -231,8 +234,8 @@ rebuild work.
 - Cross-tenant pattern to copy: `apps/api/src/routes/admin.ts` (`/api/admin/companies`),
   `apps/api/src/routes/admin-jobs.ts`; admin tabs `apps/web/src/routes/admin.tsx:559`
 - STT: `apps/worker/src/runners/capture-artifact-analysis.ts:138`
-  (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE` default `off`), whisper `:5678`
-  via `host.docker.internal` from Docker
+  (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE` default `off` on droplets);
+  `npm run capture:media-worker` uses local workstation Whisper `:5678`
 - Multimodal precedent: `apps/worker/src/runners/voice-to-log.ts`;
   algorithm `~/projects/capture/bin/capture-analyze`
 - Seam (landed): `apps/api/src/routes/signal.ts` in `origin/main`

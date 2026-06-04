@@ -22,6 +22,7 @@
     "capture:smoke": "bash scripts/test-capture-session-smoke.sh",
     "capture:analyze": "tsx scripts/analyze-capture-session.ts",
     "capture:audio-qa": "bash scripts/test-capture-audio-roundtrip.sh",
+    "capture:media-worker": "tsx scripts/run-capture-media-worker.ts",
     "capture:export": "tsx scripts/export-capture-session.ts",
     "capture:review": "bash scripts/review-capture-session.sh",
     "capture:review-import": "tsx scripts/import-capture-review.ts",
