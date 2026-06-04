@@ -95,7 +95,10 @@ function portalBackend(surface: PortalFeedbackSurface, shareToken: string): Feed
   }
 }
 
-function uploadPortalStateProviderArtifact(surface: PortalFeedbackSurface, shareToken: string): FeedbackCaptureBackend['uploadArtifact'] {
+function uploadPortalStateProviderArtifact(
+  surface: PortalFeedbackSurface,
+  shareToken: string,
+): FeedbackCaptureBackend['uploadArtifact'] {
   if (surface === 'estimate_portal') {
     return (captureSessionId, input) => uploadPortalEstimateCaptureArtifact(shareToken, captureSessionId, input)
   }

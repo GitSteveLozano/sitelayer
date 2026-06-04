@@ -5,6 +5,7 @@ decision docs into a dependency-ordered, lane-disjoint plan — but **re-grounde
 reading the actual code**, which materially contradicts both docs' "what's missing"
 claims. Read this before driving any board/processing work; it supersedes the
 "Build slice" sections of:
+
 - `FEEDBACK_ISSUE_BOARD_DECISION_2026-06-04.md` (§11)
 - `CAPTURE_PROCESSING_PIPELINE_2026-06-04.md` (§10)
 
@@ -67,21 +68,21 @@ the exact drift to avoid.
 
 ## 1. Verified state — DONE vs the real frontier
 
-| Item (from companion docs) | Verified status | Proof |
-| --- | --- | --- |
-| `context_work_items` kanban entity | ✅ DONE | `000_baseline.sql:1262` |
-| Capture→issue at `/finalize` | ✅ DONE | `capture-sessions.ts` finalize |
-| `move` endpoint (status/lane/assignee, optimistic, 409) | ✅ DONE | `work-requests.ts:1608`, route `:2497` |
-| Column-shaped board read (`groupBy`) | ✅ DONE | `work-requests.ts:1202,410,383` |
-| `request_ref` unique index | ✅ DONE | `000_baseline.sql:6148` |
-| `IssueBoard` port (web client) | ✅ DONE | `apps/web/src/lib/api/issue-board.ts` |
-| Tenant board UI (`/work/board`, canTriage) | ✅ DONE | `screens/mobile/issue-board.tsx` + `mobile-shell.tsx` |
-| `/api/signal` ingest seam + projectkit adopt | ✅ DONE (in `main`) | `signal.ts` in `origin/main` |
-| Dispatch-promote to mesh | ✅ DONE | `dispatchWorkRequestToMesh`, route `:2503` |
-| STT path (audio→whisper write-back) | 🟡 PARTIAL — built but **default `off`** | `capture-artifact-analysis.ts:138` (`AUDIO_ANALYSIS_MODES=['off','local-whisper']`) |
-| **Operator cross-tenant board** | ✅ DONE in dirty checkout | `apps/api/src/routes/admin-work-requests.ts`, `/api/admin/work-requests/board`, `apps/web/src/lib/api/admin-issue-board.ts`, `/admin` `Issues` tab |
-| **Media understanding seam** | ✅ DONE and replayed to this dirty checkout | `apps/worker/src/media/*` + `capture-artifact-analysis.ts` integration |
-| **Lost-callback reconciler** | ✅ DONE in dirty checkout | `apps/worker/src/runners/work-dispatch-reconciler.ts`, `agent.callback_missing` timeline event |
+| Item (from companion docs)                              | Verified status                             | Proof                                                                                                                                              |
+| ------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context_work_items` kanban entity                      | ✅ DONE                                     | `000_baseline.sql:1262`                                                                                                                            |
+| Capture→issue at `/finalize`                            | ✅ DONE                                     | `capture-sessions.ts` finalize                                                                                                                     |
+| `move` endpoint (status/lane/assignee, optimistic, 409) | ✅ DONE                                     | `work-requests.ts:1608`, route `:2497`                                                                                                             |
+| Column-shaped board read (`groupBy`)                    | ✅ DONE                                     | `work-requests.ts:1202,410,383`                                                                                                                    |
+| `request_ref` unique index                              | ✅ DONE                                     | `000_baseline.sql:6148`                                                                                                                            |
+| `IssueBoard` port (web client)                          | ✅ DONE                                     | `apps/web/src/lib/api/issue-board.ts`                                                                                                              |
+| Tenant board UI (`/work/board`, canTriage)              | ✅ DONE                                     | `screens/mobile/issue-board.tsx` + `mobile-shell.tsx`                                                                                              |
+| `/api/signal` ingest seam + projectkit adopt            | ✅ DONE (in `main`)                         | `signal.ts` in `origin/main`                                                                                                                       |
+| Dispatch-promote to mesh                                | ✅ DONE                                     | `dispatchWorkRequestToMesh`, route `:2503`                                                                                                         |
+| STT path (audio→whisper write-back)                     | 🟡 PARTIAL — built but **default `off`**    | `capture-artifact-analysis.ts:138` (`AUDIO_ANALYSIS_MODES=['off','local-whisper']`)                                                                |
+| **Operator cross-tenant board**                         | ✅ DONE in dirty checkout                   | `apps/api/src/routes/admin-work-requests.ts`, `/api/admin/work-requests/board`, `apps/web/src/lib/api/admin-issue-board.ts`, `/admin` `Issues` tab |
+| **Media understanding seam**                            | ✅ DONE and replayed to this dirty checkout | `apps/worker/src/media/*` + `capture-artifact-analysis.ts` integration                                                                             |
+| **Lost-callback reconciler**                            | ✅ DONE in dirty checkout                   | `apps/worker/src/runners/work-dispatch-reconciler.ts`, `agent.callback_missing` timeline event                                                     |
 
 So the **real remaining frontier is the STT config/verification lane**, not the ~10 slices the docs imply.
 
@@ -127,17 +128,18 @@ endpoint, the board read, the IssueBoard port, the tenant board UI.
 ## 3. Lane-disjointness — proven file footprints
 
 Verified the two "in-flight" worktrees so lanes don't collide:
+
 - `seam-sl-telemetry`: **0 diff vs `origin/main`** — merged. Not a constraint.
 - `b-sitelayer` (`agent/claude/b-sitelayer`): touches **only** `Dockerfile`,
   `apps/worker/package.json`, `apps/worker/src/runners/mesh-trace-forward.{ts,test.ts}`,
   the vendored projectkit `.tgz`, `package-lock.json`. Disjoint from every lane below.
 
-| Lane | Primary files (disjoint) | Migration? | Collides with |
-| --- | --- | --- | --- |
-| **L1 cross-tenant board** | `apps/api/src/routes/admin-work-requests.ts`, `apps/web/src/lib/api/admin-issue-board.ts`, `apps/web/src/routes/admin.tsx` | No | done in dirty checkout |
-| **L2 STT flip** | env (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE`) + verify in `apps/worker/src/runners/capture-artifact-analysis.ts` | No | none |
-| **L3 media understanding** | `apps/worker/src/media/*` + `apps/worker/src/runners/capture-artifact-analysis.ts`; replayed to dirty checkout | No | worker analysis runner only |
-| **L4 reconciler** | `apps/worker/src/runners/work-dispatch-reconciler.ts`, `apps/worker/src/worker.ts`, event labels/types | No | built in dirty checkout |
+| Lane                       | Primary files (disjoint)                                                                                                   | Migration? | Collides with               |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------- |
+| **L1 cross-tenant board**  | `apps/api/src/routes/admin-work-requests.ts`, `apps/web/src/lib/api/admin-issue-board.ts`, `apps/web/src/routes/admin.tsx` | No         | done in dirty checkout      |
+| **L2 STT flip**            | env (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE`) + verify in `apps/worker/src/runners/capture-artifact-analysis.ts`            | No         | none                        |
+| **L3 media understanding** | `apps/worker/src/media/*` + `apps/worker/src/runners/capture-artifact-analysis.ts`; replayed to dirty checkout             | No         | worker analysis runner only |
+| **L4 reconciler**          | `apps/worker/src/runners/work-dispatch-reconciler.ts`, `apps/worker/src/worker.ts`, event labels/types                     | No         | built in dirty checkout     |
 
 L1 touches `admin-work-requests.ts`, `admin-issue-board.ts`, and `admin.tsx`;
 L3/L4 are worker-only, and L2 is config. **No two active lanes write the same file.**

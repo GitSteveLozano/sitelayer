@@ -109,7 +109,19 @@ export function MobileProjectDetail({
         materialBillCount: materialBills.length,
       }),
     )
-  }, [bid, companyRole, labor.length, materialBills.length, onTrack, pctSpent, project, schedules.length, spent, tab, totalHours])
+  }, [
+    bid,
+    companyRole,
+    labor.length,
+    materialBills.length,
+    onTrack,
+    pctSpent,
+    project,
+    schedules.length,
+    spent,
+    tab,
+    totalHours,
+  ])
 
   return (
     <>

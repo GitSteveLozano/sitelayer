@@ -1,7 +1,7 @@
 # Capture Processing Pipeline — Multimodal Understanding & Event Reconciliation - 2026-06-04
 
 Status: **DESIGN / working-through with dirty-checkout implementation notes.** Companion to
-`FEEDBACK_ISSUE_BOARD_DECISION_2026-06-04.md` — that doc decided *where issues live*
+`FEEDBACK_ISSUE_BOARD_DECISION_2026-06-04.md` — that doc decided _where issues live_
 (C: sitelayer-local behind the `IssueBoard` port); **this doc decides how raw
 multimodal capture becomes an enriched, reconciled issue**, and where Gemini fits.
 
@@ -28,7 +28,7 @@ subscriber/dispatch adapter; projectkit's `CONTRACT` stays emit/dispatch-only.
 1. **"Can we easily do speech-to-text?"** — **Yes, today, two ways.** A local
    `faster-whisper` server already runs on the fleet (`~/projects/voice-tools`, port
    **5678**, `large-v3`, GPU, $0); and the `gemini-video` CLI skill transcribes
-   audio/video. Sitelayer's own worker can *already* hit whisper — it's just
+   audio/video. Sitelayer's own worker can _already_ hit whisper — it's just
    **off by default** (`CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE=off`). So STT is a
    config flip + a write-back, not a build.
 2. **"How are we reconciling all these events?"** — Everything is keyed to the
@@ -55,10 +55,10 @@ without widening branch drift.
 
 ## 1. The two layers of reality: captured vs understood
 
-| Layer | State today |
-| --- | --- |
-| **Captured (stored)** | ✅ Solid. Screen video / audio / browser corpus / events land as `capture_artifacts` (DO Spaces, `tor1`) + `capture_session_events`, keyed by `capture_session_id`, with `content_hash`, `duration_ms`, `pii_level`, `access_policy`, retention GC. |
-| **Understood (structured)** | ⚠️ Weak *in sitelayer*. On `finalize`, sitelayer records `artifact_count` but **reads no media content**. Audio STT exists but is `off` by default; video is `frames-only` (ffmpeg JPEG dump, **no VLM**). The rich media→action brain lives in the **host** `~/projects/capture` tooling, not the sitelayer/Spaces pipeline. |
+| Layer                       | State today                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Captured (stored)**       | ✅ Solid. Screen video / audio / browser corpus / events land as `capture_artifacts` (DO Spaces, `tor1`) + `capture_session_events`, keyed by `capture_session_id`, with `content_hash`, `duration_ms`, `pii_level`, `access_policy`, retention GC.                                                                           |
+| **Understood (structured)** | ⚠️ Weak _in sitelayer_. On `finalize`, sitelayer records `artifact_count` but **reads no media content**. Audio STT exists but is `off` by default; video is `frames-only` (ffmpeg JPEG dump, **no VLM**). The rich media→action brain lives in the **host** `~/projects/capture` tooling, not the sitelayer/Spaces pipeline. |
 
 The gap between these two layers is the whole subject of this doc.
 
@@ -67,6 +67,7 @@ The gap between these two layers is the whole subject of this doc.
 ## 2. What exists today (don't rebuild)
 
 ### 2.1 Speech-to-text — two working paths
+
 - **Local faster-whisper (primary, $0).** `~/projects/voice-tools/lib/whisper-server.py`
   (`large-v3`, GPU, `POST /transcribe` + `/health` on **:5678**), unit
   `systemd/voice-tools-whisper.service`, config `config/voice-tools.env`. Clients
@@ -78,6 +79,7 @@ The gap between these two layers is the whole subject of this doc.
   mp3/wav/aac/ogg/flac, ~1 fps. The "Claude can't read media → hand to Gemini" path.
 
 ### 2.2 Media capture + storage
+
 - `~/projects/capture/bin/` (`capture-toggle`/`capture-agent`/`capture-stream`/
   `capture-session`/`capture-analyze`), `lib/capture_streams.py`, reaper bound
   `VT_CAPTURE_MAX_RECORD_SECONDS=3600`. Emits aligned `.mp4`/`.wav` + event corpus +
@@ -86,6 +88,7 @@ The gap between these two layers is the whole subject of this doc.
   Spaces (`DO_SPACES_*`); retention GC `apps/worker/src/runners/blueprint-storage-gc.ts`.
 
 ### 2.3 Existing processing (the brain is in the wrong place)
+
 - **`~/projects/capture/bin/capture-analyze` already does media→tasks**: video →
   metered Gemini (`VT_CAPTURE_VIDEO_MODEL=gemini-3.1-flash-lite`, key
   `VT_CAPTURE_GEMINI_API_KEY`, cost-capped, kill-switch `VT_CAPTURE_VIDEO_API=0`) or
@@ -99,6 +102,7 @@ The gap between these two layers is the whole subject of this doc.
   JPEG dump, no understanding.
 
 ### 2.4 Gemini access + routing
+
 - **Keys** (metered cash) in `~/.env.local`: `GOOGLE_API_KEY`, `GEMINI_API_KEY`,
   `GOOGLE_GENERATIVE_AI_API_KEY`.
 - **REST scaffold** `mesh/scripts/gemini_research.py` — `generateContent`, reads keys,
@@ -106,7 +110,7 @@ The gap between these two layers is the whole subject of this doc.
   unless `MESH_ENABLE_GEMINI_API=1`** (`gemini_direct_api_disabled()`). Rate table
   `:161` (pro $2.50/$15, flash-lite $0.10/$0.40 per Mtok).
 - **CLI rides subscription, not cash**: launch scripts `unset GEMINI_API_KEY
-  GOOGLE_API_KEY` (`mesh-worker-client/runners.go:791`); subscription Gemini 3 only via
+GOOGLE_API_KEY` (`mesh-worker-client/runners.go:791`); subscription Gemini 3 only via
   Auto-picker (no `-m`), translated at the CLI boundary
   (`mesh/core/gemini_cli_llm_adapter.go` — `subscriptionSafeGeminiCLIModelArg`).
   Scheduler routes `Tool="gemini"` runners (`runner_orchestrator.go:84-87`,
@@ -147,6 +151,7 @@ opaque mirrors** (`product_trace_events` mig 320, `contract_version` mig 325).
 ```
 
 **Idempotency, where it lives (already correct):**
+
 - Finalize pre-checks `(company_id, capture_session_id, source='capture_session_finalize')`
   → `idempotent_replay:true` (`capture-sessions.ts:206,1001`); handoff idem-key
   `capture_session:finalize:<id>:work_item_created` (`:1145`); unique-violation race
@@ -243,8 +248,8 @@ capture-artifact-analysis runner:
 customer media that must stay behind RLS. Routing it through mesh would re-acquire
 ownership of the testbed's data (the forbidden inversion). Mesh stays subscriber-only —
 it sees the issue **after** promotion as a dispatched `Concern` and returns a `Callback`.
-Multimodal *understanding* is a sitelayer-internal enrichment step, off the wire. A
-separate "processing lane" is over-engineering: the outbox+runner already *is* a lane
+Multimodal _understanding_ is a sitelayer-internal enrichment step, off the wire. A
+separate "processing lane" is over-engineering: the outbox+runner already _is_ a lane
 keyed by `capture_session_id`, with retry/lease semantics.
 
 **Default safety:** keep analysis modes gated. Audio and video analysis default off;
@@ -257,6 +262,7 @@ key are present.
 ## 7. Cost / quota / safety posture (Gemini)
 
 Per `~/CLAUDE.md` rules 3/4/7 — the operator is cash-constrained:
+
 - **Default to subscription, not cash.** The fleet deliberately unsets API keys so the
   CLI rides OAuth subscription. The cash REST path (`gemini_research.py`) is opt-in
   (`MESH_ENABLE_GEMINI_API=1`). For sitelayer media: `LocalWhisperProcessor` is $0;
@@ -324,6 +330,7 @@ worth triaging instead of "a video nobody watched."
 ## 10. Build slice (NOT NOW — for when greenlit)
 
 Ordered, lane-disjoint:
+
 1. **STT quick win:** flip audio analysis to `local-whisper`, write transcript back as a
    `capture_artifact` + handoff event. (`capture-artifact-analysis.ts`, voice-to-log
    precedent.)

@@ -30,11 +30,11 @@ Steve-as-collaborator. Not operator-only.
   the first concrete implementation.** Not a standalone service (A); not a per-site
   re-implemented pattern (B).
 - **It is ~80% built already.** `context_work_items` is a complete kanban entity;
-  capture→issue creation is live; only the board *view*, one *move* mutation, a
-  column-shaped *read*, and the per-tenant surfacing are missing.
+  capture→issue creation is live; only the board _view_, one _move_ mutation, a
+  column-shaped _read_, and the per-tenant surfacing are missing.
 - **The general problem stays deferred.** projectkit's published `CONTRACT` remains
   emit/dispatch-only. The issue store stays sitelayer-local behind a port. The
-  "general pattern" gets *extracted later from the proven specific*, never designed
+  "general pattern" gets _extracted later from the proven specific_, never designed
   up front.
 - **The boundary test (this feature's version of the One-Line Boundary Test):** you
   can swap the local `IssueBoard` implementation for a standalone service, and swap
@@ -45,14 +45,14 @@ Steve-as-collaborator. Not operator-only.
 
 ## 1. The decision
 
-| Option | Verdict | Why |
-| --- | --- | --- |
-| **A. Standalone issue/tracker service** | ❌ Reject (now) | Premature general solve. Multiplies the auth surface — token exchange to re-prove Clerk identity + company role across a trust boundary, cross-origin CORS, re-implementing/replicating Postgres RLS company isolation outside the DB, a second audit chain. No buyer yet. |
-| **B. Per-site re-implemented pattern** | ❌ Reject (now) | Duplicates a backend that already exists in sitelayer. Lifting an issue read/mutate surface into projectkit's contract *is* the deferred general problem. |
-| **C. Self-contained capability behind an interface, sitelayer first** | ✅ **Adopt** | Reuses the existing `context_work_items` + RLS + role gates. Ships value to tenant users + Steve + operator now. Hides implementation behind one port so standalone-vs-embedded stays an unforced, reversible decision. |
+| Option                                                                | Verdict         | Why                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A. Standalone issue/tracker service**                               | ❌ Reject (now) | Premature general solve. Multiplies the auth surface — token exchange to re-prove Clerk identity + company role across a trust boundary, cross-origin CORS, re-implementing/replicating Postgres RLS company isolation outside the DB, a second audit chain. No buyer yet. |
+| **B. Per-site re-implemented pattern**                                | ❌ Reject (now) | Duplicates a backend that already exists in sitelayer. Lifting an issue read/mutate surface into projectkit's contract _is_ the deferred general problem.                                                                                                                  |
+| **C. Self-contained capability behind an interface, sitelayer first** | ✅ **Adopt**    | Reuses the existing `context_work_items` + RLS + role gates. Ships value to tenant users + Steve + operator now. Hides implementation behind one port so standalone-vs-embedded stays an unforced, reversible decision.                                                    |
 
-This matches the operator's stated constraints: *prove the specific, don't solve the
-general, keep behind interfaces, self-contained, hide implementation/workflows.*
+This matches the operator's stated constraints: _prove the specific, don't solve the
+general, keep behind interfaces, self-contained, hide implementation/workflows._
 
 ---
 
@@ -67,13 +67,13 @@ Verified by reading the code (paths are in the main sitelayer checkout):
   timestamps, and **`capture_session_id`** as the link-back to the originating
   capture. Kanban state:
   - `status` (11-state CHECK): `new, triaged, agent_running, human_assigned,
-    review_ready, review_stale, proposal_expired, resolved, reopened, wont_do,
-    reversed` (enum mirror in `apps/api/src/context-handoff.ts:8`).
+review_ready, review_stale, proposal_expired, resolved, reopened, wont_do,
+reversed` (enum mirror in `apps/api/src/context-handoff.ts:8`).
   - `lane`: `triage | human | agent | both | done` (`context-handoff.ts:24`) — the
     natural board columns; `status` is the in-column state.
-  The operator's own docs already name this "the common Kanban"
-  (`OPT_IN_CAPTURE_LADDER_2026-06-04.md:442`,
-  `CONTEXT_HANDOFF_CAPTURE_ARCHITECTURE_2026-06-02.md`).
+    The operator's own docs already name this "the common Kanban"
+    (`OPT_IN_CAPTURE_LADDER_2026-06-04.md:442`,
+    `CONTEXT_HANDOFF_CAPTURE_ARCHITECTURE_2026-06-02.md`).
 - **The append-only timeline exists.** `context_handoff_events`
   (`000_baseline.sql:1228`) — status changes, dispatch, runner callbacks; the card
   detail/activity feed.
@@ -94,13 +94,13 @@ Verified by reading the code (paths are in the main sitelayer checkout):
 - **A working drag-drop kanban UI exists — but bound to the WRONG store.** Console
   `BoardTab.tsx` + `boardTabMachine.ts` (console-ui repo) is columns + optimistic
   drag → `POST /orchestrate/tasks/{id}/transition`, but over **mesh `tasks.state`**.
-  **Reuse the component/machine *pattern*, never the binding.** Pointing sitelayer's
+  **Reuse the component/machine _pattern_, never the binding.** Pointing sitelayer's
   board at mesh tasks would invert the seam (mesh is the execution-record subscriber,
   not the issue owner).
 
-**Net genuinely missing:** a board *view* over `context_work_items`; one generic
-*move* endpoint (status/lane/assignee with optimistic version); a *column-shaped
-list* read (grouped by lane+status); a `request_ref` idempotency index; and the
+**Net genuinely missing:** a board _view_ over `context_work_items`; one generic
+_move_ endpoint (status/lane/assignee with optimistic version); a _column-shaped
+list_ read (grouped by lane+status); a `request_ref` idempotency index; and the
 per-tenant surfacing of the board. That's the whole slice.
 
 ---
@@ -113,7 +113,7 @@ board consumes. Do not rebuild it; depend on it.
 - **`sitelayer-worktrees/seam-sl-telemetry`** (`agent/claude/seam-sitelayer-telemetry`)
   — adds the same-origin ingest proxy `apps/api/src/routes/signal.ts`
   (`@operator/projectkit` `HttpSink`, validates every `ProjectEventEnvelope`,
-  forwards to a subscriber that is *just a URL*; inert when `SIGNAL_SINK_URL` unset;
+  forwards to a subscriber that is _just a URL_; inert when `SIGNAL_SINK_URL` unset;
   HMAC server-side via `SIGNAL_SINK_SECRET`, mirrors the nhl `/api/signal`). Also
   rewrites the beacon + `mesh-observation-client` + `mesh-trace-forward`.
 - **`.worktrees/b-sitelayer`** (`agent/claude/b-sitelayer`) — worker product-trace
@@ -121,8 +121,8 @@ board consumes. Do not rebuild it; depend on it.
 - ⚠️ Both branches edit `apps/worker/src/runners/mesh-trace-forward.ts` — a
   coordination point **between those two**, not with this board work.
 
-**Implication for the board:** the `DispatchAdapter` port below is *already being
-built* by these worktrees (projectkit `HttpSink` + `/api/signal` + the worker
+**Implication for the board:** the `DispatchAdapter` port below is _already being
+built_ by these worktrees (projectkit `HttpSink` + `/api/signal` + the worker
 forward). The board work consumes that seam (mesh = one swappable URL) and does
 **not** touch `mesh-dispatcher.ts` / `context-work-dispatch.ts` emit internals.
 
@@ -157,8 +157,8 @@ later requires **zero** UI changes — that is the boundary test.
 
 Wraps outbound dispatch through `@operator/projectkit` so **mesh is one swappable
 `HttpSink`/URL**. Built in the two seam worktrees (§3). Dispatch is a **separate**
-port from `IssueBoard` — promoting an issue to mesh execution is an action *on* an
-issue, not a property *of* the board store.
+port from `IssueBoard` — promoting an issue to mesh execution is an action _on_ an
+issue, not a property _of_ the board store.
 
 ### 4.3 Actor-resolution + ownership-tag seam (CONSOLIDATE)
 
@@ -173,7 +173,7 @@ on the local side of the seam.
 
 `projectkit/CONTRACT.md` (v1.3.0) defines `ProjectEvent`, `CaptureEnvelope`,
 `WorkRequest`, `Concern`/`Callback`, `DispatchAdapter`. **Do NOT add an issue
-read/mutate surface to it.** That surface staying sitelayer-local *is* how the
+read/mutate surface to it.** That surface staying sitelayer-local _is_ how the
 general problem stays deferred. mesh ingests as a tolerant subscriber
 (`control-plane/mesh/core/contracts/projectkit/README.md`, mig 325
 `contract_version`); identity, roles, RLS, and raw evidence never leave sitelayer —
@@ -187,11 +187,11 @@ The expanded v1 scope (per the 2026-06-04 audience decision) serves **three acto
 classes** off the **same `context_work_items` table**, differentiated only by
 identity + RLS scope — no second store, no second model.
 
-| Audience | Surface | Identity | Scope |
-| --- | --- | --- | --- |
-| **Tenant users (in-app issues)** | Company board inside the tenant app | Clerk JWT → `company_memberships` role | Company-scoped via RLS (`app_current_company_id()` GUC, `company_isolation` policy `000_baseline.sql:10780`). `canReadWorkItem` already restricts `member` to own/assigned items; admin/foreman/office see company-wide. |
-| **Operator triage** | Cross-tenant board in `/admin` console (`apps/web/src/routes/admin.tsx`, mounted `App.tsx:373`) | Clerk `sub` ∈ `platform_admins` / `PLATFORM_SUPERADMIN_CLERK_IDS` via `requirePlatformAdmin` | Cross-tenant (bypasses single-company RLS through the platform-admin path only). |
-| **Steve-the-client (collaborator/product feedback)** | Shared collaborator view; submits via capture | **Prod:** token-bound feedback-invite guest (`portal_guest:<authority>:<actorRef>`, `portal-capture-sessions.ts:42`). **NOT** the dev-only `x-sitelayer-act-as` (null when `tier==='prod'`, `auth.ts:33`). | Single-company, token-scoped. |
+| Audience                                             | Surface                                                                                         | Identity                                                                                                                                                                                                   | Scope                                                                                                                                                                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Tenant users (in-app issues)**                     | Company board inside the tenant app                                                             | Clerk JWT → `company_memberships` role                                                                                                                                                                     | Company-scoped via RLS (`app_current_company_id()` GUC, `company_isolation` policy `000_baseline.sql:10780`). `canReadWorkItem` already restricts `member` to own/assigned items; admin/foreman/office see company-wide. |
+| **Operator triage**                                  | Cross-tenant board in `/admin` console (`apps/web/src/routes/admin.tsx`, mounted `App.tsx:373`) | Clerk `sub` ∈ `platform_admins` / `PLATFORM_SUPERADMIN_CLERK_IDS` via `requirePlatformAdmin`                                                                                                               | Cross-tenant (bypasses single-company RLS through the platform-admin path only).                                                                                                                                         |
+| **Steve-the-client (collaborator/product feedback)** | Shared collaborator view; submits via capture                                                   | **Prod:** token-bound feedback-invite guest (`portal_guest:<authority>:<actorRef>`, `portal-capture-sessions.ts:42`). **NOT** the dev-only `x-sitelayer-act-as` (null when `tier==='prod'`, `auth.ts:33`). | Single-company, token-scoped.                                                                                                                                                                                            |
 
 Both board surfaces render the **same `IssueBoard` port** with a different `scope`
 filter. The per-tenant company board is the larger of the two additions; it requires
@@ -235,16 +235,16 @@ the `move` endpoint gated by `TRIAGE_ROLES` + `canReadWorkItem`.
 - A **card → captured-context deep link** surfaced in the UI (the
   `capture_session_id` join already exists; nothing consumes it yet).
 
-Capture→issue stays a **sitelayer concern**: auto-create one issue per *finalized*
+Capture→issue stays a **sitelayer concern**: auto-create one issue per _finalized_
 feedback episode (not per inbound event); later events append to the timeline keyed
 by `capture_session_id`. mesh never performs this transform — it only receives a
-*dispatched* prepared work item via `mutation_outbox(dispatch_mesh_work_request)`
+_dispatched_ prepared work item via `mutation_outbox(dispatch_mesh_work_request)`
 when an operator/flag promotes it, and returns a `Callback` that lands as
 `context_handoff_event(agent.*)`.
 
 Storage stays in sitelayer Postgres (company-scoped RLS), **not mesh, not a
 standalone store.** Issues are company-scoped customer data sitelayer authors and
-triages; mesh-as-subscriber *precludes* mesh-as-store (a subscriber that owned the
+triages; mesh-as-subscriber _precludes_ mesh-as-store (a subscriber that owned the
 board would re-acquire ownership of the testbed's data — the exact drift the operator
 forbids).
 
@@ -281,7 +281,7 @@ forbids).
   `OPT_IN_CAPTURE_LADDER`, not built).
 - Boards for the other testbeds (nhl / chess / winwar / sandolab — none have an
   issue store today). Sitelayer is the reference backend; the **pattern is extracted
-  from it later**, by promoting the `IssueBoard` port + capture-client, *not* by
+  from it later**, by promoting the `IssueBoard` port + capture-client, _not_ by
   designing a shared system up front.
 
 ---

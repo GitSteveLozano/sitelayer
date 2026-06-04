@@ -4,10 +4,7 @@ import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import { ScreenCaptureRecorder } from '@/lib/capture-recorder'
 import { FeedbackCaptureController, type FeedbackCaptureBackend } from '@/lib/feedback-capture-controller'
-import {
-  uploadRegisteredCaptureStateSnapshots,
-  type CaptureStateSnapshotReason,
-} from '@/lib/capture-state-providers'
+import { uploadRegisteredCaptureStateSnapshots, type CaptureStateSnapshotReason } from '@/lib/capture-state-providers'
 import {
   appendFeedbackInviteCaptureEvents,
   discardFeedbackInviteCaptureSession,

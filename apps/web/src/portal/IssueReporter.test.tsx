@@ -1,10 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CAPTURE_SESSION_STORAGE_KEY } from '@/lib/capture-session'
-import {
-  __resetCaptureStateProvidersForTests,
-  registerCaptureStateProvider,
-} from '@/lib/capture-state-providers'
+import { __resetCaptureStateProvidersForTests, registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { IssueReporter } from './IssueReporter'
 
 const api = vi.hoisted(() => ({

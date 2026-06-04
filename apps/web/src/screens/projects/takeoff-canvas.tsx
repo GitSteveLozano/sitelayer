@@ -336,33 +336,36 @@ export function TakeoffCanvasScreen() {
   useEffect(() => {
     if (!projectId) return
     const shouldCapture = () => activeBlueprint || blueprintMeasurements.length > 0 || draftPoints.length > 0
-    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:project:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!shouldCapture()) return null
-      const payload = buildCanvasGeometryArtifact({
-        project_id: projectId,
-        route_path: currentCaptureRoutePath(),
-        active_draft_id: activeDraftId,
-        active_blueprint_id: activeBlueprint?.id ?? null,
-        active_page_id: activePage?.id ?? null,
-        blueprint: activeBlueprint,
-        page: activePage,
-        viewport: { zoom, mode: 'draw', tool },
-        draft: {
-          points: draftPoints,
-          quantity: draftQuantity,
-          service_item_code: serviceItemCode,
-          elevation,
-        },
-        selection: {
-          tag_sheet_measurement_id: tagSheetMeasurementId,
-        },
-        measurements: blueprintMeasurements,
-      })
-      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
-        ...metadata,
-        surface: 'project_takeoff_canvas',
-      })
-    })
+    const unregisterArtifact = registerCaptureArtifactProvider(
+      `takeoff:project:${projectId}`,
+      async ({ captureSessionId, metadata }) => {
+        if (!shouldCapture()) return null
+        const payload = buildCanvasGeometryArtifact({
+          project_id: projectId,
+          route_path: currentCaptureRoutePath(),
+          active_draft_id: activeDraftId,
+          active_blueprint_id: activeBlueprint?.id ?? null,
+          active_page_id: activePage?.id ?? null,
+          blueprint: activeBlueprint,
+          page: activePage,
+          viewport: { zoom, mode: 'draw', tool },
+          draft: {
+            points: draftPoints,
+            quantity: draftQuantity,
+            service_item_code: serviceItemCode,
+            elevation,
+          },
+          selection: {
+            tag_sheet_measurement_id: tagSheetMeasurementId,
+          },
+          measurements: blueprintMeasurements,
+        })
+        return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+          ...metadata,
+          surface: 'project_takeoff_canvas',
+        })
+      },
+    )
     const unregisterState = registerCaptureStateProvider(`takeoff:project:${projectId}`, ({ reason }) => {
       if (!shouldCapture()) return null
       return buildTakeoffCanvasStateSnapshot({

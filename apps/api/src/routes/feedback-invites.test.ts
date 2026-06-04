@@ -133,9 +133,7 @@ describe('handleFeedbackInviteRoutes', () => {
 
     await handleFeedbackInviteRoutes(
       buildReq('POST'),
-      buildUrl(
-        '/api/portal/feedback-invites/capture-sessions/99999999-9999-4999-8999-999999999999/artifacts/upload',
-      ),
+      buildUrl('/api/portal/feedback-invites/capture-sessions/99999999-9999-4999-8999-999999999999/artifacts/upload'),
       ctx,
     )
 

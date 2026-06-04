@@ -1,6 +1,12 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { Pool } from 'pg'
-import { HttpSink, type EventSink, type ProjectEvent, type ProjectEventEnvelope, type SignFn } from '@operator/projectkit'
+import {
+  HttpSink,
+  type EventSink,
+  type ProjectEvent,
+  type ProjectEventEnvelope,
+  type SignFn,
+} from '@operator/projectkit'
 
 /**
  * Mesh trace forwarder — the SERVER lane of the observability spectrum (T3,

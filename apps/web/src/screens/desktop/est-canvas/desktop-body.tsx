@@ -956,36 +956,39 @@ export function EstCanvasDesktopBody() {
   useEffect(() => {
     if (!projectId) return
     const shouldCapture = () => activeBlueprint || blueprintMeasurements.length > 0 || draftPoints.length > 0
-    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:desktop:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!shouldCapture()) return null
-      const payload = buildCanvasGeometryArtifact({
-        project_id: projectId,
-        route_path: currentCaptureRoutePath(),
-        active_draft_id: activeDraftId,
-        active_blueprint_id: activeBlueprint?.id ?? null,
-        active_page_id: activePage?.id ?? null,
-        blueprint: activeBlueprint,
-        page: activePage,
-        viewport: { zoom, pan, mode, tool },
-        draft: {
-          points: draftPoints,
-          quantity: draftQuantity,
-          scale_points: scalePoints,
-          edit_geom_id: editGeomId,
-          edit_points: editPoints,
-        },
-        selection: {
-          selected_measurement_id: selectedMeasurementId,
-          bulk_selected_ids: Array.from(bulkSelected),
-          reassign_ids: reassignIds,
-        },
-        measurements: blueprintMeasurements,
-      })
-      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
-        ...metadata,
-        surface: 'desktop_est_canvas',
-      })
-    })
+    const unregisterArtifact = registerCaptureArtifactProvider(
+      `takeoff:desktop:${projectId}`,
+      async ({ captureSessionId, metadata }) => {
+        if (!shouldCapture()) return null
+        const payload = buildCanvasGeometryArtifact({
+          project_id: projectId,
+          route_path: currentCaptureRoutePath(),
+          active_draft_id: activeDraftId,
+          active_blueprint_id: activeBlueprint?.id ?? null,
+          active_page_id: activePage?.id ?? null,
+          blueprint: activeBlueprint,
+          page: activePage,
+          viewport: { zoom, pan, mode, tool },
+          draft: {
+            points: draftPoints,
+            quantity: draftQuantity,
+            scale_points: scalePoints,
+            edit_geom_id: editGeomId,
+            edit_points: editPoints,
+          },
+          selection: {
+            selected_measurement_id: selectedMeasurementId,
+            bulk_selected_ids: Array.from(bulkSelected),
+            reassign_ids: reassignIds,
+          },
+          measurements: blueprintMeasurements,
+        })
+        return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+          ...metadata,
+          surface: 'desktop_est_canvas',
+        })
+      },
+    )
     const unregisterState = registerCaptureStateProvider(`takeoff:desktop:${projectId}`, ({ reason }) => {
       if (!shouldCapture()) return null
       return buildTakeoffCanvasStateSnapshot({

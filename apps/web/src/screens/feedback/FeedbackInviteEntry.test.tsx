@@ -1,9 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  __resetCaptureStateProvidersForTests,
-  registerCaptureStateProvider,
-} from '@/lib/capture-state-providers'
+import { __resetCaptureStateProvidersForTests, registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { FeedbackInviteEntry } from './FeedbackInviteEntry'
 
 const api = vi.hoisted(() => {
@@ -242,20 +239,21 @@ describe('FeedbackInviteEntry', () => {
         }),
       }),
     )
-    await expect((api.uploadFeedbackInviteCaptureArtifact.mock.calls[0]?.[2]?.file as Blob).text().then(JSON.parse))
-      .resolves.toMatchObject({
-        artifact_type: 'capture.state_snapshot',
-        capture_session_id: captureSessionId,
-        route_path: '/desktop',
-        invite: {
-          id: 'invite-1',
-          company_slug: 'la-ops',
-          reviewer_ref: 'steve',
-          target_route: '/desktop',
-          allowed_capture_modes: ['text', 'state', 'audio', 'screen'],
-        },
-        form: { note_length: 30 },
-      })
+    await expect(
+      (api.uploadFeedbackInviteCaptureArtifact.mock.calls[0]?.[2]?.file as Blob).text().then(JSON.parse),
+    ).resolves.toMatchObject({
+      artifact_type: 'capture.state_snapshot',
+      capture_session_id: captureSessionId,
+      route_path: '/desktop',
+      invite: {
+        id: 'invite-1',
+        company_slug: 'la-ops',
+        reviewer_ref: 'steve',
+        target_route: '/desktop',
+        allowed_capture_modes: ['text', 'state', 'audio', 'screen'],
+      },
+      form: { note_length: 30 },
+    })
 
     const providerCall = api.uploadFeedbackInviteCaptureArtifact.mock.calls.find(
       (call) => call[2]?.metadata?.provider_id === 'route:feedback-test',

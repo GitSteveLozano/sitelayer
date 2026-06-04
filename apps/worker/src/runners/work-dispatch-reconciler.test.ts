@@ -108,9 +108,7 @@ describe('createWorkDispatchReconcilerRunner', () => {
     ])
     const insert = calls.find((call) => call.sql.includes('insert into context_handoff_events'))
     expect(insert?.sql).toContain("'agent.callback_missing'")
-    expect(insert?.params[4]).toBe(
-      'context_work_item:lost_callback:00000000-0000-4000-8000-000000000101:mesh-task-101',
-    )
+    expect(insert?.params[4]).toBe('context_work_item:lost_callback:00000000-0000-4000-8000-000000000101:mesh-task-101')
     expect(insert?.params[5]).toBe('11111111-1111-4111-8111-111111111111')
     expect(JSON.parse(String(insert?.params[2]))).toMatchObject({
       previous_status: 'agent_running',

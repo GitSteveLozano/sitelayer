@@ -308,10 +308,7 @@ function formatDate(iso: string): string {
   }
 }
 
-function useEstimatePortalCaptureStateProvider(
-  shareToken: string,
-  signature: PortalEstimateSignatureHookResult,
-): void {
+function useEstimatePortalCaptureStateProvider(shareToken: string, signature: PortalEstimateSignatureHookResult): void {
   const signatureRef = useRef(signature)
   signatureRef.current = signature
 

@@ -406,10 +406,9 @@ describe('AuthenticatedFeedbackDock', () => {
         }),
       }),
     )
-    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
-      expect.any(String),
-      [expect.objectContaining({ event_type: 'authenticated.feedback.issue_opened' })],
-    )
+    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(expect.any(String), [
+      expect.objectContaining({ event_type: 'authenticated.feedback.issue_opened' }),
+    ])
     await waitFor(() => expect(stateProvider).toHaveBeenCalledTimes(1))
     expect(stateProvider).toHaveBeenCalledWith({
       captureSessionId: expect.any(String),

@@ -600,35 +600,38 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   useEffect(() => {
     if (!projectId) return
     const shouldCapture = () => activeBlueprint || canvasMeasurements.length > 0 || draftPoints.length > 0
-    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!shouldCapture()) return null
-      const payload = buildCanvasGeometryArtifact({
-        project_id: projectId,
-        route_path: currentCaptureRoutePath(),
-        active_draft_id: activeDraftId,
-        active_blueprint_id: activeBlueprint?.id ?? null,
-        active_page_id: activePage?.id ?? null,
-        blueprint: activeBlueprint,
-        page: activePage,
-        viewport: { mode, tool },
-        draft: {
-          points: draftPoints,
-          quantity: draftQuantity,
-          manual_qty: manualQty,
-          edit_id: editId,
-          edit_points: editPoints,
-        },
-        selection: {
-          selected_id: selectedId,
-          bulk_selected_ids: Array.from(bulkIds),
-        },
-        measurements: canvasMeasurements,
-      })
-      return uploadCanvasGeometryArtifact(captureSessionId, payload, {
-        ...metadata,
-        surface: 'mobile_takeoff',
-      })
-    })
+    const unregisterArtifact = registerCaptureArtifactProvider(
+      `takeoff:mobile:${projectId}`,
+      async ({ captureSessionId, metadata }) => {
+        if (!shouldCapture()) return null
+        const payload = buildCanvasGeometryArtifact({
+          project_id: projectId,
+          route_path: currentCaptureRoutePath(),
+          active_draft_id: activeDraftId,
+          active_blueprint_id: activeBlueprint?.id ?? null,
+          active_page_id: activePage?.id ?? null,
+          blueprint: activeBlueprint,
+          page: activePage,
+          viewport: { mode, tool },
+          draft: {
+            points: draftPoints,
+            quantity: draftQuantity,
+            manual_qty: manualQty,
+            edit_id: editId,
+            edit_points: editPoints,
+          },
+          selection: {
+            selected_id: selectedId,
+            bulk_selected_ids: Array.from(bulkIds),
+          },
+          measurements: canvasMeasurements,
+        })
+        return uploadCanvasGeometryArtifact(captureSessionId, payload, {
+          ...metadata,
+          surface: 'mobile_takeoff',
+        })
+      },
+    )
     const unregisterState = registerCaptureStateProvider(`takeoff:mobile:${projectId}`, ({ reason }) => {
       if (!shouldCapture()) return null
       return buildTakeoffCanvasStateSnapshot({
