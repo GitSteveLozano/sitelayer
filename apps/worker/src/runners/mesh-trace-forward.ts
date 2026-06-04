@@ -1,27 +1,36 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { Pool } from 'pg'
+import { HttpSink, type ProjectEvent, type ProjectEventEnvelope, type SignFn } from '@operator/projectkit'
 
 /**
  * Mesh trace forwarder — the SERVER lane of the observability spectrum (T3,
  * records-nothing). Ships sitelayer's own deterministic workflow transitions
- * (workflow_event_log) to the mesh product-trace ingest, where the
- * flow-conformance keeper types them against sitelayer's statechart-ologs and
- * clusters failures into deduped issues — finding bugs for users who recorded
- * nothing. Capture-session events are forwarded as the same low-PII product
- * trace shape so public-link/mobile/browser behavior reaches the learning
- * pipeline even when no deterministic workflow row fired.
+ * (workflow_event_log) to the subscriber ingest, where the flow-conformance
+ * keeper types them against sitelayer's statechart-ologs and clusters failures
+ * into deduped issues — finding bugs for users who recorded nothing.
+ * Capture-session events are forwarded as the same low-PII product trace shape
+ * so public-link/mobile/browser behavior reaches the learning pipeline even
+ * when no deterministic workflow row fired.
  *
- * Design constraints (deliberate):
+ * SEAM (decoupling): the wire-shape + transport are the @operator/projectkit
+ * contract. Each trace event is carried inside a projectkit ProjectEvent and
+ * the batch ships as a ProjectEventEnvelope through an HttpSink — mesh is just a
+ * URL (SIGNAL_SINK_URL, or the existing MESH_TRACE_FORWARD_URL). The X-Mesh
+ * canonical HMAC is INJECTED as the sink's sign callback, so the ingest route
+ * path + header names live in host config, not in this worker source.
+ *
+ * Design constraints (deliberate, unchanged):
  *  - ISOLATED: a standalone interval loop, NOT wired into the lifecycle/queue
  *    heartbeat, so it can never stall or break the critical rental-invoice / QBO
  *    runners. A failure here logs and is recorded for retry/proof.
- *  - OPT-IN / OFF BY DEFAULT: no-ops unless MESH_TRACE_FORWARD_URL +
- *    MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET are all set. This honors
- *    the collaborator-workstation rule (no Mesh dependency) and means merging it
- *    is inert until the operator sets the env in the GitHub production environment.
+ *  - OPT-IN / OFF BY DEFAULT: no-ops unless an ingest URL
+ *    (SIGNAL_SINK_URL or MESH_TRACE_FORWARD_URL) + MESH_TRACE_HMAC_COMPONENT +
+ *    MESH_TRACE_HMAC_SECRET are all set. This honors the collaborator-workstation
+ *    rule (no Mesh dependency) and means merging it is inert until the operator
+ *    sets the env in the production environment.
  *  - SECRET FROM ENV ONLY: the HMAC secret is never committed; it is minted in
- *    mesh (component_auth_secrets) and injected via the GitHub `production` env,
- *    per sitelayer's secret rules.
+ *    mesh (component_auth_secrets) and injected via the `production` env, per
+ *    sitelayer's secret rules.
  *  - LOW-PII: forwards only typed flow shape (workflow_name, state, outcome,
  *    state_version), never event_payload bodies. mesh additionally templates +
  *    redacts on ingest.
@@ -32,7 +41,10 @@ import type { Pool } from 'pg'
  */
 
 type ForwarderConfig = {
+  /** Full ingest URL. mesh is just this string; the sink does not know mesh. */
   url: string
+  /** Canonical-HMAC path component (the sink signs over the URL's pathname). */
+  path: string
   component: string
   secretHex: string
   projectKey: string
@@ -51,13 +63,35 @@ export type MeshTraceForwardSummary = {
   status: number | null
 }
 
+/** The default ingest path, kept in host config (env), not the wire-shape. The
+ * full SIGNAL_SINK_URL or MESH_TRACE_FORWARD_URL+this path is what the HttpSink
+ * POSTs to and what the injected HMAC signs over. */
+const DEFAULT_INGEST_PATH = '/api/product-trace/ingest'
+
+function resolveIngestUrl(): string | null {
+  // Prefer the uniform testbed sink URL; fall back to the existing
+  // trace-forward URL (base) + the default ingest path.
+  const signalSinkUrl = process.env.SIGNAL_SINK_URL?.trim()
+  if (signalSinkUrl) return signalSinkUrl
+  const base = process.env.MESH_TRACE_FORWARD_URL?.trim()
+  if (base) return base.replace(/\/$/, '') + DEFAULT_INGEST_PATH
+  return null
+}
+
 function readConfig(): ForwarderConfig | null {
-  const url = process.env.MESH_TRACE_FORWARD_URL?.trim()
+  const url = resolveIngestUrl()
   const component = process.env.MESH_TRACE_HMAC_COMPONENT?.trim()
   const secretHex = process.env.MESH_TRACE_HMAC_SECRET?.trim()
   if (!url || !component || !secretHex) return null
+  let path: string
+  try {
+    path = new URL(url).pathname || DEFAULT_INGEST_PATH
+  } catch {
+    return null
+  }
   return {
     url,
+    path,
     component,
     secretHex,
     projectKey: process.env.MESH_TRACE_PROJECT_KEY?.trim() || 'sitelayer',
@@ -344,17 +378,57 @@ async function recordTraceForwardState(
   )
 }
 
-function signedHeaders(cfg: ForwarderConfig, path: string, body: string): Record<string, string> {
-  const ts = Math.floor(Date.now() / 1000).toString()
-  const bodySha = createHash('sha256').update(body).digest('hex')
-  const canonical = `${ts}.POST.${path}.${bodySha}`
-  const sig = 'sha256=' + createHmac('sha256', Buffer.from(cfg.secretHex, 'hex')).update(canonical).digest('hex')
-  return {
-    'Content-Type': 'application/json',
-    'X-Mesh-Component': cfg.component,
-    'X-Mesh-Timestamp': ts,
-    'X-Mesh-Signature': sig,
+/**
+ * The injected X-Mesh canonical-HMAC signer. The HttpSink calls this with the
+ * FINAL request body string and we sign the mesh canonical-string over it. Path
+ * + header names live in config here, not in the contract package — the secret
+ * is env-injected and never travels to the contract.
+ */
+function buildMeshSign(cfg: ForwarderConfig): SignFn {
+  return (body: string) => {
+    const ts = Math.floor(Date.now() / 1000).toString()
+    const bodySha = createHash('sha256').update(body).digest('hex')
+    const canonical = `${ts}.POST.${cfg.path}.${bodySha}`
+    const sig = 'sha256=' + createHmac('sha256', Buffer.from(cfg.secretHex, 'hex')).update(canonical).digest('hex')
+    return {
+      'X-Mesh-Component': cfg.component,
+      'X-Mesh-Timestamp': ts,
+      'X-Mesh-Signature': sig,
+    }
   }
+}
+
+/**
+ * Wrap a low-PII product-trace event inside the @operator/projectkit
+ * ProjectEvent contract. The trace fields (event_ref/seq/state_after/outcome/…)
+ * map onto the contract's common fields where they exist; the rest travel in
+ * `payload` so a subscriber that understands the product-trace shape has every
+ * field, while the envelope stays contract-valid. `tier: 3` is preserved here so
+ * the keeper still sees the original ingest hint.
+ */
+function toTraceProjectEvent(event: ProductTraceEvent, projectKey: string): ProjectEvent {
+  const captureSessionId = 'capture_session_id' in event ? (event.capture_session_id ?? undefined) : undefined
+  const projectEvent: ProjectEvent = {
+    schema_version: '1.0.0',
+    project_key: projectKey,
+    event_type: String((event.payload as { event_name?: unknown })?.event_name ?? 'product_trace.event'),
+    occurred_at: event.occurred_at,
+    domain: event.event_class === 'workflow_event' ? 'workflow_event' : 'user_action',
+    outcome: event.outcome,
+    route_path: event.route_path,
+    session_id: event.session_id,
+    count: event.seq,
+    payload: {
+      tier: 3,
+      event_ref: event.event_ref,
+      event_class: event.event_class,
+      capture_session_id: captureSessionId,
+      ...event.payload,
+    },
+  }
+  if (event.error_code) projectEvent.error_code = event.error_code
+  if (event.state_after) projectEvent.state_after = event.state_after
+  return projectEvent
 }
 
 async function forwardOnce(
@@ -422,34 +496,43 @@ async function forwardOnce(
     }
   }
   const events = unforwarded.map((candidate) => candidate.event)
-  const path = '/api/product-trace/ingest'
-  const body = JSON.stringify({ project_key: cfg.projectKey, tier: 3, events })
-  const base = cfg.url.replace(/\/$/, '')
-  let res: Response
-  try {
-    res = await fetch(base + path, {
-      method: 'POST',
-      headers: signedHeaders(cfg, path, body),
-      body,
-      // Fail fast if the operator stack is unreachable/hanging — never block on a dead host.
-      signal: AbortSignal.timeout(cfg.requestTimeoutMs),
-    })
-  } catch (error) {
+  // SEAM: build a contract ProjectEventEnvelope (each trace event wrapped in a
+  // ProjectEvent) and deliver via HttpSink. mesh is just cfg.url; the X-Mesh
+  // canonical HMAC is injected as the sink's sign callback.
+  const envelope: ProjectEventEnvelope = {
+    contract_version: '1.0.0',
+    project_key: cfg.projectKey,
+    emitted_at: new Date().toISOString(),
+    producer: { name: 'sitelayer-worker:mesh-trace-forward' },
+    events: events.map((event) => toTraceProjectEvent(event, cfg.projectKey)),
+  }
+  const sink = new HttpSink({
+    url: cfg.url,
+    sign: buildMeshSign(cfg),
+    timeoutMs: cfg.requestTimeoutMs,
+    name: 'mesh-trace-forward',
+  })
+  const result = await sink.deliver(envelope)
+  // HttpSink never throws: a transport error returns ok:false with no status; an
+  // HTTP non-2xx returns ok:false with the status. Preserve the prior behavior —
+  // transport error records failed + throws (so the loop logs a tick error and
+  // backs off), HTTP non-2xx records failed + returns.
+  if (!result.ok && result.status === undefined) {
     await recordTraceForwardState(pool, unforwarded, {
       projectKey: cfg.projectKey,
       status: 'failed',
       httpStatus: null,
-      error: error instanceof Error ? error.message : String(error),
+      error: result.error ?? 'transport error',
     })
-    throw error
+    throw new Error(result.error ?? 'mesh-trace-forward transport error')
   }
-  if (!res.ok) {
-    log(`mesh-trace-forward: ingest HTTP ${res.status}`)
+  if (!result.ok) {
+    log(`mesh-trace-forward: ingest HTTP ${result.status}`)
     await recordTraceForwardState(pool, unforwarded, {
       projectKey: cfg.projectKey,
       status: 'failed',
-      httpStatus: res.status,
-      error: `HTTP ${res.status}`,
+      httpStatus: result.status ?? null,
+      error: result.error ?? `HTTP ${result.status}`,
     })
     return {
       ran: true,
@@ -457,13 +540,13 @@ async function forwardOnce(
       capture_session_events: captureRows.rows.length,
       forwarded_events: 0,
       skipped_forwarded_events: candidates.length - unforwarded.length,
-      status: res.status,
+      status: result.status ?? null,
     }
   }
   await recordTraceForwardState(pool, unforwarded, {
     projectKey: cfg.projectKey,
     status: 'forwarded',
-    httpStatus: res.status,
+    httpStatus: result.status ?? null,
     error: null,
   })
   log(`mesh-trace-forward: forwarded ${events.length} trace event(s)`)
@@ -473,7 +556,7 @@ async function forwardOnce(
     capture_session_events: captureRows.rows.length,
     forwarded_events: events.length,
     skipped_forwarded_events: candidates.length - unforwarded.length,
-    status: res.status,
+    status: result.status ?? null,
   }
 }
 
@@ -485,7 +568,7 @@ export async function forwardMeshTraceOnce(deps: {
   const cfg = readConfig()
   if (!cfg) {
     log(
-      'mesh-trace-forward: disabled (set MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)',
+      'mesh-trace-forward: disabled (set SIGNAL_SINK_URL or MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)',
     )
     return {
       ran: false,
@@ -512,7 +595,7 @@ export function startMeshTraceForwarder(deps: {
   const cfg = readConfig()
   if (!cfg) {
     log(
-      'mesh-trace-forward: disabled (set MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)',
+      'mesh-trace-forward: disabled (set SIGNAL_SINK_URL or MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)',
     )
     return { stop: () => {} }
   }

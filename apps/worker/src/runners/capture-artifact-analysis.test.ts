@@ -75,6 +75,7 @@ afterEach(() => {
   delete process.env.CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE
   delete process.env.CAPTURE_ARTIFACT_WHISPER_URL
   delete process.env.CAPTURE_ARTIFACT_ANALYSIS_AUTO_DISPATCH
+  delete process.env.MEDIA_UNDERSTANDING_ENGINE
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -743,5 +744,114 @@ describe('createCaptureArtifactAnalysisRunner', () => {
       },
     })
     expect(payload.analysis.derived_artifacts).toHaveLength(2)
+  })
+
+  it('derives an understanding from the audio transcript when an engine is configured', async () => {
+    process.env.CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE = 'local-whisper'
+    process.env.CAPTURE_ARTIFACT_WHISPER_URL = 'http://127.0.0.1:5678'
+    process.env.MEDIA_UNDERSTANDING_ENGINE = 'stub'
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ text: 'The scale verify button did nothing.', language: 'en' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    const rows = [
+      {
+        id: 'artifact-audio',
+        capture_session_id: '00000000-0000-4000-8000-000000000123',
+        work_item_id: 'work-1',
+        kind: 'audio',
+        storage_key: 'co-1/capture-sessions/session-1/audio.webm',
+        content_type: 'audio/webm',
+        byte_size: 128,
+        content_hash: 'sha256:audio',
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: {},
+        retention_expires_at: null,
+      },
+    ]
+    const handler: QueryHandler = (sql) => {
+      if (sql.includes('from capture_artifacts')) return { rows, rowCount: rows.length }
+      if (sql.includes('insert into capture_artifacts')) return { rows: [{ id: 'derived-transcript-1' }], rowCount: 1 }
+      if (sql.includes('insert into context_handoff_events')) return { rows: [], rowCount: 1 }
+      return { rows: [] }
+    }
+    const { pool, clients } = makeFakePool(handler)
+    const runner = createCaptureArtifactAnalysisRunner({
+      pool,
+      storage: storage({ get: vi.fn(async () => Buffer.from('fake webm bytes')) }),
+    })
+
+    await expect(runner.forceAnalyze('co-1')).resolves.toEqual({ ran: true, analyzed: 1, skipped: 0, failed: 0 })
+
+    const insert = clients[0]?.calls.find((call) => call.sql.includes('insert into context_handoff_events'))
+    const payload = JSON.parse(insert?.params[2] as string) as { analysis: Record<string, unknown> }
+    expect(payload.analysis.understanding).toMatchObject({
+      analyzer: 'media-understanding-stub-v1',
+      summary: 'The scale verify button did nothing.',
+    })
+    // the work-item-facing summary becomes the understanding, not the raw word count
+    expect(payload.analysis.summary).toBe('The scale verify button did nothing.')
+  })
+
+  it('derives an understanding from sampled video frames in gemini mode with an engine configured', async () => {
+    process.env.CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE = 'gemini'
+    process.env.MEDIA_UNDERSTANDING_ENGINE = 'stub'
+    const rows = [
+      {
+        id: 'artifact-video',
+        capture_session_id: '00000000-0000-4000-8000-000000000123',
+        work_item_id: 'work-1',
+        kind: 'video',
+        storage_key: 'co-1/capture-sessions/session-1/screen.webm',
+        content_type: 'video/webm',
+        byte_size: 128,
+        content_hash: 'sha256:video',
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: {},
+        retention_expires_at: null,
+      },
+    ]
+    let artifactInsert = 0
+    const handler: QueryHandler = (sql) => {
+      if (sql.includes('from capture_artifacts')) return { rows, rowCount: rows.length }
+      if (sql.includes('insert into capture_artifacts')) {
+        artifactInsert += 1
+        return { rows: [{ id: `derived-video-${artifactInsert}` }], rowCount: 1 }
+      }
+      if (sql.includes('update context_work_items')) return { rows: [], rowCount: 1 }
+      if (sql.includes('insert into context_handoff_events')) return { rows: [], rowCount: 1 }
+      return { rows: [] }
+    }
+    const { pool, clients } = makeFakePool(handler)
+    const st = storage({ get: vi.fn(async () => Buffer.from('fake video bytes')), put: vi.fn(async () => {}) })
+    const runner = createCaptureArtifactAnalysisRunner({
+      pool,
+      storage: st,
+      videoFrameExtractor: vi.fn(async () => ({
+        analyzer: 'test-frame-extractor-v1',
+        duration_seconds: 4,
+        frames: [
+          { index: 1, time_seconds: 0.5, content_type: 'image/jpeg', bytes: Buffer.from('frame-one') },
+          { index: 2, time_seconds: 2.5, content_type: 'image/jpeg', bytes: Buffer.from('frame-two') },
+        ],
+      })),
+    })
+
+    await expect(runner.forceAnalyze('co-1')).resolves.toEqual({ ran: true, analyzed: 1, skipped: 0, failed: 0 })
+
+    const insert = clients[0]?.calls.find((call) => call.sql.includes('insert into context_handoff_events'))
+    const payload = JSON.parse(insert?.params[2] as string) as {
+      analysis: { understanding?: Record<string, unknown>; summary?: string; stats?: Record<string, unknown> }
+    }
+    expect(payload.analysis.understanding).toMatchObject({ analyzer: 'media-understanding-stub-v1' })
+    expect(String(payload.analysis.understanding?.summary)).toContain('2 sampled frame(s)')
+    expect(payload.analysis.summary).toBe(payload.analysis.understanding?.summary)
+    expect(payload.analysis.stats?.understanding_action_item_count).toBe(0)
   })
 })

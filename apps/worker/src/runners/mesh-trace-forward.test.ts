@@ -230,7 +230,8 @@ describe('mesh trace forwarder', () => {
     const summary = await __meshTraceForwardTestHooks.forwardOnce(
       { query } as unknown as Pool,
       {
-        url: 'http://mesh.test',
+        url: 'http://mesh.test/api/product-trace/ingest',
+        path: '/api/product-trace/ingest',
         component: 'sitelayer-test',
         secretHex: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         projectKey: 'sitelayer',

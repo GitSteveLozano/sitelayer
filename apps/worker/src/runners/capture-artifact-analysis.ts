@@ -6,6 +6,8 @@ import path from 'node:path'
 import type { Pool } from 'pg'
 import { setCompanyGuc } from '../runner-utils.js'
 import type { ObjectStorageClient } from './blueprint-storage-gc.js'
+import { createMediaUnderstandingProcessor } from '../media/create-media-understanding-processor.js'
+import { resolveMediaUnderstandMode, type MediaProcessor, type MediaUnderstanding } from '../media/media-processor.js'
 
 export type CaptureArtifactAnalysisSummary = {
   ran: boolean
@@ -76,6 +78,9 @@ type ArtifactAnalysis = {
   analyzer?: string
   derived_artifact?: DerivedArtifactRef
   derived_artifacts?: DerivedArtifactRef[]
+  // Structured multimodal understanding (summary / suggested title+severity /
+  // action items) produced by a MediaProcessor when video mode is 'gemini'.
+  understanding?: MediaUnderstanding
 }
 
 type AnalysisReadyWorkItemRow = {
@@ -98,7 +103,10 @@ type AnalysisReadyWorkItemRow = {
 const ANALYZABLE_KINDS = new Set(['transcript', 'text', 'rrweb', 'canvas_geometry'])
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: false })
 const AUDIO_ANALYSIS_MODES = ['off', 'local-whisper'] as const
-const VIDEO_ANALYSIS_MODES = ['off', 'frames-only'] as const
+// 'gemini' is a superset of 'frames-only': it still extracts + stores frames,
+// then runs a MediaProcessor.understand() pass over them (subscription CLI by
+// default, cash API opt-in). Default stays 'off' so prod is untouched.
+const VIDEO_ANALYSIS_MODES = ['off', 'frames-only', 'gemini'] as const
 const DEFAULT_CALLBACK_TOKEN_TTL_HOURS = 72
 
 export function createCaptureArtifactAnalysisRunner(deps: {
@@ -138,6 +146,15 @@ async function analyzeCaptureArtifacts(
   const audioMode = readMode('CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE', AUDIO_ANALYSIS_MODES, 'off')
   const videoMode = readMode('CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE', VIDEO_ANALYSIS_MODES, 'off')
   const videoFrameCount = Math.min(readPositiveInt('CAPTURE_ARTIFACT_VIDEO_FRAME_COUNT', 3), 12)
+  // Multimodal-understanding engine, built once per run, applied to BOTH audio
+  // transcripts and sampled video frames. Master toggle is
+  // MEDIA_UNDERSTANDING_ENGINE (off | gemini-cli=$0 subscription | gemini-api=
+  // cash/gated | stub=offline); the legacy CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE
+  // ='gemini' acts as a back-compat alias that turns the CLI engine on.
+  const understandMode = resolveMediaUnderstandMode(
+    process.env.MEDIA_UNDERSTANDING_ENGINE ?? (videoMode === 'gemini' ? 'gemini-cli' : 'off'),
+  )
+  const understandingProcessor = createMediaUnderstandingProcessor(understandMode)
   const client = await pool.connect()
   const summary: CaptureArtifactAnalysisSummary = { ran: true, analyzed: 0, skipped: 0, failed: 0 }
   try {
@@ -223,9 +240,10 @@ async function analyzeCaptureArtifacts(
         const analysis = isVideoArtifact(row)
           ? await analyzeVideoArtifact(client, storage, companyId, row, bytes, videoMode, videoFrameExtractor, {
               frameCount: videoFrameCount,
+              understandingProcessor,
             })
           : isAudioArtifact(row)
-            ? await analyzeAudioArtifact(client, storage, companyId, row, bytes, audioMode)
+            ? await analyzeAudioArtifact(client, storage, companyId, row, bytes, audioMode, understandingProcessor)
             : analyzeBytes(row, bytes)
         await appendAnalysisEvent(client, companyId, row, analysis)
         await refreshAnalysisReadiness(client, companyId, row.work_item_id, { audioMode, videoMode })
@@ -649,6 +667,7 @@ async function analyzeAudioArtifact(
   row: CaptureArtifactAnalysisRow,
   bytes: Buffer,
   mode: (typeof AUDIO_ANALYSIS_MODES)[number],
+  understandingProcessor?: MediaProcessor | null,
 ): Promise<ArtifactAnalysis> {
   if (mode !== 'local-whisper') return skippedAnalysis(row, `audio analysis mode ${mode} is disabled`)
   const transcript = await transcribeWithLocalWhisper(row, bytes)
@@ -667,16 +686,40 @@ async function analyzeAudioArtifact(
       segments: Array.isArray(transcript.segments) ? transcript.segments.length : null,
     },
   })
+
+  // When an understanding engine is configured, derive a summary + suggested
+  // title/severity + action items from the transcript. Best-effort: a failure
+  // never fails the transcription, so the transcript still attaches.
+  let understanding: MediaUnderstanding | undefined
+  let understandingError: string | undefined
+  if (understandingProcessor) {
+    try {
+      understanding = await understandingProcessor.understand({
+        transcript: text,
+        context: { kind: row.kind, capture_session_id: row.capture_session_id },
+      })
+    } catch (error) {
+      understandingError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   return {
     status: 'attached',
     artifact_kind: row.kind,
     content_type: row.content_type,
     byte_size: row.byte_size,
-    summary: `Audio artifact transcribed ${compact.split(/\s+/).length} word(s).`,
+    summary: understanding
+      ? understanding.summary
+      : `Audio artifact transcribed ${compact.split(/\s+/).length} word(s).`,
     excerpt: compact.slice(0, 2000),
     analyzer: 'local-whisper-v1',
-    stats: derived.stats,
+    stats: {
+      ...derived.stats,
+      ...(understanding ? { understanding_action_item_count: understanding.action_items.length } : {}),
+      ...(understandingError ? { understanding_error: understandingError } : {}),
+    },
     derived_artifact: derived.artifact,
+    ...(understanding ? { understanding } : {}),
   }
 }
 
@@ -688,18 +731,37 @@ async function analyzeVideoArtifact(
   bytes: Buffer,
   mode: (typeof VIDEO_ANALYSIS_MODES)[number],
   frameExtractor: VideoFrameExtractor,
-  opts: { frameCount: number },
+  opts: { frameCount: number; understandingProcessor?: MediaProcessor | null },
 ): Promise<ArtifactAnalysis> {
-  if (mode !== 'frames-only') return skippedAnalysis(row, `video analysis mode ${mode} is disabled`)
+  if (mode === 'off') return skippedAnalysis(row, `video analysis mode ${mode} is disabled`)
   const extracted = await frameExtractor({ row, bytes, frameCount: opts.frameCount })
   if (extracted.frames.length === 0) return skippedAnalysis(row, 'video frame extractor returned no frames')
   const derived = await insertDerivedVideoFrameArtifacts(client, storage, companyId, row, extracted)
+
+  // When an understanding engine is configured, run a MediaProcessor.understand()
+  // pass over the sampled frames. Best-effort: a failure (CLI absent, API error)
+  // degrades to frames-only — it never fails the artifact, so frames still attach.
+  let understanding: MediaUnderstanding | undefined
+  let understandingError: string | undefined
+  if (opts.understandingProcessor) {
+    try {
+      understanding = await opts.understandingProcessor.understand({
+        frames: extracted.frames,
+        context: { kind: row.kind, capture_session_id: row.capture_session_id },
+      })
+    } catch (error) {
+      understandingError = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   return {
     status: 'attached',
     artifact_kind: row.kind,
     content_type: row.content_type,
     byte_size: row.byte_size,
-    summary: `Video artifact extracted ${derived.frames.length} frame(s) for multimodal review.`,
+    summary: understanding
+      ? understanding.summary
+      : `Video artifact extracted ${derived.frames.length} frame(s) for multimodal review.`,
     analyzer: extracted.analyzer,
     stats: {
       duration_seconds: extracted.duration_seconds,
@@ -707,9 +769,12 @@ async function analyzeVideoArtifact(
       extracted_frame_count: derived.frames.length,
       manifest_artifact_id: derived.manifest.id,
       frame_artifact_ids: derived.frames.map((frame) => frame.id),
+      ...(understanding ? { understanding_action_item_count: understanding.action_items.length } : {}),
+      ...(understandingError ? { understanding_error: understandingError } : {}),
     },
     derived_artifact: derived.manifest,
     derived_artifacts: derived.frames,
+    ...(understanding ? { understanding } : {}),
   }
 }
 
