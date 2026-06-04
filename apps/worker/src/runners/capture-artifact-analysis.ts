@@ -103,6 +103,7 @@ type AnalysisReadyWorkItemRow = {
 const ANALYZABLE_KINDS = new Set(['transcript', 'text', 'rrweb', 'canvas_geometry'])
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: false })
 const AUDIO_ANALYSIS_MODES = ['off', 'local-whisper'] as const
+const WHISPER_PAYLOAD_MODES = ['base64', 'path'] as const
 // 'gemini' is a superset of 'frames-only': it still extracts + stores frames,
 // then runs a MediaProcessor.understand() pass over them (subscription CLI by
 // default, cash API opt-in). Default stays 'off' so prod is untouched.
@@ -670,7 +671,15 @@ async function analyzeAudioArtifact(
   understandingProcessor?: MediaProcessor | null,
 ): Promise<ArtifactAnalysis> {
   if (mode !== 'local-whisper') return skippedAnalysis(row, `audio analysis mode ${mode} is disabled`)
-  const transcript = await transcribeWithLocalWhisper(row, bytes)
+  let transcript: Required<Pick<LocalWhisperResponse, 'text'>> & LocalWhisperResponse
+  try {
+    transcript = await transcribeWithLocalWhisper(row, bytes)
+  } catch (error) {
+    return {
+      ...skippedAnalysis(row, `local whisper unavailable: ${errorMessage(error)}`),
+      analyzer: 'local-whisper-v1',
+    }
+  }
   const text = transcript.text.trim()
   if (!text) return skippedAnalysis(row, 'local whisper returned an empty transcript')
   const compact = text.replace(/\s+/g, ' ')
@@ -1132,14 +1141,29 @@ async function transcribeWithLocalWhisper(
   bytes: Buffer,
 ): Promise<Required<Pick<LocalWhisperResponse, 'text'>> & LocalWhisperResponse> {
   const baseUrl = (process.env.CAPTURE_ARTIFACT_WHISPER_URL ?? 'http://127.0.0.1:5678').replace(/\/$/, '')
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'sitelayer-capture-audio-'))
-  const audioPath = path.join(tmpDir, `artifact-${row.id}${extensionForAudio(row)}`)
+  const timeoutMs = readPositiveInt('CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS', 10_000)
+  const payloadMode = readMode('CAPTURE_ARTIFACT_WHISPER_PAYLOAD_MODE', WHISPER_PAYLOAD_MODES, 'base64')
+  const filename = `artifact-${row.id}${extensionForAudio(row)}`
+  let tmpDir: string | undefined
   try {
-    await writeFile(audioPath, bytes)
+    const request =
+      payloadMode === 'path'
+        ? await (async () => {
+            tmpDir = await mkdtemp(path.join(os.tmpdir(), 'sitelayer-capture-audio-'))
+            const audioPath = path.join(tmpDir, filename)
+            await writeFile(audioPath, bytes)
+            return { path: audioPath }
+          })()
+        : {
+            audio_base64: bytes.toString('base64'),
+            filename,
+            content_type: row.content_type,
+          }
     const response = await fetch(`${baseUrl}/transcribe`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: audioPath }),
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     const body = (await response.json().catch(() => ({}))) as LocalWhisperResponse & { error?: string }
     if (!response.ok) {
@@ -1147,8 +1171,13 @@ async function transcribeWithLocalWhisper(
     }
     return { ...body, text: typeof body.text === 'string' ? body.text : '' }
   } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined)
   }
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name
+  return String(error)
 }
 
 function extensionForAudio(row: CaptureArtifactAnalysisRow): string {
