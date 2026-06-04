@@ -196,8 +196,13 @@ start_body="$(
         smoke_id: $smoke_id
       },
       consent_scope: {
-        streams: ["transcript", "rrweb"],
+        streams: ["dom_replay", "text_note"],
+        artifacts: {
+          transcript: true,
+          rrweb: true
+        },
         dom_replay: true,
+        text_note: true,
         scripted_smoke: true
       }
     }'
