@@ -43,7 +43,7 @@ we can replay what changed on screen.
 ## What the link grants
 
 - Dev-only Sitelayer act-as: `e2e-admin`.
-- Active dev company: `la-operations`.
+- Active dev company: `e2e-fixtures`.
 - Feedback capture: enabled.
 - DOM replay flag: enabled for explicit page recording.
 - Audio capture: disabled.

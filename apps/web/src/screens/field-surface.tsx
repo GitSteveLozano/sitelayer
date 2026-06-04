@@ -1,11 +1,10 @@
 /**
  * Field / mobile section of the unified app shell (Phase D).
  *
- * MobileShell's bottom-tab chrome plus the operator probe + feedback dock that
- * the former `routes/workspace.tsx` `CompanyWorkspace` mounted around it. The
- * command-center section (screens/desktop/desktop-workspace.tsx) installs its
- * own copies of these internally, so they live here — not in AppShell — to avoid
- * double-mounting across sections.
+ * MobileShell's bottom-tab chrome plus the operator probe that the former
+ * `routes/workspace.tsx` `CompanyWorkspace` mounted around it. The authenticated
+ * feedback dock now mounts once at the AppShell boundary so full-screen routes
+ * and both shell sections share one reporter.
  *
  * Lives in its own module so the unified AppShell can lazy-load it: the field
  * bundle (MobileShell + ~80 persona screens) stays a separate chunk from the
@@ -15,7 +14,6 @@
 import { useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
-import { AuthenticatedFeedbackDock } from '@/components/capture/AuthenticatedFeedbackDock'
 import type { BootstrapResponse } from '@/lib/api'
 import type { normalizeMobileShellRole } from '@/lib/active-context'
 import { RoleContext, type Role } from '@/lib/role'
@@ -59,7 +57,6 @@ export default function FieldSurface({
         timeReviewState={null}
         billingReviewState={null}
       />
-      <AuthenticatedFeedbackDock companySlug={companySlug} />
       <MobileShell
         bootstrap={bootstrap}
         companyRole={companyRole}

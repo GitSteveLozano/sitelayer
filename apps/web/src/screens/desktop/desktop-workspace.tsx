@@ -37,15 +37,11 @@ import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
 import { ACTIVE_COMPANY_STORAGE_KEY } from '@/lib/api/client'
 import type { MembershipsResponse } from '@/components/shell/CompanySwitcher'
-// Lazy: the control-plane probe and the feedback-capture dock (which pulls in
-// the rrweb recorder → vendor-rrweb) are owner-only diagnostics. Keeping them
-// out of the static graph holds the desktop-workspace lazy chunk under budget;
-// they mount after the dashboard paints.
+// Lazy: the control-plane probe is an owner-only diagnostic. Keeping it out of
+// the static graph holds the desktop-workspace lazy chunk under budget; it
+// mounts after the dashboard paints.
 const ControlPlaneProbe = lazy(() =>
   import('@/components/ControlPlaneProbe').then((m) => ({ default: m.ControlPlaneProbe })),
-)
-const AuthenticatedFeedbackDock = lazy(() =>
-  import('@/components/capture/AuthenticatedFeedbackDock').then((m) => ({ default: m.AuthenticatedFeedbackDock })),
 )
 import { useNotificationFeed, useMarkNotificationRead, type NotificationRow } from '@/lib/api/notifications'
 import { usePendingApprovalsSummary } from '@/lib/api/approvals'
@@ -918,9 +914,6 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
             timeReviewState={null}
             billingReviewState={null}
           />
-        </Suspense>
-        <Suspense fallback={null}>
-          <AuthenticatedFeedbackDock companySlug={companySlug ?? ''} />
         </Suspense>
         {/* Command-center route table. Phase D mounts this shell as the
             `/desktop` section of the unified AppShell (screens/app-shell.tsx) —

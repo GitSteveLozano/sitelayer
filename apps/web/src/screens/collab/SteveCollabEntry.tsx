@@ -10,7 +10,7 @@ import {
 } from '@/lib/steve-collab'
 
 const DEFAULT_TARGET = '/desktop'
-const DEFAULT_COMPANY_SLUG = 'la-operations'
+const DEFAULT_COMPANY_SLUG = 'e2e-fixtures'
 const VALID_ROLES = new Set(['admin', 'foreman', 'office', 'member', 'bookkeeper'])
 
 function safeTarget(raw: string | null): string {
