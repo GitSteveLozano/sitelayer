@@ -6,7 +6,7 @@ import {
   fetchWorkflowEventLogTail,
   readDeployCache,
 } from './estimate-push'
-import { __resetBuildShaCacheForTests, getBuildSha } from '@/lib/api/client'
+import { API_URL, __resetBuildShaCacheForTests, getBuildSha } from '@/lib/api/client'
 import type { WorkflowEventLogRow } from './types'
 
 const sentryMock = vi.hoisted(() => ({
@@ -62,7 +62,7 @@ describe('fetchWorkflowEventLogTail', () => {
     expect(result).toEqual({ rows: [row], error: null })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-      'http://localhost:3001/api/workflow-event-log?entity_type=estimate_push&entity_id=11111111-1111-4111-8111-111111111111&limit=3',
+      `${API_URL}/api/workflow-event-log?entity_type=estimate_push&entity_id=11111111-1111-4111-8111-111111111111&limit=3`,
     )
     const init = fetchSpy.mock.calls[0]?.[1] as RequestInit
     const headers = init.headers as Headers
@@ -117,7 +117,7 @@ describe('Probe side-channel fetches', () => {
     })
     expect(getBuildSha()).toBe('sha-feature')
     expect(readDeployCache()).toEqual({ app_build_sha: 'sha-feature', env: null })
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:3001/api/features')
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(`${API_URL}/api/features`)
     const init = fetchSpy.mock.calls[0]?.[1] as RequestInit
     const headers = init.headers as Headers
     expect(headers.get('x-sitelayer-company-slug')).toBe('la-operations')
@@ -134,6 +134,6 @@ describe('Probe side-channel fetches', () => {
 
     await expect(fetchActiveCompanyRole()).resolves.toBe('office')
     expect(getBuildSha()).toBe('sha-session')
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe('http://localhost:3001/api/session')
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(`${API_URL}/api/session`)
   })
 })
