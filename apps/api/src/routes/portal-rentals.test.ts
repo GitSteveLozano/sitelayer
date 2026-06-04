@@ -841,6 +841,16 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
     await expect(upload.storage.get(key)).resolves.toEqual(payload)
 
     const discard = makeCtx(pool, upload.storage)
+    discard.reads.push({
+      metadata: {
+        capture_failure: {
+          event_type: 'recording_start_failed',
+          failed_at: '2026-06-04T12:00:00.000Z',
+          error_name: 'NotAllowedError',
+          message: 'Screen share permission denied',
+        },
+      },
+    })
     await handlePortalRentalRoutes(
       { method: 'POST' } as never,
       buildUrl(`/api/portal/rentals/${token}/capture-sessions/00000000-0000-4000-8000-000000000123/discard`),
@@ -860,8 +870,35 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
       metadata: {
         discarded_by: 'portal_guest',
         portal_surface: 'rental_portal',
+        capture_failure: {
+          event_type: 'recording_start_failed',
+          failed_at: '2026-06-04T12:00:00.000Z',
+          error_name: 'NotAllowedError',
+          message: 'Screen share permission denied',
+        },
       },
     })
+    expect(pool.captureEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'recording_start_failed',
+          event_class: 'lifecycle',
+          route_path: '/portal/rentals/share-token',
+          payload: expect.objectContaining({
+            event_type: 'recording_start_failed',
+            error_name: 'NotAllowedError',
+            message: 'Screen share permission denied',
+            portal_surface: 'rental_portal',
+            portal_authority: 'signed_rental_share_token',
+            discard_status: 'succeeded',
+          }),
+        }),
+        expect.objectContaining({
+          event_type: 'session.discarded',
+          event_class: 'lifecycle',
+        }),
+      ]),
+    )
     expect(pool.captureArtifacts[0]?.deleted_at).toBeTruthy()
     await expect(upload.storage.get(key)).rejects.toThrow(`missing ${key}`)
   })

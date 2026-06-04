@@ -342,7 +342,7 @@ describe('FeedbackInviteEntry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /stop and submit screen/i }))
 
-    await waitFor(() => expect(api.uploadFeedbackInviteCaptureArtifact).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(api.uploadFeedbackInviteCaptureArtifact).toHaveBeenCalledTimes(3))
     expect(api.uploadFeedbackInviteCaptureArtifact).toHaveBeenCalledWith(
       'feedback.token',
       captureSessionId,
@@ -357,6 +357,22 @@ describe('FeedbackInviteEntry', () => {
           artifact_type: 'capture.screen_video',
           feedback_invite_id: 'invite-1',
           mime_type: 'video/webm;codecs=vp9,opus',
+        }),
+      }),
+    )
+    expect(api.uploadFeedbackInviteCaptureArtifact).toHaveBeenCalledWith(
+      'feedback.token',
+      captureSessionId,
+      expect.objectContaining({
+        kind: 'video_clip_manifest',
+        fileName: 'video-clip-manifest.json',
+        pii_level: 'internal',
+        access_policy: 'support_only',
+        metadata: expect.objectContaining({
+          source: 'feedback_invite_page',
+          capture_profile: 'screen_recording',
+          artifact_type: 'capture.video_clip_manifest',
+          feedback_invite_id: 'invite-1',
         }),
       }),
     )

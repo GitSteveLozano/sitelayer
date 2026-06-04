@@ -32,6 +32,7 @@ class FakeMediaRecorder {
   ondataavailable: ((event: BlobEvent) => void) | null = null
   onstop: ((event: Event) => void) | null = null
   onerror: ((event: Event) => void) | null = null
+  startTimeslice: number | undefined
 
   constructor(
     readonly stream: MediaStream,
@@ -41,7 +42,8 @@ class FakeMediaRecorder {
     FakeMediaRecorder.instances.push(this)
   }
 
-  start(): void {
+  start(timeslice?: number): void {
+    this.startTimeslice = timeslice
     this.state = 'recording'
   }
 
@@ -98,6 +100,7 @@ describe('capture audio recorder', () => {
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true })
     expect(recorder.isRecording).toBe(true)
     expect(FakeMediaRecorder.instances[0]?.mimeType).toBe('audio/webm')
+    expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBeUndefined()
 
     now = 2_250
     const result = await recorder.stop()
@@ -160,6 +163,7 @@ describe('capture screen recorder', () => {
     expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false })
     expect(recorder.isRecording).toBe(true)
     expect(FakeMediaRecorder.instances[0]?.mimeType).toBe('video/webm')
+    expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBe(5000)
 
     now = 8_333
     const result = await recorder.stop()
@@ -167,7 +171,40 @@ describe('capture screen recorder', () => {
     expect(result.duration_ms).toBe(3333)
     expect(result.mime_type).toBe('video/webm')
     expect(await result.blob.text()).toBe('hello world')
+    expect(result.chunks).toEqual([
+      {
+        seq: 0,
+        start_ms: 0,
+        end_ms: 3333,
+        byte_size: 6,
+        content_type: 'video/webm',
+      },
+      {
+        seq: 1,
+        start_ms: 3333,
+        end_ms: 3333,
+        byte_size: 5,
+        content_type: 'video/webm',
+      },
+    ])
     expect(stream.tracks[0]?.stop).toHaveBeenCalledTimes(1)
     expect(recorder.isRecording).toBe(false)
+  })
+
+  it('can disable screen recorder timeslice chunking for single-blob browsers', async () => {
+    const Recorder = recorderCtor()
+    Recorder.supported = new Set(['video/webm'])
+    const stream = new FakeMediaStream()
+    const getDisplayMedia = vi.fn(async () => stream as unknown as MediaStream)
+    const recorder = new ScreenCaptureRecorder({
+      mediaDevices: { getDisplayMedia: getDisplayMedia as unknown as MediaDevices['getDisplayMedia'] },
+      MediaRecorderCtor: Recorder as unknown as typeof MediaRecorder,
+      timesliceMs: null,
+    })
+
+    await recorder.start()
+
+    expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBeUndefined()
+    await recorder.stop()
   })
 })

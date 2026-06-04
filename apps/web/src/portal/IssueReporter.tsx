@@ -77,8 +77,8 @@ function portalBackend(surface: PortalFeedbackSurface, shareToken: string): Feed
         uploadPortalEstimateCaptureArtifact(shareToken, captureSessionId, input),
       finalizeSession: (captureSessionId, input) =>
         finalizePortalEstimateCaptureSession(shareToken, captureSessionId, input),
-      discardSession: async (captureSessionId) => {
-        if (captureSessionId) await discardPortalEstimateCaptureSession(shareToken, captureSessionId)
+      discardSession: async (captureSessionId, input) => {
+        if (captureSessionId) await discardPortalEstimateCaptureSession(shareToken, captureSessionId, input)
         clearLocalCaptureSession()
       },
     }
@@ -88,8 +88,8 @@ function portalBackend(surface: PortalFeedbackSurface, shareToken: string): Feed
     uploadArtifact: (captureSessionId, input) => uploadPortalRentalCaptureArtifact(shareToken, captureSessionId, input),
     finalizeSession: (captureSessionId, input) =>
       finalizePortalRentalCaptureSession(shareToken, captureSessionId, input),
-    discardSession: async (captureSessionId) => {
-      if (captureSessionId) await discardPortalRentalCaptureSession(shareToken, captureSessionId)
+    discardSession: async (captureSessionId, input) => {
+      if (captureSessionId) await discardPortalRentalCaptureSession(shareToken, captureSessionId, input)
       clearLocalCaptureSession()
     },
   }

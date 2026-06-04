@@ -258,6 +258,18 @@ async function appendPortalCaptureLifecycleEventTx(
   )
 }
 
+function recordingStartFailedPayload(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  const captureFailure = jsonRecord(metadata.capture_failure)
+  if (captureFailure.event_type !== 'recording_start_failed') return null
+  return {
+    event_type: 'recording_start_failed',
+    failed_at: optionalTimestampText(captureFailure.failed_at) ?? new Date().toISOString(),
+    error_name: optionalText(captureFailure.error_name, 120),
+    message: optionalText(captureFailure.message, 500) ?? 'recording start failed',
+    discard_status: 'succeeded',
+  }
+}
+
 async function fetchPortalCaptureFinalizeSnapshot(actor: PortalCaptureActor, captureSessionId: string) {
   const [session, eventCount, artifactSummary] = await Promise.all([
     withCompanyClient(actor.companyId, (client) =>
@@ -902,6 +914,8 @@ export async function discardPortalCaptureSession(
     return
   }
 
+  const body = await ctx.readBody().catch((): Record<string, unknown> => ({}))
+  const requestMetadata = jsonRecord(body.metadata)
   let foundSession = false
   let blockedStatus: string | null = null
   let artifactObjectKeys: string[] = []
@@ -940,6 +954,7 @@ export async function discardPortalCaptureSession(
         actor.companyId,
         actor.actorRef,
         JSON.stringify({
+          ...requestMetadata,
           discarded_at: new Date().toISOString(),
           discarded_by: 'portal_guest',
           portal_surface: actor.surface,
@@ -977,6 +992,19 @@ export async function discardPortalCaptureSession(
           and deleted_at is null`,
       [id, actor.companyId],
     )
+    const startFailure = recordingStartFailedPayload(requestMetadata)
+    if (startFailure) {
+      await appendPortalCaptureLifecycleEventTx(client, actor.companyId, id, {
+        eventType: 'recording_start_failed',
+        routePath: captureSession.route_path,
+        requestId: getRequestContext()?.requestId ?? null,
+        payload: {
+          ...startFailure,
+          portal_surface: actor.surface,
+          portal_authority: actor.authority,
+        },
+      })
+    }
     await appendPortalCaptureLifecycleEventTx(client, actor.companyId, id, {
       eventType: 'session.discarded',
       routePath: captureSession.route_path,

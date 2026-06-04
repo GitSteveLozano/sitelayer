@@ -195,7 +195,15 @@ describe('FeedbackCaptureController', () => {
     expect(api.startSession).toHaveBeenCalledTimes(1)
     expect(audio.cancel).toHaveBeenCalledTimes(1)
     expect(replay.cancel).toHaveBeenCalledTimes(1)
-    expect(api.discardSession).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000123')
+    expect(api.discardSession).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000123', {
+      metadata: {
+        capture_failure: expect.objectContaining({
+          event_type: 'recording_start_failed',
+          error_name: 'Error',
+          message: 'microphone permission denied',
+        }),
+      },
+    })
     expect(controller.status).toBe('error')
     expect(controller.activeCaptureSessionId).toBeNull()
   })

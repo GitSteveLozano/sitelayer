@@ -347,7 +347,14 @@ describe('public portal API capture headers', () => {
     )
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
-    await discardPortalEstimateCaptureSession('share.token', '00000000-0000-4000-8000-000000000123')
+    await discardPortalEstimateCaptureSession('share.token', '00000000-0000-4000-8000-000000000123', {
+      metadata: {
+        capture_failure: {
+          event_type: 'recording_start_failed',
+          message: 'screen share permission denied',
+        },
+      },
+    })
     await discardPortalRentalCaptureSession('rental.token', '00000000-0000-4000-8000-000000000123')
 
     const [estimateUrl, estimateInit] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
@@ -360,5 +367,16 @@ describe('public portal API capture headers', () => {
     )
     expect(estimateInit.method).toBe('POST')
     expect(rentalInit.method).toBe('POST')
+    expect(estimateInit.body).toBe(
+      JSON.stringify({
+        metadata: {
+          capture_failure: {
+            event_type: 'recording_start_failed',
+            message: 'screen share permission denied',
+          },
+        },
+      }),
+    )
+    expect(rentalInit.body).toBe(JSON.stringify({}))
   })
 })

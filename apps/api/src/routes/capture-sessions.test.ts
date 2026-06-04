@@ -980,6 +980,52 @@ describe('capture session routes', () => {
     })
   })
 
+  it('records recording-start failures when a session is discarded after permission denial', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      route_path: '/desktop/takeoff',
+      consent_version: 'pilot-v1',
+    })
+
+    const discarded = await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, {
+      status: 'discarded',
+      metadata: {
+        capture_failure: {
+          event_type: 'recording_start_failed',
+          failed_at: '2026-06-04T12:00:00.000Z',
+          error_name: 'NotAllowedError',
+          message: 'Permission denied',
+        },
+      },
+    })
+
+    expect(discarded.responses[0]).toMatchObject({
+      status: 200,
+      body: { capture_session: { status: 'discarded' } },
+    })
+    expect(pool.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: 'recording_start_failed',
+          event_class: 'lifecycle',
+          route_path: '/desktop/takeoff',
+          payload: expect.objectContaining({
+            event_type: 'recording_start_failed',
+            error_name: 'NotAllowedError',
+            message: 'Permission denied',
+            discard_status: 'succeeded',
+          }),
+        }),
+        expect.objectContaining({
+          event_type: 'session.discarded',
+          event_class: 'lifecycle',
+        }),
+      ]),
+    )
+  })
+
   it('deletes stored artifact objects when a session is discarded', async () => {
     const pool = new FakeCapturePool()
     await callRoute(pool, 'POST', '/api/capture-sessions', {

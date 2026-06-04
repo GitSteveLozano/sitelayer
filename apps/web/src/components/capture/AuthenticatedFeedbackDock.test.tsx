@@ -545,7 +545,7 @@ describe('AuthenticatedFeedbackDock', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /stop/i }))
 
-    await waitFor(() => expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledTimes(2))
     expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledWith(
       startPayload.capture_session_id,
       expect.objectContaining({
@@ -559,6 +559,21 @@ describe('AuthenticatedFeedbackDock', () => {
           surface: 'authenticated_app',
           company_slug: 'la-operations',
           mime_type: 'video/webm',
+        }),
+      }),
+    )
+    expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledWith(
+      startPayload.capture_session_id,
+      expect.objectContaining({
+        kind: 'video_clip_manifest',
+        fileName: 'video-clip-manifest.json',
+        pii_level: 'internal',
+        access_policy: 'support_only',
+        metadata: expect.objectContaining({
+          source: 'screen_recording',
+          artifact_type: 'capture.video_clip_manifest',
+          surface: 'authenticated_app',
+          company_slug: 'la-operations',
         }),
       }),
     )

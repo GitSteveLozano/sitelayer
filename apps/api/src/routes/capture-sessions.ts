@@ -277,6 +277,18 @@ async function appendCaptureLifecycleEventTx(
   )
 }
 
+function recordingStartFailedPayload(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  const captureFailure = jsonRecord(metadata.capture_failure)
+  if (captureFailure.event_type !== 'recording_start_failed') return null
+  return {
+    event_type: 'recording_start_failed',
+    failed_at: optionalTimestampText(captureFailure.failed_at) ?? new Date().toISOString(),
+    error_name: optionalText(captureFailure.error_name, 120),
+    message: optionalText(captureFailure.message, 500) ?? 'recording start failed',
+    discard_status: 'succeeded',
+  }
+}
+
 async function fetchCaptureFinalizeSnapshot(companyId: string, captureSessionId: string) {
   const [session, eventCount, artifactSummary] = await Promise.all([
     withCompanyClient(companyId, (c) =>
@@ -563,6 +575,15 @@ async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       )
     }
     if (updated && status) {
+      const startFailure = status === 'discarded' ? recordingStartFailedPayload(metadata) : null
+      if (startFailure) {
+        await appendCaptureLifecycleEventTx(c, ctx.company.id, id, {
+          eventType: 'recording_start_failed',
+          routePath: updated.route_path,
+          requestId: getRequestContext()?.requestId ?? null,
+          payload: startFailure,
+        })
+      }
       await appendCaptureLifecycleEventTx(c, ctx.company.id, id, {
         eventType: `session.${status}`,
         routePath: updated.route_path,

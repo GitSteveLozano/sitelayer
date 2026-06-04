@@ -90,6 +90,37 @@ describe('capture session API client', () => {
     expect(getActiveCaptureSessionId()).toBe('00000000-0000-4000-8000-000000000123')
   })
 
+  it('sends discard metadata and clears local capture session only after success', async () => {
+    startLocalCaptureSession({ id: '00000000-0000-4000-8000-000000000123', mode: 'feedback' })
+    requestMock.mockResolvedValueOnce(response('discarded'))
+
+    await expect(
+      discardCaptureSession('00000000-0000-4000-8000-000000000123', {
+        metadata: {
+          capture_failure: {
+            event_type: 'recording_start_failed',
+            message: 'microphone permission denied',
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ capture_session: { status: 'discarded' } })
+
+    expect(requestMock).toHaveBeenCalledWith('/api/capture-sessions/00000000-0000-4000-8000-000000000123', {
+      method: 'PATCH',
+      json: {
+        status: 'discarded',
+        route_path: '/desktop/takeoff',
+        metadata: {
+          capture_failure: {
+            event_type: 'recording_start_failed',
+            message: 'microphone permission denied',
+          },
+        },
+      },
+    })
+    expect(getActiveCaptureSessionId()).toBeNull()
+  })
+
   it('fetches capture session counts from the detail route', async () => {
     requestMock.mockResolvedValueOnce({
       ...response('open'),

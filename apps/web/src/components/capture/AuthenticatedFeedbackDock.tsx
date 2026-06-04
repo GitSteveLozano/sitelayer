@@ -12,6 +12,7 @@ import { uploadRegisteredCaptureArtifacts } from '@/lib/capture-artifact-provide
 import { captureErrorMessage } from '@/lib/capture-error-copy'
 import { uploadRegisteredCaptureStateSnapshots } from '@/lib/capture-state-providers'
 import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
+import { buildVideoClipManifestBlob } from '@/lib/capture-video-manifest'
 import {
   FeedbackCaptureController,
   FeedbackCaptureQueuedError,
@@ -123,8 +124,8 @@ function authenticatedBackend(): FeedbackCaptureBackend {
     startSession: (payload) => createCaptureSession(payload),
     uploadArtifact: uploadCaptureArtifact,
     finalizeSession: finalizeCaptureSession,
-    discardSession: async (captureSessionId) => {
-      await discardCaptureSession(captureSessionId)
+    discardSession: async (captureSessionId, input) => {
+      await discardCaptureSession(captureSessionId, input)
       clearLocalCaptureSession()
     },
   }
@@ -494,7 +495,8 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     }).catch(() => undefined)
     try {
       const recording = await recorder.stop()
-      await uploadCaptureArtifact(captureSessionId, {
+      const routePath = currentCaptureRoutePath()
+      const videoUpload = await uploadCaptureArtifact(captureSessionId, {
         kind: 'video',
         file: recording.blob,
         fileName: 'screen-video.webm',
@@ -507,10 +509,40 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
           surface: 'authenticated_app',
           company_slug: companySlug,
           mime_type: recording.mime_type,
-          route_path: currentCaptureRoutePath(),
+          route_path: routePath,
           ...(collabMode ? { collab_mode: collabMode } : {}),
         },
       })
+      const clipManifest = buildVideoClipManifestBlob({
+        captureSessionId,
+        recording,
+        reason: 'recording_stopped',
+        routePath,
+        videoArtifactId: videoUpload.artifact.id,
+        metadata: {
+          source: 'screen_recording',
+          surface: 'authenticated_app',
+          company_slug: companySlug,
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        },
+      })
+      if (clipManifest) {
+        await uploadCaptureArtifact(captureSessionId, {
+          kind: 'video_clip_manifest',
+          file: clipManifest,
+          fileName: 'video-clip-manifest.json',
+          pii_level: 'internal',
+          access_policy: 'support_only',
+          metadata: {
+            source: 'screen_recording',
+            artifact_type: 'capture.video_clip_manifest',
+            surface: 'authenticated_app',
+            company_slug: companySlug,
+            route_path: routePath,
+            ...(collabMode ? { collab_mode: collabMode } : {}),
+          },
+        })
+      }
       await uploadRegisteredCaptureStateSnapshots(captureSessionId, {
         reason: 'screen_recording_stopped',
         metadata: {
@@ -533,8 +565,8 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         summary: trimmedNote || 'Authenticated user recorded screen feedback.',
         severity: 'normal',
         lane: 'triage',
-        route_path: currentCaptureRoutePath(),
-        route: currentCaptureRoutePath(),
+        route_path: routePath,
+        route: routePath,
         category: 'record_feedback',
       })
       setReceipt(receiptFromFinalize(finalize))

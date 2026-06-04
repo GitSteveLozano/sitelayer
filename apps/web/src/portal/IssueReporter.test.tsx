@@ -398,7 +398,7 @@ describe('IssueReporter', () => {
     fireEvent.click(screen.getByRole('button', { name: /discard/i }))
 
     await waitFor(() =>
-      expect(api.discardPortalEstimateCaptureSession).toHaveBeenCalledWith('share-token', captureSessionId),
+      expect(api.discardPortalEstimateCaptureSession).toHaveBeenCalledWith('share-token', captureSessionId, undefined),
     )
     expect(api.uploadPortalEstimateCaptureArtifact).not.toHaveBeenCalled()
     expect(api.finalizePortalEstimateCaptureSession).not.toHaveBeenCalled()

@@ -1,7 +1,16 @@
+export type CaptureRecordingChunk = {
+  seq: number
+  start_ms: number
+  end_ms: number
+  byte_size: number
+  content_type: string
+}
+
 export type CaptureRecordingResult = {
   blob: Blob
   duration_ms: number
   mime_type: string
+  chunks?: CaptureRecordingChunk[]
 }
 
 type MediaRecorderConstructor = {
@@ -20,6 +29,7 @@ export type ScreenCaptureRecorderDeps = {
   MediaRecorderCtor?: MediaRecorderConstructor | null
   now?: () => number
   displayMediaConstraints?: DisplayMediaStreamOptions
+  timesliceMs?: number | null
 }
 
 const AUDIO_MIME_PREFERENCES = [
@@ -201,9 +211,11 @@ export class ScreenCaptureRecorder {
   private readonly Recorder: MediaRecorderConstructor | null
   private readonly now: () => number
   private readonly displayMediaConstraints: DisplayMediaStreamOptions
+  private readonly timesliceMs: number | null
   private stream: MediaStream | null = null
   private recorder: MediaRecorder | null = null
   private chunks: BlobPart[] = []
+  private chunkManifest: CaptureRecordingChunk[] = []
   private startedAt = 0
   private stopPromise: Promise<CaptureRecordingResult> | null = null
   private resolveStop: ((value: CaptureRecordingResult) => void) | null = null
@@ -214,6 +226,7 @@ export class ScreenCaptureRecorder {
     this.Recorder = deps.MediaRecorderCtor ?? defaultMediaRecorder()
     this.now = deps.now ?? Date.now
     this.displayMediaConstraints = deps.displayMediaConstraints ?? { video: true, audio: false }
+    this.timesliceMs = deps.timesliceMs === null ? null : Math.max(1000, Math.trunc(deps.timesliceMs ?? 5000))
   }
 
   get isRecording(): boolean {
@@ -238,9 +251,7 @@ export class ScreenCaptureRecorder {
       this.rejectStop = reject
     })
 
-    recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) this.chunks.push(event.data)
-    }
+    recorder.ondataavailable = (event) => this.recordChunk(event.data)
     recorder.onstop = () => {
       const resolvedMime = recorder.mimeType || mimeType || 'video/webm'
       const blob = new Blob(this.chunks, { type: resolvedMime })
@@ -248,6 +259,7 @@ export class ScreenCaptureRecorder {
         blob,
         duration_ms: Math.max(0, Math.trunc(this.now() - this.startedAt)),
         mime_type: resolvedMime,
+        chunks: this.chunkManifest.slice(),
       }
       const resolve = this.resolveStop
       this.cleanup()
@@ -261,7 +273,8 @@ export class ScreenCaptureRecorder {
     }
 
     try {
-      recorder.start()
+      if (this.timesliceMs === null) recorder.start()
+      else recorder.start(this.timesliceMs)
     } catch (error) {
       this.cleanup()
       throw error
@@ -285,11 +298,27 @@ export class ScreenCaptureRecorder {
     reject?.(error)
   }
 
+  private recordChunk(data: Blob | undefined): void {
+    if (!data || data.size <= 0) return
+    const seq = this.chunkManifest.length
+    const startMs = seq === 0 ? 0 : (this.chunkManifest[seq - 1]?.end_ms ?? 0)
+    const endMs = Math.max(startMs, Math.trunc(this.now() - this.startedAt))
+    this.chunks.push(data)
+    this.chunkManifest.push({
+      seq,
+      start_ms: startMs,
+      end_ms: endMs,
+      byte_size: data.size,
+      content_type: data.type || this.recorder?.mimeType || 'video/webm',
+    })
+  }
+
   private cleanup(): void {
     stopStreamTracks(this.stream)
     this.stream = null
     this.recorder = null
     this.chunks = []
+    this.chunkManifest = []
     this.startedAt = 0
     this.stopPromise = null
     this.resolveStop = null

@@ -47,7 +47,7 @@ export type FeedbackCaptureBackend = {
     input: CaptureArtifactUploadInput,
   ) => Promise<CaptureArtifactUploadResponse>
   finalizeSession: (captureSessionId: string, input?: CaptureFinalizeInput) => Promise<CaptureFinalizeResponse>
-  discardSession?: (captureSessionId: string) => Promise<unknown>
+  discardSession?: (captureSessionId: string, input?: { metadata?: Record<string, unknown> }) => Promise<unknown>
 }
 
 export type FeedbackCaptureControllerDeps = {
@@ -180,7 +180,11 @@ export class FeedbackCaptureController {
       this.audioRecorder?.cancel()
       this.replayRecorder?.cancel()
       if (this.startQueued) await this.removeQueuedStartMutation().catch(() => undefined)
-      else if (this.backend.discardSession) await this.backend.discardSession(id).catch(() => undefined)
+      else if (this.backend.discardSession) {
+        await this.backend
+          .discardSession(id, { metadata: buildRecordingStartFailedMetadata(error) })
+          .catch(() => undefined)
+      }
       this.startQueued = false
       this.queuedStartMutationId = null
       this.captureSessionId = null
@@ -490,6 +494,23 @@ function syntheticCaptureSessionResponse(input: FeedbackCaptureSessionInput): Fe
       last_seen_at: now,
     },
   }
+}
+
+function buildRecordingStartFailedMetadata(error: unknown): Record<string, unknown> {
+  return {
+    capture_failure: {
+      event_type: 'recording_start_failed',
+      failed_at: new Date().toISOString(),
+      error_name: error instanceof Error ? error.name : typeof error,
+      message: errorMessage(error).slice(0, 500),
+    },
+  }
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'recording start failed'
 }
 
 function fileNameForAudio(mimeType: string): string {

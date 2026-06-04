@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle, Loader2, Mic, ScreenShare, Send, ShieldCheck,
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import { ScreenCaptureRecorder } from '@/lib/capture-recorder'
+import { buildVideoClipManifestBlob } from '@/lib/capture-video-manifest'
 import { FeedbackCaptureController, type FeedbackCaptureBackend } from '@/lib/feedback-capture-controller'
 import { uploadRegisteredCaptureStateSnapshots, type CaptureStateSnapshotReason } from '@/lib/capture-state-providers'
 import {
@@ -152,7 +153,7 @@ function feedbackInviteBackend(token: string): FeedbackCaptureBackend {
     uploadArtifact: (captureSessionId, input) => uploadFeedbackInviteCaptureArtifact(token, captureSessionId, input),
     finalizeSession: (captureSessionId, input) =>
       finalizeFeedbackInviteCaptureSession(token, captureSessionId, input ?? {}),
-    discardSession: (captureSessionId) => discardFeedbackInviteCaptureSession(token, captureSessionId),
+    discardSession: (captureSessionId, input) => discardFeedbackInviteCaptureSession(token, captureSessionId, input),
   }
 }
 
@@ -460,7 +461,7 @@ export function FeedbackInviteEntry() {
       ]).catch(() => undefined)
       const recording = await recorder.stop()
       screenRecorderRef.current = null
-      await uploadFeedbackInviteCaptureArtifact(load.token, captureSessionId, {
+      const videoUpload = await uploadFeedbackInviteCaptureArtifact(load.token, captureSessionId, {
         kind: 'video',
         file: recording.blob,
         fileName: 'screen-video.webm',
@@ -476,6 +477,34 @@ export function FeedbackInviteEntry() {
           mime_type: recording.mime_type,
         },
       })
+      const clipManifest = buildVideoClipManifestBlob({
+        captureSessionId,
+        recording,
+        reason: 'recording_stopped',
+        routePath,
+        videoArtifactId: videoUpload.artifact.id,
+        metadata: {
+          source: 'feedback_invite_page',
+          capture_profile: 'screen_recording',
+          feedback_invite_id: load.invite.id,
+        },
+      })
+      if (clipManifest) {
+        await uploadFeedbackInviteCaptureArtifact(load.token, captureSessionId, {
+          kind: 'video_clip_manifest',
+          file: clipManifest,
+          fileName: 'video-clip-manifest.json',
+          pii_level: 'internal',
+          access_policy: 'support_only',
+          metadata: {
+            source: 'feedback_invite_page',
+            capture_profile: 'screen_recording',
+            artifact_type: 'capture.video_clip_manifest',
+            route_path: routePath,
+            feedback_invite_id: load.invite.id,
+          },
+        })
+      }
       if (modes.includes('state')) {
         await uploadFeedbackInviteStateArtifacts({
           token: load.token,

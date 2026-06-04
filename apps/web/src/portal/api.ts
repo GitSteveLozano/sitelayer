@@ -265,12 +265,16 @@ export function finalizeFeedbackInviteCaptureSession(
   )
 }
 
-export function discardFeedbackInviteCaptureSession(token: string, captureSessionId: string): Promise<{ ok: true }> {
+export function discardFeedbackInviteCaptureSession(
+  token: string,
+  captureSessionId: string,
+  input: { metadata?: Record<string, unknown> } = {},
+): Promise<{ ok: true }> {
   return portalRequest<{ ok: true }>(
     `/api/portal/feedback-invites/capture-sessions/${encodeURIComponent(captureSessionId)}/discard`,
     {
       method: 'POST',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, ...(input.metadata ? { metadata: input.metadata } : {}) }),
     },
   )
 }
@@ -335,6 +339,7 @@ export function finalizePortalEstimateCaptureSession(
 export function discardPortalEstimateCaptureSession(
   shareToken: string,
   captureSessionId: string,
+  input: { metadata?: Record<string, unknown> } = {},
 ): Promise<PortalCaptureSessionResponse> {
   return portalRequest<PortalCaptureSessionResponse>(
     `/api/portal/estimates/${encodeURIComponent(shareToken)}/capture-sessions/${encodeURIComponent(
@@ -342,7 +347,7 @@ export function discardPortalEstimateCaptureSession(
     )}/discard`,
     {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(input.metadata ? { metadata: input.metadata } : {}),
     },
   )
 }
@@ -404,12 +409,13 @@ export function finalizePortalRentalCaptureSession(
 export function discardPortalRentalCaptureSession(
   shareToken: string,
   captureSessionId: string,
+  input: { metadata?: Record<string, unknown> } = {},
 ): Promise<PortalCaptureSessionResponse> {
   return portalRequest<PortalCaptureSessionResponse>(
     `/api/portal/rentals/${encodeURIComponent(shareToken)}/capture-sessions/${encodeURIComponent(captureSessionId)}/discard`,
     {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(input.metadata ? { metadata: input.metadata } : {}),
     },
   )
 }

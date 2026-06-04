@@ -117,6 +117,10 @@ export type CaptureFinalizeResponse = {
   idempotent_replay?: true
 }
 
+export type CaptureSessionDiscardInput = {
+  metadata?: Record<string, unknown>
+}
+
 function clearLocalCaptureSessionIfCurrent(captureSessionId: string): void {
   if (getActiveCaptureSessionId() === captureSessionId) clearLocalCaptureSession()
 }
@@ -260,10 +264,17 @@ export async function stopCaptureSession(captureSessionId: string): Promise<Capt
   return response
 }
 
-export async function discardCaptureSession(captureSessionId: string): Promise<CaptureSessionResponse> {
+export async function discardCaptureSession(
+  captureSessionId: string,
+  input: CaptureSessionDiscardInput = {},
+): Promise<CaptureSessionResponse> {
   const response = await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
     method: 'PATCH',
-    json: { status: 'discarded', route_path: currentCaptureRoutePath() },
+    json: {
+      status: 'discarded',
+      route_path: currentCaptureRoutePath(),
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    },
   })
   clearLocalCaptureSessionIfCurrent(captureSessionId)
   return response
