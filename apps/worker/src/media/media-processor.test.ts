@@ -98,6 +98,12 @@ describe('createStubUnderstandingProcessor', () => {
     expect(out.summary).toContain('2 sampled frame(s)')
     expect(out.suggested_title).toBe('Hi')
   })
+
+  it('summarizes a transcript when no frames are present (audio path)', async () => {
+    const proc = createStubUnderstandingProcessor()
+    const out = await proc.understand({ transcript: 'the save button did nothing', context: { kind: 'audio' } })
+    expect(out.summary).toContain('save button')
+  })
 })
 
 describe('createGeminiCliUnderstandingProcessor', () => {
