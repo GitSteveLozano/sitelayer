@@ -145,13 +145,22 @@ class FakePool {
       return { rows: row ? [{ ...row, id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
 
-    if (/select id, status(?:, retention_expires_at)?\s+from capture_sessions/i.test(sql)) {
+    if (/select id, status(?:, retention_expires_at)?(?:, consent_scope)?\s+from capture_sessions/i.test(sql)) {
       const [id, companyId, actorRef] = params as [string, string, string]
       const row = this.captureSessions.find(
         (session) => session.id === id && session.company_id === companyId && session.consent_actor_ref === actorRef,
       )
       return {
-        rows: row ? [{ id: row.id, status: row.status, retention_expires_at: row.retention_expires_at }] : [],
+        rows: row
+          ? [
+              {
+                id: row.id,
+                status: row.status,
+                retention_expires_at: row.retention_expires_at,
+                consent_scope: row.consent_scope,
+              },
+            ]
+          : [],
         rowCount: row ? 1 : 0,
       }
     }

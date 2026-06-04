@@ -37,6 +37,20 @@ function makeTempDir(prefix: string): string {
   return dir
 }
 
+function cleanGitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) delete env[key]
+  }
+  return {
+    ...env,
+    GIT_AUTHOR_NAME: 't',
+    GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 't',
+    GIT_COMMITTER_EMAIL: 't@example.com',
+  }
+}
+
 afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
@@ -74,13 +88,7 @@ function makeLocalRemote(): { url: string; headSha: string } {
     execFileSync('git', args, {
       cwd: dir,
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: 't',
-        GIT_AUTHOR_EMAIL: 't@example.com',
-        GIT_COMMITTER_NAME: 't',
-        GIT_COMMITTER_EMAIL: 't@example.com',
-      },
+      env: cleanGitEnv(),
     })
   git(['init', '-q', '-b', 'dev'])
   writeFileSync(join(dir, 'README.md'), '# fixture\n')

@@ -408,12 +408,15 @@ class FakePool {
       this.captureSessions.push(row)
       return { rows: [row], rowCount: 1 }
     }
-    if (/select id, status\s+from capture_sessions/i.test(sql)) {
+    if (/select id, status(?:, consent_scope)?\s+from capture_sessions/i.test(sql)) {
       const [id, companyId, actorRef] = params as [string, string, string]
       const row = this.captureSessions.find(
         (s) => s.id === id && s.company_id === companyId && s.consent_actor_ref === actorRef,
       )
-      return { rows: row ? [{ id: row.id, status: row.status }] : [], rowCount: row ? 1 : 0 }
+      return {
+        rows: row ? [{ id: row.id, status: row.status, consent_scope: row.consent_scope }] : [],
+        rowCount: row ? 1 : 0,
+      }
     }
     if (/^\s*insert into capture_session_events/i.test(sql)) {
       const [
@@ -507,13 +510,22 @@ class FakePool {
       const row = this.captureSessions.find((session) => session.company_id === companyId && session.id === id)
       return { rows: row ? [{ ...row, id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
-    if (/select id, status(?:, retention_expires_at)?\s+from capture_sessions/i.test(sql)) {
+    if (/select id, status(?:, retention_expires_at)?(?:, consent_scope)?\s+from capture_sessions/i.test(sql)) {
       const [id, companyId, actorRef] = params as [string, string, string]
       const row = this.captureSessions.find(
         (s) => s.id === id && s.company_id === companyId && s.consent_actor_ref === actorRef,
       )
       return {
-        rows: row ? [{ id: row.id, status: row.status, retention_expires_at: row.retention_expires_at }] : [],
+        rows: row
+          ? [
+              {
+                id: row.id,
+                status: row.status,
+                retention_expires_at: row.retention_expires_at,
+                consent_scope: row.consent_scope,
+              },
+            ]
+          : [],
         rowCount: row ? 1 : 0,
       }
     }
