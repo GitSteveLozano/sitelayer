@@ -1,9 +1,10 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { getActiveCompanySlug } from '@/lib/api'
+import { isSteveCollabMode } from '@/lib/steve-collab'
 // Lazy: the feedback-capture dock pulls in the rrweb recorder (vendor-rrweb),
 // so a static import would drag that heavy machinery onto the eager critical
 // path. It mounts only on the capture surfaces below, after first paint.
@@ -136,6 +137,9 @@ const TakeoffPreviewDemo = lazy(() =>
 // renders a bare 404 anywhere but the demo deployment, so it's structurally
 // inert off the demo tier.
 const DemoLandingRoute = lazy(() => import('@/screens/demo/demo-landing').then((m) => ({ default: m.DemoLanding })))
+const SteveCollabEntryRoute = lazy(() =>
+  import('@/screens/collab/SteveCollabEntry').then((m) => ({ default: m.SteveCollabEntry })),
+)
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -289,6 +293,7 @@ export default function App() {
                   Clerk-gated app shell so signed-out visitors can reach it.
                   Self-gates on tier (404 off the demo deployment). */}
               <Route path="/demo" element={<DemoLandingRoute />} />
+              <Route path="/collab/steve" element={<SteveCollabEntryRoute />} />
 
               {/* Public teammate-invite accept page. Above the Clerk-gated
                   shell so a signed-out invitee can render the invite summary
@@ -304,17 +309,26 @@ export default function App() {
                 element={
                   <FirstRunGate>
                     <ClerkAuthGate>
-                      <AppShellRoutes />
+                      <AuthenticatedAppRoutes />
                     </ClerkAuthGate>
                   </FirstRunGate>
                 }
               />
             </Routes>
           </Suspense>
-          {SHOW_ROLE_SWITCHER ? <RoleSwitcher /> : null}
+          {SHOW_ROLE_SWITCHER ? <RoleSwitcherGate /> : null}
         </BrowserRouter>
       </QueryClientProvider>
     </AuthProvider>
+  )
+}
+
+function AuthenticatedAppRoutes() {
+  return (
+    <>
+      <AppShellRoutes />
+      <CaptureFeedbackDockMount />
+    </>
   )
 }
 
@@ -324,14 +338,7 @@ function AppShellRoutes() {
       {/* Project deep routes that need the full viewport. */}
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-      <Route
-        path="/projects/:id/takeoff-canvas"
-        element={
-          <CaptureFeedbackRoute>
-            <TakeoffCanvasScreen />
-          </CaptureFeedbackRoute>
-        }
-      />
+      <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
@@ -426,13 +433,17 @@ function WelcomeRoute() {
   return <DesktopOnboardingRoute onComplete={() => navigate('/desktop')} />
 }
 
-function CaptureFeedbackRoute({ children }: { children: ReactNode }) {
+function CaptureFeedbackDockMount() {
   return (
-    <>
-      {children}
-      <Suspense fallback={null}>
-        <AuthenticatedFeedbackDock companySlug={getActiveCompanySlug()} />
-      </Suspense>
-    </>
+    <Suspense fallback={null}>
+      <AuthenticatedFeedbackDock companySlug={getActiveCompanySlug()} />
+    </Suspense>
   )
+}
+
+function RoleSwitcherGate() {
+  const location = useLocation()
+  if (location.pathname === '/collab/steve') return null
+  if (isSteveCollabMode()) return null
+  return <RoleSwitcher />
 }

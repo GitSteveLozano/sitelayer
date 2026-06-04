@@ -5,6 +5,14 @@ import {
   registerCaptureArtifactProvider,
 } from '@/lib/capture-artifact-providers'
 import { CAPTURE_SESSION_STORAGE_KEY } from '@/lib/capture-session'
+import {
+  AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
+  AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY,
+  AUTH_FEEDBACK_ENABLED_STORAGE_KEY,
+  AUTH_FEEDBACK_REPLAY_STORAGE_KEY,
+  STEVE_COLLAB_MODE_STORAGE_KEY,
+  STEVE_COLLAB_MODE_VALUE,
+} from '@/lib/steve-collab'
 import { AuthenticatedFeedbackDock } from './AuthenticatedFeedbackDock'
 
 const captureApi = vi.hoisted(() => ({
@@ -69,7 +77,11 @@ describe('AuthenticatedFeedbackDock', () => {
     __resetCaptureArtifactProvidersForTests()
     window.history.pushState(null, '', '/projects/p1')
     window.sessionStorage.clear()
-    window.localStorage.removeItem('sitelayer.auth-feedback-enabled')
+    window.localStorage.removeItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY)
+    window.localStorage.removeItem(AUTH_FEEDBACK_REPLAY_STORAGE_KEY)
+    window.localStorage.removeItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY)
+    window.localStorage.removeItem(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY)
+    window.localStorage.removeItem(STEVE_COLLAB_MODE_STORAGE_KEY)
     rrweb.record.mockImplementation((options?: { emit?: (event: unknown) => void }) => {
       options?.emit?.({ type: 'rrweb-full-snapshot', data: { source: 'authenticated-test' } })
       return vi.fn()
@@ -214,6 +226,72 @@ describe('AuthenticatedFeedbackDock', () => {
     ])
     expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
       expect.objectContaining({ event_type: 'authenticated.feedback.recording_stopped' }),
+    ])
+    expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
+  })
+
+  it('sends Steve text issues without requesting microphone access', async () => {
+    window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
+    window.localStorage.setItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY, '0')
+    window.localStorage.setItem(STEVE_COLLAB_MODE_STORAGE_KEY, STEVE_COLLAB_MODE_VALUE)
+    const provider = vi.fn(async () => ({ artifact: { id: 'screen-1', kind: 'screen_context' } }))
+    registerCaptureArtifactProvider('screen:test', provider)
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /report issue/i }))
+    fireEvent.change(screen.getByPlaceholderText('What is wrong?'), {
+      target: { value: 'The project total is wrong after I change markup.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /send issue/i }))
+
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    const startPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
+      capture_session_id: string
+      consent_scope: Record<string, unknown>
+      metadata: Record<string, unknown>
+    }
+    expect(startPayload).toMatchObject({
+      mode: 'feedback',
+      consent_version: 'authenticated-feedback-v1',
+      route_path: '/projects/p1',
+      metadata: {
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        capture_profile: 'text_issue',
+        collab_mode: 'steve',
+      },
+      consent_scope: {
+        surface: 'authenticated_app',
+        streams: ['text_note', 'registered_artifacts'],
+        audio: false,
+        dom_replay: false,
+      },
+    })
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
+    await waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
+    expect(provider).toHaveBeenCalledWith({
+      captureSessionId: startPayload.capture_session_id,
+      metadata: expect.objectContaining({
+        source: 'text_issue',
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        collab_mode: 'steve',
+        trigger: 'text_issue_submit',
+      }),
+    })
+    await waitFor(() => expect(captureApi.finalizeCaptureSession).toHaveBeenCalledTimes(1))
+    expect(captureApi.finalizeCaptureSession).toHaveBeenCalledWith(
+      startPayload.capture_session_id,
+      expect.objectContaining({
+        category: 'record_feedback',
+        title: 'In-app issue report',
+        summary: 'The project total is wrong after I change markup.',
+        lane: 'triage',
+        severity: 'normal',
+      }),
+    )
+    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
+      expect.objectContaining({ event_type: 'authenticated.feedback.issue_submitted' }),
     ])
     expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
   })

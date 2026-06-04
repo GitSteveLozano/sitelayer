@@ -13,29 +13,49 @@ import {
   FeedbackCaptureController,
   FeedbackCaptureQueuedError,
   type FeedbackCaptureBackend,
+  type FeedbackCaptureControllerDeps,
 } from '@/lib/feedback-capture-controller'
 import {
   appendCaptureSessionEvents,
   createCaptureSession,
   discardCaptureSession,
   finalizeCaptureSession,
+  type CaptureFinalizeResponse,
   uploadCaptureArtifact,
 } from '@/lib/api/capture-sessions'
+import {
+  AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
+  AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY,
+  AUTH_FEEDBACK_ENABLED_STORAGE_KEY,
+  AUTH_FEEDBACK_REPLAY_STORAGE_KEY,
+  isSteveCollabMode,
+} from '@/lib/steve-collab'
 
 type CaptureState = 'idle' | 'recording' | 'stopping' | 'sent' | 'queued' | 'error'
+
+type FeedbackReceipt = {
+  workItemId: string
+  supportPacketId: string
+}
 
 type AuthenticatedFeedbackDockProps = {
   companySlug: string
 }
 
 const CONSENT_VERSION = 'authenticated-feedback-v1'
-const ENABLE_STORAGE_KEY = 'sitelayer.auth-feedback-enabled'
-
 function env(name: string): string {
   try {
     return String((import.meta as { env?: Record<string, string> }).env?.[name] || '').trim()
   } catch {
     return ''
+  }
+}
+
+function flagFromStorage(name: string): string | null {
+  try {
+    return window.localStorage.getItem(name)
+  } catch {
+    return null
   }
 }
 
@@ -63,17 +83,29 @@ function authenticatedFeedbackEnabled(): boolean {
   const fromUrl = flagFromUrl('capture_feedback', 'captureFeedback', 'record_feedback')
   if (fromUrl !== null) return isTruthyFlag(fromUrl)
   if (isTruthyFlag(env('VITE_AUTH_CAPTURE_FEEDBACK')) || isTruthyFlag(env('VITE_CAPTURE_FEEDBACK'))) return true
-  try {
-    return isTruthyFlag(window.localStorage.getItem(ENABLE_STORAGE_KEY))
-  } catch {
-    return false
-  }
+  return isTruthyFlag(flagFromStorage(AUTH_FEEDBACK_ENABLED_STORAGE_KEY))
 }
 
 function captureReplayEnabled(): boolean {
   const fromUrl = flagFromUrl('capture_replay', 'captureReplay')
   if (fromUrl !== null) return isTruthyFlag(fromUrl)
-  return isTruthyFlag(env('VITE_AUTH_CAPTURE_REPLAY'))
+  return (
+    isTruthyFlag(env('VITE_AUTH_CAPTURE_REPLAY')) || isTruthyFlag(flagFromStorage(AUTH_FEEDBACK_REPLAY_STORAGE_KEY))
+  )
+}
+
+function captureAudioEnabled(): boolean {
+  const fromUrl = flagFromUrl('capture_audio', 'captureAudio')
+  if (fromUrl !== null) return isTruthyFlag(fromUrl)
+  const fromStorage = flagFromStorage(AUTH_FEEDBACK_AUDIO_STORAGE_KEY)
+  if (fromStorage !== null) return isTruthyFlag(fromStorage)
+  return true
+}
+
+function feedbackAutoOpen(): boolean {
+  const fromUrl = flagFromUrl('feedback_open', 'feedbackOpen')
+  if (fromUrl !== null) return isTruthyFlag(fromUrl)
+  return isTruthyFlag(flagFromStorage(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY))
 }
 
 function authenticatedBackend(): FeedbackCaptureBackend {
@@ -105,21 +137,110 @@ async function appendFeedbackEvent(
   ])
 }
 
+function receiptFromFinalize(finalize: CaptureFinalizeResponse): FeedbackReceipt {
+  return {
+    workItemId: finalize.work_item.id,
+    supportPacketId: finalize.support_packet.id,
+  }
+}
+
 export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedbackDockProps) {
   const enabled = authenticatedFeedbackEnabled()
   const replayEnabled = captureReplayEnabled()
-  const audioSupported = resolveCaptureCapabilities().audio
+  const audioEnabled = captureAudioEnabled()
+  const audioSupported = !audioEnabled || resolveCaptureCapabilities().audio
+  const steveMode = isSteveCollabMode()
   const backend = useMemo(() => authenticatedBackend(), [])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
   const [state, setState] = useState<CaptureState>('idle')
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => feedbackAutoOpen())
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [receipt, setReceipt] = useState<FeedbackReceipt | null>(null)
 
   if (!enabled || !companySlug) return null
 
+  const buttonLabel = steveMode ? 'Report issue' : 'Record feedback'
+  const idlePlaceholder = steveMode ? 'What is wrong?' : 'What happened?'
+  const recordingTitle = audioEnabled ? 'Recording feedback' : 'Recording page context'
+  const collabMode = steveMode ? 'steve' : null
+  const streams = [...(audioEnabled ? ['audio'] : []), ...(replayEnabled ? ['dom_replay'] : [])]
+
+  async function sendTextIssue() {
+    const trimmedNote = note.trim()
+    if (!trimmedNote) {
+      setError('Write what is wrong first.')
+      setOpen(true)
+      return
+    }
+    setState('stopping')
+    setError(null)
+    setReceipt(null)
+    const local = startLocalCaptureSession({
+      mode: 'feedback',
+      consent_version: CONSENT_VERSION,
+    })
+    const routePath = currentCaptureRoutePath()
+    const artifactMetadata = {
+      source: 'text_issue',
+      surface: 'authenticated_app',
+      company_slug: companySlug,
+      ...(collabMode ? { collab_mode: collabMode } : {}),
+    }
+    try {
+      await createCaptureSession({
+        capture_session_id: local.id,
+        mode: 'feedback',
+        consent_version: CONSENT_VERSION,
+        route_path: routePath,
+        device_kind: inferDeviceKind(),
+        platform: inferPlatform(),
+        viewport: inferViewport(),
+        metadata: {
+          surface: 'authenticated_app',
+          company_slug: companySlug,
+          capture_profile: 'text_issue',
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        },
+        consent_scope: {
+          surface: 'authenticated_app',
+          streams: ['text_note', 'registered_artifacts'],
+          audio: false,
+          dom_replay: false,
+        },
+      })
+      await appendFeedbackEvent(local.id, 'authenticated.feedback.issue_submitted', {
+        note_length: trimmedNote.length,
+        ...(collabMode ? { collab_mode: collabMode } : {}),
+      }).catch(() => undefined)
+      await uploadRegisteredCaptureArtifacts(local.id, {
+        ...artifactMetadata,
+        trigger: 'text_issue_submit',
+      })
+      const finalize = await finalizeCaptureSession(local.id, {
+        title: 'In-app issue report',
+        summary: trimmedNote,
+        severity: 'normal',
+        lane: 'triage',
+        route_path: routePath,
+        route: routePath,
+        category: 'record_feedback',
+      })
+      clearLocalCaptureSession()
+      setReceipt(receiptFromFinalize(finalize))
+      setNote('')
+      setOpen(false)
+      setState('sent')
+      window.setTimeout(() => setState('idle'), 6000)
+    } catch (err) {
+      setState('error')
+      setError(err instanceof Error ? err.message : 'Issue could not be sent.')
+    }
+  }
+
   async function startRecording() {
     setError(null)
+    setReceipt(null)
     const active = getActiveCaptureSession()
     if (active?.mode === 'feedback') {
       setState('error')
@@ -130,7 +251,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       mode: 'feedback',
       consent_version: CONSENT_VERSION,
     })
-    const controller = new FeedbackCaptureController({
+    const controllerDeps: FeedbackCaptureControllerDeps = {
       backend,
       offlineQueue: { target: { type: 'authenticated' } },
       replayRecorder: replayEnabled
@@ -138,7 +259,9 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             upload: backend.uploadArtifact,
           })
         : null,
-    })
+    }
+    if (!audioEnabled) controllerDeps.audioRecorder = null
+    const controller = new FeedbackCaptureController(controllerDeps)
     controllerRef.current = controller
     try {
       await controller.start({
@@ -152,11 +275,15 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         metadata: {
           surface: 'authenticated_app',
           company_slug: companySlug,
+          capture_profile: 'recording',
+          ...(collabMode ? { collab_mode: collabMode } : {}),
         },
         consent_scope: {
           surface: 'authenticated_app',
-          streams: replayEnabled ? ['audio', 'dom_replay'] : ['audio'],
+          streams,
+          audio: audioEnabled,
           dom_replay: replayEnabled,
+          text_note: true,
         },
       })
       await appendFeedbackEvent(local.id, 'authenticated.feedback.recording_started').catch(() => undefined)
@@ -180,7 +307,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       note_length: trimmedNote.length,
     }).catch(() => undefined)
     try {
-      await controller.stop({
+      const result = await controller.stop({
         title: 'In-app feedback recording',
         summary: trimmedNote || 'Authenticated user recorded feedback.',
         severity: 'normal',
@@ -199,6 +326,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             }),
         ],
       })
+      setReceipt(receiptFromFinalize(result.finalize))
       clearLocalCaptureSession()
       controllerRef.current = null
       setNote('')
@@ -243,7 +371,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     return (
       <div style={{ ...dockPositionStyle, ...pillStyle, color: 'var(--m-green)', cursor: 'default' }}>
         <CheckCircle size={16} aria-hidden />
-        Feedback sent
+        {receipt ? `Sent · packet ${receipt.supportPacketId} · work ${receipt.workItemId}` : 'Feedback sent'}
       </div>
     )
   }
@@ -263,7 +391,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         {error ? <div style={errorPillStyle}>{error}</div> : null}
         <button type="button" style={pillStyle} onClick={() => setOpen(true)}>
           <Mic size={16} aria-hidden />
-          Record feedback
+          {buttonLabel}
         </button>
       </div>
     )
@@ -273,7 +401,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     <div style={panelStyle}>
       <div style={panelHeaderStyle}>
         <div style={panelTitleStyle}>
-          {state === 'recording' ? 'Recording feedback' : state === 'stopping' ? 'Sending feedback' : 'Record feedback'}
+          {state === 'recording' ? recordingTitle : state === 'stopping' ? 'Sending feedback' : buttonLabel}
         </div>
         <button
           type="button"
@@ -291,7 +419,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="What happened?"
+            placeholder={idlePlaceholder}
             rows={3}
             style={textareaStyle}
           />
@@ -300,9 +428,12 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             <button type="button" style={secondaryButtonStyle} onClick={() => setOpen(false)}>
               Cancel
             </button>
+            <button type="button" style={secondaryButtonStyle} onClick={sendTextIssue} disabled={!note.trim()}>
+              Send issue
+            </button>
             <button type="button" style={primaryButtonStyle} onClick={startRecording} disabled={!audioSupported}>
               <Mic size={14} aria-hidden />
-              Start
+              {audioEnabled ? 'Start' : 'Record page'}
             </button>
           </div>
         </>
