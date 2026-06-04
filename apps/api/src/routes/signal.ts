@@ -1,11 +1,6 @@
 import type http from 'node:http'
 import { createHmac } from 'node:crypto'
-import {
-  HttpSink,
-  validateProjectEvent,
-  type HttpSinkOptions,
-  type ProjectEventEnvelope,
-} from '@operator/projectkit'
+import { HttpSink, validateProjectEvent, type HttpSinkOptions, type ProjectEventEnvelope } from '@operator/projectkit'
 
 /**
  * Server-side @operator/projectkit ingest proxy (the SAME-ORIGIN seam).
@@ -46,11 +41,7 @@ function sinkSecret(): string | null {
  * request (so the caller stops walking the route cascade), false otherwise.
  * Unauthenticated by design — the browser beacon carries no Bearer.
  */
-export async function handleSignalRoutes(
-  req: http.IncomingMessage,
-  url: URL,
-  ctx: SignalRouteCtx,
-): Promise<boolean> {
+export async function handleSignalRoutes(req: http.IncomingMessage, url: URL, ctx: SignalRouteCtx): Promise<boolean> {
   if (req.method !== 'POST' || url.pathname !== '/api/signal') return false
 
   const target = sinkUrl()

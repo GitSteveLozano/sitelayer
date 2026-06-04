@@ -202,6 +202,8 @@ export function beaconTraceEvent(input: BeaconInput): void {
       event_name: input.event_type,
       event_class: eventClass,
       state_after: stateAfter,
+      // per-page-load monotonic sequence so the sink can order events
+      seq,
     }
     if (captureSessionId) payload.capture_session_id = captureSessionId
     const event: EmitInput = {

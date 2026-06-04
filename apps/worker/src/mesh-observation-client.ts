@@ -108,12 +108,7 @@ function toObservationProjectEvent(
  * about to POST — so the route path + header names + scheme live here in host
  * config, and the contract package never holds a mesh secret.
  */
-function buildMeshSigner(
-  url: string,
-  component: string,
-  secret: Buffer,
-  now: () => Date,
-): SignFn {
+function buildMeshSigner(url: string, component: string, secret: Buffer, now: () => Date): SignFn {
   const path = parsePath(url) ?? '/'
   return (body: string) => {
     const timestamp = String(Math.floor(now().getTime() / 1000))

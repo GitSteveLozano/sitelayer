@@ -407,8 +407,7 @@ function buildMeshSign(cfg: ForwarderConfig): SignFn {
  * the keeper still sees the original ingest hint.
  */
 function toTraceProjectEvent(event: ProductTraceEvent, projectKey: string): ProjectEvent {
-  const captureSessionId =
-    'capture_session_id' in event ? (event.capture_session_id ?? undefined) : undefined
+  const captureSessionId = 'capture_session_id' in event ? (event.capture_session_id ?? undefined) : undefined
   const projectEvent: ProjectEvent = {
     schema_version: '1.0.0',
     project_key: projectKey,
