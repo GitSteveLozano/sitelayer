@@ -1,5 +1,8 @@
 # Steve Review Link
 
+Workflow recommendation and option comparison:
+`docs/STEVE_FEEDBACK_CAPTURE_WORKFLOW.md`.
+
 ## Link to send
 
 Send this over Discord:

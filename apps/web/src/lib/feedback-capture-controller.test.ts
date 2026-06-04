@@ -174,6 +174,32 @@ describe('FeedbackCaptureController', () => {
     expect(controller.activeCaptureSessionId).toBeNull()
   })
 
+  it('discards the server session when recorder start fails after session creation', async () => {
+    const api = backend()
+    const audio = audioRecorder()
+    audio.start.mockRejectedValueOnce(new Error('microphone permission denied'))
+    const replay = replayRecorder()
+    const controller = new FeedbackCaptureController({
+      backend: api,
+      audioRecorder: audio,
+      replayRecorder: replay,
+    })
+
+    await expect(
+      controller.start({
+        capture_session_id: '00000000-0000-4000-8000-000000000123',
+        consent_version: 'portal-feedback-v1',
+      }),
+    ).rejects.toThrow('microphone permission denied')
+
+    expect(api.startSession).toHaveBeenCalledTimes(1)
+    expect(audio.cancel).toHaveBeenCalledTimes(1)
+    expect(replay.cancel).toHaveBeenCalledTimes(1)
+    expect(api.discardSession).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000123')
+    expect(controller.status).toBe('error')
+    expect(controller.activeCaptureSessionId).toBeNull()
+  })
+
   it('retries finalize after uploads without double-stopping or double-uploading audio', async () => {
     const api = backend()
     const audio = audioRecorder()

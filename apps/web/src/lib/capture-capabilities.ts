@@ -10,7 +10,7 @@
 //   tier 0 — passive events (always available; the floor)
 //   tier 1 — +DOM replay (rrweb), no OS prompt
 //   tier 2 — +audio (getUserMedia grant)
-//   tier 3 — +video (ingest-only today; no in-browser recorder exists)
+//   tier 3 — +video (getDisplayMedia grant + MediaRecorder)
 //
 // IMPORTANT (bundle hygiene): this module must stay off the eager critical
 // path's rrweb dependency. The beacon + trace emitter import it for every
@@ -21,8 +21,8 @@
 // recorder (the docks) can pass the real `isCaptureReplayRecorderSupported`,
 // and the default is a dependency-free environment check.
 
-import { isAudioCaptureSupported } from './capture-recorder'
-import { beaconUrl, dntOptOut, traceBeaconConsentGranted } from './product-trace-beacon'
+import { isAudioCaptureSupported, isScreenCaptureSupported } from './capture-recorder'
+import { traceBeaconEnabled } from './product-trace-consent'
 
 export type CaptureTier = 0 | 1 | 2 | 3
 
@@ -35,7 +35,7 @@ export type CaptureCapabilities = {
   dom_replay: boolean
   /** Public trace beacon enabled: URL set + consent granted + not DNT (tier 0 transport). */
   beacon: boolean
-  /** In-browser video recorder available (tier 3). Ingest-only today, so false. */
+  /** In-browser screen video recorder available (tier 3). */
   video: boolean
 }
 
@@ -62,12 +62,11 @@ function defaultDomReplaySupported(): boolean {
  * Identical composition to the former private `beaconEnabled()` in
  * `product-trace-beacon.ts`. */
 function defaultBeaconEnabled(): boolean {
-  return Boolean(beaconUrl()) && !dntOptOut() && traceBeaconConsentGranted()
+  return traceBeaconEnabled()
 }
 
-/** No in-browser video recorder exists yet (video is ingest-only, plan §4). */
 function defaultVideoSupported(): boolean {
-  return false
+  return isScreenCaptureSupported()
 }
 
 /**

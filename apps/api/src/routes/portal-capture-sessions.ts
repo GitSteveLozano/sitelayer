@@ -2,6 +2,7 @@ import type http from 'node:http'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import { CaptureArtifactUploadError, parseCaptureArtifactMultipart } from '../capture-artifact-upload.js'
+import { captureConsentAllowsArtifactKind, captureConsentAllowsEventClass } from '../capture-consent-policy.js'
 import type { ActiveCompany } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import {
@@ -41,8 +42,8 @@ export type PortalCaptureRouteCtx = {
 export type PortalCaptureActor = {
   companyId: string
   actorRef: string
-  authority: 'signed_estimate_share_token' | 'signed_rental_share_token'
-  surface: 'estimate_portal' | 'rental_portal'
+  authority: 'signed_estimate_share_token' | 'signed_rental_share_token' | 'signed_feedback_invite_token'
+  surface: 'estimate_portal' | 'rental_portal' | 'feedback_invite'
   metadata?: Record<string, unknown>
   consentScope?: Record<string, unknown>
 }
@@ -140,6 +141,14 @@ function requiresExplicitConsent(mode: (typeof MODES)[number]): boolean {
 
 function responseRow(row: CaptureSessionRow): CaptureSessionRow {
   return row
+}
+
+function captureConsentArtifactError(kind: string): string {
+  return `capture consent does not allow artifact kind "${kind}"`
+}
+
+function captureConsentEventClassError(eventClass: string): string {
+  return `capture consent does not allow event class "${eventClass}"`
 }
 
 function portalActorUserId(actor: PortalCaptureActor): string {
@@ -445,9 +454,10 @@ export async function appendPortalCaptureEvents(
   let inserted = 0
   let foundSession = false
   let blockedStatus: string | null = null
+  let consentViolation: string | null = null
   await withMutationTx(actor.companyId, async (client) => {
-    const exists = await client.query<{ id: string; status: string }>(
-      `select id, status
+    const exists = await client.query<{ id: string; status: string; consent_scope: Record<string, unknown> | null }>(
+      `select id, status, consent_scope
          from capture_sessions
         where id = $1
           and company_id = $2
@@ -462,6 +472,16 @@ export async function appendPortalCaptureEvents(
     if (session.status !== 'open') {
       blockedStatus = session.status
       return
+    }
+    for (const raw of rawEvents) {
+      if (!isRecord(raw)) continue
+      const eventType = optionalText(raw.event_type, 160)
+      if (!eventType) continue
+      const eventClass = optionalText(raw.event_class, 120) ?? 'portal'
+      if (!captureConsentAllowsEventClass(session.consent_scope, eventClass)) {
+        consentViolation = captureConsentEventClassError(eventClass)
+        return
+      }
     }
     for (const [index, raw] of rawEvents.entries()) {
       if (!isRecord(raw)) continue
@@ -511,6 +531,10 @@ export async function appendPortalCaptureEvents(
     ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
     return
   }
+  if (consentViolation) {
+    ctx.sendJson(403, { error: consentViolation })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 
@@ -531,8 +555,13 @@ export async function uploadPortalCaptureArtifact(
     return
   }
 
-  const exists = await ctx.pool.query<{ id: string; status: string; retention_expires_at: string | null }>(
-    `select id, status, retention_expires_at
+  const exists = await ctx.pool.query<{
+    id: string
+    status: string
+    retention_expires_at: string | null
+    consent_scope: Record<string, unknown> | null
+  }>(
+    `select id, status, retention_expires_at, consent_scope
        from capture_sessions
       where id = $1
         and company_id = $2
@@ -559,6 +588,8 @@ export async function uploadPortalCaptureArtifact(
   try {
     upload = await parseCaptureArtifactMultipart(req, storage, actor.companyId, id, {
       maxFileBytes: ctx.maxArtifactBytes ?? Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+      allowKind: (kind) => captureConsentAllowsArtifactKind(session.consent_scope, kind),
+      disallowedKindMessage: captureConsentArtifactError,
     })
   } catch (error) {
     const status = error instanceof CaptureArtifactUploadError ? error.status : 500

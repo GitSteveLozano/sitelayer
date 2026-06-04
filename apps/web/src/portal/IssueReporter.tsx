@@ -1,7 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import { CheckCircle, Mic, Square, X } from 'lucide-react'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
+import { buildPortalFeedbackConsentScope } from '@/lib/capture-policy'
+import { captureErrorMessage } from '@/lib/capture-error-copy'
 import { clearLocalCaptureSession, currentCaptureRoutePath, startLocalCaptureSession } from '@/lib/capture-session'
+import { uploadRegisteredCaptureStateSnapshots } from '@/lib/capture-state-providers'
 import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
 import {
   FeedbackCaptureController,
@@ -92,6 +95,13 @@ function portalBackend(surface: PortalFeedbackSurface, shareToken: string): Feed
   }
 }
 
+function uploadPortalStateProviderArtifact(surface: PortalFeedbackSurface, shareToken: string): FeedbackCaptureBackend['uploadArtifact'] {
+  if (surface === 'estimate_portal') {
+    return (captureSessionId, input) => uploadPortalEstimateCaptureArtifact(shareToken, captureSessionId, input)
+  }
+  return (captureSessionId, input) => uploadPortalRentalCaptureArtifact(shareToken, captureSessionId, input)
+}
+
 async function appendPortalFeedbackEvent(
   surface: PortalFeedbackSurface,
   shareToken: string,
@@ -154,11 +164,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
           portal_surface: surface,
           capture_invite_present: true,
         },
-        consent_scope: {
-          portal_surface: surface,
-          streams: replayEnabled ? ['audio', 'dom_replay'] : ['audio'],
-          dom_replay: replayEnabled,
-        },
+        consent_scope: buildPortalFeedbackConsentScope({ surface, domReplay: replayEnabled }),
       })
       await appendPortalFeedbackEvent(surface, shareToken, local.id, 'portal.feedback.recording_started').catch(
         () => undefined,
@@ -168,7 +174,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
     } catch (err) {
       clearLocalCaptureSession()
       setState('error')
-      setError(err instanceof Error ? err.message : 'Recording could not start.')
+      setError(captureErrorMessage(err, 'Recording could not start.'))
     }
   }
 
@@ -192,6 +198,17 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
           portal_surface: surface,
           dom_replay: replayEnabled,
         },
+        additional_artifact_uploads: [
+          (id, metadata) =>
+            uploadRegisteredCaptureStateSnapshots(id, {
+              reason: 'recording_stopped',
+              metadata: {
+                ...metadata,
+                trigger: 'portal_feedback_stop',
+              },
+              upload: uploadPortalStateProviderArtifact(surface, shareToken),
+            }),
+        ],
       })
       clearLocalCaptureSession()
       controllerRef.current = null
@@ -210,7 +227,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
         return
       }
       setState('error')
-      setError(err instanceof Error ? err.message : 'Feedback could not be sent.')
+      setError(captureErrorMessage(err, 'Feedback could not be sent.'))
     }
   }
 
@@ -225,7 +242,7 @@ export function IssueReporter({ surface, shareToken }: PortalFeedbackRecorderPro
       setState('idle')
     } catch (err) {
       setState('error')
-      setError(err instanceof Error ? err.message : 'Feedback could not be discarded.')
+      setError(captureErrorMessage(err, 'Feedback could not be discarded.'))
     }
   }
 

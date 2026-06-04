@@ -1,13 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
-import { CheckCircle, Mic, Square, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CheckCircle, Mic, ScreenShare, Square, X } from 'lucide-react'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import {
   clearLocalCaptureSession,
   currentCaptureRoutePath,
+  ensureLocalCaptureSession,
   getActiveCaptureSession,
   startLocalCaptureSession,
 } from '@/lib/capture-session'
 import { uploadRegisteredCaptureArtifacts } from '@/lib/capture-artifact-providers'
+import { captureErrorMessage } from '@/lib/capture-error-copy'
+import { uploadRegisteredCaptureStateSnapshots } from '@/lib/capture-state-providers'
 import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
 import {
   FeedbackCaptureController,
@@ -23,6 +26,12 @@ import {
   type CaptureFinalizeResponse,
   uploadCaptureArtifact,
 } from '@/lib/api/capture-sessions'
+import { buildTextIssueCaptureSessionInput } from '@/lib/feedback-text-issue'
+import {
+  buildAuthenticatedFeedbackConsentScope,
+  buildAuthenticatedScreenRecordingConsentScope,
+} from '@/lib/capture-policy'
+import { ScreenCaptureRecorder } from '@/lib/capture-recorder'
 import {
   AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
   AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY,
@@ -32,6 +41,7 @@ import {
 } from '@/lib/steve-collab'
 
 type CaptureState = 'idle' | 'recording' | 'stopping' | 'sent' | 'queued' | 'error'
+type RecordingKind = 'feedback' | 'screen'
 
 type FeedbackReceipt = {
   workItemId: string
@@ -148,23 +158,70 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   const enabled = authenticatedFeedbackEnabled()
   const replayEnabled = captureReplayEnabled()
   const audioEnabled = captureAudioEnabled()
-  const audioSupported = !audioEnabled || resolveCaptureCapabilities().audio
+  const capabilities = resolveCaptureCapabilities()
+  const audioSupported = !audioEnabled || capabilities.audio
+  const screenSupported = capabilities.video
   const steveMode = isSteveCollabMode()
   const backend = useMemo(() => authenticatedBackend(), [])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
+  const screenRecorderRef = useRef<ScreenCaptureRecorder | null>(null)
+  const prewarmedTextIssueSessionIdRef = useRef<string | null>(null)
   const [state, setState] = useState<CaptureState>('idle')
+  const [recordingKind, setRecordingKind] = useState<RecordingKind | null>(null)
   const [open, setOpen] = useState(() => feedbackAutoOpen())
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<FeedbackReceipt | null>(null)
 
-  if (!enabled || !companySlug) return null
-
   const buttonLabel = steveMode ? 'Report issue' : 'Record feedback'
   const idlePlaceholder = steveMode ? 'What is wrong?' : 'What happened?'
-  const recordingTitle = audioEnabled ? 'Recording feedback' : 'Recording page context'
+  const recordingTitle =
+    recordingKind === 'screen' ? 'Recording screen' : audioEnabled ? 'Recording feedback' : 'Recording page context'
   const collabMode = steveMode ? 'steve' : null
-  const streams = [...(audioEnabled ? ['audio'] : []), ...(replayEnabled ? ['dom_replay'] : [])]
+
+  useEffect(() => {
+    if (!enabled || !companySlug || !steveMode || !open || state !== 'idle') return
+    const local = ensureLocalCaptureSession({ mode: 'feedback', consent_version: CONSENT_VERSION })
+    if (local.mode !== 'feedback') return
+    if (prewarmedTextIssueSessionIdRef.current === local.id) return
+    prewarmedTextIssueSessionIdRef.current = local.id
+    const routePath = currentCaptureRoutePath()
+    const metadata = {
+      source: 'text_issue_prewarm',
+      surface: 'authenticated_app',
+      company_slug: companySlug,
+      trigger: 'issue_opened',
+      ...(collabMode ? { collab_mode: collabMode } : {}),
+    }
+    void (async () => {
+      try {
+        await createCaptureSession(
+          buildTextIssueCaptureSessionInput({
+            captureSessionId: local.id,
+            companySlug,
+            captureProfile: 'text_issue_prewarm',
+            collabMode,
+            routePath,
+            deviceKind: inferDeviceKind(),
+            platform: inferPlatform(),
+            viewport: inferViewport(),
+            consentVersion: CONSENT_VERSION,
+          }),
+        )
+        await appendFeedbackEvent(local.id, 'authenticated.feedback.issue_opened', {
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        }).catch(() => undefined)
+        await uploadRegisteredCaptureStateSnapshots(local.id, {
+          reason: 'issue_opened',
+          metadata,
+        }).catch(() => undefined)
+      } catch {
+        if (prewarmedTextIssueSessionIdRef.current === local.id) prewarmedTextIssueSessionIdRef.current = null
+      }
+    })()
+  }, [collabMode, companySlug, enabled, open, state, steveMode])
+
+  if (!enabled || !companySlug) return null
 
   async function sendTextIssue() {
     const trimmedNote = note.trim()
@@ -176,10 +233,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     setState('stopping')
     setError(null)
     setReceipt(null)
-    const local = startLocalCaptureSession({
-      mode: 'feedback',
-      consent_version: CONSENT_VERSION,
-    })
+    const active = getActiveCaptureSession()
+    const local =
+      active?.mode === 'feedback'
+        ? active
+        : startLocalCaptureSession({
+            mode: 'feedback',
+            consent_version: CONSENT_VERSION,
+          })
     const routePath = currentCaptureRoutePath()
     const artifactMetadata = {
       source: 'text_issue',
@@ -188,31 +249,30 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       ...(collabMode ? { collab_mode: collabMode } : {}),
     }
     try {
-      await createCaptureSession({
-        capture_session_id: local.id,
-        mode: 'feedback',
-        consent_version: CONSENT_VERSION,
-        route_path: routePath,
-        device_kind: inferDeviceKind(),
-        platform: inferPlatform(),
-        viewport: inferViewport(),
-        metadata: {
-          surface: 'authenticated_app',
-          company_slug: companySlug,
-          capture_profile: 'text_issue',
-          ...(collabMode ? { collab_mode: collabMode } : {}),
-        },
-        consent_scope: {
-          surface: 'authenticated_app',
-          streams: ['text_note', 'registered_artifacts'],
-          audio: false,
-          dom_replay: false,
-        },
-      })
+      await createCaptureSession(
+        buildTextIssueCaptureSessionInput({
+          captureSessionId: local.id,
+          companySlug,
+          captureProfile: 'text_issue',
+          collabMode,
+          routePath,
+          deviceKind: inferDeviceKind(),
+          platform: inferPlatform(),
+          viewport: inferViewport(),
+          consentVersion: CONSENT_VERSION,
+        }),
+      )
       await appendFeedbackEvent(local.id, 'authenticated.feedback.issue_submitted', {
         note_length: trimmedNote.length,
         ...(collabMode ? { collab_mode: collabMode } : {}),
       }).catch(() => undefined)
+      await uploadRegisteredCaptureStateSnapshots(local.id, {
+        reason: 'issue_submitted',
+        metadata: {
+          ...artifactMetadata,
+          trigger: 'text_issue_submit',
+        },
+      })
       await uploadRegisteredCaptureArtifacts(local.id, {
         ...artifactMetadata,
         trigger: 'text_issue_submit',
@@ -227,14 +287,16 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         category: 'record_feedback',
       })
       clearLocalCaptureSession()
+      if (prewarmedTextIssueSessionIdRef.current === local.id) prewarmedTextIssueSessionIdRef.current = null
       setReceipt(receiptFromFinalize(finalize))
       setNote('')
+      setRecordingKind(null)
       setOpen(false)
       setState('sent')
       window.setTimeout(() => setState('idle'), 6000)
     } catch (err) {
       setState('error')
-      setError(err instanceof Error ? err.message : 'Issue could not be sent.')
+      setError(captureErrorMessage(err, 'Issue could not be sent.'))
     }
   }
 
@@ -263,6 +325,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     if (!audioEnabled) controllerDeps.audioRecorder = null
     const controller = new FeedbackCaptureController(controllerDeps)
     controllerRef.current = controller
+    setRecordingKind('feedback')
     try {
       await controller.start({
         capture_session_id: local.id,
@@ -278,25 +341,85 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
           capture_profile: 'recording',
           ...(collabMode ? { collab_mode: collabMode } : {}),
         },
-        consent_scope: {
-          surface: 'authenticated_app',
-          streams,
+        consent_scope: buildAuthenticatedFeedbackConsentScope({
           audio: audioEnabled,
-          dom_replay: replayEnabled,
-          text_note: true,
-        },
+          domReplay: replayEnabled,
+        }),
       })
       await appendFeedbackEvent(local.id, 'authenticated.feedback.recording_started').catch(() => undefined)
       setState('recording')
       setOpen(true)
     } catch (err) {
       clearLocalCaptureSession()
+      setRecordingKind(null)
       setState('error')
-      setError(err instanceof Error ? err.message : 'Recording could not start.')
+      setError(captureErrorMessage(err, 'Recording could not start.'))
+    }
+  }
+
+  async function startScreenRecording() {
+    setError(null)
+    setReceipt(null)
+    const active = getActiveCaptureSession()
+    if (active?.mode === 'feedback') {
+      setState('error')
+      setError('Recording is already active.')
+      return
+    }
+
+    const recorder = new ScreenCaptureRecorder()
+    try {
+      await recorder.start()
+    } catch (err) {
+      setState('error')
+      setError(captureErrorMessage(err, 'Screen recording could not start.'))
+      return
+    }
+
+    const local = startLocalCaptureSession({
+      mode: 'feedback',
+      consent_version: CONSENT_VERSION,
+    })
+    const routePath = currentCaptureRoutePath()
+    screenRecorderRef.current = recorder
+    setRecordingKind('screen')
+    try {
+      await createCaptureSession({
+        capture_session_id: local.id,
+        mode: 'feedback',
+        consent_version: CONSENT_VERSION,
+        route_path: routePath,
+        device_kind: inferDeviceKind(),
+        platform: inferPlatform(),
+        viewport: inferViewport(),
+        metadata: {
+          surface: 'authenticated_app',
+          company_slug: companySlug,
+          capture_profile: 'screen_recording',
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        },
+        consent_scope: buildAuthenticatedScreenRecordingConsentScope(),
+      })
+      await appendFeedbackEvent(local.id, 'authenticated.feedback.screen_recording_started', {
+        ...(collabMode ? { collab_mode: collabMode } : {}),
+      }).catch(() => undefined)
+      setState('recording')
+      setOpen(true)
+    } catch (err) {
+      recorder.cancel()
+      screenRecorderRef.current = null
+      clearLocalCaptureSession()
+      setRecordingKind(null)
+      setState('error')
+      setError(captureErrorMessage(err, 'Screen recording could not start.'))
     }
   }
 
   async function stopRecording() {
+    if (recordingKind === 'screen') {
+      await stopScreenRecording()
+      return
+    }
     const controller = controllerRef.current
     const captureSessionId = controller?.activeCaptureSessionId
     if (!controller || !captureSessionId) return
@@ -320,6 +443,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         },
         additional_artifact_uploads: [
           (id, metadata) =>
+            uploadRegisteredCaptureStateSnapshots(id, {
+              reason: 'recording_stopped',
+              metadata: {
+                ...metadata,
+                trigger: 'record_feedback_stop',
+              },
+            }),
+          (id, metadata) =>
             uploadRegisteredCaptureArtifacts(id, {
               ...metadata,
               trigger: 'record_feedback_stop',
@@ -330,6 +461,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       clearLocalCaptureSession()
       controllerRef.current = null
       setNote('')
+      setRecordingKind(null)
       setOpen(false)
       setState('sent')
       window.setTimeout(() => setState('idle'), 4000)
@@ -338,17 +470,92 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         clearLocalCaptureSession()
         controllerRef.current = null
         setNote('')
+        setRecordingKind(null)
         setOpen(false)
         setState('queued')
         window.setTimeout(() => setState('idle'), 4000)
         return
       }
       setState('error')
-      setError(err instanceof Error ? err.message : 'Feedback could not be sent.')
+      setError(captureErrorMessage(err, 'Feedback could not be sent.'))
+    }
+  }
+
+  async function stopScreenRecording() {
+    const recorder = screenRecorderRef.current
+    const captureSessionId = getActiveCaptureSession()?.id
+    if (!recorder || !captureSessionId) return
+    setState('stopping')
+    setError(null)
+    const trimmedNote = note.trim()
+    await appendFeedbackEvent(captureSessionId, 'authenticated.feedback.screen_recording_stopped', {
+      note_length: trimmedNote.length,
+      ...(collabMode ? { collab_mode: collabMode } : {}),
+    }).catch(() => undefined)
+    try {
+      const recording = await recorder.stop()
+      await uploadCaptureArtifact(captureSessionId, {
+        kind: 'video',
+        file: recording.blob,
+        fileName: 'screen-video.webm',
+        duration_ms: recording.duration_ms,
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: {
+          source: 'screen_recording',
+          artifact_type: 'capture.screen_video',
+          surface: 'authenticated_app',
+          company_slug: companySlug,
+          mime_type: recording.mime_type,
+          route_path: currentCaptureRoutePath(),
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        },
+      })
+      await uploadRegisteredCaptureStateSnapshots(captureSessionId, {
+        reason: 'screen_recording_stopped',
+        metadata: {
+          source: 'screen_recording',
+          surface: 'authenticated_app',
+          company_slug: companySlug,
+          trigger: 'screen_recording_stop',
+          ...(collabMode ? { collab_mode: collabMode } : {}),
+        },
+      })
+      await uploadRegisteredCaptureArtifacts(captureSessionId, {
+        source: 'screen_recording',
+        surface: 'authenticated_app',
+        company_slug: companySlug,
+        trigger: 'screen_recording_stop',
+        ...(collabMode ? { collab_mode: collabMode } : {}),
+      })
+      const finalize = await finalizeCaptureSession(captureSessionId, {
+        title: 'In-app screen recording',
+        summary: trimmedNote || 'Authenticated user recorded screen feedback.',
+        severity: 'normal',
+        lane: 'triage',
+        route_path: currentCaptureRoutePath(),
+        route: currentCaptureRoutePath(),
+        category: 'record_feedback',
+      })
+      setReceipt(receiptFromFinalize(finalize))
+      clearLocalCaptureSession()
+      screenRecorderRef.current = null
+      setNote('')
+      setRecordingKind(null)
+      setOpen(false)
+      setState('sent')
+      window.setTimeout(() => setState('idle'), 4000)
+    } catch (err) {
+      setState('error')
+      setError(captureErrorMessage(err, 'Screen recording could not be sent.'))
     }
   }
 
   async function discardRecording() {
+    if (recordingKind === 'screen') {
+      await discardScreenRecording()
+      return
+    }
     const captureSessionId = controllerRef.current?.activeCaptureSessionId
     if (captureSessionId) {
       await appendFeedbackEvent(captureSessionId, 'authenticated.feedback.recording_discarded').catch(() => undefined)
@@ -358,12 +565,36 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       controllerRef.current = null
       clearLocalCaptureSession()
       setNote('')
+      setRecordingKind(null)
       setOpen(false)
       setError(null)
       setState('idle')
     } catch (err) {
       setState('error')
-      setError(err instanceof Error ? err.message : 'Feedback could not be discarded.')
+      setError(captureErrorMessage(err, 'Feedback could not be discarded.'))
+    }
+  }
+
+  async function discardScreenRecording() {
+    const captureSessionId = getActiveCaptureSession()?.id
+    if (captureSessionId) {
+      await appendFeedbackEvent(captureSessionId, 'authenticated.feedback.screen_recording_discarded').catch(
+        () => undefined,
+      )
+    }
+    screenRecorderRef.current?.cancel()
+    try {
+      if (captureSessionId) await discardCaptureSession(captureSessionId)
+      screenRecorderRef.current = null
+      clearLocalCaptureSession()
+      setNote('')
+      setRecordingKind(null)
+      setOpen(false)
+      setError(null)
+      setState('idle')
+    } catch (err) {
+      setState('error')
+      setError(captureErrorMessage(err, 'Screen recording could not be discarded.'))
     }
   }
 
@@ -431,6 +662,12 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             <button type="button" style={secondaryButtonStyle} onClick={sendTextIssue} disabled={!note.trim()}>
               Send issue
             </button>
+            {screenSupported ? (
+              <button type="button" style={secondaryButtonStyle} onClick={startScreenRecording}>
+                <ScreenShare size={14} aria-hidden />
+                Record screen
+              </button>
+            ) : null}
             <button type="button" style={primaryButtonStyle} onClick={startRecording} disabled={!audioSupported}>
               <Mic size={14} aria-hidden />
               {audioEnabled ? 'Start' : 'Record page'}

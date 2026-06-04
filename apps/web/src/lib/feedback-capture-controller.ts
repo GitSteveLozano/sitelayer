@@ -180,6 +180,7 @@ export class FeedbackCaptureController {
       this.audioRecorder?.cancel()
       this.replayRecorder?.cancel()
       if (this.startQueued) await this.removeQueuedStartMutation().catch(() => undefined)
+      else if (this.backend.discardSession) await this.backend.discardSession(id).catch(() => undefined)
       this.startQueued = false
       this.queuedStartMutationId = null
       this.captureSessionId = null

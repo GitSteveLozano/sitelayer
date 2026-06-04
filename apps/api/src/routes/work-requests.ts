@@ -369,6 +369,66 @@ function workItemBriefResponse(row: ContextWorkItemRow): WorkRequestBrief['work_
   }
 }
 
+type WorkItemApiResponse = ReturnType<typeof workItemResponse>
+type WorkRequestBoardGroupBy = 'lane' | 'status_group'
+type WorkRequestBoardColumn = {
+  id: string
+  title: string
+  lane: WorkItemLane | null
+  statuses: WorkItemStatus[]
+  work_items: WorkItemApiResponse[]
+}
+
+const BOARD_GROUP_BY_VALUES = ['lane', 'status_group'] as const
+const STATUS_BOARD_COLUMNS: Array<{ id: string; title: string; statuses: WorkItemStatus[] }> = [
+  { id: 'new', title: 'New', statuses: ['new'] },
+  { id: 'triaged', title: 'Triaged', statuses: ['triaged', 'human_assigned', 'reopened'] },
+  {
+    id: 'in_progress',
+    title: 'In Progress',
+    statuses: ['agent_running', 'review_ready', 'review_stale', 'proposal_expired'],
+  },
+  { id: 'done', title: 'Done', statuses: ['resolved', 'wont_do', 'reversed'] },
+]
+
+function titleForLane(lane: WorkItemLane): string {
+  if (lane === 'triage') return 'Triage'
+  if (lane === 'human') return 'Human'
+  if (lane === 'agent') return 'Agent'
+  if (lane === 'both') return 'Review'
+  return 'Done'
+}
+
+function defaultLaneForStatus(status: WorkItemStatus): WorkItemLane {
+  if (status === 'human_assigned') return 'human'
+  if (status === 'agent_running') return 'agent'
+  if (status === 'review_ready' || status === 'review_stale' || status === 'proposal_expired') return 'both'
+  if (status === 'resolved' || status === 'wont_do' || status === 'reversed') return 'done'
+  return 'triage'
+}
+
+function buildWorkRequestBoardColumns(
+  rows: WorkItemApiResponse[],
+  groupBy: WorkRequestBoardGroupBy,
+): WorkRequestBoardColumn[] {
+  if (groupBy === 'status_group') {
+    return STATUS_BOARD_COLUMNS.map((column) => ({
+      id: column.id,
+      title: column.title,
+      lane: null,
+      statuses: column.statuses,
+      work_items: rows.filter((row) => column.statuses.includes(row.status)),
+    }))
+  }
+  return WORK_ITEM_LANES.map((lane) => ({
+    id: lane,
+    title: titleForLane(lane),
+    lane,
+    statuses: [...WORK_ITEM_STATUSES],
+    work_items: rows.filter((row) => row.lane === lane),
+  }))
+}
+
 function timelineEntry(event: ContextHandoffEventRow): WorkRequestBriefTimelineEntry {
   const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts.length : null
   return {
@@ -599,8 +659,22 @@ async function getWorkItemIdByClientRequestId(
   })
 }
 
-async function getExistingCreateResponse(companyId: string, actorUserId: string, clientRequestId: string) {
-  const workItemId = await getWorkItemIdByClientRequestId(companyId, actorUserId, clientRequestId)
+async function getWorkItemIdByRequestRef(companyId: string, requestRef: string): Promise<string | null> {
+  return withCompanyClient(companyId, async (c) => {
+    const result = await c.query<{ id: string }>(
+      `select id
+         from context_work_items
+        where company_id = $1
+          and metadata ->> 'request_ref' = $2
+        order by created_at asc
+        limit 1`,
+      [companyId, requestRef],
+    )
+    return result.rows[0]?.id ?? null
+  })
+}
+
+async function getExistingCreateResponseForWorkItem(companyId: string, workItemId: string) {
   if (!workItemId) return null
   const detail = await getContextWorkItemWithEvents(companyId, workItemId)
   if (!detail) return null
@@ -618,6 +692,30 @@ async function getExistingCreateResponse(companyId: string, actorUserId: string,
     event: detail.events[0] ?? null,
     idempotent_replay: true,
   }
+}
+
+async function getExistingCreateResponse(companyId: string, actorUserId: string, clientRequestId: string) {
+  const workItemId = await getWorkItemIdByClientRequestId(companyId, actorUserId, clientRequestId)
+  return workItemId ? getExistingCreateResponseForWorkItem(companyId, workItemId) : null
+}
+
+async function getExistingCreateResponseByRequestRef(
+  companyId: string,
+  role: CompanyRole,
+  userId: string,
+  requestRef: string,
+): Promise<
+  | { kind: 'found'; response: NonNullable<Awaited<ReturnType<typeof getExistingCreateResponseForWorkItem>>> }
+  | { kind: 'conflict' }
+  | null
+> {
+  const workItemId = await getWorkItemIdByRequestRef(companyId, requestRef)
+  if (!workItemId) return null
+  const detail = await getContextWorkItemWithEvents(companyId, workItemId)
+  if (!detail) return null
+  if (!canReadWorkItem(role, userId, detail.work_item)) return { kind: 'conflict' }
+  const response = await getExistingCreateResponseForWorkItem(companyId, workItemId)
+  return response ? { kind: 'found', response } : null
 }
 
 async function getDispatchOutboxTx(
@@ -933,8 +1031,29 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
   const entity = firstEntityRef(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+  const requestRef = optionalText(body.request_ref, 200)
+  if (body.request_ref !== undefined && body.request_ref !== null && !requestRef) {
+    ctx.sendJson(400, { error: 'request_ref must be a non-empty string when provided' })
+    return
+  }
   const clientIdempotency =
     optionalText(body.client_request_id, 160) ?? optionalText(headerText(req.headers['idempotency-key']), 160)
+  if (requestRef) {
+    const existing = await getExistingCreateResponseByRequestRef(
+      ctx.company.id,
+      ctx.company.role,
+      ctx.identity.userId,
+      requestRef,
+    )
+    if (existing?.kind === 'found') {
+      ctx.sendJson(200, existing.response)
+      return
+    }
+    if (existing?.kind === 'conflict') {
+      ctx.sendJson(409, { error: 'request_ref already exists' })
+      return
+    }
+  }
   if (clientIdempotency) {
     const existing = await getExistingCreateResponse(ctx.company.id, ctx.identity.userId, clientIdempotency)
     if (existing) {
@@ -979,6 +1098,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         metadata: {
           category,
           source: 'work_request',
+          request_ref: requestRef,
           capture_session_id: captureSessionId,
           client_request_id: clientIdempotency,
           support_packet_expires_at: packet.expires_at ?? expiresAt,
@@ -1014,6 +1134,22 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
       return { packet, item, event }
     })
   } catch (error) {
+    if (requestRef && isUniqueViolation(error)) {
+      const existing = await getExistingCreateResponseByRequestRef(
+        ctx.company.id,
+        ctx.company.role,
+        ctx.identity.userId,
+        requestRef,
+      )
+      if (existing?.kind === 'found') {
+        ctx.sendJson(200, existing.response)
+        return
+      }
+      if (existing?.kind === 'conflict') {
+        ctx.sendJson(409, { error: 'request_ref already exists' })
+        return
+      }
+    }
     if (clientIdempotency && isUniqueViolation(error)) {
       const existing = await getExistingCreateResponse(ctx.company.id, ctx.identity.userId, clientIdempotency)
       if (existing) {
@@ -1045,6 +1181,7 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
   const memberVisibleUserId = ctx.company.role === 'member' ? ctx.identity.userId : null
   const rows = await listContextWorkItems(ctx.company.id, {
     status: url.searchParams.get('status'),
+    lane: url.searchParams.get('lane'),
     entityType: url.searchParams.get('entity_type'),
     entityId: url.searchParams.get('entity_id'),
     createdByUserId:
@@ -1058,6 +1195,56 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
   })
   ctx.sendJson(200, {
     work_items: rows.rows.map(workItemResponse),
+    pagination: buildPaginationMeta(pagination.value, rows.rowCount ?? rows.rows.length),
+  })
+}
+
+async function listWorkRequestBoard(ctx: WorkRequestRouteCtx, url: URL) {
+  if (!ctx.requireRole(LIST_ROLES)) return
+  const pagination = parsePagination(url.searchParams, { defaultLimit: 200, maxLimit: PAGINATION_MAX_LIMIT })
+  if (!pagination.ok) {
+    ctx.sendJson(400, { error: pagination.error })
+    return
+  }
+  const groupByRaw = url.searchParams.get('group_by')
+  const groupBy =
+    groupByRaw === null
+      ? 'status_group'
+      : (parseAllowed(groupByRaw, BOARD_GROUP_BY_VALUES) as WorkRequestBoardGroupBy | null)
+  if (!groupBy) {
+    ctx.sendJson(400, { error: `group_by must be one of ${BOARD_GROUP_BY_VALUES.join(', ')}` })
+    return
+  }
+  const status = url.searchParams.get('status')
+  if (status !== null && !parseAllowed(status, WORK_ITEM_STATUSES)) {
+    ctx.sendJson(400, { error: `status must be one of ${WORK_ITEM_STATUSES.join(', ')}` })
+    return
+  }
+  const lane = url.searchParams.get('lane')
+  if (lane !== null && !parseAllowed(lane, WORK_ITEM_LANES)) {
+    ctx.sendJson(400, { error: `lane must be one of ${WORK_ITEM_LANES.join(', ')}` })
+    return
+  }
+  const memberVisibleUserId = ctx.company.role === 'member' ? ctx.identity.userId : null
+  const rows = await listContextWorkItems(ctx.company.id, {
+    status,
+    lane,
+    entityType: url.searchParams.get('entity_type'),
+    entityId: url.searchParams.get('entity_id'),
+    createdByUserId:
+      memberVisibleUserId === null
+        ? roleScopedCreatedBy(ctx.company.role, ctx.identity.userId, url.searchParams.get('created_by_user_id'))
+        : null,
+    assigneeUserId: memberVisibleUserId === null ? url.searchParams.get('assignee_user_id') : null,
+    visibleToUserId: memberVisibleUserId,
+    limit: pagination.value.limit,
+    offset: pagination.value.offset,
+  })
+  const workItems = rows.rows.map(workItemResponse)
+  ctx.sendJson(200, {
+    group_by: groupBy,
+    columns: buildWorkRequestBoardColumns(workItems, groupBy),
+    work_items: workItems,
     pagination: buildPaginationMeta(pagination.value, rows.rowCount ?? rows.rows.length),
   })
 }
@@ -1416,6 +1603,135 @@ async function getGithubExport(ctx: WorkRequestRouteCtx, id: string, opts: { rec
   })
   observeContextHandoff('github_export.generated')
   if (event) observeContextHandoff('external.github_export_prepared')
+}
+
+async function moveWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
+  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid work request id' })
+    return
+  }
+  let body: Record<string, unknown>
+  try {
+    body = await ctx.readBody()
+  } catch {
+    ctx.sendJson(400, { error: 'invalid JSON body' })
+    return
+  }
+  const status = parseAllowed(body.status, WORK_ITEM_STATUSES) as WorkItemStatus | null
+  const lane = parseAllowed(body.lane, WORK_ITEM_LANES) as WorkItemLane | null
+  if (body.status !== undefined && body.status !== null && !status) {
+    ctx.sendJson(400, { error: `status must be one of ${WORK_ITEM_STATUSES.join(', ')}` })
+    return
+  }
+  if (status === 'reversed') {
+    ctx.sendJson(400, { error: 'status reversed must use the reverse endpoint' })
+    return
+  }
+  if (body.lane !== undefined && body.lane !== null && !lane) {
+    ctx.sendJson(400, { error: `lane must be one of ${WORK_ITEM_LANES.join(', ')}` })
+    return
+  }
+  const hasAssignee = Object.prototype.hasOwnProperty.call(body, 'assignee_user_id')
+  let assigneeUserId: string | null | undefined
+  if (hasAssignee) {
+    if (
+      body.assignee_user_id !== null &&
+      body.assignee_user_id !== undefined &&
+      typeof body.assignee_user_id !== 'string'
+    ) {
+      ctx.sendJson(400, { error: 'assignee_user_id must be a string or null' })
+      return
+    }
+    assigneeUserId = optionalText(body.assignee_user_id, 200)
+  }
+  if (!status && !lane && !hasAssignee) {
+    ctx.sendJson(400, { error: 'status, lane, or assignee_user_id is required' })
+    return
+  }
+  const expectedUpdatedAt = optionalText(body.expected_updated_at, 100)
+  if (!expectedUpdatedAt || !Number.isFinite(Date.parse(expectedUpdatedAt))) {
+    ctx.sendJson(400, { error: 'expected_updated_at is required' })
+    return
+  }
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 1 })
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
+    ctx.sendJson(403, { error: 'forbidden' })
+    return
+  }
+  const idempotencyKey =
+    optionalText(body.idempotency_key, 200) ?? optionalText(headerText(req.headers['idempotency-key']), 200)
+  const movedAt = new Date().toISOString()
+  const result = await withMutationTx(ctx.company.id, async (c) => {
+    const locked = await c.query<
+      Pick<ContextWorkItemRow, 'status' | 'lane' | 'assignee_user_id' | 'updated_at' | 'resolved_at'>
+    >(
+      `select status, lane, assignee_user_id, updated_at, resolved_at
+         from context_work_items
+        where company_id = $1 and id = $2
+        for update`,
+      [ctx.company.id, id],
+    )
+    const current = locked.rows[0]
+    if (!current) return { kind: 'not_found' as const }
+    if (current.updated_at !== expectedUpdatedAt) {
+      return { kind: 'stale' as const, currentUpdatedAt: current.updated_at }
+    }
+    if (isReversedTerminal(current.status)) {
+      return { kind: 'terminal' as const, status: current.status }
+    }
+    const nextStatus = status ?? current.status
+    const nextLane = lane ?? (status ? defaultLaneForStatus(status) : current.lane)
+    const nextResolvedAt =
+      status === 'resolved' ? (current.resolved_at ?? movedAt) : status === 'reopened' ? null : undefined
+    const updated = await updateContextWorkItemWithEventTx(c, {
+      companyId: ctx.company.id,
+      workItemId: id,
+      eventType: 'work_item.status_changed',
+      actorKind: 'user',
+      actorUserId: ctx.identity.userId,
+      status: nextStatus,
+      lane: nextLane,
+      ...(hasAssignee ? { assigneeUserId: assigneeUserId ?? null } : {}),
+      ...(nextResolvedAt !== undefined ? { resolvedAt: nextResolvedAt } : {}),
+      payload: {
+        message: optionalText(body.message, MAX_SUMMARY_LENGTH),
+        previous_status: current.status,
+        previous_lane: current.lane,
+        previous_assignee_user_id: current.assignee_user_id,
+        status: nextStatus,
+        lane: nextLane,
+        ...(hasAssignee ? { assignee_user_id: assigneeUserId ?? null } : {}),
+      },
+      metadata: {
+        move_source: optionalText(body.source, 120) ?? 'issue_board',
+        evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
+      },
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    })
+    return updated ? { kind: 'ok' as const, updated } : { kind: 'not_found' as const }
+  })
+  if (result.kind === 'not_found') {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (result.kind === 'stale') {
+    ctx.sendJson(409, { error: 'work item changed', current_updated_at: result.currentUpdatedAt })
+    return
+  }
+  if (result.kind === 'terminal') {
+    ctx.sendJson(409, { error: `work item is ${result.status} and cannot be moved` })
+    return
+  }
+  ctx.sendJson(200, {
+    work_item: workItemResponse(result.updated.workItem),
+    event: result.updated.event,
+  })
+  observeContextHandoff('work_item.status_changed')
 }
 
 async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
@@ -2156,6 +2472,11 @@ export async function handleWorkRequestRoutes(
     return true
   }
 
+  if (url.pathname === '/api/work-requests/board' && req.method === 'GET') {
+    await listWorkRequestBoard(ctx, url)
+    return true
+  }
+
   if (url.pathname === '/api/work-requests/queue-health' && req.method === 'GET') {
     await getWorkRequestQueueHealth(ctx)
     return true
@@ -2169,6 +2490,12 @@ export async function handleWorkRequestRoutes(
   const eventMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/events$/)
   if (eventMatch && req.method === 'POST') {
     await appendWorkRequestEvent(ctx, decodeURIComponent(eventMatch[1]!))
+    return true
+  }
+
+  const moveMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/move$/)
+  if (moveMatch && req.method === 'POST') {
+    await moveWorkRequest(req, ctx, decodeURIComponent(moveMatch[1]!))
     return true
   }
 

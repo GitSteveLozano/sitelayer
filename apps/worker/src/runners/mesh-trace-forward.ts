@@ -1,6 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { Pool } from 'pg'
-import { HttpSink, type ProjectEvent, type ProjectEventEnvelope, type SignFn } from '@operator/projectkit'
+import { HttpSink, type EventSink, type ProjectEvent, type ProjectEventEnvelope, type SignFn } from '@operator/projectkit'
 
 /**
  * Mesh trace forwarder — the SERVER lane of the observability spectrum (T3,
@@ -51,6 +51,7 @@ type ForwarderConfig = {
   intervalMs: number
   windowMinutes: number
   requestTimeoutMs: number
+  sink?: EventSink
 }
 
 export type MeshTraceForwardSummary = {
@@ -506,12 +507,14 @@ async function forwardOnce(
     producer: { name: 'sitelayer-worker:mesh-trace-forward' },
     events: events.map((event) => toTraceProjectEvent(event, cfg.projectKey)),
   }
-  const sink = new HttpSink({
-    url: cfg.url,
-    sign: buildMeshSign(cfg),
-    timeoutMs: cfg.requestTimeoutMs,
-    name: 'mesh-trace-forward',
-  })
+  const sink =
+    cfg.sink ??
+    new HttpSink({
+      url: cfg.url,
+      sign: buildMeshSign(cfg),
+      timeoutMs: cfg.requestTimeoutMs,
+      name: 'mesh-trace-forward',
+    })
   const result = await sink.deliver(envelope)
   // HttpSink never throws: a transport error returns ok:false with no status; an
   // HTTP non-2xx returns ok:false with the status. Preserve the prior behavior —

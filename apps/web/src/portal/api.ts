@@ -136,6 +136,17 @@ export type PortalCaptureSessionInput = {
   retention_days?: number
 }
 
+export type FeedbackInviteView = {
+  id: string
+  company_slug: string
+  company_name: string
+  reviewer_ref: string
+  source: string
+  target_route: string | null
+  allowed_capture_modes: Array<'text' | 'audio' | 'screen' | 'trace' | 'state'>
+  expires_at: string
+}
+
 export type PortalCaptureEventInput = {
   client_event_id?: string
   seq?: number
@@ -171,6 +182,7 @@ function fileNameForPortalArtifact(kind: string, file: Blob, explicit?: string):
 async function portalCaptureArtifactUploadRequest(
   path: string,
   input: CaptureArtifactUploadInput,
+  initHeaders?: HeadersInit,
 ): Promise<CaptureArtifactUploadResponse> {
   const form = new FormData()
   form.append('kind', input.kind)
@@ -180,7 +192,7 @@ async function portalCaptureArtifactUploadRequest(
   if (input.metadata) form.append('metadata', JSON.stringify(input.metadata))
   form.append('file', input.file, fileNameForPortalArtifact(input.kind, input.file, input.fileName))
 
-  const headers = buildPortalRequestHeaders(undefined, false)
+  const headers = buildPortalRequestHeaders(initHeaders, false)
   const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
   const contentType = response.headers.get('content-type') ?? ''
   let body: unknown
@@ -205,6 +217,73 @@ export function startPortalEstimateCaptureSession(
       method: 'POST',
       body: JSON.stringify(payload),
     },
+  )
+}
+
+export function resolveFeedbackInvite(token: string): Promise<{ invite: FeedbackInviteView }> {
+  return portalRequest<{ invite: FeedbackInviteView }>('/api/portal/feedback-invites/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
+export function startFeedbackInviteCaptureSession(
+  token: string,
+  payload: PortalCaptureSessionInput,
+): Promise<PortalCaptureSessionResponse> {
+  return portalRequest<PortalCaptureSessionResponse>('/api/portal/feedback-invites/capture-sessions', {
+    method: 'POST',
+    body: JSON.stringify({ ...payload, token }),
+  })
+}
+
+export function appendFeedbackInviteCaptureEvents(
+  token: string,
+  captureSessionId: string,
+  events: PortalCaptureEventInput[],
+): Promise<{ accepted: number }> {
+  return portalRequest<{ accepted: number }>(
+    `/api/portal/feedback-invites/capture-sessions/${encodeURIComponent(captureSessionId)}/events`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ token, events }),
+    },
+  )
+}
+
+export function finalizeFeedbackInviteCaptureSession(
+  token: string,
+  captureSessionId: string,
+  input: CaptureFinalizeInput,
+): Promise<CaptureFinalizeResponse> {
+  return portalRequest<CaptureFinalizeResponse>(
+    `/api/portal/feedback-invites/capture-sessions/${encodeURIComponent(captureSessionId)}/finalize`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...input, token }),
+    },
+  )
+}
+
+export function discardFeedbackInviteCaptureSession(token: string, captureSessionId: string): Promise<{ ok: true }> {
+  return portalRequest<{ ok: true }>(
+    `/api/portal/feedback-invites/capture-sessions/${encodeURIComponent(captureSessionId)}/discard`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    },
+  )
+}
+
+export function uploadFeedbackInviteCaptureArtifact(
+  token: string,
+  captureSessionId: string,
+  input: CaptureArtifactUploadInput,
+): Promise<CaptureArtifactUploadResponse> {
+  return portalCaptureArtifactUploadRequest(
+    `/api/portal/feedback-invites/capture-sessions/${encodeURIComponent(captureSessionId)}/artifacts/upload`,
+    input,
+    { 'x-sitelayer-feedback-invite': token },
   )
 }
 

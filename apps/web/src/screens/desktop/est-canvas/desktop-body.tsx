@@ -36,6 +36,7 @@ import {
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 // Phase B responsive consolidation: the AI setup panels moved into the merged
 // responsive screens (former desktop twins est-ai-count.tsx / est-ai-takeoff.tsx
 // were deleted). The standalone float-palette exports are unchanged.
@@ -43,6 +44,7 @@ import { EstAiCountSetupPanel } from '../../mobile/takeoff-ai-count'
 import { EstAiTakeoffSetupPanel } from '../../mobile/takeoff-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
+import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
@@ -953,8 +955,9 @@ export function EstCanvasDesktopBody() {
 
   useEffect(() => {
     if (!projectId) return
-    return registerCaptureArtifactProvider(`takeoff:desktop:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!activeBlueprint && blueprintMeasurements.length === 0 && draftPoints.length === 0) return null
+    const shouldCapture = () => activeBlueprint || blueprintMeasurements.length > 0 || draftPoints.length > 0
+    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:desktop:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!shouldCapture()) return null
       const payload = buildCanvasGeometryArtifact({
         project_id: projectId,
         route_path: currentCaptureRoutePath(),
@@ -983,10 +986,66 @@ export function EstCanvasDesktopBody() {
         surface: 'desktop_est_canvas',
       })
     })
+    const unregisterState = registerCaptureStateProvider(`takeoff:desktop:${projectId}`, ({ reason }) => {
+      if (!shouldCapture()) return null
+      return buildTakeoffCanvasStateSnapshot({
+        surface: 'desktop_est_canvas',
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        reason,
+        active_draft: activeDraft,
+        active_blueprint: activeBlueprint,
+        active_page: activePage,
+        viewport: {
+          zoom,
+          pan,
+          mode,
+          tool,
+          pdf_engine: pdfEngineOn && blueprintIsPdf ? 'pdf' : 'image',
+        },
+        session: {
+          xstate_value: session.value,
+          xstate_mode: session.mode,
+          machine_tool: sctx.draft.tool,
+          overlay: sctx.overlay,
+          error: sctx.error,
+          draft_point_count: sctx.draft.points.length,
+          calibration_point_count: sctx.calibration.points.length,
+          selected_id: sctx.selection.selectedId,
+          bulk_selected_count: sctx.selection.bulkIds.length,
+          edit_geom_id: sctx.selection.editGeomId,
+          capture_kind: sctx.capture.kind,
+          capture_mode: sctx.capture.mode,
+        },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          scale_points: scalePoints,
+          service_item_code: serviceItemCode,
+          condition_id: activeConditionId,
+          elevation: sctx.draft.elevation,
+          edit_geom_id: editGeomId,
+          edit_points: editPoints,
+        },
+        selection: {
+          selected_measurement_id: selectedMeasurementId,
+          bulk_selected_count: bulkSelected.size,
+          reassign_count: reassignIds?.length ?? 0,
+        },
+        measurements: blueprintMeasurements,
+      })
+    })
+    return () => {
+      unregisterArtifact()
+      unregisterState()
+    }
   }, [
+    activeConditionId,
     activeBlueprint,
+    activeDraft,
     activeDraftId,
     activePage,
+    blueprintIsPdf,
     blueprintMeasurements,
     bulkSelected,
     draftPoints,
@@ -995,10 +1054,15 @@ export function EstCanvasDesktopBody() {
     editPoints,
     mode,
     pan,
+    pdfEngineOn,
     projectId,
     reassignIds,
     scalePoints,
     selectedMeasurementId,
+    serviceItemCode,
+    sctx,
+    session.mode,
+    session.value,
     tool,
     zoom,
   ])

@@ -60,6 +60,13 @@ missing pieces are higher-fidelity capture/analysis: real phone/tablet smoke,
 real Mesh ingest proof, multimodal review over exported video/frame evidence,
 and the native ReplayKit/MediaProjection path.
 
+Opt-in capture ladder note:
+`docs/OPT_IN_CAPTURE_LADDER_2026-06-04.md`. That document is the cross-product
+policy and adapter plan: user cohorts, consent scopes, state-provider contract,
+chunked media, live screen sharing, and the NHL/Chess/WinWar/Sandolab porting
+sequence. The Sitelayer-specific next step is to centralize the capture policy
+and enforce `consent_scope` server-side for events and artifacts.
+
 ## What already exists in this repo (reuse, do not rebuild)
 
 - Typed event log: `docker/postgres/init/020_workflow_event_log.sql` -

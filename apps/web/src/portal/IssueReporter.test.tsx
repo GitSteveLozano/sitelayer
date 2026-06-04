@@ -1,6 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CAPTURE_SESSION_STORAGE_KEY } from '@/lib/capture-session'
+import {
+  __resetCaptureStateProvidersForTests,
+  registerCaptureStateProvider,
+} from '@/lib/capture-state-providers'
 import { IssueReporter } from './IssueReporter'
 
 const api = vi.hoisted(() => ({
@@ -182,6 +186,7 @@ describe('IssueReporter', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+    __resetCaptureStateProvidersForTests()
     window.sessionStorage.clear()
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -266,8 +271,21 @@ describe('IssueReporter', () => {
     expect(startCall?.[1]).toMatchObject({
       consent_scope: {
         portal_surface: 'estimate_portal',
-        streams: ['audio', 'dom_replay'],
+        streams: ['audio', 'dom_replay', 'registered_artifacts'],
+        artifacts: expect.objectContaining({
+          audio: true,
+          transcript: true,
+          rrweb: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        }),
+        event_classes: ['portal_feedback'],
+        audio: true,
         dom_replay: true,
+        registered_artifacts: true,
+        screen_video: false,
+        text_note: false,
       },
     })
     expect(rrweb.record).toHaveBeenCalledWith(
@@ -307,6 +325,65 @@ describe('IssueReporter', () => {
       events: [{ type: 'rrweb-full-snapshot', data: { source: 'portal-test' } }],
     })
     await waitFor(() => expect(api.finalizePortalEstimateCaptureSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('uploads public portal state providers through the token-bound portal artifact route', async () => {
+    registerCaptureStateProvider('portal:estimate-test', ({ metadata, reason }) => ({
+      schema: 'portal.estimate-state.v1',
+      payload: {
+        surface: metadata.portal_surface,
+        reason,
+        token: 'do-not-serialize',
+        visible_state: 'acceptance-panel-open',
+      },
+      metadata: { portal_state: true },
+    }))
+    window.history.pushState(null, '', '/portal/estimates/share-token?capture_invite=invite-1')
+    render(<IssueReporter surface="estimate_portal" shareToken="share-token" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    fireEvent.click(screen.getByRole('button', { name: /start/i }))
+
+    await waitFor(() => expect(api.startPortalEstimateCaptureSession).toHaveBeenCalledTimes(1))
+    const startCall = api.startPortalEstimateCaptureSession.mock.calls[0]
+    const captureSessionId = (startCall?.[1] as { capture_session_id: string }).capture_session_id
+
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+
+    await waitFor(() => expect(api.uploadPortalEstimateCaptureArtifact).toHaveBeenCalledTimes(2))
+    const stateCall = api.uploadPortalEstimateCaptureArtifact.mock.calls.find(
+      (call) => call[2]?.metadata?.provider_id === 'portal:estimate-test',
+    )
+    expect(stateCall).toBeDefined()
+    expect(stateCall?.[0]).toBe('share-token')
+    expect(stateCall?.[1]).toBe(captureSessionId)
+    expect(stateCall?.[2]).toMatchObject({
+      kind: 'state_snapshot',
+      fileName: 'portal-estimate-test-state_snapshot.json',
+      pii_level: 'internal',
+      access_policy: 'support_only',
+      metadata: expect.objectContaining({
+        source: 'capture_state_provider',
+        artifact_type: 'capture.state_snapshot',
+        provider_id: 'portal:estimate-test',
+        reason: 'recording_stopped',
+        schema: 'portal.estimate-state.v1',
+        portal_surface: 'estimate_portal',
+        portal_state: true,
+      }),
+    })
+    const stateBody = JSON.parse(await (stateCall?.[2]?.file as Blob).text()) as Record<string, unknown>
+    expect(stateBody).toMatchObject({
+      artifact_type: 'capture.state_snapshot',
+      provider_id: 'portal:estimate-test',
+      reason: 'recording_stopped',
+      payload: {
+        surface: 'estimate_portal',
+        reason: 'recording_stopped',
+        visible_state: 'acceptance-panel-open',
+      },
+    })
+    expect(JSON.stringify(stateBody)).not.toContain('do-not-serialize')
   })
 
   it('discards an active portal capture session on the server before clearing local state', async () => {

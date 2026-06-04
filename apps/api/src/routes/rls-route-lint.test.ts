@@ -73,6 +73,12 @@ const RAW_QUERY_REVIEWED: Readonly<Record<string, string>> = {
   'admin-jobs.ts':
     'platform-admin cross-tenant surface (authorizePlatformAdmin): global job_runs + cross-tenant queue summaries',
 
+  // Read-only platform-admin work-request board. Gated by authorizePlatformAdmin
+  // before any query; intentionally reads context_work_items across tenants and
+  // joins companies so each card carries tenant identity.
+  'admin-work-requests.ts':
+    'platform-admin cross-tenant surface (authorizePlatformAdmin): cross-tenant context_work_items board',
+
   // Tenant ROOT registry. companies has no company_id column; the
   // company_memberships lookup IS the pre-GUC resolution path (you cannot bind
   // app.company_id until you have resolved which company the request is for).
@@ -85,6 +91,10 @@ const RAW_QUERY_REVIEWED: Readonly<Record<string, string>> = {
   // company_invites lifecycle on the registry surface; invite tokens resolve
   // before app.company_id exists.
   'invites.ts': 'invite-token lifecycle on the registry surface (pre-GUC)',
+
+  // feedback_invites lifecycle on the registry/portal surface; signed feedback
+  // tokens resolve before app.company_id exists, then bind to the row's company.
+  'feedback-invites.ts': 'feedback-invite token lifecycle on the registry/portal surface (pre-GUC)',
 
   // Clerk webhook mirror writes to `clerk_users` — a GLOBAL table keyed by the
   // globally-unique Clerk user id, with NO company_id column. Not a tenant

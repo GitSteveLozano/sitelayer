@@ -1,5 +1,6 @@
 import type { Pool } from 'pg'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MemorySink } from '@operator/projectkit'
 import { __meshTraceForwardTestHooks } from './mesh-trace-forward.js'
 
 describe('mesh trace forwarder', () => {
@@ -253,6 +254,97 @@ describe('mesh trace forwarder', () => {
       capture_session_id: '11111111-1111-4111-8111-111111111111',
       status: 'forwarded',
       last_status: 202,
+    })
+  })
+
+  it('can forward through an injected non-http sink without changing the project event envelope', async () => {
+    const memory = new MemorySink()
+    const insertedStatePayloads: unknown[] = []
+    const query = vi.fn(async (sqlLike: unknown, params?: unknown[]) => {
+      const sql = String(sqlLike)
+      if (/from workflow_event_log/i.test(sql)) {
+        return {
+          rows: [
+            {
+              id: '44444444-4444-4444-8444-444444444444',
+              company_id: '33333333-3333-4333-8333-333333333333',
+              workflow_name: 'estimate_share',
+              entity_id: '00000000-0000-4000-8000-000000000123',
+              capture_session_id: '11111111-1111-4111-8111-111111111111',
+              state_version: 7,
+              event_type: 'POST_SUCCEEDED',
+              state_after: 'posted',
+              applied_at: '2026-05-31T18:00:00.000Z',
+            },
+          ],
+        }
+      }
+      if (/from capture_session_events/i.test(sql)) return { rows: [] }
+      if (/from mesh_trace_forward_state/i.test(sql)) return { rows: [] }
+      if (/insert into mesh_trace_forward_state/i.test(sql)) {
+        insertedStatePayloads.push(JSON.parse(String(params?.[0])))
+        return { rows: [], rowCount: 1 }
+      }
+      throw new Error(`Unexpected SQL: ${sql}`)
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('fetch must not be called when a non-http sink is injected')
+      }),
+    )
+
+    const summary = await __meshTraceForwardTestHooks.forwardOnce(
+      { query } as unknown as Pool,
+      {
+        url: 'http://unused.invalid/api/product-trace/ingest',
+        path: '/api/product-trace/ingest',
+        component: 'sitelayer-test',
+        secretHex: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        projectKey: 'sitelayer',
+        intervalMs: 60000,
+        windowMinutes: 60,
+        requestTimeoutMs: 3000,
+        sink: memory,
+      },
+      () => {},
+    )
+
+    expect(summary.forwarded_events).toBe(1)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(memory.envelopes).toHaveLength(1)
+    expect(memory.envelopes[0]).toMatchObject({
+      contract_version: '1.0.0',
+      project_key: 'sitelayer',
+      producer: { name: 'sitelayer-worker:mesh-trace-forward' },
+      events: [
+        expect.objectContaining({
+          schema_version: '1.0.0',
+          project_key: 'sitelayer',
+          event_type: 'POST_SUCCEEDED',
+          domain: 'workflow_event',
+          outcome: 'succeeded',
+          route_path: '/wf/estimate_share',
+          session_id: '11111111-1111-4111-8111-111111111111',
+          count: 7,
+          state_after: 'posted',
+          payload: expect.objectContaining({
+            tier: 3,
+            event_ref: expect.stringMatching(/^workflow_event:estimate_share:[a-f0-9]{16}:7$/),
+            event_class: 'workflow_event',
+            capture_session_id: '11111111-1111-4111-8111-111111111111',
+            workflow_id: 'estimate_share',
+            event_name: 'POST_SUCCEEDED',
+          }),
+        }),
+      ],
+    })
+    expect(insertedStatePayloads).toHaveLength(1)
+    const records = insertedStatePayloads[0] as Array<Record<string, unknown>>
+    expect(records[0]).toMatchObject({
+      source_kind: 'workflow_event_log',
+      status: 'forwarded',
+      last_status: null,
     })
   })
 })

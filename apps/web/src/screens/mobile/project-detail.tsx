@@ -12,10 +12,13 @@
  * Estimate still opens its dedicated full-screen review route, which owns
  * line items + send-to-client.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { CompanyRole } from '@sitelayer/domain'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
+import { buildProjectDetailStateSnapshot } from '@/lib/project-detail-state-snapshot'
 import { MBody, MTopBar } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
@@ -87,6 +90,26 @@ export function MobileProjectDetail({
   const bid = Number(project.bid_total ?? 0)
   const pctSpent = bid > 0 ? Math.round((spent / bid) * 100) : 0
   const onTrack = pctSpent <= 75
+
+  useEffect(() => {
+    return registerCaptureStateProvider(`project-detail:${project.id}`, ({ reason }) =>
+      buildProjectDetailStateSnapshot({
+        project,
+        activeTab: tab,
+        companyRole,
+        routePath: currentCaptureRoutePath(),
+        reason,
+        totalHours,
+        bid,
+        spent,
+        pctSpent,
+        onTrack,
+        scheduleCount: schedules.length,
+        laborEntryCount: labor.length,
+        materialBillCount: materialBills.length,
+      }),
+    )
+  }, [bid, companyRole, labor.length, materialBills.length, onTrack, pctSpent, project, schedules.length, spent, tab, totalHours])
 
   return (
     <>

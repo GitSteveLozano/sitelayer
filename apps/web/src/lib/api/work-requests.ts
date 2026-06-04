@@ -29,6 +29,7 @@ export type HandoffEventType =
   | 'agent.dispatch_acknowledged'
   | 'agent.dispatch_retried'
   | 'agent.dispatch_cancel_requested'
+  | 'agent.callback_missing'
   | 'agent.message_received'
   | 'agent.artifact_attached'
   | 'agent.proposal_ready'
@@ -233,6 +234,7 @@ export interface CreateWorkRequestInput {
   category?: string | null
   route?: string | null
   client?: unknown
+  request_ref?: string | null
   client_request_id?: string | null
 }
 
@@ -248,6 +250,7 @@ export interface CreateWorkRequestResponse {
 
 export interface ListWorkRequestsParams {
   status?: WorkItemStatus | null
+  lane?: WorkItemLane | null
   entity_type?: string | null
   entity_id?: string | null
   created_by_user_id?: string | null

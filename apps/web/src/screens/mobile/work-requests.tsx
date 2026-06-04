@@ -89,6 +89,16 @@ export function MobileWorkRequests({
           defaultSummary=""
           collapsedLabel="New work item"
         />
+        {canTriage ? (
+          <div style={{ padding: '0 16px 8px' }}>
+            <MButton variant="ghost" onClick={() => navigate('/work/board')}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <MI.Layers size={16} />
+                Board
+              </span>
+            </MButton>
+          </div>
+        ) : null}
         <MChipRow>
           {filters.map((entry) => (
             <MChip key={entry.id} active={filter === entry.id} onClick={() => setFilter(entry.id)}>

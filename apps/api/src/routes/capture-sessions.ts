@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import { z } from 'zod'
 import { getRequestContext } from '@sitelayer/logger'
 import { CaptureArtifactUploadError, parseCaptureArtifactMultipart } from '../capture-artifact-upload.js'
+import { captureConsentAllowsArtifactKind, captureConsentAllowsEventClass } from '../capture-consent-policy.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import {
@@ -147,6 +148,14 @@ function captureConsentScope(body: Record<string, unknown>, mode: (typeof MODES)
     mode,
     route_path: optionalText(body.route_path, 500) ?? getRequestContext()?.route ?? null,
   }
+}
+
+function captureConsentArtifactError(kind: string): string {
+  return `capture consent does not allow artifact kind "${kind}"`
+}
+
+function captureConsentEventClassError(eventClass: string): string {
+  return `capture consent does not allow event class "${eventClass}"`
 }
 
 function captureSessionIdFromPath(pathname: string): string | null {
@@ -601,9 +610,15 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
   let inserted = 0
   let foundSession = false
   let blockedStatus: string | null = null
+  let consentViolation: string | null = null
   await withMutationTx(ctx.company.id, async (c) => {
-    const exists = await c.query<{ id: string; status: string; retention_expires_at: string | null }>(
-      `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,
+    const exists = await c.query<{
+      id: string
+      status: string
+      retention_expires_at: string | null
+      consent_scope: Record<string, unknown> | null
+    }>(
+      `select id, status, retention_expires_at, consent_scope from capture_sessions where id = $1 and company_id = $2 limit 1`,
       [id, ctx.company.id],
     )
     const session = exists.rows[0]
@@ -612,6 +627,16 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
     if (session.status !== 'open') {
       blockedStatus = session.status
       return
+    }
+    for (const raw of rawEvents) {
+      if (!isRecord(raw)) continue
+      const eventType = optionalText(raw.event_type, 160)
+      if (!eventType) continue
+      const eventClass = optionalText(raw.event_class, 120) ?? ''
+      if (!captureConsentAllowsEventClass(session.consent_scope, eventClass)) {
+        consentViolation = captureConsentEventClassError(eventClass)
+        return
+      }
     }
     for (const [index, raw] of rawEvents.entries()) {
       if (!isRecord(raw)) continue
@@ -660,6 +685,10 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
     ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
     return
   }
+  if (consentViolation) {
+    ctx.sendJson(403, { error: consentViolation })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 
@@ -680,9 +709,15 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
   let foundSession = false
   let blockedStatus: string | null = null
   let finalized = false
+  let consentViolation: string | null = null
   await withMutationTx(ctx.company.id, async (c) => {
-    const exists = await c.query<{ id: string; status: string; retention_expires_at: string | null }>(
-      `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,
+    const exists = await c.query<{
+      id: string
+      status: string
+      retention_expires_at: string | null
+      consent_scope: Record<string, unknown> | null
+    }>(
+      `select id, status, retention_expires_at, consent_scope from capture_sessions where id = $1 and company_id = $2 limit 1`,
       [id, ctx.company.id],
     )
     const session = exists.rows[0]
@@ -694,6 +729,17 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
     }
     finalized = await isCaptureSessionFinalizedTx(c, ctx.company.id, id)
     if (finalized) return
+    for (const raw of rawArtifacts) {
+      if (!isRecord(raw)) continue
+      const kind = optionalText(raw.kind, 80)
+      const storageKey = optionalText(raw.storage_key, 500)
+      const uri = optionalText(raw.uri, 1000)
+      if (!kind || (!storageKey && !uri)) continue
+      if (!captureConsentAllowsArtifactKind(session.consent_scope, kind)) {
+        consentViolation = captureConsentArtifactError(kind)
+        return
+      }
+    }
     for (const raw of rawArtifacts) {
       if (!isRecord(raw)) continue
       const kind = optionalText(raw.kind, 80)
@@ -754,6 +800,10 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
     ctx.sendJson(409, { error: 'capture session has already been finalized' })
     return
   }
+  if (consentViolation) {
+    ctx.sendJson(403, { error: consentViolation })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 
@@ -770,8 +820,13 @@ function parseMetadataField(value: string | undefined): Record<string, unknown> 
 async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
   const exists = await withCompanyClient(ctx.company.id, (c) =>
-    c.query<{ id: string; status: string; retention_expires_at: string | null }>(
-      `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,
+    c.query<{
+      id: string
+      status: string
+      retention_expires_at: string | null
+      consent_scope: Record<string, unknown> | null
+    }>(
+      `select id, status, retention_expires_at, consent_scope from capture_sessions where id = $1 and company_id = $2 limit 1`,
       [id, ctx.company.id],
     ),
   )
@@ -794,6 +849,8 @@ async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSess
   try {
     upload = await parseCaptureArtifactMultipart(req, ctx.storage, ctx.company.id, id, {
       maxFileBytes: ctx.maxArtifactBytes,
+      allowKind: (kind) => captureConsentAllowsArtifactKind(session.consent_scope, kind),
+      disallowedKindMessage: captureConsentArtifactError,
     })
   } catch (error) {
     const status = error instanceof CaptureArtifactUploadError ? error.status : 500

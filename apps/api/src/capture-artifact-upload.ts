@@ -27,6 +27,8 @@ export interface CaptureArtifactUploadResult {
 export interface ParseCaptureArtifactMultipartOptions {
   maxFileBytes: number
   objectKeyPrefix?: string
+  allowKind?: (kind: string) => boolean
+  disallowedKindMessage?: (kind: string) => string
 }
 
 const SAFE_FALLBACK_MIME = 'application/octet-stream'
@@ -140,6 +142,16 @@ export function parseCaptureArtifactMultipart(
       if (!kind) {
         fileStream.resume()
         fail(new CaptureArtifactUploadError(400, 'kind field is required before file'))
+        return
+      }
+      if (options.allowKind && !options.allowKind(kind)) {
+        fileStream.resume()
+        fail(
+          new CaptureArtifactUploadError(
+            403,
+            options.disallowedKindMessage?.(kind) ?? `capture consent does not allow artifact kind "${kind}"`,
+          ),
+        )
         return
       }
       const incomingName = (info?.filename || '').trim() || defaultFileNameFor(kind)

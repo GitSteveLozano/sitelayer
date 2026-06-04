@@ -22,12 +22,14 @@ import {
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 // Phase B responsive consolidation: the AI setup panels moved into the merged
 // responsive screens (former desktop twins est-ai-count.tsx / est-ai-takeoff.tsx
 // were deleted). The standalone float-palette exports are unchanged.
 
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
+import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
@@ -597,8 +599,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   }
   useEffect(() => {
     if (!projectId) return
-    return registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!activeBlueprint && canvasMeasurements.length === 0 && draftPoints.length === 0) return null
+    const shouldCapture = () => activeBlueprint || canvasMeasurements.length > 0 || draftPoints.length > 0
+    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:mobile:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!shouldCapture()) return null
       const payload = buildCanvasGeometryArtifact({
         project_id: projectId,
         route_path: currentCaptureRoutePath(),
@@ -626,10 +629,59 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         surface: 'mobile_takeoff',
       })
     })
+    const unregisterState = registerCaptureStateProvider(`takeoff:mobile:${projectId}`, ({ reason }) => {
+      if (!shouldCapture()) return null
+      return buildTakeoffCanvasStateSnapshot({
+        surface: 'mobile_takeoff',
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        reason,
+        active_draft: activeDraft,
+        active_blueprint: activeBlueprint,
+        active_page: activePage,
+        viewport: {
+          mode,
+          tool,
+          pdf_engine: pdfEngineOn && blueprintIsPdf ? 'pdf' : 'image',
+        },
+        session: {
+          xstate_value: session.value,
+          xstate_mode: session.mode,
+          machine_tool: sctx.draft.tool,
+          overlay: sctx.overlay,
+          error: sctx.error,
+          draft_point_count: sctx.draft.points.length,
+          calibration_point_count: sctx.calibration.points.length,
+          selected_id: sctx.selection.selectedId,
+          bulk_selected_count: sctx.selection.bulkIds.length,
+          edit_geom_id: sctx.selection.editGeomId,
+          capture_kind: sctx.capture.kind,
+          capture_mode: sctx.capture.mode,
+        },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          manual_qty: manualQty,
+          edit_id: editId,
+          edit_points: editPoints,
+        },
+        selection: {
+          selected_id: selectedId,
+          bulk_selected_count: bulkIds.size,
+        },
+        measurements: canvasMeasurements,
+      })
+    })
+    return () => {
+      unregisterArtifact()
+      unregisterState()
+    }
   }, [
     activeBlueprint,
+    activeDraft,
     activeDraftId,
     activePage,
+    blueprintIsPdf,
     bulkIds,
     canvasMeasurements,
     draftPoints,
@@ -638,8 +690,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     editPoints,
     manualQty,
     mode,
+    pdfEngineOn,
     projectId,
+    sctx,
     selectedId,
+    session.mode,
+    session.value,
     tool,
   ])
 

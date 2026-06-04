@@ -4,6 +4,7 @@ import {
   __resetCaptureArtifactProvidersForTests,
   registerCaptureArtifactProvider,
 } from '@/lib/capture-artifact-providers'
+import { __resetCaptureStateProvidersForTests, registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { CAPTURE_SESSION_STORAGE_KEY } from '@/lib/capture-session'
 import {
   AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
@@ -44,17 +45,24 @@ class FakeStream {
 }
 
 class FakeMediaRecorder {
+  static supported = new Set(['audio/webm'])
+
   static isTypeSupported(mimeType: string): boolean {
-    return mimeType === 'audio/webm'
+    return FakeMediaRecorder.supported.has(mimeType)
   }
 
   state: RecordingState = 'inactive'
-  mimeType = 'audio/webm'
+  mimeType: string
   ondataavailable: ((event: BlobEvent) => void) | null = null
   onstop: ((event: Event) => void) | null = null
   onerror: ((event: Event) => void) | null = null
 
-  constructor(readonly stream: MediaStream) {}
+  constructor(
+    readonly stream: MediaStream,
+    options?: MediaRecorderOptions,
+  ) {
+    this.mimeType = options?.mimeType ?? 'audio/webm'
+  }
 
   start(): void {
     this.state = 'recording'
@@ -75,6 +83,7 @@ describe('AuthenticatedFeedbackDock', () => {
     cleanup()
     vi.clearAllMocks()
     __resetCaptureArtifactProvidersForTests()
+    __resetCaptureStateProvidersForTests()
     window.history.pushState(null, '', '/projects/p1')
     window.sessionStorage.clear()
     window.localStorage.removeItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY)
@@ -86,6 +95,7 @@ describe('AuthenticatedFeedbackDock', () => {
       options?.emit?.({ type: 'rrweb-full-snapshot', data: { source: 'authenticated-test' } })
       return vi.fn()
     })
+    FakeMediaRecorder.supported = new Set(['audio/webm'])
     captureApi.appendCaptureSessionEvents.mockResolvedValue({ accepted: 1 })
     captureApi.createCaptureSession.mockImplementation(async (payload: { capture_session_id: string }) => ({
       capture_session: {
@@ -143,6 +153,7 @@ describe('AuthenticatedFeedbackDock', () => {
   afterEach(() => {
     cleanup()
     __resetCaptureArtifactProvidersForTests()
+    __resetCaptureStateProvidersForTests()
     window.sessionStorage.clear()
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -186,8 +197,21 @@ describe('AuthenticatedFeedbackDock', () => {
       },
       consent_scope: {
         surface: 'authenticated_app',
-        streams: ['audio'],
+        streams: ['audio', 'registered_artifacts', 'text_note'],
+        artifacts: expect.objectContaining({
+          audio: true,
+          transcript: true,
+          text_note: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        }),
+        event_classes: ['authenticated_feedback'],
+        audio: true,
         dom_replay: false,
+        registered_artifacts: true,
+        screen_video: false,
+        text_note: true,
       },
     })
     expect(screen.getByText('Recording feedback')).toBeTruthy()
@@ -239,17 +263,51 @@ describe('AuthenticatedFeedbackDock', () => {
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
 
     fireEvent.click(screen.getByRole('button', { name: /report issue/i }))
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    const prewarmPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
+      capture_session_id: string
+      metadata: Record<string, unknown>
+    }
+    expect(prewarmPayload).toMatchObject({
+      mode: 'feedback',
+      consent_version: 'authenticated-feedback-v1',
+      route_path: '/projects/p1',
+      metadata: {
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        capture_profile: 'text_issue_prewarm',
+        collab_mode: 'steve',
+      },
+      consent_scope: {
+        surface: 'authenticated_app',
+        streams: ['text_note', 'registered_artifacts'],
+        artifacts: expect.objectContaining({
+          text_note: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        }),
+        event_classes: ['authenticated_feedback'],
+        audio: false,
+        dom_replay: false,
+        registered_artifacts: true,
+        screen_video: false,
+        text_note: true,
+      },
+    })
+
     fireEvent.change(screen.getByPlaceholderText('What is wrong?'), {
       target: { value: 'The project total is wrong after I change markup.' },
     })
     fireEvent.click(screen.getByRole('button', { name: /send issue/i }))
 
-    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
-    const startPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(2))
+    const startPayload = captureApi.createCaptureSession.mock.calls[1]?.[0] as {
       capture_session_id: string
       consent_scope: Record<string, unknown>
       metadata: Record<string, unknown>
     }
+    expect(startPayload.capture_session_id).toBe(prewarmPayload.capture_session_id)
     expect(startPayload).toMatchObject({
       mode: 'feedback',
       consent_version: 'authenticated-feedback-v1',
@@ -263,8 +321,18 @@ describe('AuthenticatedFeedbackDock', () => {
       consent_scope: {
         surface: 'authenticated_app',
         streams: ['text_note', 'registered_artifacts'],
+        artifacts: expect.objectContaining({
+          text_note: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        }),
+        event_classes: ['authenticated_feedback'],
         audio: false,
         dom_replay: false,
+        registered_artifacts: true,
+        screen_video: false,
+        text_note: true,
       },
     })
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
@@ -296,6 +364,68 @@ describe('AuthenticatedFeedbackDock', () => {
     expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
   })
 
+  it('prewarms a Steve issue capture session when the dock auto-opens', async () => {
+    window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
+    window.localStorage.setItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY, '0')
+    window.localStorage.setItem(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY, '1')
+    window.localStorage.setItem(STEVE_COLLAB_MODE_STORAGE_KEY, STEVE_COLLAB_MODE_VALUE)
+    const stateProvider = vi.fn(() => ({
+      schema: 'test.route-state.v1',
+      payload: { route: '/projects/p1', opened: true },
+    }))
+    registerCaptureStateProvider('route:opened', stateProvider)
+
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    expect(captureApi.createCaptureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'feedback',
+        consent_version: 'authenticated-feedback-v1',
+        route_path: '/projects/p1',
+        metadata: expect.objectContaining({
+          surface: 'authenticated_app',
+          company_slug: 'la-operations',
+          capture_profile: 'text_issue_prewarm',
+          collab_mode: 'steve',
+        }),
+        consent_scope: expect.objectContaining({
+          streams: ['text_note', 'registered_artifacts'],
+          artifacts: expect.objectContaining({
+            text_note: true,
+            canvas_geometry: true,
+            screen_context: true,
+            state_snapshot: true,
+          }),
+          event_classes: ['authenticated_feedback'],
+          audio: false,
+          dom_replay: false,
+          registered_artifacts: true,
+          screen_video: false,
+          text_note: true,
+        }),
+      }),
+    )
+    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
+      expect.any(String),
+      [expect.objectContaining({ event_type: 'authenticated.feedback.issue_opened' })],
+    )
+    await waitFor(() => expect(stateProvider).toHaveBeenCalledTimes(1))
+    expect(stateProvider).toHaveBeenCalledWith({
+      captureSessionId: expect.any(String),
+      reason: 'issue_opened',
+      metadata: expect.objectContaining({
+        source: 'text_issue_prewarm',
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        collab_mode: 'steve',
+        trigger: 'issue_opened',
+      }),
+    })
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
+    expect(captureApi.finalizeCaptureSession).not.toHaveBeenCalled()
+  })
+
   it('adds DOM replay only when authenticated replay is explicitly enabled', async () => {
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1&capture_replay=1')
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
@@ -309,8 +439,15 @@ describe('AuthenticatedFeedbackDock', () => {
       consent_scope: Record<string, unknown>
     }
     expect(startPayload.consent_scope).toMatchObject({
-      streams: ['audio', 'dom_replay'],
+      streams: ['audio', 'dom_replay', 'registered_artifacts', 'text_note'],
+      artifacts: expect.objectContaining({
+        audio: true,
+        transcript: true,
+        rrweb: true,
+      }),
+      audio: true,
       dom_replay: true,
+      registered_artifacts: true,
     })
     expect(rrweb.record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -349,10 +486,112 @@ describe('AuthenticatedFeedbackDock', () => {
     })
   })
 
+  it('records optional screen video through the browser screen picker', async () => {
+    window.history.pushState(null, '', '/projects/p1?capture_feedback=1&capture_audio=0')
+    FakeMediaRecorder.supported = new Set(['video/webm'])
+    const getUserMedia = vi.fn()
+    const getDisplayMedia = vi.fn(async () => new FakeStream() as unknown as MediaStream)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia,
+        getDisplayMedia,
+      },
+    })
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    fireEvent.change(screen.getByPlaceholderText('What happened?'), {
+      target: { value: 'The invoice drawer flickered while I shared the tab.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /record screen/i }))
+
+    await waitFor(() => expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false }))
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    const startPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
+      capture_session_id: string
+      consent_scope: Record<string, unknown>
+      metadata: Record<string, unknown>
+    }
+    expect(startPayload).toMatchObject({
+      mode: 'feedback',
+      consent_version: 'authenticated-feedback-v1',
+      route_path: '/projects/p1',
+      metadata: {
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        capture_profile: 'screen_recording',
+      },
+      consent_scope: {
+        surface: 'authenticated_app',
+        streams: ['screen_video', 'text_note', 'registered_artifacts'],
+        artifacts: expect.objectContaining({
+          video: true,
+          video_clip_manifest: true,
+          text_note: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        }),
+        event_classes: ['authenticated_feedback'],
+        audio: false,
+        dom_replay: false,
+        screen_video: true,
+        registered_artifacts: true,
+        text_note: true,
+      },
+    })
+    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(screen.getByText('Recording screen')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /stop/i }))
+
+    await waitFor(() => expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledTimes(1))
+    expect(captureApi.uploadCaptureArtifact).toHaveBeenCalledWith(
+      startPayload.capture_session_id,
+      expect.objectContaining({
+        kind: 'video',
+        fileName: 'screen-video.webm',
+        pii_level: 'private',
+        access_policy: 'support_only',
+        metadata: expect.objectContaining({
+          source: 'screen_recording',
+          artifact_type: 'capture.screen_video',
+          surface: 'authenticated_app',
+          company_slug: 'la-operations',
+          mime_type: 'video/webm',
+        }),
+      }),
+    )
+    await waitFor(() => expect(captureApi.finalizeCaptureSession).toHaveBeenCalledTimes(1))
+    expect(captureApi.finalizeCaptureSession).toHaveBeenCalledWith(
+      startPayload.capture_session_id,
+      expect.objectContaining({
+        category: 'record_feedback',
+        title: 'In-app screen recording',
+        summary: 'The invoice drawer flickered while I shared the tab.',
+        lane: 'triage',
+        severity: 'normal',
+      }),
+    )
+    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
+      expect.objectContaining({ event_type: 'authenticated.feedback.screen_recording_started' }),
+    ])
+    expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
+      expect.objectContaining({ event_type: 'authenticated.feedback.screen_recording_stopped' }),
+    ])
+    expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
+  })
+
   it('uploads registered extra artifacts before finalizing', async () => {
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
     const provider = vi.fn(async () => ({ artifact: { id: 'canvas-1', kind: 'canvas_geometry' } }))
     registerCaptureArtifactProvider('takeoff:test', provider)
+    const stateProvider = vi.fn(() => ({
+      schema: 'test.route-state.v1',
+      payload: { route: '/projects/p1', state: 'drawing' },
+    }))
+    registerCaptureStateProvider('route:test', stateProvider)
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
 
     fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
@@ -364,7 +603,36 @@ describe('AuthenticatedFeedbackDock', () => {
     fireEvent.click(screen.getByRole('button', { name: /stop/i }))
 
     await waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(stateProvider).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(captureApi.finalizeCaptureSession).toHaveBeenCalledTimes(1))
+    expect(stateProvider).toHaveBeenCalledWith({
+      captureSessionId: startPayload.capture_session_id,
+      reason: 'recording_stopped',
+      metadata: expect.objectContaining({
+        source: 'record_feedback',
+        surface: 'authenticated_app',
+        company_slug: 'la-operations',
+        trigger: 'record_feedback_stop',
+      }),
+    })
+    const stateSnapshotCall = captureApi.uploadCaptureArtifact.mock.calls.find(
+      (call) => call[1]?.kind === 'state_snapshot',
+    )
+    expect(stateSnapshotCall).toBeDefined()
+    expect(stateSnapshotCall?.[0]).toBe(startPayload.capture_session_id)
+    expect(stateSnapshotCall?.[1]).toMatchObject({
+      kind: 'state_snapshot',
+      fileName: 'route-test-state_snapshot.json',
+      pii_level: 'internal',
+      access_policy: 'support_only',
+      metadata: expect.objectContaining({
+        source: 'capture_state_provider',
+        artifact_type: 'capture.state_snapshot',
+        provider_id: 'route:test',
+        reason: 'recording_stopped',
+        schema: 'test.route-state.v1',
+      }),
+    })
     expect(provider).toHaveBeenCalledWith({
       captureSessionId: startPayload.capture_session_id,
       metadata: expect.objectContaining({

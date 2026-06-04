@@ -140,6 +140,9 @@ const DemoLandingRoute = lazy(() => import('@/screens/demo/demo-landing').then((
 const SteveCollabEntryRoute = lazy(() =>
   import('@/screens/collab/SteveCollabEntry').then((m) => ({ default: m.SteveCollabEntry })),
 )
+const FeedbackInviteEntryRoute = lazy(() =>
+  import('@/screens/feedback/FeedbackInviteEntry').then((m) => ({ default: m.FeedbackInviteEntry })),
+)
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -294,6 +297,7 @@ export default function App() {
                   Self-gates on tier (404 off the demo deployment). */}
               <Route path="/demo" element={<DemoLandingRoute />} />
               <Route path="/collab/steve" element={<SteveCollabEntryRoute />} />
+              <Route path="/feedback" element={<FeedbackInviteEntryRoute />} />
 
               {/* Public teammate-invite accept page. Above the Clerk-gated
                   shell so a signed-out invitee can render the invite summary

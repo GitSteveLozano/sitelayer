@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AudioCaptureRecorder, isAudioCaptureSupported, preferredAudioMimeType } from './capture-recorder'
+import {
+  AudioCaptureRecorder,
+  ScreenCaptureRecorder,
+  isAudioCaptureSupported,
+  isScreenCaptureSupported,
+  preferredAudioMimeType,
+  preferredScreenMimeType,
+} from './capture-recorder'
 
 class FakeTrack {
   stop = vi.fn()
@@ -109,5 +116,58 @@ describe('capture audio recorder', () => {
     })
 
     await expect(recorder.stop()).rejects.toThrow('Audio recording has not been started.')
+  })
+})
+
+describe('capture screen recorder', () => {
+  it('reports unsupported when display capture or MediaRecorder is unavailable', () => {
+    expect(
+      isScreenCaptureSupported({
+        mediaDevices: null,
+        MediaRecorderCtor: recorderCtor() as unknown as typeof MediaRecorder,
+      }),
+    ).toBe(false)
+    expect(
+      isScreenCaptureSupported({
+        mediaDevices: { getDisplayMedia: vi.fn() as unknown as MediaDevices['getDisplayMedia'] },
+        MediaRecorderCtor: null,
+      }),
+    ).toBe(false)
+  })
+
+  it('chooses the first supported screen mime type', () => {
+    const Recorder = recorderCtor()
+    Recorder.supported = new Set(['video/webm', 'video/mp4'])
+
+    expect(preferredScreenMimeType(Recorder as unknown as Parameters<typeof preferredScreenMimeType>[0])).toBe(
+      'video/webm',
+    )
+  })
+
+  it('records display video, stops tracks, and returns a blob with duration', async () => {
+    const Recorder = recorderCtor()
+    Recorder.supported = new Set(['video/webm'])
+    const stream = new FakeMediaStream()
+    const getDisplayMedia = vi.fn(async () => stream as unknown as MediaStream)
+    let now = 5_000
+    const recorder = new ScreenCaptureRecorder({
+      mediaDevices: { getDisplayMedia: getDisplayMedia as unknown as MediaDevices['getDisplayMedia'] },
+      MediaRecorderCtor: Recorder as unknown as typeof MediaRecorder,
+      now: () => now,
+    })
+
+    await recorder.start()
+    expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false })
+    expect(recorder.isRecording).toBe(true)
+    expect(FakeMediaRecorder.instances[0]?.mimeType).toBe('video/webm')
+
+    now = 8_333
+    const result = await recorder.stop()
+
+    expect(result.duration_ms).toBe(3333)
+    expect(result.mime_type).toBe('video/webm')
+    expect(await result.blob.text()).toBe('hello world')
+    expect(stream.tracks[0]?.stop).toHaveBeenCalledTimes(1)
+    expect(recorder.isRecording).toBe(false)
   })
 })

@@ -53,6 +53,8 @@ services:
       DO_SPACES_REGION: us-east-1
       DO_SPACES_BUCKET: sitelayer-blueprints-local
       DO_SPACES_ENDPOINT: http://minio:9000
+      MAX_CAPTURE_ARTIFACT_BYTES: ${MAX_CAPTURE_ARTIFACT_BYTES:-52428800}
+      CAPTURE_AUTH_AUTO_DISPATCH: ${CAPTURE_AUTH_AUTO_DISPATCH:-}
     ports:
       - '3001:3001'
     depends_on:
@@ -96,6 +98,14 @@ services:
       DO_SPACES_REGION: us-east-1
       DO_SPACES_BUCKET: sitelayer-blueprints-local
       DO_SPACES_ENDPOINT: http://minio:9000
+      MAX_CAPTURE_ARTIFACT_BYTES: ${MAX_CAPTURE_ARTIFACT_BYTES:-52428800}
+      CAPTURE_ARTIFACT_ANALYSIS_INTERVAL_MS: ${CAPTURE_ARTIFACT_ANALYSIS_INTERVAL_MS:-60000}
+      CAPTURE_ARTIFACT_ANALYSIS_LIMIT: ${CAPTURE_ARTIFACT_ANALYSIS_LIMIT:-10}
+      CAPTURE_ARTIFACT_ANALYSIS_MAX_BYTES: ${CAPTURE_ARTIFACT_ANALYSIS_MAX_BYTES:-1048576}
+      CAPTURE_ARTIFACT_ANALYSIS_AUTO_DISPATCH: ${CAPTURE_ARTIFACT_ANALYSIS_AUTO_DISPATCH:-}
+      CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE: ${CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE:-off}
+      CAPTURE_ARTIFACT_WHISPER_URL: ${CAPTURE_ARTIFACT_WHISPER_URL:-http://host.docker.internal:5678}
+      CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE: ${CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE:-off}
     depends_on:
       db:
         condition: service_started
@@ -104,6 +114,8 @@ services:
     volumes:
       - .:/app
       - worker_node_modules:/app/node_modules
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
 
 volumes:
   pgdata:

@@ -39,6 +39,7 @@ export const queryKeys = {
     all: () => ['work-requests'] as const,
     list: (params?: {
       status?: string | null
+      lane?: string | null
       entity_type?: string | null
       entity_id?: string | null
       created_by_user_id?: string | null
@@ -51,6 +52,38 @@ export const queryKeys = {
     handoffPacket: (id: string, audience: string) =>
       [...queryKeys.workRequests.all(), 'handoff-packet', id, audience] as const,
     health: () => [...queryKeys.workRequests.all(), 'health'] as const,
+  },
+  issueBoard: {
+    all: () => ['issue-board'] as const,
+    board: (params?: {
+      scope?: string | null
+      groupBy?: string | null
+      status?: string | null
+      lane?: string | null
+      assigneeUserId?: string | null
+      createdByUserId?: string | null
+      entityType?: string | null
+      entityId?: string | null
+      limit?: number
+      offset?: number
+    }) => [...queryKeys.issueBoard.all(), 'board', params ?? {}] as const,
+    detail: (id: string) => [...queryKeys.issueBoard.all(), 'detail', id] as const,
+  },
+  adminIssueBoard: {
+    all: () => ['admin-issue-board'] as const,
+    board: (params?: {
+      companyId?: string | null
+      companySlug?: string | null
+      groupBy?: string | null
+      status?: string | null
+      lane?: string | null
+      assigneeUserId?: string | null
+      createdByUserId?: string | null
+      entityType?: string | null
+      entityId?: string | null
+      limit?: number
+      offset?: number
+    }) => [...queryKeys.adminIssueBoard.all(), 'board', params ?? {}] as const,
   },
   supportPackets: {
     all: () => ['support-packets'] as const,

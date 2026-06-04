@@ -242,7 +242,16 @@ class FakeCapturePool {
       const [id, companyId] = params as [string, string]
       const row = this.sessions.find((s) => s.id === id && s.company_id === companyId)
       return {
-        rows: row ? [{ id: row.id, status: row.status, retention_expires_at: row.retention_expires_at }] : [],
+        rows: row
+          ? [
+              {
+                id: row.id,
+                status: row.status,
+                retention_expires_at: row.retention_expires_at,
+                consent_scope: row.consent_scope,
+              },
+            ]
+          : [],
         rowCount: row ? 1 : 0,
       }
     }
@@ -845,6 +854,95 @@ describe('capture session routes', () => {
         artifact_count: 2,
       },
     })
+  })
+
+  it('rejects events and artifacts outside an explicit consent policy', async () => {
+    const pool = new FakeCapturePool()
+
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      consent_version: 'text-only-v1',
+      consent_scope: {
+        streams: ['text_note', 'registered_artifacts'],
+        artifacts: {
+          text_note: true,
+          canvas_geometry: true,
+          screen_context: true,
+          state_snapshot: true,
+        },
+        event_classes: ['authenticated_feedback'],
+        audio: false,
+        dom_replay: false,
+        registered_artifacts: true,
+        screen_video: false,
+        text_note: true,
+      },
+    })
+
+    const events = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/events`, {
+      events: [{ event_type: 'nav.route', event_class: 'navigation' }],
+    })
+    expect(events.responses[0]).toEqual({
+      status: 403,
+      body: { error: 'capture consent does not allow event class "navigation"' },
+    })
+    expect(pool.events).toHaveLength(0)
+
+    const audioArtifact = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'audio', uri: 's3://capture/audio.webm' }],
+    })
+    expect(audioArtifact.responses[0]).toEqual({
+      status: 403,
+      body: { error: 'capture consent does not allow artifact kind "audio"' },
+    })
+    expect(pool.artifacts).toHaveLength(0)
+
+    const audioUpload = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'file', filename: 'audio.webm', contentType: 'audio/webm', body: Buffer.from('no consent') },
+    ])
+    expect(audioUpload.responses[0]).toEqual({
+      status: 403,
+      body: { error: 'capture consent does not allow artifact kind "audio"' },
+    })
+    expect(audioUpload.storage.files.size).toBe(0)
+    expect(pool.artifacts).toHaveLength(0)
+
+    const canvasArtifact = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'canvas_geometry', uri: 's3://capture/canvas.json' }],
+    })
+    expect(canvasArtifact.responses[0]).toEqual({ status: 202, body: { accepted: 1 } })
+    expect(pool.artifacts[0]).toMatchObject({ kind: 'canvas_geometry' })
+  })
+
+  it('accepts audio uploads when microphone capture is explicitly consented', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      consent_version: 'audio-v1',
+      consent_scope: {
+        streams: ['audio'],
+        artifacts: { audio: true, transcript: true },
+        event_classes: ['authenticated_feedback'],
+        audio: true,
+        dom_replay: false,
+      },
+    })
+
+    const payload = Buffer.from('recorded audio')
+    const uploaded = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'file', filename: 'audio.webm', contentType: 'audio/webm', body: payload },
+    ])
+
+    expect(uploaded.responses[0]).toMatchObject({
+      status: 201,
+      body: { artifact: { kind: 'audio', byte_size: payload.length } },
+    })
+    expect(pool.artifacts[0]).toMatchObject({ kind: 'audio', byte_size: payload.length })
+    await expect(uploaded.storage.get(pool.artifacts[0]?.storage_key ?? '')).resolves.toEqual(payload)
   })
 
   it('marks stopped and discarded sessions terminal without clearing the row', async () => {

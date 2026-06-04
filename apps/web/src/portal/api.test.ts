@@ -23,6 +23,7 @@ import {
   finalizePortalEstimateCaptureSession,
   finalizePortalRentalCaptureSession,
   startPortalEstimateCaptureSession,
+  uploadFeedbackInviteCaptureArtifact,
   uploadPortalEstimateCaptureArtifact,
   uploadPortalRentalCaptureArtifact,
 } from './api'
@@ -179,6 +180,51 @@ describe('public portal API capture headers', () => {
     expect(form.get('duration_ms')).toBe('1200')
     expect(form.get('pii_level')).toBe('private')
     expect(form.get('metadata')).toBe(JSON.stringify({ source: 'portal_mic' }))
+  })
+
+  it('uploads feedback invite capture artifacts with the token header and no forced multipart content-type', async () => {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            artifact: {
+              id: 'artifact-1',
+              kind: 'state_snapshot',
+              storage_key: 'co-1/capture-sessions/00000000-0000-4000-8000-000000000123/state.json',
+              content_type: 'application/json',
+              byte_size: 24,
+              content_hash: 'sha256:state',
+              redaction_version: 'capture-session-v1',
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        ),
+    )
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    await uploadFeedbackInviteCaptureArtifact('feedback.token', '00000000-0000-4000-8000-000000000123', {
+      kind: 'state_snapshot',
+      file: new Blob(['{"ok":true}'], { type: 'application/json' }),
+      fileName: 'state.json',
+      pii_level: 'internal',
+      access_policy: 'support_only',
+      metadata: { source: 'feedback_invite_page' },
+    })
+
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(url)).toContain(
+      '/api/portal/feedback-invites/capture-sessions/00000000-0000-4000-8000-000000000123/artifacts/upload',
+    )
+    expect(init.method).toBe('POST')
+    const headers = init.headers as Headers
+    expect(headers.get('content-type')).toBeNull()
+    expect(headers.get('authorization')).toBeNull()
+    expect(headers.get('x-sitelayer-feedback-invite')).toBe('feedback.token')
+    expect(init.body).toBeInstanceOf(FormData)
+    const form = init.body as FormData
+    expect(form.get('kind')).toBe('state_snapshot')
+    expect(form.get('pii_level')).toBe('internal')
+    expect(form.get('access_policy')).toBe('support_only')
   })
 
   it('finalizes rental capture sessions through the token-bound public route', async () => {

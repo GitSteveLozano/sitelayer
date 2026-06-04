@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
+import { useAdminIssueBoard, type AdminIssueBoardFilters, type AdminIssueBoardItem } from '@/lib/api/admin-issue-board'
 import { request } from '@/lib/api/client'
+import type { IssueBoardGroupBy, IssueBoardLane, IssueBoardStatus } from '@/lib/api/issue-board'
 
 /**
  * Site Admin console (P3) — a read-only, cross-tenant superadmin surface over
@@ -69,7 +71,7 @@ interface DemoLinkResult {
 
 const DEMO_ROLE_OPTIONS = ['owner', 'estimator', 'foreman', 'crew'] as const
 
-type TabKey = 'companies' | 'workflows' | 'scenarios' | 'demo'
+type TabKey = 'companies' | 'issues' | 'workflows' | 'scenarios' | 'demo'
 
 interface LoadState<T> {
   data: T | null
@@ -148,6 +150,31 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     textDecoration: 'underline',
   },
+  controls: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 },
+  input: { border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 8px', fontSize: 13 },
+  select: { border: '1px solid #d1d5db', borderRadius: 6, padding: '6px 8px', fontSize: 13, background: '#fff' },
+  smallButton: {
+    background: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: 6,
+    padding: '6px 10px',
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  board: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, alignItems: 'start' },
+  column: { border: '1px solid #e5e7eb', borderRadius: 8, background: '#f9fafb', minHeight: 120, padding: 10 },
+  columnHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  issueCard: { border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff', padding: 10, marginBottom: 8 },
+  issueTitle: { fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 4 },
+  issueMeta: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 },
+  chip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    borderRadius: 999,
+    padding: '2px 7px',
+    fontSize: 11,
+    fontWeight: 600,
+  },
 }
 
 function Status({ loading, error }: { loading: boolean; error: string | null }) {
@@ -217,6 +244,176 @@ function WorkflowsTab() {
       ))}
     </div>
   )
+}
+
+const STATUS_OPTIONS: IssueBoardStatus[] = [
+  'new',
+  'triaged',
+  'human_assigned',
+  'agent_running',
+  'review_ready',
+  'review_stale',
+  'proposal_expired',
+  'resolved',
+  'reopened',
+  'wont_do',
+  'reversed',
+]
+const LANE_OPTIONS: IssueBoardLane[] = ['triage', 'human', 'agent', 'both', 'done']
+
+function WorkRequestsTab() {
+  const [groupBy, setGroupBy] = useState<IssueBoardGroupBy>('status_group')
+  const [companySlug, setCompanySlug] = useState('')
+  const [lane, setLane] = useState<IssueBoardLane | ''>('')
+  const [status, setStatus] = useState<IssueBoardStatus | ''>('')
+  const filters: AdminIssueBoardFilters = { groupBy, limit: 200 }
+  const trimmedCompanySlug = companySlug.trim()
+  if (trimmedCompanySlug) filters.companySlug = trimmedCompanySlug
+  if (lane) filters.lane = lane
+  if (status) filters.status = status
+  const board = useAdminIssueBoard(filters)
+
+  if (board.isLoading || board.error) {
+    return <Status loading={board.isLoading} error={board.error ? errorMessage(board.error) : null} />
+  }
+
+  const columns = board.data?.columns ?? []
+  const total = board.data?.items.length ?? 0
+
+  return (
+    <div>
+      <div style={styles.controls}>
+        <input
+          value={companySlug}
+          onChange={(e) => setCompanySlug(e.target.value)}
+          placeholder="company slug"
+          style={{ ...styles.input, flex: '0 0 180px' }}
+        />
+        <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as IssueBoardGroupBy)} style={styles.select}>
+          <option value="status_group">Status groups</option>
+          <option value="lane">Lanes</option>
+        </select>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value as IssueBoardStatus | '')}
+          style={styles.select}
+        >
+          <option value="">Any status</option>
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {label(s)}
+            </option>
+          ))}
+        </select>
+        <select value={lane} onChange={(e) => setLane(e.target.value as IssueBoardLane | '')} style={styles.select}>
+          <option value="">Any lane</option>
+          {LANE_OPTIONS.map((l) => (
+            <option key={l} value={l}>
+              {label(l)}
+            </option>
+          ))}
+        </select>
+        <button type="button" style={styles.smallButton} onClick={() => void board.refetch()}>
+          Refresh
+        </button>
+        <span style={styles.muted}>
+          {total} item{total === 1 ? '' : 's'}
+          {board.data?.pagination.hasMore ? ' shown, more available' : ''}
+        </span>
+      </div>
+
+      <div style={styles.board}>
+        {columns.map((column) => (
+          <section key={column.id} style={styles.column}>
+            <div style={styles.columnHead}>
+              <strong style={{ fontSize: 13 }}>{column.title}</strong>
+              <span style={styles.muted}>{column.items.length}</span>
+            </div>
+            {column.items.map((item) => (
+              <AdminIssueCard key={item.id} item={item} />
+            ))}
+            {column.items.length === 0 && <span style={styles.muted}>No issues.</span>}
+          </section>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AdminIssueCard({ item }: { item: AdminIssueBoardItem }) {
+  return (
+    <article style={styles.issueCard}>
+      <div style={styles.issueTitle}>{item.title || 'Untitled issue'}</div>
+      {item.summary ? <div style={{ color: '#4b5563', fontSize: 12 }}>{item.summary}</div> : null}
+      <div style={styles.issueMeta}>
+        <span style={{ ...styles.chip, background: '#eef2ff', color: '#3730a3' }}>{item.companySlug}</span>
+        <span style={{ ...styles.chip, ...statusChipStyle(item.status) }}>{label(item.status)}</span>
+        <span style={{ ...styles.chip, background: '#ecfdf5', color: '#047857' }}>{label(item.lane)}</span>
+        {item.severity ? (
+          <span style={{ ...styles.chip, background: '#fff7ed', color: '#c2410c' }}>{label(item.severity)}</span>
+        ) : null}
+        {item.captureSessionId ? (
+          <span style={{ ...styles.chip, background: '#f5f3ff', color: '#6d28d9' }}>captured</span>
+        ) : null}
+      </div>
+      <div style={{ ...styles.muted, marginTop: 8 }}>
+        {age(item.createdAt)} · <span style={styles.code}>{item.id.slice(0, 8)}</span>
+      </div>
+      {item.route ? (
+        <div style={{ ...styles.code, display: 'block', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {item.route}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function label(value: string): string {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function age(createdAt: string): string {
+  const created = Date.parse(createdAt)
+  if (!Number.isFinite(created)) return createdAt.slice(0, 10)
+  const elapsed = Math.max(0, Date.now() - created)
+  const minutes = Math.floor(elapsed / 60000)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
+function statusChipStyle(status: IssueBoardStatus): CSSProperties {
+  switch (status) {
+    case 'new':
+      return { background: '#eff6ff', color: '#1d4ed8' }
+    case 'triaged':
+    case 'reopened':
+      return { background: '#eef2ff', color: '#4338ca' }
+    case 'human_assigned':
+      return { background: '#fff7ed', color: '#c2410c' }
+    case 'agent_running':
+    case 'review_ready':
+      return { background: '#ecfeff', color: '#0e7490' }
+    case 'review_stale':
+    case 'proposal_expired':
+      return { background: '#fef2f2', color: '#b91c1c' }
+    case 'resolved':
+      return { background: '#f0fdf4', color: '#15803d' }
+    case 'wont_do':
+    case 'reversed':
+      return { background: '#f3f4f6', color: '#4b5563' }
+    default:
+      return { background: '#f3f4f6', color: '#4b5563' }
+  }
 }
 
 function ScenariosTab() {
@@ -535,6 +732,7 @@ export default function AdminRoute() {
   const [tab, setTab] = useState<TabKey>('companies')
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'companies', label: 'Companies' },
+    { key: 'issues', label: 'Issues' },
     { key: 'workflows', label: 'Workflows' },
     { key: 'scenarios', label: 'Scenarios' },
     { key: 'demo', label: 'Demo links' },
@@ -556,6 +754,7 @@ export default function AdminRoute() {
         ))}
       </div>
       {tab === 'companies' && <CompaniesTab />}
+      {tab === 'issues' && <WorkRequestsTab />}
       {tab === 'workflows' && <WorkflowsTab />}
       {tab === 'scenarios' && <ScenariosTab />}
       {tab === 'demo' && <DemoLinksTab />}

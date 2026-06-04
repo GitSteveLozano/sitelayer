@@ -5,6 +5,7 @@ import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type Spark
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
 import { registerCaptureArtifactProvider } from '@/lib/capture-artifact-providers'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import {
   useBlueprintPages,
   useCaptureTakeoffDraft,
@@ -30,6 +31,7 @@ import {
 } from '@/lib/api'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
+import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 import { clamp, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useRole } from '@/lib/role'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
@@ -333,8 +335,9 @@ export function TakeoffCanvasScreen() {
 
   useEffect(() => {
     if (!projectId) return
-    return registerCaptureArtifactProvider(`takeoff:project:${projectId}`, async ({ captureSessionId, metadata }) => {
-      if (!activeBlueprint && blueprintMeasurements.length === 0 && draftPoints.length === 0) return null
+    const shouldCapture = () => activeBlueprint || blueprintMeasurements.length > 0 || draftPoints.length > 0
+    const unregisterArtifact = registerCaptureArtifactProvider(`takeoff:project:${projectId}`, async ({ captureSessionId, metadata }) => {
+      if (!shouldCapture()) return null
       const payload = buildCanvasGeometryArtifact({
         project_id: projectId,
         route_path: currentCaptureRoutePath(),
@@ -360,8 +363,42 @@ export function TakeoffCanvasScreen() {
         surface: 'project_takeoff_canvas',
       })
     })
+    const unregisterState = registerCaptureStateProvider(`takeoff:project:${projectId}`, ({ reason }) => {
+      if (!shouldCapture()) return null
+      return buildTakeoffCanvasStateSnapshot({
+        surface: 'project_takeoff_canvas',
+        project_id: projectId,
+        route_path: currentCaptureRoutePath(),
+        reason,
+        active_draft: activeDraft,
+        active_blueprint: activeBlueprint,
+        active_page: activePage,
+        viewport: { zoom, mode: 'draw', tool },
+        session: {
+          mode: 'legacy_project_takeoff_canvas',
+          tool,
+          active_page_id: activePage?.id ?? null,
+          tag_sheet_open: Boolean(tagSheetMeasurementId),
+        },
+        draft: {
+          points: draftPoints,
+          quantity: draftQuantity,
+          service_item_code: serviceItemCode,
+          elevation,
+        },
+        selection: {
+          tag_sheet_measurement_id: tagSheetMeasurementId,
+        },
+        measurements: blueprintMeasurements,
+      })
+    })
+    return () => {
+      unregisterArtifact()
+      unregisterState()
+    }
   }, [
     activeBlueprint,
+    activeDraft,
     activeDraftId,
     activePage,
     blueprintMeasurements,

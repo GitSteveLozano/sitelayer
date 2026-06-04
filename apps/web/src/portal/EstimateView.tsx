@@ -1,7 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MBanner, MBody, MButton, MButtonStack, MTextarea, MTopBar } from '@/components/m'
-import { usePortalEstimateSignature } from '@/machines/portal-estimate-signature'
+import {
+  usePortalEstimateSignature,
+  type PortalEstimateSignatureHookResult,
+} from '@/machines/portal-estimate-signature'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { type PortalEstimateView } from './api'
 import { IssueReporter } from './IssueReporter'
 import { SignatureCapture } from './SignatureCapture'
@@ -27,6 +31,7 @@ export function EstimateView() {
   const token = shareToken ?? ''
   const navigate = useNavigate()
   const signature = usePortalEstimateSignature(token)
+  useEstimatePortalCaptureStateProvider(token, signature)
 
   // The machine signals when it's time to navigate into the accepted
   // view. Doing the navigation here (instead of inside an XState
@@ -301,4 +306,79 @@ function formatDate(iso: string): string {
   } catch {
     return iso
   }
+}
+
+function useEstimatePortalCaptureStateProvider(
+  shareToken: string,
+  signature: PortalEstimateSignatureHookResult,
+): void {
+  const signatureRef = useRef(signature)
+  signatureRef.current = signature
+
+  useEffect(() => {
+    if (!shareToken) return undefined
+    return registerCaptureStateProvider('portal:estimate', ({ reason }) => {
+      const state = signatureRef.current
+      const view = state.view
+      return {
+        schema: 'sitelayer.portal.estimate-state.v1',
+        payload: {
+          surface: 'estimate_portal',
+          route_template: '/portal/estimates/:shareToken',
+          share_token_present: true,
+          reason,
+          is_loading: state.isLoading,
+          mode: state.mode,
+          submit_error_present: Boolean(state.submitError),
+          accept_validation_present: Boolean(state.acceptValidationMessage),
+          decline_validation_present: Boolean(state.declineValidationMessage),
+          draft: {
+            signer_name_length: state.signerName.trim().length,
+            signature_present: Boolean(state.signature),
+            decline_reason_length: state.declineReason.trim().length,
+          },
+          load_error: state.loadError
+            ? {
+                status: state.loadError.status,
+                message: truncateForCapture(state.loadError.message),
+              }
+            : null,
+          estimate: view
+            ? {
+                id: view.id,
+                status: view.status,
+                sent_at: view.sent_at,
+                expires_at: view.expires_at,
+                accepted: Boolean(view.accepted_at),
+                declined: Boolean(view.declined_at),
+                has_decline_reason: Boolean(view.decline_reason),
+                has_recipient: Boolean(view.recipient_name || view.recipient_email),
+                bid_total: view.estimate.bid_total,
+                scope_total: view.estimate.scope_total,
+                line_count: view.estimate.lines.length,
+                captured_at: view.estimate.captured_at,
+                truncated: view.estimate.lines.length > 20,
+                lines: view.estimate.lines.slice(0, 20).map((line, index) => ({
+                  index,
+                  service_item_code: line.service_item_code,
+                  quantity: line.quantity,
+                  unit: line.unit,
+                  division_code: line.division_code,
+                  amount: line.amount,
+                })),
+              }
+            : null,
+        },
+        piiLevel: 'internal' as const,
+        metadata: {
+          portal_surface: 'estimate_portal',
+          route_template: '/portal/estimates/:shareToken',
+        },
+      }
+    })
+  }, [shareToken])
+}
+
+function truncateForCapture(value: string): string {
+  return value.length > 500 ? value.slice(0, 500) : value
 }

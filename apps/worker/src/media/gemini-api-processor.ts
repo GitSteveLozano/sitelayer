@@ -1,5 +1,6 @@
 // Gemini API media-understanding adapter. Uploads sampled frames inline and
-// asks generateContent for a structured-JSON understanding via responseSchema.
+// asks generateContent for a structured-JSON understanding via the current REST
+// responseFormat shape.
 //
 // This is the CASH path (metered tokens), so it is OFF unless explicitly enabled
 // (`MEDIA_UNDERSTANDING_GEMINI_API_ENABLED=1`) AND a key is present — mirroring
@@ -79,21 +80,22 @@ export function createGeminiApiUnderstandingProcessor(deps?: {
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       let response: Response
       try {
-        response = await fetchImpl(
-          `${API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts }],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                responseSchema: RESPONSE_SCHEMA,
+        response = await fetchImpl(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: {
+              responseFormat: {
+                text: {
+                  mimeType: 'application/json',
+                  schema: RESPONSE_SCHEMA,
+                },
               },
-            }),
-            signal: controller.signal,
-          },
-        )
+            },
+          }),
+          signal: controller.signal,
+        })
       } finally {
         clearTimeout(timer)
       }

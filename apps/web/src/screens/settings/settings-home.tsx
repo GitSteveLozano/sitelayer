@@ -18,7 +18,7 @@
  * surface is reachable without leaving the screen — push toggle uses the
  * existing PushOnboardingCard, channel prefs use NotificationPreferencesScreen.
  */
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import type { CompanyRole } from '@sitelayer/domain'
 import {
@@ -35,7 +35,14 @@ import {
 import { useQboConnection } from '@/lib/api'
 import { NotificationPreferencesScreen } from './notifications.js'
 import { PushOnboardingCard } from './push-onboarding.js'
-import { traceBeaconConsentGranted, setTraceBeaconConsent } from '../../lib/product-trace-beacon.js'
+import { traceBeaconConsentGranted, setTraceBeaconConsent } from '../../lib/product-trace-consent.js'
+import { useActiveCompanyId } from '@/lib/api/active-company'
+import {
+  useCompanyFeedbackInvites,
+  useCreateFeedbackInvite,
+  useRevokeFeedbackInvite,
+  type FeedbackInviteCaptureMode,
+} from '@/lib/api/feedback-invites'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: 'Owner / PM',
@@ -54,7 +61,7 @@ export function MobileSettingsHome({
   companyRole: CompanyRole
   navigate?: (path: string) => void
 }) {
-  const [section, setSection] = useState<'home' | 'notifications'>('home')
+  const [section, setSection] = useState<'home' | 'notifications' | 'feedback-invites'>('home')
   // T1 "help debug my session": opt into anonymized in-app diagnostics (the
   // observability client beacon). OFF by default; flips setTraceBeaconConsent.
   const [debugConsent, setDebugConsent] = useState(traceBeaconConsentGranted())
@@ -68,6 +75,17 @@ export function MobileSettingsHome({
             <PushSection />
             <NotificationPreferencesScreen />
           </div>
+        </MBody>
+      </>
+    )
+  }
+
+  if (section === 'feedback-invites') {
+    return (
+      <>
+        <MTopBar back title="External reviewers" onBack={() => setSection('home')} />
+        <MBody>
+          <FeedbackInvitesSection />
         </MBody>
       </>
     )
@@ -200,6 +218,16 @@ export function MobileSettingsHome({
             chev
             onTap={() => go('/more/roles')}
           />
+          {companyRole === 'admin' ? (
+            <MListRow
+              leading={<MI.Alert size={18} />}
+              leadingTone="blue"
+              headline="External reviewers"
+              supporting="Signed feedback links"
+              chev
+              onTap={() => setSection('feedback-invites')}
+            />
+          ) : null}
           <MListRow
             leading={<MI.Users size={18} />}
             leadingTone="blue"
@@ -280,6 +308,160 @@ export function MobileSettingsHome({
         </div>
       </MBody>
     </>
+  )
+}
+
+const FEEDBACK_CAPTURE_MODES: FeedbackInviteCaptureMode[] = ['text', 'state', 'audio', 'screen']
+
+function FeedbackInvitesSection() {
+  const companyId = useActiveCompanyId()
+  const invites = useCompanyFeedbackInvites(companyId)
+  const create = useCreateFeedbackInvite(companyId ?? '')
+  const revoke = useRevokeFeedbackInvite(companyId ?? '')
+  const [reviewerRef, setReviewerRef] = useState('steve')
+  const [targetRoute, setTargetRoute] = useState('')
+  const [expiresInDays, setExpiresInDays] = useState('14')
+  const [modes, setModes] = useState<FeedbackInviteCaptureMode[]>(['text', 'state'])
+  const [createdUrl, setCreatedUrl] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const activeInvites = (invites.data?.invites ?? []).filter((invite) => !invite.revoked_at)
+
+  async function createLink() {
+    if (!companyId || create.isPending) return
+    setCreatedUrl(null)
+    setCopied(false)
+    try {
+      const route = targetRoute.trim()
+      const result = await create.mutateAsync({
+        reviewer_ref: reviewerRef.trim() || 'reviewer',
+        source: 'settings_external_reviewer',
+        ...(route ? { target_route: route } : {}),
+        expires_in_days: Math.max(1, Math.min(90, Number(expiresInDays) || 14)),
+        allowed_capture_modes: modes.length ? modes : ['text'],
+        metadata: { created_from: 'settings_external_reviewers' },
+      })
+      setCreatedUrl(result.invite_url)
+    } catch {
+      // React Query owns the rendered error state.
+    }
+  }
+
+  function toggleMode(mode: FeedbackInviteCaptureMode) {
+    setModes((current) => {
+      if (mode === 'text') return current.includes('text') ? current : ['text', ...current]
+      const next = current.includes(mode) ? current.filter((entry) => entry !== mode) : [...current, mode]
+      return next.includes('text') ? next : ['text', ...next]
+    })
+  }
+
+  function copyUrl(url: string) {
+    void navigator.clipboard
+      ?.writeText(url)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false))
+  }
+
+  if (!companyId) {
+    return <div style={{ padding: 16, color: 'var(--m-ink-3)', fontSize: 13 }}>No active company loaded.</div>
+  }
+
+  return (
+    <div style={{ padding: '12px 16px 30px' }}>
+      <div style={feedbackStyles.card}>
+        <label style={feedbackStyles.label}>
+          Reviewer
+          <input
+            value={reviewerRef}
+            onChange={(event) => setReviewerRef(event.target.value)}
+            style={feedbackStyles.input}
+            maxLength={120}
+          />
+        </label>
+        <label style={feedbackStyles.label}>
+          Target route
+          <input
+            value={targetRoute}
+            onChange={(event) => setTargetRoute(event.target.value)}
+            placeholder="/desktop"
+            style={feedbackStyles.input}
+            maxLength={500}
+          />
+        </label>
+        <label style={feedbackStyles.label}>
+          Expires
+          <input
+            value={expiresInDays}
+            onChange={(event) => setExpiresInDays(event.target.value)}
+            inputMode="numeric"
+            style={feedbackStyles.input}
+          />
+        </label>
+        <div style={feedbackStyles.modeGrid}>
+          {FEEDBACK_CAPTURE_MODES.map((mode) => (
+            <label key={mode} style={feedbackStyles.check}>
+              <input
+                type="checkbox"
+                checked={modes.includes(mode)}
+                disabled={mode === 'text'}
+                onChange={() => toggleMode(mode)}
+              />
+              {mode}
+            </label>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => void createLink()}
+          disabled={create.isPending}
+          style={{ ...feedbackStyles.primary, opacity: create.isPending ? 0.7 : 1 }}
+        >
+          {create.isPending ? 'Creating...' : 'Create feedback link'}
+        </button>
+        {create.isError ? <div style={feedbackStyles.error}>{create.error.message}</div> : null}
+        {createdUrl ? (
+          <div style={feedbackStyles.result}>
+            <div style={feedbackStyles.url}>{createdUrl}</div>
+            <button type="button" style={feedbackStyles.secondary} onClick={() => copyUrl(createdUrl)}>
+              {copied ? 'Copied' : 'Copy link'}
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <MSectionH>Active links</MSectionH>
+      <MListInset>
+        {invites.isPending ? (
+          <div style={feedbackStyles.empty}>Loading...</div>
+        ) : invites.isError ? (
+          <div style={feedbackStyles.error}>{invites.error.message}</div>
+        ) : activeInvites.length === 0 ? (
+          <div style={feedbackStyles.empty}>No active feedback links.</div>
+        ) : (
+          activeInvites.map((invite) => (
+            <div key={invite.id} style={feedbackStyles.inviteRow}>
+              <div style={{ minWidth: 0 }}>
+                <div style={feedbackStyles.inviteTitle}>{invite.reviewer_ref}</div>
+                <div style={feedbackStyles.inviteMeta}>
+                  {invite.allowed_capture_modes.join(', ')} · expires {shortDate(invite.expires_at)}
+                </div>
+                {invite.last_used_at ? (
+                  <div style={feedbackStyles.inviteMeta}>Last used {relativeTime(invite.last_used_at)}</div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                style={feedbackStyles.revoke}
+                disabled={revoke.isPending}
+                onClick={() => revoke.mutate({ inviteId: invite.id })}
+              >
+                Revoke
+              </button>
+            </div>
+          ))
+        )}
+      </MListInset>
+    </div>
   )
 }
 
@@ -418,4 +600,95 @@ function relativeTime(iso: string): string {
   if (day === 1) return 'yesterday'
   if (day < 7) return `${day} days ago`
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function shortDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso.slice(0, 10)
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+const feedbackStyles: Record<string, CSSProperties> = {
+  card: {
+    border: '1px solid var(--m-line)',
+    borderRadius: 12,
+    background: 'var(--m-card)',
+    padding: 12,
+    marginBottom: 18,
+  },
+  label: {
+    display: 'grid',
+    gap: 5,
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--m-ink-2)',
+    marginBottom: 10,
+  },
+  input: {
+    border: '1px solid var(--m-line)',
+    borderRadius: 8,
+    padding: '9px 10px',
+    font: 'inherit',
+    fontSize: 14,
+    background: '#fff',
+    color: 'var(--m-ink)',
+  },
+  modeGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 12 },
+  check: { display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: 'var(--m-ink)' },
+  primary: {
+    width: '100%',
+    border: 0,
+    borderRadius: 9,
+    padding: '10px 12px',
+    background: 'var(--m-accent)',
+    color: 'var(--m-accent-ink)',
+    fontWeight: 700,
+  },
+  secondary: {
+    border: '1px solid var(--m-line)',
+    borderRadius: 8,
+    padding: '8px 10px',
+    background: '#fff',
+    color: 'var(--m-ink)',
+    fontWeight: 700,
+  },
+  result: { marginTop: 10, display: 'grid', gap: 8 },
+  url: {
+    border: '1px solid var(--m-line)',
+    borderRadius: 8,
+    padding: 8,
+    background: 'var(--m-card-soft)',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: 11,
+    overflowWrap: 'anywhere',
+  },
+  error: {
+    marginTop: 8,
+    color: '#b91c1c',
+    background: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: 8,
+    padding: 8,
+    fontSize: 12,
+  },
+  empty: { padding: 12, fontSize: 13, color: 'var(--m-ink-3)' },
+  inviteRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '11px 12px',
+    borderBottom: '1px solid var(--m-line)',
+  },
+  inviteTitle: { fontSize: 14, fontWeight: 700, color: 'var(--m-ink)' },
+  inviteMeta: { fontSize: 12, color: 'var(--m-ink-3)', marginTop: 2 },
+  revoke: {
+    border: '1px solid #fecaca',
+    borderRadius: 8,
+    padding: '7px 9px',
+    background: '#fff',
+    color: '#b91c1c',
+    fontSize: 12,
+    fontWeight: 700,
+  },
 }

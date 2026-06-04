@@ -10,6 +10,7 @@ every step "capture."
 
 Related implementation notes:
 
+- `docs/OPT_IN_CAPTURE_LADDER_2026-06-04.md`
 - `docs/USAGE_CAPTURE_IMPLEMENTATION.md`
 - `docs/RUNBOOK_CONTEXT_HANDOFF.md`
 - `docs/SUPPORT_DEBUG_PACKETS.md`

@@ -115,6 +115,39 @@ export {
 } from './work-requests'
 
 export {
+  fetchIssueBoard,
+  fetchIssueBoardItem,
+  moveIssueBoardItem,
+  normalizeIssueBoardFilters,
+  useIssueBoard,
+  useIssueBoardItem,
+  useMoveIssueBoardItem,
+  type IssueBoardColumn,
+  type IssueBoardColumnId,
+  type IssueBoardFilters,
+  type IssueBoardGroupBy,
+  type IssueBoardItem,
+  type IssueBoardItemDetail,
+  type IssueBoardLane,
+  type IssueBoardResponse,
+  type IssueBoardScope,
+  type IssueBoardSeverity,
+  type IssueBoardStatus,
+  type IssueBoardTimelineEvent,
+  type MoveIssueBoardItemInput,
+} from './issue-board'
+
+export {
+  fetchAdminIssueBoard,
+  normalizeAdminIssueBoardFilters,
+  useAdminIssueBoard,
+  type AdminIssueBoardColumn,
+  type AdminIssueBoardFilters,
+  type AdminIssueBoardItem,
+  type AdminIssueBoardResponse,
+} from './admin-issue-board'
+
+export {
   clockIn,
   clockOut,
   fetchClockTimeline,

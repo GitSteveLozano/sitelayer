@@ -27,6 +27,7 @@ import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-
 import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
+import { createWorkDispatchReconcilerRunner } from './runners/work-dispatch-reconciler.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
 import { createLaneHealthKeeper } from './runners/lane-health-keeper.js'
 import { recordJobRun } from './runners/job-runs.js'
@@ -138,6 +139,7 @@ const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
+const workDispatchReconcilerRunner = createWorkDispatchReconcilerRunner({ pool })
 const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
 const laneHealthKeeper = createLaneHealthKeeper({ pool, logger })
 // Wedge 2 audit-escrow tick — hourly forward-anchor of audit_events +
@@ -559,6 +561,23 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
 
+  const workDispatchReconcileSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'work_request_stale',
+    () =>
+      workDispatchReconcilerRunner.maybeReconcile(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] work_dispatch_reconciler failed')
+        captureWithEntityContext(error, {
+          scope: 'work_dispatch_reconciler',
+          entity_type: 'context_work_item',
+          company_id: companyId,
+        })
+        return { ran: false, reconciled: 0, failed: 1 }
+      }),
+    { ran: false, reconciled: 0, failed: 0 },
+  )
+
   const workRequestStaleSummary = await runIfLaneActive(
     pool,
     logger,
@@ -677,6 +696,9 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     capture_artifact_analysis_failed: captureArtifactAnalysisSummary.failed,
     context_work_dispatch_processed: contextWorkDispatchSummary.processed,
     context_work_dispatch_failed: contextWorkDispatchSummary.failed,
+    work_dispatch_reconcile_ran: workDispatchReconcileSummary.ran,
+    work_dispatch_reconcile_reconciled: workDispatchReconcileSummary.reconciled,
+    work_dispatch_reconcile_failed: workDispatchReconcileSummary.failed,
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
     work_request_stale_sweep_updated: workRequestStaleSummary.updated,
     work_request_stale_sweep_failed: workRequestStaleSummary.failed,
@@ -721,6 +743,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     captureArtifactRetentionGcSummary.deleted > 0 ||
     captureArtifactAnalysisSummary.analyzed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
+    workDispatchReconcileSummary.ran ||
     workRequestStaleSummary.ran ||
     auditEscrowSummary.ran
   ) {

@@ -31,6 +31,7 @@
     "capture:trace-smoke": "tsx scripts/trace-capture-session-smoke.ts",
     "capture:learning-smoke": "bash scripts/test-capture-learning-loop.sh",
     "capture:portal-smoke": "playwright test -c e2e/portal-feedback-capture.config.ts",
+    "capture:steve-smoke": "playwright test -c e2e/steve-feedback-capture.config.ts",
     "capture:auth-browser-smoke": "playwright test -c e2e/authenticated-feedback-capture.config.ts",
     "capture:auth-smoke": "bash scripts/test-authenticated-feedback-capture.sh",
     "demo:email": "tsx scripts/demo-email.ts",

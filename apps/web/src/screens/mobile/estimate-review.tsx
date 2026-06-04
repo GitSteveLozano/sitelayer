@@ -14,6 +14,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useCustomers } from '@/lib/api/customers'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
+import { buildEstimateReviewStateSnapshot } from '@/lib/estimate-review-state-snapshot'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { repriceEstimateMargin, type EstimateLine } from '../../lib/api/estimate.js'
 import { createEstimateShare } from '../../lib/api/estimate-shares.js'
@@ -175,6 +178,70 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const profit = sellTotal - costBasis
   const clientLabel = client?.name ?? summary.project.customer_name ?? ''
   const clientFirstName = clientLabel.trim().split(/\s+/)[0] ?? ''
+
+  useEffect(() => {
+    return registerCaptureStateProvider(`estimate-review:${projectId}`, ({ reason }) =>
+      buildEstimateReviewStateSnapshot({
+        projectId,
+        routePath: currentCaptureRoutePath(),
+        reason,
+        summary,
+        builder: {
+          snapshot: builder.snapshot,
+          lines: builder.lines,
+          pendingEdits: builder.pendingEdits,
+          hasDirtyEdits: builder.hasDirtyEdits,
+          isLoading: builder.isLoading,
+          isSaving: builder.isSaving,
+          conflict: builder.conflict,
+          error: builder.error,
+        },
+        ui: {
+          creatingPush,
+          createError,
+          shareCreated: Boolean(shareUrl),
+          marginOverride,
+          marginSaving,
+          showSendSheet,
+          sendNoteLength: sendNote.length,
+          sendEmailPresent: Boolean(sendEmail.trim()),
+        },
+        totals: {
+          liveTotal,
+          costBasis,
+          sellTotal,
+          profit,
+          margin: marginClamped,
+          roundingDelta,
+        },
+      }),
+    )
+  }, [
+    builder.conflict,
+    builder.error,
+    builder.hasDirtyEdits,
+    builder.isLoading,
+    builder.isSaving,
+    builder.lines,
+    builder.pendingEdits,
+    builder.snapshot,
+    costBasis,
+    createError,
+    creatingPush,
+    liveTotal,
+    marginClamped,
+    marginOverride,
+    marginSaving,
+    profit,
+    projectId,
+    roundingDelta,
+    sellTotal,
+    sendEmail,
+    sendNote.length,
+    shareUrl,
+    showSendSheet,
+    summary,
+  ])
 
   // Commit the chosen margin: reprice the project bid off the cost basis
   // (SET_MARGIN). Fired on slider release / after a stepper tap, not on every

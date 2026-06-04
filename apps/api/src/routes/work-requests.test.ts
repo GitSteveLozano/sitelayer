@@ -429,6 +429,14 @@ class FakePool {
       return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
 
+    if (normalized.includes('from context_work_items') && normalized.includes("metadata ->> 'request_ref'")) {
+      const [companyId, requestRef] = params as [string, string]
+      const row = this.workItems.find(
+        (item) => item.company_id === companyId && item.metadata.request_ref === requestRef,
+      )
+      return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
+    }
+
     if (normalized.includes('from context_work_items') && normalized.includes('group by status')) {
       const [companyId, statuses] = params as [string, string[]]
       const rows = statuses
@@ -765,6 +773,140 @@ describe('handleWorkRequestRoutes', () => {
     expect(listed.responses[0]?.status).toBe(200)
     const body = listed.responses[0]?.body as { work_items: WorkItem[] }
     expect(body.work_items.map((item) => item.id)).toEqual([pool.workItems[0]!.id, uuid(998)])
+  })
+
+  it('returns status-group board columns that cover every work item status', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Board seed', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const statuses = [
+      'new',
+      'triaged',
+      'agent_running',
+      'human_assigned',
+      'review_ready',
+      'review_stale',
+      'proposal_expired',
+      'resolved',
+      'reopened',
+      'wont_do',
+      'reversed',
+    ]
+    pool.workItems = statuses.map((status, index) => ({
+      ...pool.workItems[0]!,
+      id: uuid(700 + index),
+      title: `Status ${status}`,
+      status,
+      lane: status === 'resolved' || status === 'wont_do' || status === 'reversed' ? 'done' : 'triage',
+    }))
+    const board = makeCtx(pool, {}, 'admin', 'admin-1')
+
+    await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests/board'), board.ctx)
+
+    expect(board.responses[0]?.status).toBe(200)
+    const body = board.responses[0]?.body as {
+      columns: Array<{ id: string; statuses: string[]; work_items: WorkItem[] }>
+    }
+    expect(body.columns.map((column) => column.id)).toEqual(['new', 'triaged', 'in_progress', 'done'])
+    expect(body.columns.flatMap((column) => column.statuses).sort()).toEqual([...statuses].sort())
+    expect(
+      body.columns
+        .flatMap((column) => column.work_items)
+        .map((item) => item.status)
+        .sort(),
+    ).toEqual([...statuses].sort())
+  })
+
+  it('scopes board columns to member-visible work items', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Mine', client: clientContext }, 'member', 'member-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    pool.workItems.push({
+      ...pool.workItems[0]!,
+      id: uuid(997),
+      title: 'Hidden',
+      created_by_user_id: 'other-user',
+      assignee_user_id: null,
+    })
+    pool.workItems.push({
+      ...pool.workItems[0]!,
+      id: uuid(996),
+      title: 'Assigned',
+      created_by_user_id: 'other-user',
+      assignee_user_id: 'member-1',
+    })
+    const board = makeCtx(pool, {}, 'member', 'member-1')
+
+    await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests/board'), board.ctx)
+
+    expect(board.responses[0]?.status).toBe(200)
+    const body = board.responses[0]?.body as { work_items: WorkItem[] }
+    expect(body.work_items.map((item) => item.title)).toEqual(['Mine', 'Assigned'])
+  })
+
+  it('moves a work request with an optimistic updated_at check and handoff event', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Move me', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const move = makeCtx(pool, {
+      status: 'triaged',
+      expected_updated_at: workItem.updated_at,
+      message: 'Ready for triage.',
+    })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/move`), move.ctx)
+
+    expect(move.responses[0]?.status).toBe(200)
+    expect(pool.workItems[0]).toMatchObject({ status: 'triaged', lane: 'triage' })
+    expect(pool.handoffEvents.at(-1)).toMatchObject({
+      event_type: 'work_item.status_changed',
+      actor_kind: 'user',
+      actor_user_id: 'user-1',
+      payload: expect.objectContaining({
+        previous_status: 'new',
+        status: 'triaged',
+        message: 'Ready for triage.',
+      }),
+    })
+  })
+
+  it('rejects member move attempts and stale move versions', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Guard me', client: clientContext }, 'member', 'member-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const memberMove = makeCtx(
+      pool,
+      { status: 'triaged', expected_updated_at: workItem.updated_at },
+      'member',
+      'member-1',
+    )
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/move`), memberMove.ctx)
+
+    expect(memberMove.responses[0]?.status).toBe(403)
+    const stale = makeCtx(pool, { status: 'triaged', expected_updated_at: '2026-05-21T12:00:00.000Z' })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/move`), stale.ctx)
+
+    expect(stale.responses[0]?.status).toBe(409)
+    expect(pool.workItems[0]).toMatchObject({ status: 'new', lane: 'triage' })
+    expect(pool.handoffEvents).toHaveLength(1)
+  })
+
+  it('rejects move attempts that try to set reversed status', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Reverse guard', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const move = makeCtx(pool, { status: 'reversed', expected_updated_at: workItem.updated_at })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/move`), move.ctx)
+
+    expect(move.responses[0]?.status).toBe(400)
+    expect(pool.workItems[0]).toMatchObject({ status: 'new' })
+    expect(pool.handoffEvents).toHaveLength(1)
   })
 
   it('appends a resolution event and updates status transactionally', async () => {

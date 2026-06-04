@@ -6,6 +6,9 @@ import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { useProject, useServiceItems, type EstimateLine, type PricingProfile, type ServiceItem } from '@/lib/api'
+import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
+import { buildEstimateBuilderStateSnapshot } from '@/lib/estimate-builder-state-snapshot'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateLineAssembly } from './estimate-line-assembly'
@@ -106,6 +109,49 @@ export function EstimateBuilderScreen() {
   const isCompactKeystone = lines.length > 0 && lines.length < COMPACT_KEYSTONE_LINE_THRESHOLD
   const [keystoneSheetOpen, setKeystoneSheetOpen] = useState(false)
   const [shareSheetOpen, setShareSheetOpen] = useState(false)
+
+  useEffect(() => {
+    if (!projectId) return
+    return registerCaptureStateProvider(`estimate-builder:${projectId}`, ({ reason }) =>
+      buildEstimateBuilderStateSnapshot({
+        projectId,
+        routePath: currentCaptureRoutePath(),
+        reason,
+        project: project.data?.project ?? null,
+        snapshot: builder.snapshot,
+        pendingEdits: builder.pendingEdits,
+        selectedCategory,
+        activeProfile,
+        ui: {
+          isLoading: builder.isLoading,
+          isSaving: builder.isSaving,
+          isRecomputing: builder.isRecomputing,
+          hasDirtyEdits: builder.hasDirtyEdits,
+          conflict: builder.conflict,
+          error: builder.error,
+          compactKeystone: isCompactKeystone,
+          shareSheetOpen,
+          keystoneSheetOpen,
+        },
+      }),
+    )
+  }, [
+    activeProfile,
+    builder.conflict,
+    builder.error,
+    builder.hasDirtyEdits,
+    builder.isLoading,
+    builder.isRecomputing,
+    builder.isSaving,
+    builder.pendingEdits,
+    builder.snapshot,
+    isCompactKeystone,
+    keystoneSheetOpen,
+    project.data?.project,
+    projectId,
+    selectedCategory,
+    shareSheetOpen,
+  ])
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-[1280px] mx-auto">

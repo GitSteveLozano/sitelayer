@@ -136,7 +136,20 @@ describe('createGeminiApiUnderstandingProcessor', () => {
     expect(fetchImpl).toHaveBeenCalledOnce()
     const [url, init] = fetchImpl.mock.calls[0]!
     expect(String(url)).toContain('gemini-3.1-flash-lite:generateContent')
-    expect(String(init.body)).toContain('inline_data')
+    expect(String(url)).not.toContain('key=')
+    expect(init.headers).toMatchObject({ 'x-goog-api-key': 'k' })
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(JSON.stringify(body.contents)).toContain('inline_data')
+    expect(body.generationConfig).toMatchObject({
+      responseFormat: {
+        text: {
+          mimeType: 'application/json',
+          schema: expect.objectContaining({
+            type: 'object',
+          }),
+        },
+      },
+    })
   })
 
   it('throws a clear error on non-200', async () => {

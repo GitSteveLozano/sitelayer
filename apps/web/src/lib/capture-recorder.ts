@@ -15,6 +15,13 @@ export type AudioCaptureRecorderDeps = {
   now?: () => number
 }
 
+export type ScreenCaptureRecorderDeps = {
+  mediaDevices?: Pick<MediaDevices, 'getDisplayMedia'> | null
+  MediaRecorderCtor?: MediaRecorderConstructor | null
+  now?: () => number
+  displayMediaConstraints?: DisplayMediaStreamOptions
+}
+
 const AUDIO_MIME_PREFERENCES = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -24,9 +31,26 @@ const AUDIO_MIME_PREFERENCES = [
   'audio/wav',
 ] as const
 
+const SCREEN_MIME_PREFERENCES = [
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8,opus',
+  'video/webm;codecs=vp9',
+  'video/webm;codecs=vp8',
+  'video/webm',
+  'video/mp4',
+] as const
+
 function defaultMediaDevices(): Pick<MediaDevices, 'getUserMedia'> | null {
   if (typeof navigator === 'undefined') return null
   return navigator.mediaDevices ?? null
+}
+
+function defaultScreenMediaDevices(): Pick<MediaDevices, 'getDisplayMedia'> | null {
+  if (typeof navigator === 'undefined') return null
+  const mediaDevices = navigator.mediaDevices as Partial<Pick<MediaDevices, 'getDisplayMedia'>> | undefined
+  return typeof mediaDevices?.getDisplayMedia === 'function'
+    ? (mediaDevices as Pick<MediaDevices, 'getDisplayMedia'>)
+    : null
 }
 
 function defaultMediaRecorder(): MediaRecorderConstructor | null {
@@ -58,6 +82,19 @@ export function preferredAudioMimeType(
 ): string | null {
   if (!Recorder?.isTypeSupported) return null
   return AUDIO_MIME_PREFERENCES.find((mime) => Recorder.isTypeSupported?.(mime)) ?? null
+}
+
+export function isScreenCaptureSupported(deps: ScreenCaptureRecorderDeps = {}): boolean {
+  const mediaDevices = deps.mediaDevices ?? defaultScreenMediaDevices()
+  const Recorder = deps.MediaRecorderCtor ?? defaultMediaRecorder()
+  return Boolean(mediaDevices?.getDisplayMedia && Recorder)
+}
+
+export function preferredScreenMimeType(
+  Recorder: MediaRecorderConstructor | null = defaultMediaRecorder(),
+): string | null {
+  if (!Recorder?.isTypeSupported) return null
+  return SCREEN_MIME_PREFERENCES.find((mime) => Recorder.isTypeSupported?.(mime)) ?? null
 }
 
 export class AudioCaptureRecorder {
@@ -140,6 +177,107 @@ export class AudioCaptureRecorder {
 
   cancel(): void {
     const error = new Error('Audio recording cancelled.')
+    const reject = this.rejectStop
+    const stopPromise = this.stopPromise
+    void stopPromise?.catch(() => undefined)
+    this.cleanup()
+    reject?.(error)
+  }
+
+  private cleanup(): void {
+    stopStreamTracks(this.stream)
+    this.stream = null
+    this.recorder = null
+    this.chunks = []
+    this.startedAt = 0
+    this.stopPromise = null
+    this.resolveStop = null
+    this.rejectStop = null
+  }
+}
+
+export class ScreenCaptureRecorder {
+  private readonly mediaDevices: Pick<MediaDevices, 'getDisplayMedia'> | null
+  private readonly Recorder: MediaRecorderConstructor | null
+  private readonly now: () => number
+  private readonly displayMediaConstraints: DisplayMediaStreamOptions
+  private stream: MediaStream | null = null
+  private recorder: MediaRecorder | null = null
+  private chunks: BlobPart[] = []
+  private startedAt = 0
+  private stopPromise: Promise<CaptureRecordingResult> | null = null
+  private resolveStop: ((value: CaptureRecordingResult) => void) | null = null
+  private rejectStop: ((error: Error) => void) | null = null
+
+  constructor(deps: ScreenCaptureRecorderDeps = {}) {
+    this.mediaDevices = deps.mediaDevices ?? defaultScreenMediaDevices()
+    this.Recorder = deps.MediaRecorderCtor ?? defaultMediaRecorder()
+    this.now = deps.now ?? Date.now
+    this.displayMediaConstraints = deps.displayMediaConstraints ?? { video: true, audio: false }
+  }
+
+  get isRecording(): boolean {
+    return Boolean(this.recorder && this.recorder.state !== 'inactive')
+  }
+
+  async start(): Promise<void> {
+    if (!this.mediaDevices?.getDisplayMedia || !this.Recorder) {
+      throw new Error('Screen recording is not available in this browser.')
+    }
+    if (this.isRecording) throw new Error('Screen recording is already active.')
+
+    const stream = await this.mediaDevices.getDisplayMedia(this.displayMediaConstraints)
+    const mimeType = preferredScreenMimeType(this.Recorder)
+    const recorder = new this.Recorder(stream, mimeType ? { mimeType } : undefined)
+    this.stream = stream
+    this.recorder = recorder
+    this.chunks = []
+    this.startedAt = this.now()
+    this.stopPromise = new Promise<CaptureRecordingResult>((resolve, reject) => {
+      this.resolveStop = resolve
+      this.rejectStop = reject
+    })
+
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) this.chunks.push(event.data)
+    }
+    recorder.onstop = () => {
+      const resolvedMime = recorder.mimeType || mimeType || 'video/webm'
+      const blob = new Blob(this.chunks, { type: resolvedMime })
+      const result = {
+        blob,
+        duration_ms: Math.max(0, Math.trunc(this.now() - this.startedAt)),
+        mime_type: resolvedMime,
+      }
+      const resolve = this.resolveStop
+      this.cleanup()
+      resolve?.(result)
+    }
+    recorder.onerror = (event) => {
+      const error = errorFromRecorderEvent(event)
+      const reject = this.rejectStop
+      this.cleanup()
+      reject?.(error)
+    }
+
+    try {
+      recorder.start()
+    } catch (error) {
+      this.cleanup()
+      throw error
+    }
+  }
+
+  async stop(): Promise<CaptureRecordingResult> {
+    const recorder = this.recorder
+    const stopPromise = this.stopPromise
+    if (!recorder || !stopPromise) throw new Error('Screen recording has not been started.')
+    if (recorder.state !== 'inactive') recorder.stop()
+    return stopPromise
+  }
+
+  cancel(): void {
+    const error = new Error('Screen recording cancelled.')
     const reject = this.rejectStop
     const stopPromise = this.stopPromise
     void stopPromise?.catch(() => undefined)

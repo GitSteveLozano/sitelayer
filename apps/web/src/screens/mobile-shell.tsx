@@ -146,6 +146,7 @@ const MobileQuickInvoice = lazy(() =>
 const MobileWorkRequests = lazy(() =>
   import('./mobile/work-requests.js').then((m) => ({ default: m.MobileWorkRequests })),
 )
+const MobileIssueBoard = lazy(() => import('./mobile/issue-board.js').then((m) => ({ default: m.MobileIssueBoard })))
 const MobileWorkRequestDetail = lazy(() =>
   import('./mobile/work-request-detail.js').then((m) => ({ default: m.MobileWorkRequestDetail })),
 )
@@ -443,6 +444,7 @@ export function MobileShell({
               path="work"
               element={<MobileWorkRequests companyRole={companyRole} currentUserId={currentUserId} />}
             />
+            <Route path="work/board" element={<MobileIssueBoard companyRole={companyRole} />} />
             <Route path="work/:workItemId" element={<MobileWorkRequestDetail companyRole={companyRole} />} />
             <Route path="more/*" element={<MoreRoute />} />
             <Route

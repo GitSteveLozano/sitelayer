@@ -16,6 +16,7 @@ import {
 } from './permission-seam.js'
 import { handleCompanyRoutes, loadCompanyCreateGateConfig } from './routes/companies.js'
 import { handleInviteRoutes } from './routes/invites.js'
+import { handleFeedbackInviteRoutes } from './routes/feedback-invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { resolveBlueprintVisionMode } from './takeoff-capture-pipelines/blueprint-vision.js'
@@ -26,6 +27,7 @@ import { handleSignalRoutes } from './routes/signal.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
+import { handleAdminWorkRequestRoutes } from './routes/admin-work-requests.js'
 import {
   createClerkSignInTokenMinter,
   handleDemoRoutes,
@@ -171,6 +173,11 @@ if (appConfig.tier === 'prod' && !process.env.ESTIMATE_SHARE_SECRET?.trim()) {
   logger.warn('[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET')
 }
 const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
+const feedbackInviteSecret =
+  process.env.FEEDBACK_INVITE_SECRET?.trim() || (appConfig.tier === 'prod' ? '' : estimateShareSecret)
+if (appConfig.tier === 'prod' && !process.env.FEEDBACK_INVITE_SECRET?.trim()) {
+  logger.warn('[feedback-invite] FEEDBACK_INVITE_SECRET not set; feedback invite routes will return 503')
+}
 // Demo-tier magic-link config. Only meaningful when APP_TIER=demo (the route
 // module hard-gates on tier). The shared access code + the Clerk sign-in-token
 // minter are resolved here so the handler stays pure. The minter reuses
@@ -845,6 +852,20 @@ const server = http.createServer(async (req, res) => {
               })
               if (publicPortalHandled) return
 
+              if (url.pathname.startsWith('/api/portal/feedback-invites/')) {
+                const feedbackInvitePublicHandled = await handleFeedbackInviteRoutes(req, url, {
+                  pool,
+                  userId: 'anonymous-feedback-invite',
+                  identitySource: 'default',
+                  isAnonymous: true,
+                  feedbackInviteSecret,
+                  portalBaseUrl,
+                  sendJson: (status, body) => sendJson(res, status, body, req),
+                  readBody: () => readBody(req),
+                })
+                if (feedbackInvitePublicHandled) return
+              }
+
               // Demo-tier magic-link sign-in. Structurally inert (returns
               // false → keeps walking → 404) unless APP_TIER=demo. Handled
               // pre-auth because the caller is signed-out and is asking for a
@@ -911,6 +932,13 @@ const server = http.createServer(async (req, res) => {
                 }
               }
 
+              const adminWorkRequestsHandled = await handleAdminWorkRequestRoutes(req, url, {
+                pool,
+                identity,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+              })
+              if (adminWorkRequestsHandled) return
+
               // Company routes (GET/POST /api/companies,
               // POST /api/companies/:id/memberships) handled by the extracted
               // route module. See routes/companies.ts.
@@ -954,6 +982,21 @@ const server = http.createServer(async (req, res) => {
                   // two: equal → no override → genuinely anonymous.
                   isAnonymous: identity.source === 'default' && getCurrentUserId(req) === identity.userId,
                   tier: appConfig.tier,
+                  sendJson: (status, body) => sendJson(res, status, body, req),
+                  readBody: () => readBody(req),
+                })
+              ) {
+                return
+              }
+
+              if (
+                await handleFeedbackInviteRoutes(req, url, {
+                  pool,
+                  userId: getCurrentUserId(req),
+                  identitySource: identity.source,
+                  isAnonymous: identity.source === 'default' && getCurrentUserId(req) === identity.userId,
+                  feedbackInviteSecret,
+                  portalBaseUrl,
                   sendJson: (status, body) => sendJson(res, status, body, req),
                   readBody: () => readBody(req),
                 })

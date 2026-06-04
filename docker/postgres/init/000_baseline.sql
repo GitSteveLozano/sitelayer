@@ -1075,6 +1075,43 @@ COMMENT ON TABLE public.company_invites IS 'Teammate invitations. email is the a
 
 
 --
+-- Name: feedback_invites; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE IF NOT EXISTS public.feedback_invites (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    company_id uuid NOT NULL,
+    token_id text NOT NULL,
+    token_kid text DEFAULT 'default'::text NOT NULL,
+    reviewer_ref text DEFAULT 'collaborator'::text NOT NULL,
+    source text DEFAULT 'manual'::text NOT NULL,
+    target_route text,
+    allowed_capture_modes text[] DEFAULT ARRAY['text'::text, 'state'::text] NOT NULL,
+    expires_at timestamp with time zone DEFAULT (now() + '14 days'::interval) NOT NULL,
+    revoked_at timestamp with time zone,
+    created_by_user_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT feedback_invites_allowed_capture_modes_nonempty CHECK ((array_length(allowed_capture_modes, 1) >= 1)),
+    CONSTRAINT feedback_invites_allowed_capture_modes_valid CHECK ((allowed_capture_modes <@ ARRAY['text'::text, 'audio'::text, 'screen'::text, 'trace'::text, 'state'::text])),
+    CONSTRAINT feedback_invites_reviewer_ref_nonempty CHECK ((btrim(reviewer_ref) <> ''::text)),
+    CONSTRAINT feedback_invites_source_nonempty CHECK ((btrim(source) <> ''::text)),
+    CONSTRAINT feedback_invites_token_id_min_length CHECK ((length(token_id) >= 16)),
+    CONSTRAINT feedback_invites_token_kid_valid CHECK ((token_kid ~ '^[A-Za-z0-9_-]{1,64}$'::text))
+);
+
+ALTER TABLE ONLY public.feedback_invites FORCE ROW LEVEL SECURITY;
+
+
+--
+-- Name: TABLE feedback_invites; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.feedback_invites IS 'Signed collaborator feedback links. token_id/token_kid identify the HMAC token; the full token is never listed back to admins after creation.';
+
+
+--
 -- Name: company_memberships; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3971,6 +4008,28 @@ END $baseline_con$;
 
 
 --
+-- Name: feedback_invites feedback_invites_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.feedback_invites
+      ADD CONSTRAINT feedback_invites_pkey PRIMARY KEY (id);
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
+-- Name: feedback_invites feedback_invites_token_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.feedback_invites
+      ADD CONSTRAINT feedback_invites_token_id_key UNIQUE (token_id);
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
 -- Name: company_memberships company_memberships_company_id_clerk_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6030,6 +6089,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS company_invites_token_idx ON public.company_in
 
 
 --
+-- Name: feedback_invites_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS feedback_invites_active_idx ON public.feedback_invites USING btree (company_id, expires_at) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: feedback_invites_company_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS feedback_invites_company_idx ON public.feedback_invites USING btree (company_id, created_at DESC);
+
+
+--
+-- Name: feedback_invites_token_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS feedback_invites_token_idx ON public.feedback_invites USING btree (token_id);
+
+
+--
 -- Name: company_memberships_custom_role_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6139,6 +6219,13 @@ CREATE INDEX IF NOT EXISTS context_work_items_capture_session_idx ON public.cont
 --
 
 CREATE UNIQUE INDEX IF NOT EXISTS context_work_items_client_request_id_uidx ON public.context_work_items USING btree (company_id, created_by_user_id, ((metadata ->> 'client_request_id'::text))) WHERE ((metadata ->> 'client_request_id'::text) IS NOT NULL);
+
+
+--
+-- Name: context_work_items_request_ref_uidx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX IF NOT EXISTS context_work_items_request_ref_uidx ON public.context_work_items USING btree (company_id, ((metadata ->> 'request_ref'::text))) WHERE ((metadata ->> 'request_ref'::text) IS NOT NULL);
 
 
 --
@@ -8179,6 +8266,17 @@ END $baseline_con$;
 DO $baseline_con$ BEGIN
   ALTER TABLE ONLY public.company_invites
       ADD CONSTRAINT company_invites_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
+END $baseline_con$;
+
+
+--
+-- Name: feedback_invites feedback_invites_company_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+DO $baseline_con$ BEGIN
+  ALTER TABLE ONLY public.feedback_invites
+      ADD CONSTRAINT feedback_invites_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
 EXCEPTION WHEN duplicate_table OR duplicate_object OR invalid_table_definition THEN NULL;
 END $baseline_con$;
 
@@ -10573,11 +10671,25 @@ ALTER TABLE public.clock_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_invites ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: feedback_invites; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.feedback_invites ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: company_invites company_invites_company_isolation; Type: POLICY; Schema: public; Owner: -
 --
 
 DROP POLICY IF EXISTS company_invites_company_isolation ON public.company_invites;
 CREATE POLICY company_invites_company_isolation ON public.company_invites USING (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id()))) WITH CHECK (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id())));
+
+
+--
+-- Name: feedback_invites feedback_invites_company_isolation; Type: POLICY; Schema: public; Owner: -
+--
+
+DROP POLICY IF EXISTS feedback_invites_company_isolation ON public.feedback_invites;
+CREATE POLICY feedback_invites_company_isolation ON public.feedback_invites USING (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id()))) WITH CHECK (((public.app_current_company_id() IS NULL) OR (company_id = public.app_current_company_id())));
 
 
 --

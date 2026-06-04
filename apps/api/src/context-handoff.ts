@@ -67,6 +67,7 @@ export const HANDOFF_EVENT_TYPES = [
   'agent.dispatch_acknowledged',
   'agent.dispatch_retried',
   'agent.dispatch_cancel_requested',
+  'agent.callback_missing',
   'agent.message_received',
   'agent.artifact_attached',
   'agent.proposal_ready',
@@ -487,6 +488,7 @@ export async function listContextWorkItems(
   companyId: string,
   filters: {
     status?: string | null
+    lane?: string | null
     entityType?: string | null
     entityId?: string | null
     createdByUserId?: string | null
@@ -501,6 +503,10 @@ export async function listContextWorkItems(
   if (filters.status) {
     values.push(filters.status)
     clauses.push(`status = $${values.length}`)
+  }
+  if (filters.lane) {
+    values.push(filters.lane)
+    clauses.push(`lane = $${values.length}`)
   }
   if (filters.entityType) {
     values.push(filters.entityType)

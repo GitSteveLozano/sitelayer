@@ -7,6 +7,7 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'company',
   'company_membership',
   'company_invite',
+  'feedback_invite',
   'company_role',
   'project',
   'customer',
