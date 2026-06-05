@@ -15,7 +15,7 @@ describe('buildTakeoffFromLabeledMesh', () => {
   const takeoff = buildTakeoffFromLabeledMesh({
     labeledMesh: fixture,
     projectId: 'spike-001',
-    takeoffId: '11111111-1111-1111-1111-111111111111',
+    takeoffId: '11111111-1111-4111-8111-111111111111',
     producedAt: '2026-05-07T15:01:00Z',
   })
 
