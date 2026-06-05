@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { z } from 'zod'
-import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
+import { calculateGeometryQuantity, detectDeductionOverlaps, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
 import { recordMutationLedger, withCompanyClient } from '../mutation-tx.js'
@@ -127,6 +127,50 @@ export async function handleTakeoffMeasurementRoutes(
       ),
     )
     ctx.sendJson(200, { measurements: result.rows })
+    return true
+  }
+
+  // GET /api/projects/:id/takeoff/deduction-overlaps — flag overlapping cutout
+  // (is_deduction) polygons on the same page (gap G8: "overlaps not
+  // deduplicated"). Overlapping cutouts double-subtract their shared area,
+  // deflating the net takeoff. Read-only; the dedup/clip itself is a follow-up.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/deduction-overlaps$/)) {
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    const explicitDraftId = url.searchParams.get('draft_id')
+    const params: unknown[] = [ctx.company.id, projectId]
+    let draftFilter: string
+    if (explicitDraftId !== null) {
+      if (!isValidUuid(explicitDraftId)) {
+        ctx.sendJson(400, { error: 'draft_id must be a valid uuid' })
+        return true
+      }
+      draftFilter = 'and draft_id = $3'
+      params.push(explicitDraftId)
+    } else {
+      const defaultDraftId = await resolveDefaultDraftId(ctx.pool, ctx.company.id, projectId)
+      if (defaultDraftId === null) {
+        ctx.sendJson(200, { overlaps: [], count: 0 })
+        return true
+      }
+      draftFilter = 'and draft_id = $3'
+      params.push(defaultDraftId)
+    }
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string; page_id: string | null; is_deduction: boolean; geometry: unknown }>(
+        `select id, page_id, is_deduction, geometry
+           from takeoff_measurements
+          where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}`,
+        params,
+      ),
+    )
+    const overlaps = detectDeductionOverlaps(
+      result.rows.map((r) => ({ id: r.id, pageId: r.page_id, isDeduction: r.is_deduction, geometry: r.geometry })),
+    )
+    ctx.sendJson(200, { overlaps, count: overlaps.length })
     return true
   }
 

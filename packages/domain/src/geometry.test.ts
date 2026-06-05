@@ -12,6 +12,10 @@ import {
   normalizeGeometry,
   normalizePolygonGeometry,
   normalizeLinealGeometry,
+  pointInPolygon,
+  segmentsIntersect,
+  polygonsOverlap,
+  detectDeductionOverlaps,
   type PitchDriver,
   type PolygonGeometry,
 } from './geometry.js'
@@ -153,6 +157,89 @@ describe('geometry.ts (Blocker 2 split)', () => {
         ],
       })
       expect(g && 'pitch' in g).toBe(false)
+    })
+  })
+})
+
+describe('polygon overlap kernel (gap G8: cutout de-dup)', () => {
+  const square = (x: number, y: number, s: number) => [
+    { x, y },
+    { x: x + s, y },
+    { x: x + s, y: y + s },
+    { x, y: y + s },
+  ]
+
+  describe('pointInPolygon', () => {
+    const sq = square(0, 0, 10)
+    it('is true for an interior point, false for an exterior one', () => {
+      expect(pointInPolygon({ x: 5, y: 5 }, sq)).toBe(true)
+      expect(pointInPolygon({ x: 15, y: 5 }, sq)).toBe(false)
+    })
+    it('is false for < 3 vertices', () => {
+      expect(
+        pointInPolygon({ x: 1, y: 1 }, [
+          { x: 0, y: 0 },
+          { x: 2, y: 2 },
+        ]),
+      ).toBe(false)
+    })
+  })
+
+  describe('segmentsIntersect', () => {
+    it('detects a crossing', () => {
+      expect(segmentsIntersect({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 10, y: 0 })).toBe(true)
+    })
+    it('returns false for disjoint segments', () => {
+      expect(segmentsIntersect({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 5 }, { x: 1, y: 5 })).toBe(false)
+    })
+    it('detects a collinear touch', () => {
+      expect(segmentsIntersect({ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 0 }, { x: 4, y: 0 })).toBe(true)
+    })
+  })
+
+  describe('polygonsOverlap', () => {
+    it('true when polygons cross', () => {
+      expect(polygonsOverlap(square(0, 0, 10), square(5, 5, 10))).toBe(true)
+    })
+    it('true when one fully contains the other (no edge crossings)', () => {
+      expect(polygonsOverlap(square(0, 0, 20), square(5, 5, 5))).toBe(true)
+    })
+    it('false for disjoint polygons', () => {
+      expect(polygonsOverlap(square(0, 0, 5), square(20, 20, 5))).toBe(false)
+    })
+  })
+
+  describe('detectDeductionOverlaps', () => {
+    const poly = (s: number, x = 0, y = 0) => ({ kind: 'polygon', points: square(x, y, s) })
+    it('flags two overlapping deductions on the same page', () => {
+      const pairs = detectDeductionOverlaps([
+        { id: 'cut-a', pageId: 'p1', isDeduction: true, geometry: poly(10, 0, 0) },
+        { id: 'cut-b', pageId: 'p1', isDeduction: true, geometry: poly(10, 5, 5) },
+      ])
+      expect(pairs).toHaveLength(1)
+      expect(pairs[0]).toMatchObject({ a: 'cut-a', b: 'cut-b', pageId: 'p1' })
+    })
+    it('does NOT compare deductions on different pages', () => {
+      const pairs = detectDeductionOverlaps([
+        { id: 'cut-a', pageId: 'p1', isDeduction: true, geometry: poly(10, 0, 0) },
+        { id: 'cut-b', pageId: 'p2', isDeduction: true, geometry: poly(10, 5, 5) },
+      ])
+      expect(pairs).toHaveLength(0)
+    })
+    it('ignores non-deductions and non-overlapping cutouts', () => {
+      const pairs = detectDeductionOverlaps([
+        { id: 'wall', pageId: 'p1', isDeduction: false, geometry: poly(50, 0, 0) }, // overlaps both but not a deduction
+        { id: 'cut-a', pageId: 'p1', isDeduction: true, geometry: poly(5, 0, 0) },
+        { id: 'cut-b', pageId: 'p1', isDeduction: true, geometry: poly(5, 30, 30) }, // disjoint cutout
+      ])
+      expect(pairs).toHaveLength(0)
+    })
+    it('skips measurements with non-polygon / missing geometry', () => {
+      const pairs = detectDeductionOverlaps([
+        { id: 'a', pageId: 'p1', isDeduction: true, geometry: { kind: 'volume', length: 1, width: 1, height: 1 } },
+        { id: 'b', pageId: 'p1', isDeduction: true, geometry: null },
+      ])
+      expect(pairs).toHaveLength(0)
     })
   })
 })

@@ -502,3 +502,122 @@ export function deriveMeasurementDrivers(geometry: TakeoffGeometry): Measurement
 
   return computed
 }
+
+// --- Polygon overlap detection (gap G8: cutout/deduction de-dup) -------------
+//
+// Today a deduction (cutout) just nets its quantity off the gross — two cutouts
+// that overlap (e.g. a window drawn twice, or a door inside a window opening)
+// double-subtract their shared area, deflating the net takeoff. These pure
+// primitives detect those overlaps so the caller can warn / dedup. Board-space
+// (0–100) polygons on the same page only; geometry is general-purpose.
+
+const EPS = 1e-9
+
+/** Ray-cast point-in-polygon. Boundary is treated as outside (good enough for
+ *  the overlap test, which also checks edge crossings + the other direction). */
+export function pointInPolygon(point: TakeoffPoint, polygon: readonly TakeoffPoint[]): boolean {
+  if (polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[i]
+    const b = polygon[j]
+    if (!a || !b) continue
+    const intersects = a.y > point.y !== b.y > point.y && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
+    if (intersects) inside = !inside
+  }
+  return inside
+}
+
+function orientation(p: TakeoffPoint, q: TakeoffPoint, r: TakeoffPoint): number {
+  const v = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
+  if (Math.abs(v) < EPS) return 0
+  return v > 0 ? 1 : 2
+}
+
+function onSegment(p: TakeoffPoint, q: TakeoffPoint, r: TakeoffPoint): boolean {
+  return (
+    q.x <= Math.max(p.x, r.x) + EPS &&
+    q.x >= Math.min(p.x, r.x) - EPS &&
+    q.y <= Math.max(p.y, r.y) + EPS &&
+    q.y >= Math.min(p.y, r.y) - EPS
+  )
+}
+
+/** Do segments p1p2 and p3p4 intersect (including collinear touching)? */
+export function segmentsIntersect(p1: TakeoffPoint, p2: TakeoffPoint, p3: TakeoffPoint, p4: TakeoffPoint): boolean {
+  const o1 = orientation(p1, p2, p3)
+  const o2 = orientation(p1, p2, p4)
+  const o3 = orientation(p3, p4, p1)
+  const o4 = orientation(p3, p4, p2)
+  if (o1 !== o2 && o3 !== o4) return true
+  if (o1 === 0 && onSegment(p1, p3, p2)) return true
+  if (o2 === 0 && onSegment(p1, p4, p2)) return true
+  if (o3 === 0 && onSegment(p3, p1, p4)) return true
+  if (o4 === 0 && onSegment(p3, p2, p4)) return true
+  return false
+}
+
+/**
+ * Do two polygons share interior area? True when any edges cross, OR one
+ * polygon fully contains a vertex of the other (covers containment with no edge
+ * crossings). Conservative on boundary-touch — for cutout de-dup, flagging a
+ * boundary-touch for review is the safe side.
+ */
+export function polygonsOverlap(a: readonly TakeoffPoint[], b: readonly TakeoffPoint[]): boolean {
+  if (a.length < 3 || b.length < 3) return false
+  for (let i = 0; i < a.length; i += 1) {
+    const a1 = a[i]
+    const a2 = a[(i + 1) % a.length]
+    if (!a1 || !a2) continue
+    for (let j = 0; j < b.length; j += 1) {
+      const b1 = b[j]
+      const b2 = b[(j + 1) % b.length]
+      if (!b1 || !b2) continue
+      if (segmentsIntersect(a1, a2, b1, b2)) return true
+    }
+  }
+  // No edges cross — check full containment in either direction.
+  const a0 = a[0]
+  const b0 = b[0]
+  if (a0 && pointInPolygon(a0, b)) return true
+  if (b0 && pointInPolygon(b0, a)) return true
+  return false
+}
+
+export interface OverlapCandidate {
+  id: string
+  pageId?: string | null
+  isDeduction: boolean
+  geometry: unknown
+}
+export interface OverlapPair {
+  a: string
+  b: string
+  pageId: string | null
+}
+
+/**
+ * Find overlapping DEDUCTION (cutout) polygons among a measurement set (gap G8:
+ * "overlaps not deduplicated"). Only polygon deductions ON THE SAME PAGE are
+ * compared — different pages are different board spaces. Returns the id pairs
+ * that overlap so the caller can warn or net-dedup.
+ */
+export function detectDeductionOverlaps(measurements: readonly OverlapCandidate[]): OverlapPair[] {
+  const cutouts: Array<{ id: string; pageId: string | null; points: TakeoffPoint[] }> = []
+  for (const m of measurements) {
+    if (!m.isDeduction) continue
+    const poly = normalizePolygonGeometry(m.geometry)
+    if (!poly || poly.points.length < 3) continue
+    cutouts.push({ id: m.id, pageId: m.pageId ?? null, points: poly.points })
+  }
+  const pairs: OverlapPair[] = []
+  for (let i = 0; i < cutouts.length; i += 1) {
+    for (let j = i + 1; j < cutouts.length; j += 1) {
+      const ci = cutouts[i]
+      const cj = cutouts[j]
+      if (!ci || !cj || ci.pageId !== cj.pageId) continue
+      if (polygonsOverlap(ci.points, cj.points)) pairs.push({ a: ci.id, b: cj.id, pageId: ci.pageId })
+    }
+  }
+  return pairs
+}
