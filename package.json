@@ -40,6 +40,7 @@
     "probe:workflows": "tsx apps/api/scripts/probe-workflows.ts",
     "probe:estimate-push:smoke": "playwright test -c e2e/probe-estimate-push-smoke.config.ts",
     "takeoff-preview:smoke": "playwright test -c e2e/takeoff-preview-smoke.config.ts",
+    "walkthrough": "node scripts/walkthrough/run-walkthrough.mjs",
     "test:e2e": "playwright test",
     "test:e2e:tagged": "playwright test --grep",
     "test:e2e:ui": "playwright test --ui",

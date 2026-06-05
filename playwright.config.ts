@@ -70,6 +70,10 @@ const webServer: PlaywrightTestConfig['webServer'] = [
 // `webServer` key from the object entirely.
 const baseConfig: PlaywrightTestConfig = {
   testDir: './e2e',
+  // e2e/walkthroughs/ are standalone deterministic-walkthrough recordings
+  // (video + gemini-video verification, run via scripts/walkthrough/), NOT gate
+  // tests — keep them out of the e2e suite (`npm run test:e2e` / verify:full).
+  testIgnore: '**/walkthroughs/**',
   // Sequential mode — the seed pre-creates one row per workflow under the
   // shared `e2e-fixtures` company. Running tests in parallel would race
   // for the same workflow snapshot rows (`state_version` conflicts).
