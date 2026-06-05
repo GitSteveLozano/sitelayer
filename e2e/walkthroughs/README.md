@@ -17,13 +17,24 @@ Playwright spec (deterministic, XState/seed- or demo-driven)
 ## Run
 
 ```bash
-npm run walkthrough                                   # all walkthroughs vs dev
-E2E_BASE_URL=http://localhost:3100 npm run walkthrough  # vs a local stack
-npm run walkthrough takeoff-demo                        # filter by name
-WALKTHROUGH_SKIP_GEMINI=1 npm run walkthrough           # record only, no verify
+npm run walkthrough                       # record only — NO gemini (default)
+npm run walkthrough -- --verify           # also gemini-video-verify (opt-in; uses Gemini quota)
+WALKTHROUGH_VERIFY=1 npm run walkthrough   # same, via env
+npm run walkthrough -- takeoff-demo        # filter by name
+E2E_BASE_URL=http://localhost:3100 npm run walkthrough   # vs a local stack
 ```
 
-The runner exits non-zero if gemini-video reports `pass:false`, so it can gate.
+**Gemini verification is opt-in** (`--verify` / `WALKTHROUGH_VERIFY=1`) so
+routine runs don't burn the Gemini usage limits — concept proven, now we record
+by default and verify on demand. With `--verify`, the runner exits non-zero if
+gemini-video reports `pass:false`, so it can gate.
+
+**Videos are kept on the external drive**, not DigitalOcean Spaces: default
+`/mnt/backup/sitelayer-walkthroughs/run-<timestamp>/` (the 20T external drive),
+or the gitignored `.artifacts/` if that drive isn't mounted. Override the
+location with `WALKTHROUGH_VIDEO_DIR` (e.g. point it at a USB under
+`/media/<user>/...`). Runs accumulate (each in its own timestamped dir) rather
+than being wiped.
 
 ## Why this is deterministic
 
@@ -52,4 +63,6 @@ are excluded from the e2e gate (`testIgnore: '**/walkthroughs/**'` in the root
   `GEMINI_API_KEY` so the CLI uses OAuth, matching the worker's gemini-cli media
   adapter). The local-GPU `gemma4-12b-vision` path is fragile on multi-frame
   video; gemini-cli is the reliable verifier here.
-- Artifacts land in `e2e/walkthroughs/.artifacts/` (gitignored).
+- Videos are stored locally (external drive / `WALKTHROUGH_VIDEO_DIR`), never
+  uploaded to DigitalOcean Spaces. The local `.artifacts/` fallback is
+  gitignored.

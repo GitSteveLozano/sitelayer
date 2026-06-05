@@ -1,35 +1,57 @@
 #!/usr/bin/env node
-// Deterministic walkthrough → video → gemini-video verification.
+// Deterministic walkthrough → video (kept locally) → OPTIONAL gemini-video check.
 //
 // Runs a Playwright walkthrough (video always on, see
-// e2e/walkthroughs/walkthrough.config.ts), finds the recorded video, then hands
-// it to the Gemini CLI to verify the recording matches the walkthrough's
-// expected step narrative (walkthrough-steps.json).
+// e2e/walkthroughs/walkthrough.config.ts), keeps the recording on the external
+// drive, and ONLY when asked hands it to the Gemini CLI to verify the recording
+// matches the walkthrough's expected step narrative (walkthrough-steps.json).
+// Gemini is opt-in so routine runs don't burn the Gemini usage limits.
 //
-//   node scripts/walkthrough/run-walkthrough.mjs                 # all walkthroughs vs dev
-//   E2E_BASE_URL=http://localhost:3100 node scripts/walkthrough/run-walkthrough.mjs
-//   node scripts/walkthrough/run-walkthrough.mjs takeoff-demo     # filter by name
+//   node scripts/walkthrough/run-walkthrough.mjs              # record only (no gemini) — default
+//   node scripts/walkthrough/run-walkthrough.mjs --verify     # also gemini-video-verify (opt-in)
+//   node scripts/walkthrough/run-walkthrough.mjs takeoff-demo --verify   # filter + verify
 //
 // Env: E2E_BASE_URL (default dev), GEMINI_CLI_BIN (default 'gemini'),
-//      WALKTHROUGH_SKIP_GEMINI=1 to record only.
+//      WALKTHROUGH_VERIFY=1 (gemini opt-in), WALKTHROUGH_VIDEO_DIR (where videos
+//      are kept; default /mnt/backup/sitelayer-walkthroughs — never DO Spaces).
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 const ROOT = process.cwd()
 const CONFIG = 'e2e/walkthroughs/walkthrough.config.ts'
-const OUT = path.join(ROOT, 'e2e', 'walkthroughs', '.artifacts')
-const filter = process.argv[2] ?? ''
+
+// Where recorded walkthrough videos are KEPT. Default to the large external
+// drive so they persist off-repo and OUT of DigitalOcean Spaces; fall back to a
+// local gitignored dir if that drive isn't mounted. Override with
+// WALKTHROUGH_VIDEO_DIR (e.g. point it at a plugged-in USB under /media/...).
+const VIDEO_ROOT =
+  process.env.WALKTHROUGH_VIDEO_DIR ??
+  (existsSync('/mnt/backup')
+    ? '/mnt/backup/sitelayer-walkthroughs'
+    : path.join(ROOT, 'e2e', 'walkthroughs', '.artifacts'))
+
+// Gemini verification is OPT-IN — routine runs just record the video, so we
+// don't burn the Gemini usage limits. Pass --verify or set WALKTHROUGH_VERIFY=1
+// to have gemini-video check the recording.
+const args = process.argv.slice(2)
+const VERIFY = args.includes('--verify') || process.env.WALKTHROUGH_VERIFY === '1'
+const filter = args.find((a) => !a.startsWith('-')) ?? ''
 
 function sh(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts })
 }
 
-// Fresh artifacts each run so "newest video" is unambiguous.
-if (existsSync(OUT)) rmSync(OUT, { recursive: true, force: true })
+// Each run gets its own timestamped dir — videos accumulate on the drive (we
+// keep them rather than wiping a shared external location).
+const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+const OUT = path.join(VIDEO_ROOT, `run-${stamp}${filter ? `-${filter.replace(/[^a-z0-9]+/gi, '-')}` : ''}`)
 mkdirSync(OUT, { recursive: true })
 
 console.log(`▶ walkthrough run (base=${process.env.E2E_BASE_URL ?? 'https://dev.sitelayer.sandolab.xyz'})`)
+console.log(
+  `   videos → ${OUT}${VERIFY ? '   [--verify: gemini-video on]' : '   (record only; --verify to gemini-check)'}`,
+)
 try {
   sh('npx', ['playwright', 'test', '-c', CONFIG, ...(filter ? [filter] : [])], {
     stdio: 'inherit',
@@ -60,10 +82,11 @@ if (!videos.length) {
 const video = videos[0]
 const stepsFile = files.find((f) => f.endsWith('walkthrough-steps.json'))
 const steps = stepsFile ? JSON.parse(readFileSync(stepsFile, 'utf8')) : { title: 'walkthrough', steps: [] }
-console.log('🎬 recorded video:', path.relative(ROOT, video))
+console.log('🎬 recorded video:', video)
 
-if (process.env.WALKTHROUGH_SKIP_GEMINI === '1') {
-  console.log('(WALKTHROUGH_SKIP_GEMINI=1 — recorded only, skipping gemini verify)')
+if (!VERIFY) {
+  console.log('\n✓ recorded (gemini verification skipped to conserve usage limits).')
+  console.log('  Re-run with --verify (or WALKTHROUGH_VERIFY=1) to have gemini-video check this recording.')
   process.exit(0)
 }
 
