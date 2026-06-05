@@ -13,6 +13,13 @@ const DEFAULT_TARGET = '/desktop'
 const DEFAULT_COMPANY_SLUG = 'e2e-fixtures'
 const VALID_ROLES = new Set(['admin', 'foreman', 'office', 'member', 'bookkeeper'])
 
+function isTruthyFlag(value: string | null | undefined): boolean {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
 function safeTarget(raw: string | null): string {
   if (!raw) return DEFAULT_TARGET
   const trimmed = raw.trim()
@@ -26,11 +33,20 @@ function roleToActAs(raw: string | null): string {
   return `e2e-${role}`
 }
 
-function targetWithCaptureFlags(target: string): string {
+function audioFlag(params: URLSearchParams): string {
+  // Steve records mic audio in his own browser (getUserMedia + MediaRecorder);
+  // the browser's permission prompt is the only gate. Default ON so the one-link
+  // gives the full kit (screen + mic + interaction events); allow ?audio=0 to opt out.
+  const raw = params.get('audio')
+  if (raw === null) return '1'
+  return isTruthyFlag(raw) ? '1' : '0'
+}
+
+function targetWithCaptureFlags(target: string, params: URLSearchParams): string {
   const url = new URL(target, window.location.origin)
   url.searchParams.set('capture_feedback', '1')
   url.searchParams.set('capture_replay', '1')
-  url.searchParams.set('capture_audio', '0')
+  url.searchParams.set('capture_audio', audioFlag(params))
   url.searchParams.set('collab', 'steve')
   url.searchParams.set('feedback_open', '1')
   return `${url.pathname}${url.search}${url.hash}`
@@ -40,7 +56,7 @@ export function SteveCollabEntry() {
   const [storageBlocked, setStorageBlocked] = useState(false)
   const destination = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
-    return targetWithCaptureFlags(safeTarget(params.get('target')))
+    return targetWithCaptureFlags(safeTarget(params.get('target')), params)
   }, [])
 
   useEffect(() => {
@@ -51,7 +67,7 @@ export function SteveCollabEntry() {
       window.localStorage.setItem(STEVE_COLLAB_MODE_STORAGE_KEY, STEVE_COLLAB_MODE_VALUE)
       window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
       window.localStorage.setItem(AUTH_FEEDBACK_REPLAY_STORAGE_KEY, '1')
-      window.localStorage.setItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY, '0')
+      window.localStorage.setItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY, audioFlag(params))
       window.localStorage.setItem(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY, '1')
       window.location.replace(destination)
     } catch {
