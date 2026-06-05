@@ -39,3 +39,13 @@ export {
   type TakeoffCostInput,
   type TakeoffCostEstimate,
 } from './cost.js'
+export {
+  createTakeoffVisionProvider,
+  createCliProvider,
+  createStubProvider,
+  type TakeoffVisionProvider,
+  type TakeoffVisionRequest,
+  type TakeoffVisionResult,
+  type TakeoffVisionMode,
+  type CliRunner,
+} from './provider.js'
