@@ -34,7 +34,8 @@ import {
   applyReviewFloor,
   validateTakeoffResult,
 } from '@sitelayer/capture-schema'
-import { callClaudePdfJson } from './anthropicClient.js'
+import { callClaudePdfJson, parseJsonStrict } from './anthropicClient.js'
+import type { TakeoffVisionProvider } from './provider.js'
 import { dimensionMatches, parseDimensionToFeet, pixelsPerFootFromScaleText } from './dimensions.js'
 import { polygonAreaPx2, polygonBbox, polygonPerimeterPx, segmentLengthPx } from './geometry.js'
 import { CLASSIFY_PROMPT, EXTRACT_PROMPT, PROMPT_VERSION } from './prompts.js'
@@ -104,6 +105,10 @@ export interface BuildBlueprintTakeoffOptions {
   /** Optional dependency injection for tests. If supplied, no real API
    *  client is created. */
   anthropicClient?: Anthropic
+  /** Route the classify/extract model calls through a pluggable vision provider
+   *  (e.g. gemini-3.1-flash-lite — the bang-for-buck winner) instead of Claude.
+   *  When set, the Anthropic client + `model` are ignored. */
+  visionProvider?: TakeoffVisionProvider
   /** When true, skip Anthropic calls and emit a fixture-driven mock. */
   dryRun?: boolean
   /** Pages to use for dry-run. Defaults to a one-floor-plan-page mock. */
@@ -289,6 +294,9 @@ async function runClassify(opts: BuildBlueprintTakeoffOptions, model: string, pd
   if (opts.dryRun) {
     return opts.dryRunMock?.classify ?? defaultDryRunClassify()
   }
+  if (opts.visionProvider) {
+    return runVisionJson(opts.visionProvider, CLASSIFY_PROMPT, pdfBase64)
+  }
   const client = ensureClient(opts)
   return callClaudePdfJson({
     client,
@@ -308,6 +316,13 @@ async function runExtract(
   if (opts.dryRun) {
     return opts.dryRunMock?.extract?.[pageIndex] ?? defaultDryRunExtract()
   }
+  if (opts.visionProvider) {
+    return runVisionJson(
+      opts.visionProvider,
+      `${EXTRACT_PROMPT}\n\n(Focus on page index ${pageIndex} only.)`,
+      pdfBase64,
+    )
+  }
   const client = ensureClient(opts)
   return callClaudePdfJson({
     client,
@@ -316,6 +331,16 @@ async function runExtract(
     prompt: `${EXTRACT_PROMPT}\n\n(Focus on page index ${pageIndex} only.)`,
     cacheDocument: true,
   })
+}
+
+/** Route one classify/extract call through a pluggable vision provider (gemini)
+ *  and parse its text to JSON for the same zod validation the Claude path uses. */
+async function runVisionJson(provider: TakeoffVisionProvider, prompt: string, pdfBase64: string): Promise<unknown> {
+  const res = await provider.run({
+    prompt,
+    page: { base64: pdfBase64, mimeType: 'application/pdf', widthPx: 1700, heightPx: 2200, fileExt: 'pdf' },
+  })
+  return parseJsonStrict<unknown>(res.text)
 }
 
 function ensureClient(opts: BuildBlueprintTakeoffOptions): Anthropic {
