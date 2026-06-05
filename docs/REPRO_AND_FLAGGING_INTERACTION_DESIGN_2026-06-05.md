@@ -125,22 +125,24 @@ Shipped now:
 
 - **Type an issue** → one work item (existing).
 - **Reproduce a bug** → start/mark/end bracket → `repro_bracket` + replay (new).
+- **Label a mark** inline ("the total is wrong here") while reproducing (new).
 - **Record voice** narration (existing, gated by level).
 - **Record screen** video (existing, gated by level + capability).
 - **Keyboard**: flag / start-stop repro / mark (new, opt-in, desktop).
 - **One Discord link** seeds review mode + auto-opens the dock (existing).
 - **Signed `/feedback?token=` portal** for logged-out prod reviewers (existing).
+- **Watch the reproduction back**: operator-side in-app rrweb player with the
+  `repro_bracket` summary and seek-to-mark, in the work-request triage view (new
+  — `ReproReplayPanel` inside `CaptureMediaPanel`).
 
 Deferred (designed, not built — listed so coverage isn't mistaken for complete):
 
-- **Replay player UI**: rrweb artifacts are stored but there is no operator-side
-  "watch this reproduction back" player yet. Highest-value next step — the
-  `repro_bracket.window_ms` + marks give it exact seek points.
-- **Per-mark labels**: marks are auto-numbered today; a tiny inline label field
-  per mark ("the total is wrong here") is a fast follow.
 - **L5 live assist** (WebRTC screen-share with operator marks) — infra
   (signaling/TURN/operator viewer) is a separate build.
-- **Low-default opt-in seed** for non-reviewer pilot cohorts (see note above).
+- **Low-default opt-in seed** for non-reviewer pilot cohorts (see note above) —
+  intentionally not built: the dock today is enabled only in review/collab
+  contexts, so there is no cohort that wants a low default yet. Add the seed flag
+  when one exists rather than shipping unused config.
 - **Native/mobile screen video** (ReplayKit/MediaProjection) — only if web
   capture proves insufficient.
 
@@ -154,4 +156,10 @@ Deferred (designed, not built — listed so coverage isn't mistaken for complete
   `repro_bracket` artifact kind.
 - `apps/api/src/capture-consent-policy.ts` — server allow-list for
   `repro_bracket`.
-- `apps/web/src/components/capture/AuthenticatedFeedbackDock.tsx` — the surface.
+- `apps/web/src/components/capture/AuthenticatedFeedbackDock.tsx` — the capture
+  surface.
+- `apps/web/src/lib/repro-replay.ts` — parsers/formatters + the lazy rrweb
+  Replayer loader.
+- `apps/web/src/components/work-requests/ReproReplayPanel.tsx` — the operator-side
+  viewer (summary + in-app playback + seek-to-mark), mounted by
+  `CaptureMediaPanel.tsx`.

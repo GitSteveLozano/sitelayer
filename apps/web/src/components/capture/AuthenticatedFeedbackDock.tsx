@@ -191,6 +191,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   const [receipt, setReceipt] = useState<FeedbackReceipt | null>(null)
   const [reproElapsedMs, setReproElapsedMs] = useState(0)
   const [reproMarkCount, setReproMarkCount] = useState(0)
+  const [markLabel, setMarkLabel] = useState('')
   // Progressive opt-in recording level. Seeded to the highest tier this device
   // supports (so the dock offers everything it can today, no regression), then
   // dialable up/down by the user and persisted. It gates the reproduction
@@ -528,6 +529,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     setRecordingKind('repro')
     setReproMarkCount(0)
     setReproElapsedMs(0)
+    setMarkLabel('')
     const buildSha = env('VITE_APP_BUILD_SHA') || env('VITE_BUILD_SHA')
     try {
       await controller.start({
@@ -558,8 +560,10 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function markRepro() {
     const controller = reproRef.current
     if (!controller || controller.status !== 'active') return
+    const label = markLabel.trim()
+    setMarkLabel('')
     try {
-      await controller.mark()
+      await controller.mark(label || undefined)
       setReproMarkCount(controller.markCount)
     } catch {
       /* marking is best-effort; the local mark still counts at end */
@@ -601,6 +605,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     setRecordingKind(null)
     setReproMarkCount(0)
     setReproElapsedMs(0)
+    setMarkLabel('')
     setOpen(false)
     setError(null)
     setState('idle')
@@ -954,10 +959,25 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             rows={2}
             style={textareaStyle}
           />
-          <button type="button" style={markButtonStyle} onClick={markRepro}>
-            <Flag size={14} aria-hidden />
-            Mark this moment
-          </button>
+          <div style={markRowStyle}>
+            <input
+              type="text"
+              value={markLabel}
+              onChange={(e) => setMarkLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void markRepro()
+                }
+              }}
+              placeholder="Label this moment (optional)"
+              style={markInputStyle}
+            />
+            <button type="button" style={markButtonStyle} onClick={markRepro}>
+              <Flag size={14} aria-hidden />
+              Mark this moment
+            </button>
+          </div>
           <div style={actionsStyle}>
             <button type="button" style={secondaryButtonStyle} onClick={discardRepro}>
               <X size={14} aria-hidden />
@@ -1179,10 +1199,25 @@ const reproTimerStyle: React.CSSProperties = {
   color: 'var(--m-red, #b42318)',
 }
 
+const markRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  alignItems: 'center',
+}
+
+const markInputStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 13,
+  padding: '7px 8px',
+  borderRadius: 8,
+  border: '1px solid var(--m-line, var(--p-line))',
+}
+
 const markButtonStyle: React.CSSProperties = {
   ...secondaryButtonStyle,
   justifyContent: 'center',
-  width: '100%',
+  whiteSpace: 'nowrap',
 }
 
 function formatElapsed(ms: number): string {
