@@ -24,6 +24,7 @@ type Row = Record<string, unknown>
 class FakePool {
   drafts: Row[] = []
   measurements: Row[] = []
+  corrections: Row[] = []
   syncEvents: Row[] = []
   outbox: Row[] = []
   auditEvents: Row[] = []
@@ -177,6 +178,84 @@ class FakePool {
       }
       this.measurements.push(row)
       return { rows: [row], rowCount: 1 }
+    }
+
+    // ---- takeoff_ai_corrections: insert (promote flywheel, gap G2) ----
+    if (/^insert into takeoff_ai_corrections/i.test(sql)) {
+      const [
+        company_id,
+        project_id,
+        draft_id,
+        measurement_id,
+        quantity_id,
+        source,
+        ai_value,
+        ai_unit,
+        ai_confidence,
+        ai_service_item_code,
+        ai_quantity_kind,
+        ai_detector,
+        ai_detector_version,
+        ai_quantity_json,
+        final_value,
+        final_unit,
+        final_service_item_code,
+        service_item_code_changed,
+        created_by_user_id,
+      ] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        number,
+        string,
+        number | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string,
+        number,
+        string,
+        string,
+        boolean,
+        string | null,
+      ]
+      this.corrections.push({
+        company_id,
+        project_id,
+        draft_id,
+        measurement_id,
+        quantity_id,
+        decision: 'kept',
+        source,
+        ai_value,
+        ai_unit,
+        ai_confidence,
+        ai_service_item_code,
+        ai_quantity_kind,
+        ai_detector,
+        ai_detector_version,
+        ai_quantity_json,
+        final_value,
+        final_unit,
+        final_service_item_code,
+        service_item_code_changed,
+        value_changed: false,
+        created_by_user_id,
+      })
+      return { rows: [], rowCount: 1 }
+    }
+    // ---- takeoff_ai_corrections: read (GET .../takeoff-ai-corrections) ----
+    if (/from takeoff_ai_corrections/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const changedOnly = /service_item_code_changed or value_changed/i.test(sql)
+      const rows = this.corrections
+        .filter((r) => r.company_id === companyId && r.project_id === projectId)
+        .filter((r) => (changedOnly ? Boolean(r.service_item_code_changed) || Boolean(r.value_changed) : true))
+      return { rows, rowCount: rows.length }
     }
 
     // ---- ledger fan-out (recordMutationLedger) ----
@@ -357,6 +436,21 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
     expect(body.measurements[0]?.quantity).toBe('240.5')
     expect(body.measurements[0]?.unit).toBe('sqft')
     expect(body.measurements[0]?.draft_id).toBe(DRAFT_ID)
+    // Flywheel (gap G2): each promoted quantity captured an AI-vs-final
+    // correction row. No code was overridden here, so each kept its AI-derived
+    // code and the correction is marked unchanged — but the immutable AI
+    // proposal (value/confidence/detector) is preserved as training data.
+    expect(pool.corrections).toHaveLength(2)
+    const floorCorr = pool.corrections.find((c) => c.quantity_id === 'q-floor') as Record<string, unknown>
+    expect(floorCorr.ai_service_item_code).toBe('09 29 00')
+    expect(floorCorr.final_service_item_code).toBe('09 29 00')
+    expect(floorCorr.service_item_code_changed).toBe(false)
+    expect(floorCorr.ai_value).toBe(240.5)
+    expect(floorCorr.final_value).toBe(240.5)
+    expect(floorCorr.ai_confidence).toBe(0.82)
+    expect(floorCorr.ai_detector).toBe('d')
+    expect(floorCorr.measurement_id).toBe('m-1')
+    expect(floorCorr.source).toBe('blueprint_vision')
     // Geometry resolves through the captured surface so the canvas can
     // render the promoted polygon without a follow-up fetch.
     const firstGeo = body.measurements[0]?.geometry as Record<string, unknown>
@@ -396,6 +490,49 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
     const body = responses[0]?.body as { measurements: Array<Record<string, unknown>> }
     expect(body.measurements[0]?.service_item_code).toBe('09 29 00.10')
+    // Flywheel (gap G2): the operator reclassified the AI's code — the
+    // highest-signal correction. The row pairs the AI-derived code with the
+    // human-final code and flags the change for training.
+    expect(pool.corrections).toHaveLength(1)
+    const corr = pool.corrections[0] as Record<string, unknown>
+    expect(corr.ai_service_item_code).toBe('09 29 00')
+    expect(corr.final_service_item_code).toBe('09 29 00.10')
+    expect(corr.service_item_code_changed).toBe(true)
+  })
+
+  it('exposes the captured corrections via GET, with a changed_only filter', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    pool.seedCatalog(COMPANY_ID, '09 29 00.10', 'D9')
+    // Promote two: q-door keeps its AI code; q-floor is reclassified (override).
+    const promote = makeCtx(pool, {
+      quantity_ids: ['q-floor', 'q-door'],
+      service_item_code_overrides: { 'q-floor': '09 29 00.10' },
+    })
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), promote.ctx)
+    expect(promote.responses[0]?.status, JSON.stringify(promote.responses[0]?.body)).toBe(201)
+
+    // Full list returns both corrections.
+    const all = makeCtx(pool, {})
+    await handleTakeoffDraftRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/projects/${PROJECT_ID}/takeoff-ai-corrections`),
+      all.ctx,
+    )
+    const allBody = all.responses[0]?.body as { corrections: Array<Record<string, unknown>>; count: number }
+    expect(allBody.count).toBe(2)
+
+    // changed_only returns just the reclassified one.
+    const changed = makeCtx(pool, {})
+    await handleTakeoffDraftRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/projects/${PROJECT_ID}/takeoff-ai-corrections?changed_only=1`),
+      changed.ctx,
+    )
+    const changedBody = changed.responses[0]?.body as { corrections: Array<Record<string, unknown>>; count: number }
+    expect(changedBody.count).toBe(1)
+    expect(changedBody.corrections[0]?.quantity_id).toBe('q-floor')
+    expect(changedBody.corrections[0]?.service_item_code_changed).toBe(true)
   })
 
   it('skips quantities with no derivable service_item_code and reports them', async () => {

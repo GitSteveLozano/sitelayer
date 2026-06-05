@@ -839,6 +839,16 @@ export async function handleTakeoffDraftRoutes(
        *  while AI proposals continue to bypass that gate so the review queue can
        *  surface them. */
       fromOverride: boolean
+      /** Immutable snapshot of what the AI pipeline proposed for this quantity,
+       *  captured into takeoff_ai_corrections at promote time (gap G2 flywheel).
+       *  aiServiceItemCode is the AI-derived code BEFORE any override, so the
+       *  correction row can record whether the operator reclassified it. */
+      aiServiceItemCode: string | null
+      aiConfidence: number | null
+      aiQuantityKind: string | null
+      aiDetector: string | null
+      aiDetectorVersion: string | null
+      aiQuantityJson: string
     }
     const prepared: Prepared[] = []
 
@@ -849,7 +859,8 @@ export async function handleTakeoffDraftRoutes(
         continue
       }
       const override = overrides.get(id) ?? null
-      const serviceItemCode = override ?? deriveServiceItemCodeFromQuantity(q)
+      const aiCode = deriveServiceItemCodeFromQuantity(q)
+      const serviceItemCode = override ?? aiCode
       if (!serviceItemCode) {
         skipped.push({
           quantity_id: id,
@@ -868,6 +879,8 @@ export async function handleTakeoffDraftRoutes(
         continue
       }
       const geometry = resolveCapturedGeometry(q, storedResult)
+      const prov = q.provenance && typeof q.provenance === 'object' ? (q.provenance as Record<string, unknown>) : null
+      const qRecord = q as Record<string, unknown>
       prepared.push({
         quantityId: id,
         serviceItemCode,
@@ -876,6 +889,12 @@ export async function handleTakeoffDraftRoutes(
         geometryJson: JSON.stringify(geometry),
         notes: buildPromotedNotes(q),
         fromOverride: override !== null,
+        aiServiceItemCode: aiCode,
+        aiConfidence: typeof q.confidence === 'number' ? q.confidence : null,
+        aiQuantityKind: typeof qRecord.quantityKind === 'string' ? (qRecord.quantityKind as string) : null,
+        aiDetector: typeof prov?.detector === 'string' ? (prov.detector as string) : null,
+        aiDetectorVersion: typeof prov?.detectorVersion === 'string' ? (prov.detectorVersion as string) : null,
+        aiQuantityJson: JSON.stringify(q),
       })
     }
 
@@ -956,6 +975,41 @@ export async function handleTakeoffDraftRoutes(
           outboxPayload: { measurement: row },
           actorUserId: ctx.currentUserId ?? null,
         })
+        // Correction flywheel (gap G2): pair the immutable AI proposal with the
+        // human-final commit. Required + atomic with the measurement — if this
+        // fails the whole promote rolls back, so a committed measurement always
+        // has its training row. (NOT a best-effort/swallowed write.)
+        await client.query(
+          `insert into takeoff_ai_corrections (
+              company_id, project_id, draft_id, measurement_id, quantity_id, decision, source,
+              ai_value, ai_unit, ai_confidence, ai_service_item_code, ai_quantity_kind,
+              ai_detector, ai_detector_version, ai_quantity_json,
+              final_value, final_unit, final_service_item_code,
+              service_item_code_changed, value_changed, created_by_user_id
+            )
+            values ($1, $2, $3, $4, $5, 'kept', $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $18, false, $19)`,
+          [
+            ctx.company.id,
+            projectId,
+            draftId,
+            row.id as string,
+            p.quantityId,
+            draftRow.source,
+            p.quantity,
+            p.unit,
+            p.aiConfidence,
+            p.aiServiceItemCode,
+            p.aiQuantityKind,
+            p.aiDetector,
+            p.aiDetectorVersion,
+            p.aiQuantityJson,
+            p.quantity,
+            p.unit,
+            p.serviceItemCode,
+            p.fromOverride,
+            ctx.currentUserId ?? null,
+          ],
+        )
       }
       return rows
     })
@@ -966,6 +1020,40 @@ export async function handleTakeoffDraftRoutes(
       skipped_count: skipped.length,
       skipped,
     })
+    return true
+  }
+
+  // GET /api/projects/:projectId/takeoff-ai-corrections — the correction
+  // flywheel training data (gap G2): per promoted quantity, the immutable AI
+  // proposal paired with the human-final commit + correction signals.
+  // `?changed_only=1` returns only the high-signal rows (operator reclassified
+  // the code or changed the value); `?limit=` caps the result (default 200).
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff-ai-corrections$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const changedOnly = ['1', 'true', 'yes'].includes((url.searchParams.get('changed_only') ?? '').toLowerCase())
+    const limitRaw = Number(url.searchParams.get('limit'))
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 500) : 200
+    const corrections = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id, project_id, draft_id, measurement_id, quantity_id, decision, source,
+                ai_value, ai_unit, ai_confidence, ai_service_item_code, ai_quantity_kind,
+                ai_detector, ai_detector_version,
+                final_value, final_unit, final_service_item_code,
+                service_item_code_changed, value_changed, created_by_user_id, created_at
+           from takeoff_ai_corrections
+          where company_id = $1 and project_id = $2
+            ${changedOnly ? 'and (service_item_code_changed or value_changed)' : ''}
+          order by created_at desc
+          limit $3`,
+        [ctx.company.id, projectId, limit],
+      ),
+    )
+    ctx.sendJson(200, { corrections: corrections.rows, count: corrections.rowCount ?? corrections.rows.length })
     return true
   }
 
