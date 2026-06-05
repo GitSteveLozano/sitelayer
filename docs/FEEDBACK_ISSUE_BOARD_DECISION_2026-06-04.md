@@ -3,6 +3,15 @@
 Status: **DECISION (doc only, no implementation yet).** Anchoring doc for the
 "capture feedback feeds a Linear/Kanban-like issue + task board" work, sitelayer-first.
 
+> **✅ RESOLVED (2026-06-05): the board substrate IS on `origin/main` (`952fb835`).**
+> The two conflicting 2026-06-04 notes below — one claiming it shipped in `main` via
+> `d2767daf`, the EXECUTION_PLAN claiming it was "not in `origin/main`, replayed to
+> branches" — are both stale provenance. The whole capture-feedback + work-item board
+> slice has since landed on `main`; verified files on `origin/main`:
+> `apps/web/src/lib/api/issue-board.ts`, `screens/mobile/issue-board.tsx`,
+> `apps/api/src/routes/{work-requests,admin-work-requests}.ts`. **Trust the code on
+> `main`, not the "what's missing" / commit-provenance notes in this doc.**
+
 > **⚠️ STATUS CORRECTION (2026-06-04, verified against `main`):** §11's build slice is
 > mostly **already shipped** — the `move` endpoint, the column-shaped board read, the
 > `request_ref` index, the `IssueBoard` port (`apps/web/src/lib/api/issue-board.ts`),

@@ -1,5 +1,14 @@
 # Capture → Issue Board + Multimodal Processing — Execution Plan - 2026-06-04
 
+> **✅ RESOLVED (2026-06-05): board substrate is on `origin/main` (`952fb835`).** Both
+> the §0 "already shipped in `main` (`d2767daf`)" headline and the 2026-06-04 17:50
+> "not in `origin/main`, replayed to branches" correction below are stale provenance —
+> as of 2026-06-05 the capture-feedback + work-item board slice is on `main` (verified:
+> `issue-board.ts`, `issue-board.tsx`, `work-requests.ts`, `admin-work-requests.ts`).
+> Drive from the code on `main`. The genuinely-remaining frontier is the operator media
+> viewer (G2, on `dev`), rrweb in-app playback, and multimodal processing — **not**
+> rebuilding the board.
+
 Status: **EXECUTION PLAN (verified against `main`).** Synthesizes the two companion
 decision docs into a dependency-ordered, lane-disjoint plan — but **re-grounded by
 reading the actual code**, which materially contradicts both docs' "what's missing"
