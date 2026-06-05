@@ -46,6 +46,17 @@ type PreparedTakeoffMeasurementInput = {
   // measurement was drawn against, or null for the legacy shape-first flow.
   // Additive — existing readers ignore it; the tag flow stays the fallback.
   conditionId: string | null
+  // PlanSwift org axes (gap G6): free-form Phase / Location / Zone / Folder so a
+  // big estimate is navigable and reports (gap G4) roll up by any axis.
+  // division_code + the fixed `elevation` enum already exist; these are the four
+  // missing free-form axes.
+  phase: string | null
+  location: string | null
+  zone: string | null
+  folder: string | null
+  // Extensible per-item property bag (PlanSwift's open-property-bag trick): AI
+  // metadata, trade-pack fields, future attributes without a schema change.
+  props: Record<string, unknown>
 }
 
 // POST /api/projects/:id/takeoff/measurement + /measurements wire-format.
@@ -185,6 +196,33 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     throw new HttpError(400, `${label}.condition_id must be a valid uuid`)
   }
 
+  // PlanSwift org axes (gap G6): free-form Phase / Location / Zone / Folder.
+  const orgTag = (key: 'phase' | 'location' | 'zone' | 'folder'): string | null => {
+    const v = (input as Record<string, unknown>)[key]
+    if (v === undefined || v === null) return null
+    const s = String(v).trim()
+    if (!s) return null
+    if (s.length > 120) throw new HttpError(400, `${label}.${key} exceeds the 120-character cap`)
+    return s
+  }
+  const phase = orgTag('phase')
+  const location = orgTag('location')
+  const zone = orgTag('zone')
+  const folder = orgTag('folder')
+
+  // Extensible per-item property bag.
+  let props: Record<string, unknown> = {}
+  const rawProps = input.props
+  if (rawProps !== undefined && rawProps !== null) {
+    if (typeof rawProps !== 'object' || Array.isArray(rawProps)) {
+      throw new HttpError(400, `${label}.props must be a JSON object`)
+    }
+    if (JSON.stringify(rawProps).length > 16 * 1024) {
+      throw new HttpError(413, `${label}.props exceeds the 16KB inline cap`)
+    }
+    props = rawProps as Record<string, unknown>
+  }
+
   return {
     serviceItemCode,
     quantity,
@@ -198,6 +236,11 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     imageThumbnail,
     isDeduction,
     conditionId,
+    phase,
+    location,
+    zone,
+    folder,
+    props,
   }
 }
 
@@ -398,10 +441,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id
+          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, props
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15)
-        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, coalesce($20::jsonb, '{}'::jsonb))
+        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, props, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -419,6 +462,11 @@ export async function handleTakeoffWriteRoutes(
           draftId,
           measurementInput.isDeduction,
           measurementInput.conditionId,
+          measurementInput.phase,
+          measurementInput.location,
+          measurementInput.zone,
+          measurementInput.folder,
+          JSON.stringify(measurementInput.props),
         ],
       )
       const row = insertResult.rows[0]
@@ -563,10 +611,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction
+            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, props
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14)
-          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, coalesce($19::jsonb, '{}'::jsonb))
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, props, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -583,6 +631,11 @@ export async function handleTakeoffWriteRoutes(
             measurement.imageThumbnail,
             bulkDraftId,
             measurement.isDeduction,
+            measurement.phase,
+            measurement.location,
+            measurement.zone,
+            measurement.folder,
+            JSON.stringify(measurement.props),
           ],
         )
         createdRows.push(insertResult.rows[0])
