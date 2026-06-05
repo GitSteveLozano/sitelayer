@@ -24,7 +24,7 @@ const baseQuantity = {
 
 const baseTakeoff = {
   schemaVersion: '1.0.0' as const,
-  takeoffId: '11111111-1111-1111-1111-111111111111',
+  takeoffId: '11111111-1111-4111-8111-111111111111',
   projectId: 'spike-001',
   capturedAt: '2026-05-07T12:00:00Z',
   producedAt: '2026-05-07T12:01:00Z',
