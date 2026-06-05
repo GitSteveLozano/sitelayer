@@ -152,6 +152,26 @@ export default defineConfig({
             },
           },
           {
+            // Offline plan cache (gap G7). Blueprint page/plan files are
+            // immutable per id (a new version gets a new id), so CacheFirst keeps
+            // a once-downloaded plan viewable offline on-site. This is the ONE
+            // /api/ path we deliberately cache: it serves immutable binary plan
+            // files, NOT mutable data (data stays uncached so TanStack Query owns
+            // its freshness). The file fetch carries auth headers; the default
+            // cache key is the per-plan-unique URL, so cached bytes never leak
+            // across plans. Note: this caches the API-streamed bytes; with
+            // BLUEPRINT_DOWNLOAD_PRESIGNED=1 the endpoint 302s to a short-lived
+            // Spaces URL whose signature expires, so offline caching in that mode
+            // is a follow-up.
+            urlPattern: /\/api\/(blueprint-pages|blueprints)\/[^/]+\/file(\?|$)/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'blueprint-plans',
+              expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
             handler: 'StaleWhileRevalidate',
             options: { cacheName: 'fonts-css' },
