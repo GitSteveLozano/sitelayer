@@ -584,6 +584,77 @@ export function polygonsOverlap(a: readonly TakeoffPoint[], b: readonly TakeoffP
   return false
 }
 
+function signedArea(pts: readonly TakeoffPoint[]): number {
+  let s = 0
+  for (let i = 0; i < pts.length; i += 1) {
+    const a = pts[i]
+    const b = pts[(i + 1) % pts.length]
+    if (!a || !b) continue
+    s += a.x * b.y - b.x * a.y
+  }
+  return s / 2
+}
+
+function leftOf(p: TakeoffPoint, a: TakeoffPoint, b: TakeoffPoint): boolean {
+  return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) >= -EPS
+}
+
+function lineIntersect(p1: TakeoffPoint, p2: TakeoffPoint, a: TakeoffPoint, b: TakeoffPoint): TakeoffPoint {
+  const a1 = p2.y - p1.y
+  const b1 = p1.x - p2.x
+  const c1 = a1 * p1.x + b1 * p1.y
+  const a2 = b.y - a.y
+  const b2 = a.x - b.x
+  const c2 = a2 * a.x + b2 * a.y
+  const det = a1 * b2 - a2 * b1
+  if (Math.abs(det) < EPS) return p2
+  return { x: (b2 * c1 - b1 * c2) / det, y: (a1 * c2 - a2 * c1) / det }
+}
+
+/**
+ * Sutherland–Hodgman: clip `subject` (any simple polygon) by `clipConvex`
+ * (treated as convex; auto-normalized to CCW). Returns the clipped vertices
+ * (possibly empty). Exact for a convex clip — takeoff cutouts are rectangles,
+ * so this is accurate; a non-convex clip yields a conservative approximation.
+ */
+export function clipPolygonConvex(
+  subject: readonly TakeoffPoint[],
+  clipConvex: readonly TakeoffPoint[],
+): TakeoffPoint[] {
+  if (subject.length < 3 || clipConvex.length < 3) return []
+  const clip = signedArea(clipConvex) < 0 ? [...clipConvex].reverse() : [...clipConvex]
+  let output: TakeoffPoint[] = [...subject]
+  for (let i = 0; i < clip.length; i += 1) {
+    const a = clip[i]
+    const b = clip[(i + 1) % clip.length]
+    if (!a || !b) continue
+    const input = output
+    output = []
+    for (let j = 0; j < input.length; j += 1) {
+      const cur = input[j]
+      const prev = input[(j + input.length - 1) % input.length]
+      if (!cur || !prev) continue
+      const curIn = leftOf(cur, a, b)
+      const prevIn = leftOf(prev, a, b)
+      if (curIn) {
+        if (!prevIn) output.push(lineIntersect(prev, cur, a, b))
+        output.push(cur)
+      } else if (prevIn) {
+        output.push(lineIntersect(prev, cur, a, b))
+      }
+    }
+    if (output.length === 0) break
+  }
+  return output
+}
+
+/** Board-space area of the intersection a ∩ b. Treats `b` as the convex clip;
+ *  exact for convex b (rectangular cutouts), conservative otherwise. */
+export function polygonIntersectionArea(a: readonly TakeoffPoint[], b: readonly TakeoffPoint[]): number {
+  const clipped = clipPolygonConvex(a, b)
+  return clipped.length < 3 ? 0 : calculatePolygonArea(clipped)
+}
+
 export interface OverlapCandidate {
   id: string
   pageId?: string | null
@@ -594,6 +665,8 @@ export interface OverlapPair {
   a: string
   b: string
   pageId: string | null
+  /** Board-space area the two cutouts share (the double-subtracted amount). */
+  overlapArea: number
 }
 
 /**
@@ -616,7 +689,14 @@ export function detectDeductionOverlaps(measurements: readonly OverlapCandidate[
       const ci = cutouts[i]
       const cj = cutouts[j]
       if (!ci || !cj || ci.pageId !== cj.pageId) continue
-      if (polygonsOverlap(ci.points, cj.points)) pairs.push({ a: ci.id, b: cj.id, pageId: ci.pageId })
+      if (polygonsOverlap(ci.points, cj.points)) {
+        pairs.push({
+          a: ci.id,
+          b: cj.id,
+          pageId: ci.pageId,
+          overlapArea: roundMeasurement(polygonIntersectionArea(ci.points, cj.points)),
+        })
+      }
     }
   }
   return pairs

@@ -1518,6 +1518,8 @@ export {
   pointInPolygon,
   segmentsIntersect,
   polygonsOverlap,
+  clipPolygonConvex,
+  polygonIntersectionArea,
   detectDeductionOverlaps,
   type OverlapCandidate,
   type OverlapPair,

@@ -15,6 +15,7 @@ import {
   pointInPolygon,
   segmentsIntersect,
   polygonsOverlap,
+  polygonIntersectionArea,
   detectDeductionOverlaps,
   type PitchDriver,
   type PolygonGeometry,
@@ -209,6 +210,19 @@ describe('polygon overlap kernel (gap G8: cutout de-dup)', () => {
     })
   })
 
+  describe('polygonIntersectionArea', () => {
+    it('computes the shared area of two overlapping rectangles', () => {
+      // square(0,0,10) ∩ square(5,5,10) = 5×5 = 25
+      expect(polygonIntersectionArea(square(0, 0, 10), square(5, 5, 10))).toBeCloseTo(25, 4)
+    })
+    it('equals the inner area under full containment', () => {
+      expect(polygonIntersectionArea(square(0, 0, 20), square(5, 5, 6))).toBeCloseTo(36, 4)
+    })
+    it('is 0 for disjoint polygons', () => {
+      expect(polygonIntersectionArea(square(0, 0, 5), square(20, 20, 5))).toBe(0)
+    })
+  })
+
   describe('detectDeductionOverlaps', () => {
     const poly = (s: number, x = 0, y = 0) => ({ kind: 'polygon', points: square(x, y, s) })
     it('flags two overlapping deductions on the same page', () => {
@@ -218,6 +232,8 @@ describe('polygon overlap kernel (gap G8: cutout de-dup)', () => {
       ])
       expect(pairs).toHaveLength(1)
       expect(pairs[0]).toMatchObject({ a: 'cut-a', b: 'cut-b', pageId: 'p1' })
+      // square(0,0,10) ∩ square(5,5,10) = the 5×5 corner = 25 board-units²
+      expect(pairs[0]?.overlapArea).toBeCloseTo(25, 1)
     })
     it('does NOT compare deductions on different pages', () => {
       const pairs = detectDeductionOverlaps([
