@@ -6,6 +6,7 @@ import {
 } from '@/lib/capture-artifact-providers'
 import { __resetCaptureStateProvidersForTests, registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { CAPTURE_SESSION_STORAGE_KEY } from '@/lib/capture-session'
+import { CAPTURE_LEVEL_STORAGE_KEY } from '@/lib/capture-level'
 import {
   AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
   AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY,
@@ -91,6 +92,7 @@ describe('AuthenticatedFeedbackDock', () => {
     window.localStorage.removeItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY)
     window.localStorage.removeItem(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY)
     window.localStorage.removeItem(STEVE_COLLAB_MODE_STORAGE_KEY)
+    window.localStorage.removeItem(CAPTURE_LEVEL_STORAGE_KEY)
     rrweb.record.mockImplementation((options?: { emit?: (event: unknown) => void }) => {
       options?.emit?.({ type: 'rrweb-full-snapshot', data: { source: 'authenticated-test' } })
       return vi.fn()
@@ -594,6 +596,66 @@ describe('AuthenticatedFeedbackDock', () => {
     expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
       expect.objectContaining({ event_type: 'authenticated.feedback.screen_recording_stopped' }),
     ])
+    expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
+  })
+
+  it('brackets a reproduction with start/end conditions, a mark, and a repro_bracket artifact', async () => {
+    window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    fireEvent.click(screen.getByRole('button', { name: /reproduce a bug/i }))
+
+    // Start condition: one feedback session whose consent scope opts into the
+    // repro_bracket artifact + the repro event class.
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    const startPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
+      capture_session_id: string
+      consent_scope: Record<string, unknown>
+    }
+    expect(startPayload.consent_scope).toMatchObject({
+      artifacts: expect.objectContaining({ repro_bracket: true }),
+      event_classes: expect.arrayContaining(['repro']),
+    })
+    await waitFor(() =>
+      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
+        startPayload.capture_session_id,
+        [expect.objectContaining({ event_type: 'repro.bracket_started', event_class: 'repro' })],
+      ),
+    )
+    expect(screen.getByText('Reproducing a bug')).toBeTruthy()
+
+    // Mark a moment ("the bug is here").
+    fireEvent.click(screen.getByRole('button', { name: /mark this moment/i }))
+    await waitFor(() =>
+      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
+        startPayload.capture_session_id,
+        [expect.objectContaining({ event_type: 'repro.mark', event_class: 'repro' })],
+      ),
+    )
+
+    // End condition + report.
+    fireEvent.change(screen.getByPlaceholderText('What went wrong? (the end condition)'), {
+      target: { value: 'The estimate total doubled after I changed markup.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /end & report/i }))
+
+    await waitFor(() => expect(captureApi.finalizeCaptureSession).toHaveBeenCalledTimes(1))
+    const reproArtifactCall = captureApi.uploadCaptureArtifact.mock.calls.find(
+      (call) => call[1]?.kind === 'repro_bracket',
+    )
+    expect(reproArtifactCall).toBeDefined()
+    expect(reproArtifactCall?.[0]).toBe(startPayload.capture_session_id)
+    const reproSummary = JSON.parse(await (reproArtifactCall?.[1]?.file as Blob).text())
+    expect(reproSummary).toMatchObject({
+      artifact_type: 'capture.repro_bracket',
+      end_condition: { note: 'The estimate total doubled after I changed markup.' },
+    })
+    expect(reproSummary.marks).toHaveLength(1)
+    expect(captureApi.finalizeCaptureSession).toHaveBeenCalledWith(
+      startPayload.capture_session_id,
+      expect.objectContaining({ category: 'reproduction', title: 'Reproduction report' }),
+    )
     expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
   })
 

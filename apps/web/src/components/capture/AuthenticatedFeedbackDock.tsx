@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle, Mic, ScreenShare, Square, X } from 'lucide-react'
+import { Bug, CheckCircle, Flag, Mic, ScreenShare, Square, Timer, X } from 'lucide-react'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
 import {
   clearLocalCaptureSession,
@@ -33,6 +33,21 @@ import {
   buildAuthenticatedScreenRecordingConsentScope,
 } from '@/lib/capture-policy'
 import { ScreenCaptureRecorder } from '@/lib/capture-recorder'
+import { ReproBracketController } from '@/lib/repro-bracket'
+import {
+  CAPTURE_LEVEL_META,
+  availableCaptureLevels,
+  captureLevelStreams,
+  resolveCaptureLevel,
+  writeStoredCaptureLevel,
+  type CaptureLevel,
+} from '@/lib/capture-level'
+import {
+  DEFAULT_CAPTURE_HOTKEYS,
+  captureHotkeysSupported,
+  formatCaptureHotkey,
+  registerCaptureHotkeys,
+} from '@/lib/capture-hotkeys'
 import {
   AUTH_FEEDBACK_AUDIO_STORAGE_KEY,
   AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY,
@@ -42,7 +57,7 @@ import {
 } from '@/lib/steve-collab'
 
 type CaptureState = 'idle' | 'recording' | 'stopping' | 'sent' | 'queued' | 'error'
-type RecordingKind = 'feedback' | 'screen'
+type RecordingKind = 'feedback' | 'screen' | 'repro'
 
 type FeedbackReceipt = {
   workItemId: string
@@ -166,6 +181,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   const backend = useMemo(() => authenticatedBackend(), [])
   const controllerRef = useRef<FeedbackCaptureController | null>(null)
   const screenRecorderRef = useRef<ScreenCaptureRecorder | null>(null)
+  const reproRef = useRef<ReproBracketController | null>(null)
   const prewarmedTextIssueSessionIdRef = useRef<string | null>(null)
   const [state, setState] = useState<CaptureState>('idle')
   const [recordingKind, setRecordingKind] = useState<RecordingKind | null>(null)
@@ -173,11 +189,41 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<FeedbackReceipt | null>(null)
+  const [reproElapsedMs, setReproElapsedMs] = useState(0)
+  const [reproMarkCount, setReproMarkCount] = useState(0)
+  // Progressive opt-in recording level. Seeded to the highest tier this device
+  // supports (so the dock offers everything it can today, no regression), then
+  // dialable up/down by the user and persisted. It gates the reproduction
+  // replay and the visibility of the audio/screen escalations.
+  const seedLevel: CaptureLevel = capabilities.video
+    ? 'screen'
+    : capabilities.audio
+      ? 'audio'
+      : capabilities.dom_replay
+        ? 'replay'
+        : 'note'
+  const [level, setLevelState] = useState<CaptureLevel>(() =>
+    resolveCaptureLevel(capabilities, { fallback: seedLevel }),
+  )
+  const levelStreams = captureLevelStreams(level)
+  const offerableLevels = availableCaptureLevels(capabilities)
+  const [hotkeysEnabled, setHotkeysEnabled] = useState(() => captureHotkeysSupported())
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 520)
+  function setLevel(next: CaptureLevel): void {
+    writeStoredCaptureLevel(next)
+    setLevelState(next)
+  }
 
   const buttonLabel = steveMode ? 'Report issue' : 'Record feedback'
   const idlePlaceholder = steveMode ? 'What is wrong?' : 'What happened?'
   const recordingTitle =
-    recordingKind === 'screen' ? 'Recording screen' : audioEnabled ? 'Recording feedback' : 'Recording page context'
+    recordingKind === 'repro'
+      ? 'Reproducing a bug'
+      : recordingKind === 'screen'
+        ? 'Recording screen'
+        : audioEnabled
+          ? 'Recording feedback'
+          : 'Recording page context'
   const collabMode = steveMode ? 'steve' : null
 
   useEffect(() => {
@@ -221,6 +267,52 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       }
     })()
   }, [collabMode, companySlug, enabled, open, state, steveMode])
+
+  // Keep a fresh handle to the hotkey actions so the listener (registered once)
+  // always invokes the latest closures without re-binding on every keystroke.
+  const hotkeyActionsRef = useRef<{ open: () => void; toggle: () => void; mark: () => void }>({
+    open: () => undefined,
+    toggle: () => undefined,
+    mark: () => undefined,
+  })
+  useEffect(() => {
+    hotkeyActionsRef.current = {
+      open: () => setOpen(true),
+      toggle: () => {
+        if (reproRef.current?.status === 'active') void endRepro()
+        else void startRepro()
+      },
+      mark: () => void markRepro(),
+    }
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => setNarrow(window.innerWidth < 520)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  // Live elapsed timer while a reproduction is recording.
+  useEffect(() => {
+    if (state !== 'recording' || recordingKind !== 'repro') return
+    const id = window.setInterval(() => {
+      const controller = reproRef.current
+      if (controller) setReproElapsedMs(controller.elapsedMs())
+    }, 500)
+    return () => window.clearInterval(id)
+  }, [state, recordingKind])
+
+  // Opt-in, desktop-only keyboard shortcuts. Registered once per enable toggle;
+  // handlers read the latest actions from the ref above.
+  useEffect(() => {
+    if (!enabled || !companySlug || !hotkeysEnabled) return
+    return registerCaptureHotkeys({
+      open_report: () => hotkeyActionsRef.current.open(),
+      toggle_repro: () => hotkeyActionsRef.current.toggle(),
+      mark: () => hotkeyActionsRef.current.mark(),
+    })
+  }, [enabled, companySlug, hotkeysEnabled])
 
   if (!enabled || !companySlug) return null
 
@@ -416,7 +508,109 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     }
   }
 
+  async function startRepro() {
+    setError(null)
+    setReceipt(null)
+    const active = getActiveCaptureSession()
+    if (active?.mode === 'feedback') {
+      setState('error')
+      setError('Recording is already active.')
+      return
+    }
+    const startNote = note.trim()
+    const local = startLocalCaptureSession({ mode: 'feedback', consent_version: CONSENT_VERSION })
+    const controller = new ReproBracketController({
+      replayRecorder: levelStreams.domReplay
+        ? createRrwebCaptureReplayRecorder({ upload: backend.uploadArtifact })
+        : null,
+    })
+    reproRef.current = controller
+    setRecordingKind('repro')
+    setReproMarkCount(0)
+    setReproElapsedMs(0)
+    const buildSha = env('VITE_APP_BUILD_SHA') || env('VITE_BUILD_SHA')
+    try {
+      await controller.start({
+        captureSessionId: local.id,
+        companySlug,
+        routePath: currentCaptureRoutePath(),
+        deviceKind: inferDeviceKind(),
+        platform: inferPlatform(),
+        viewport: inferViewport(),
+        consentVersion: CONSENT_VERSION,
+        collabMode,
+        domReplay: levelStreams.domReplay,
+        ...(startNote ? { startNote } : {}),
+        ...(buildSha ? { appBuildSha: buildSha } : {}),
+      })
+      setNote('')
+      setState('recording')
+      setOpen(true)
+    } catch (err) {
+      reproRef.current = null
+      clearLocalCaptureSession()
+      setRecordingKind(null)
+      setState('error')
+      setError(captureErrorMessage(err, 'Reproduction could not start.'))
+    }
+  }
+
+  async function markRepro() {
+    const controller = reproRef.current
+    if (!controller || controller.status !== 'active') return
+    try {
+      await controller.mark()
+      setReproMarkCount(controller.markCount)
+    } catch {
+      /* marking is best-effort; the local mark still counts at end */
+    }
+  }
+
+  async function endRepro() {
+    const controller = reproRef.current
+    if (!controller || controller.status !== 'active') return
+    setState('stopping')
+    setError(null)
+    const endNote = note.trim()
+    try {
+      const result = await controller.end({ ...(endNote ? { endNote } : {}) })
+      reproRef.current = null
+      setReceipt(receiptFromFinalize(result.finalize))
+      clearLocalCaptureSession()
+      setNote('')
+      setRecordingKind(null)
+      setOpen(false)
+      setState('sent')
+      window.setTimeout(() => setState('idle'), 5000)
+    } catch (err) {
+      setState('error')
+      setError(captureErrorMessage(err, 'Reproduction could not be sent.'))
+    }
+  }
+
+  async function discardRepro() {
+    const controller = reproRef.current
+    try {
+      await controller?.discard()
+    } catch {
+      /* discard is best-effort */
+    }
+    reproRef.current = null
+    clearLocalCaptureSession()
+    setNote('')
+    setRecordingKind(null)
+    setReproMarkCount(0)
+    setReproElapsedMs(0)
+    setOpen(false)
+    setError(null)
+    setState('idle')
+  }
+
   async function stopRecording() {
+    if (recordingKind === 'repro') {
+      await endRepro()
+      return
+    }
     if (recordingKind === 'screen') {
       await stopScreenRecording()
       return
@@ -584,6 +778,10 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   }
 
   async function discardRecording() {
+    if (recordingKind === 'repro') {
+      await discardRepro()
+      return
+    }
     if (recordingKind === 'screen') {
       await discardScreenRecording()
       return
@@ -661,7 +859,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   }
 
   return (
-    <div style={panelStyle}>
+    <div style={narrow ? mobilePanelStyle : panelStyle}>
       <div style={panelHeaderStyle}>
         <div style={panelTitleStyle}>
           {state === 'recording' ? recordingTitle : state === 'stopping' ? 'Sending feedback' : buttonLabel}
@@ -694,21 +892,88 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             <button type="button" style={secondaryButtonStyle} onClick={sendTextIssue} disabled={!note.trim()}>
               Send issue
             </button>
-            {screenSupported ? (
+            {levelStreams.audio ? (
+              <button type="button" style={secondaryButtonStyle} onClick={startRecording} disabled={!audioSupported}>
+                <Mic size={14} aria-hidden />
+                {audioEnabled ? 'Start' : 'Record page'}
+              </button>
+            ) : null}
+            {screenSupported && levelStreams.screen ? (
               <button type="button" style={secondaryButtonStyle} onClick={startScreenRecording}>
                 <ScreenShare size={14} aria-hidden />
                 Record screen
               </button>
             ) : null}
-            <button type="button" style={primaryButtonStyle} onClick={startRecording} disabled={!audioSupported}>
-              <Mic size={14} aria-hidden />
-              {audioEnabled ? 'Start' : 'Record page'}
+            <button type="button" style={primaryButtonStyle} onClick={startRepro}>
+              <Bug size={14} aria-hidden />
+              Reproduce a bug
             </button>
           </div>
+          <div style={levelRowStyle}>
+            <label style={levelLabelStyle}>
+              Capture
+              <select
+                value={level}
+                onChange={(e) => setLevel(e.target.value as CaptureLevel)}
+                style={levelSelectStyle}
+                aria-label="Recording level"
+              >
+                {offerableLevels.map((option) => (
+                  <option key={option} value={option}>
+                    {CAPTURE_LEVEL_META[option].label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {captureHotkeysSupported() ? (
+              <label style={hotkeyToggleStyle} title={hotkeyHintText()}>
+                <input
+                  type="checkbox"
+                  checked={hotkeysEnabled}
+                  onChange={(e) => setHotkeysEnabled(e.target.checked)}
+                />
+                Shortcuts
+              </label>
+            ) : null}
+          </div>
+          <div style={mutedStyle}>{CAPTURE_LEVEL_META[level].description}</div>
         </>
       ) : null}
 
-      {state === 'recording' ? (
+      {state === 'recording' && recordingKind === 'repro' ? (
+        <>
+          <div style={reproStatusStyle}>
+            <span style={reproTimerStyle}>
+              <Timer size={13} aria-hidden /> {formatElapsed(reproElapsedMs)}
+            </span>
+            <span style={mutedStyle}>
+              {reproMarkCount} mark{reproMarkCount === 1 ? '' : 's'}
+              {levelStreams.domReplay ? ' · screen replay on' : ''}
+            </span>
+          </div>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="What went wrong? (the end condition)"
+            rows={2}
+            style={textareaStyle}
+          />
+          <button type="button" style={markButtonStyle} onClick={markRepro}>
+            <Flag size={14} aria-hidden />
+            Mark this moment
+          </button>
+          <div style={actionsStyle}>
+            <button type="button" style={secondaryButtonStyle} onClick={discardRepro}>
+              <X size={14} aria-hidden />
+              Discard
+            </button>
+            <button type="button" style={primaryButtonStyle} onClick={endRepro}>
+              <Square size={14} aria-hidden />
+              End &amp; report
+            </button>
+          </div>
+        </>
+      ) : state === 'recording' ? (
         <>
           <textarea
             value={note}
@@ -851,6 +1116,88 @@ const inlineErrorStyle: React.CSSProperties = {
 const mutedStyle: React.CSSProperties = {
   fontSize: 12,
   color: 'var(--m-ink-3, #667085)',
+}
+
+// Bottom-sheet variant for phones/narrow tablets: full-width across the bottom
+// with a larger touch target and safe-area padding, instead of the floating
+// desktop card.
+const mobilePanelStyle: React.CSSProperties = {
+  ...panelStyle,
+  left: 8,
+  right: 8,
+  width: 'auto',
+  maxWidth: 'none',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+  borderRadius: 14,
+  padding: 16,
+}
+
+const levelRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const levelLabelStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 12,
+  color: 'var(--m-ink-3, #667085)',
+}
+
+const levelSelectStyle: React.CSSProperties = {
+  fontSize: 12,
+  padding: '4px 6px',
+  borderRadius: 6,
+  border: '1px solid var(--m-line, var(--p-line))',
+  background: 'var(--m-card, var(--p-paper, #fff))',
+  color: 'var(--m-ink, var(--p-ink, #111827))',
+}
+
+const hotkeyToggleStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 12,
+  color: 'var(--m-ink-3, #667085)',
+  cursor: 'pointer',
+}
+
+const reproStatusStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+}
+
+const reproTimerStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontVariantNumeric: 'tabular-nums',
+  fontWeight: 700,
+  fontSize: 13,
+  color: 'var(--m-red, #b42318)',
+}
+
+const markButtonStyle: React.CSSProperties = {
+  ...secondaryButtonStyle,
+  justifyContent: 'center',
+  width: '100%',
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function hotkeyHintText(): string {
+  return DEFAULT_CAPTURE_HOTKEYS.map((binding) => `${formatCaptureHotkey(binding)} — ${binding.label}`).join('\n')
 }
 
 function inferDeviceKind(): string {
