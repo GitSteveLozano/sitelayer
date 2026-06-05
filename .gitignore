@@ -27,3 +27,6 @@ docker-compose.override.yml
 ops/env/production.build.env
 
 .claude/worktrees/
+
+# Local AI-takeoff training/validation corpora (datasets — internal benchmarking only, never commit)
+data/takeoff-corpus
