@@ -2,6 +2,54 @@
 
 This is the working reconciliation snapshot for the feedback capture / issue-board work on June 4, 2026.
 
+## 2026-06-05 Refresh - Local GPU Media Worker
+
+Current canonical tree for Sitelayer capture/media work is
+`/home/taylorsando/projects/sitelayer-worktrees/dev-land` on branch `dev`.
+Before this refresh, `origin/dev`, `origin/main`, and local `dev` all pointed to
+`78c076da`.
+
+Reconciled on top of that:
+
+- `MEDIA_UNDERSTANDING_ENGINE=llama-swap` is now the local-GPU, zero-cash media
+  understanding path, backed by llama-swap's OpenAI-compatible endpoint on
+  `127.0.0.1:8081`.
+- `npm run capture:media-worker` now defaults to local Whisper, video frame
+  extraction, llama-swap understanding, and `gpu-yield` protection while each
+  analysis pass runs.
+- `npm run capture:media-status` checks Whisper, llama-swap models, gpu-yield,
+  media-worker service state, and required env-key presence without printing
+  secret values.
+- A checked-in user unit and installer now exist:
+  `ops/systemd/sitelayer-capture-media-worker.service` and
+  `scripts/install-capture-media-worker-systemd.sh`.
+
+Cross-worktree decision:
+
+- `capture-board-lanes` remains useful historical proof for the original Gemini
+  `MediaProcessor` seam, but it does not contain the local llama-swap adapter.
+  Do not merge it raw.
+- `rescue-loose-board` is still only a preservation snapshot. It is older than
+  the current `dev-land` capture/media implementation.
+- `b-sitelayer` is still stale for the current capture/media work. Do not merge
+  it raw.
+
+Cross-repo `voice-tools` decision:
+
+- The minimal uploaded-audio-byte support is already on remote branch
+  `origin/agent/codex/voice-whisper-byte-upload` and passed
+  `python3 -m pytest tests/test_whisper_server_quality.py` in a throwaway
+  worktree.
+- The current live `voice-tools` checkout on
+  `agent/claude/vtctl-no-dots` also passed
+  `python3 -m pytest tests/test_whisper_server_quality.py tests/test_voice_command_reactor_dispatch_task.py`.
+- Direct fast-forward of `voice-tools` `master` was blocked by the pre-push hook
+  because agent-authored commits must not push directly to master.
+- Pushing the broader local branch was also blocked because its commit stack has
+  mixed agent session ownership. Do not bypass from an agent run. Either merge
+  the existing minimal branch through the normal operator flow, or rebuild a
+  clean single-owner branch for the broader quality/capture-session work.
+
 ## Snapshot
 
 - Current checkout: `/home/taylorsando/projects/sitelayer`

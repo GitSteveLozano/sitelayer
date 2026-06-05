@@ -22,9 +22,10 @@ The durable shape is:
    audio through local `voice-tools`, writes first-class derived transcript
    artifacts, appends `context_handoff_events`, and refreshes
    `context_work_items.metadata.capture_artifact_analysis`.
-5. Optional LLM enrichment uses the existing subscription-CLI seam
-   (`MEDIA_UNDERSTANDING_ENGINE=gemini-cli`) after the transcript or sampled
-   frames exist. The cash/API path stays opt-in.
+5. Optional LLM enrichment uses the same `MediaProcessor` seam after the
+   transcript or sampled frames exist. The local-GPU default is
+   `MEDIA_UNDERSTANDING_ENGINE=llama-swap`; `gemini-cli` remains available as a
+   subscription-CLI fallback, and the cash/API path stays opt-in.
 
 This keeps raw STT on local hardware while preserving the existing Sitelayer
 capture/session/work-item model.
@@ -76,6 +77,18 @@ CAPTURE_ARTIFACT_ANALYSIS_AUTO_DISPATCH=1 \
 npm run capture:media-worker
 ```
 
+Check the local stack without printing secrets:
+
+```bash
+npm run capture:media-status
+```
+
+Install the workstation user unit:
+
+```bash
+scripts/install-capture-media-worker-systemd.sh
+```
+
 The command expects the normal Sitelayer runtime env for `DATABASE_URL` and
 object storage (`DO_SPACES_BUCKET`, `DO_SPACES_KEY`, `DO_SPACES_SECRET`, region
 and endpoint if needed). Do not commit those values.
@@ -102,11 +115,27 @@ permanent skipped event for unreachable Whisper.
   for microphone/screen permissions directly, upload the artifact, and let the
   server-side/local-GPU media worker derive transcripts.
 
+## Implementation Status
+
+- Implemented: local `llama-swap` media-understanding adapter
+  (`MEDIA_UNDERSTANDING_ENGINE=llama-swap`) using the OpenAI-compatible
+  endpoint on `127.0.0.1:8081`.
+- Implemented: `npm run capture:media-worker` defaults to local Whisper,
+  video frame extraction, local llama-swap understanding, and `gpu-yield`
+  protection while each analysis pass runs.
+- Implemented: checked-in user unit plus installer
+  (`ops/systemd/sitelayer-capture-media-worker.service`,
+  `scripts/install-capture-media-worker-systemd.sh`).
+- Implemented: `npm run capture:media-status` checks Whisper, llama-swap,
+  gpu-yield, service state, and required env-key presence without printing
+  secret values.
+
 ## Open Follow-Ups
 
-- Add a systemd user unit for `npm run capture:media-worker` on Taylor's
-  workstation, sourced from a local env file outside the repo.
+- Populate `/home/taylorsando/.config/sitelayer/capture-media-worker.env` with
+  the target Sitelayer DB and DO Spaces credentials, then run the installer from
+  an unsandboxed shell. The Codex sandbox cannot write that path.
 - Add a repair command for historical `local whisper unavailable` skipped events
   if any important sessions were already consumed by the bad droplet default.
-- Decide whether `gemini-cli` enrichment should run only on Taylor's workstation
-  or through a separate local CLI worker queue.
+- Decide whether `gemini-cli` enrichment should stay as a manual fallback or run
+  through a separate subscription-CLI queue.

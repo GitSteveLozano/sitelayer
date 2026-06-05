@@ -1,4 +1,6 @@
 #!/usr/bin/env -S npx tsx
+import { execFile } from 'node:child_process'
+import os from 'node:os'
 import { Pool } from 'pg'
 import { listActiveCompanies } from '../apps/worker/src/companies.js'
 import { createBlueprintStorageGcClient } from '../apps/worker/src/runners/blueprint-storage-gc.js'
@@ -24,8 +26,10 @@ Useful env:
   CAPTURE_MEDIA_WORKER_ONCE=1              run one pass and exit
   CAPTURE_MEDIA_WORKER_INTERVAL_MS=30000   loop interval
   CAPTURE_MEDIA_WORKER_COMPANY_SLUG=slug   optional single-tenant override
+  CAPTURE_MEDIA_WORKER_GPU_YIELD=1         pause idle GPU backlog while analyzing
+  CAPTURE_MEDIA_WORKER_GPU_YIELD_BIN=...   default ~/projects/screen-capture/scripts/gpu-yield
   CAPTURE_ARTIFACT_WHISPER_URL=...         default http://127.0.0.1:5678
-  MEDIA_UNDERSTANDING_ENGINE=gemini-cli    optional subscription-CLI enrichment
+  MEDIA_UNDERSTANDING_ENGINE=llama-swap    default local OpenAI-compatible enrichment
 `)
 }
 
@@ -46,6 +50,41 @@ function setDefaultEnv(name: string, value: string) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function envFlagEnabled(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase()
+  if (!raw) return fallback
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+function gpuYieldBin(): string {
+  return (
+    process.env.CAPTURE_MEDIA_WORKER_GPU_YIELD_BIN?.trim() ||
+    `${os.userInfo().homedir}/projects/screen-capture/scripts/gpu-yield`
+  )
+}
+
+async function runGpuYield(mode: 'on' | 'off', logger: Logger): Promise<void> {
+  if (!envFlagEnabled('CAPTURE_MEDIA_WORKER_GPU_YIELD', true)) return
+  const bin = gpuYieldBin()
+  await new Promise<void>((resolve) => {
+    execFile(bin, [mode], { timeout: 10_000 }, (error, stdout, stderr) => {
+      if (error) {
+        logger.warn(
+          {
+            err: error,
+            gpu_yield_bin: bin,
+            gpu_yield_mode: mode,
+            stderr: stderr?.slice(0, 500),
+            stdout: stdout?.slice(0, 500),
+          },
+          '[capture-media-worker] gpu-yield command failed',
+        )
+      }
+      resolve()
+    })
+  })
 }
 
 function jsonLogger(): Logger {
@@ -72,7 +111,9 @@ async function main() {
   setDefaultEnv('CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS', '120000')
   setDefaultEnv('CAPTURE_ARTIFACT_WHISPER_UNAVAILABLE_POLICY', 'retry')
   setDefaultEnv('CAPTURE_ARTIFACT_ANALYSIS_MAX_BYTES', '52428800')
-  setDefaultEnv('CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE', 'off')
+  setDefaultEnv('CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE', 'frames-only')
+  setDefaultEnv('MEDIA_UNDERSTANDING_ENGINE', 'llama-swap')
+  setDefaultEnv('MEDIA_UNDERSTANDING_LLAMASWAP_URL', 'http://127.0.0.1:8081/v1')
 
   const logger = jsonLogger()
   const databaseUrl = requiredEnv('DATABASE_URL')
@@ -100,27 +141,33 @@ async function main() {
 
   try {
     do {
-      const companies = await listActiveCompanies(pool, companyOverride)
-      if (companies.length === 0) {
-        logger.warn({ company_slug: companyOverride }, '[capture-media-worker] no companies matched')
-      }
-      for (const company of companies) {
-        try {
-          const summary = await runner.forceAnalyze(company.id)
-          logger.info(
-            { company_id: company.id, company_slug: company.slug, summary },
-            '[capture-media-worker] analyzed',
-          )
-        } catch (err) {
-          logger.error(
-            { err, company_id: company.id, company_slug: company.slug },
-            '[capture-media-worker] analyze failed',
-          )
+      await runGpuYield('on', logger)
+      try {
+        const companies = await listActiveCompanies(pool, companyOverride)
+        if (companies.length === 0) {
+          logger.warn({ company_slug: companyOverride }, '[capture-media-worker] no companies matched')
         }
+        for (const company of companies) {
+          try {
+            const summary = await runner.forceAnalyze(company.id)
+            logger.info(
+              { company_id: company.id, company_slug: company.slug, summary },
+              '[capture-media-worker] analyzed',
+            )
+          } catch (err) {
+            logger.error(
+              { err, company_id: company.id, company_slug: company.slug },
+              '[capture-media-worker] analyze failed',
+            )
+          }
+        }
+      } finally {
+        await runGpuYield('off', logger)
       }
       if (!once && !stopping) await sleep(intervalMs)
     } while (!once && !stopping)
   } finally {
+    await runGpuYield('off', logger)
     await pool.end()
   }
 }

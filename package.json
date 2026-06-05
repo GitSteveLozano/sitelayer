@@ -23,6 +23,7 @@
     "capture:analyze": "tsx scripts/analyze-capture-session.ts",
     "capture:audio-qa": "bash scripts/test-capture-audio-roundtrip.sh",
     "capture:media-worker": "tsx scripts/run-capture-media-worker.ts",
+    "capture:media-status": "tsx scripts/check-capture-media-stack.ts",
     "capture:export": "tsx scripts/export-capture-session.ts",
     "capture:review": "bash scripts/review-capture-session.sh",
     "capture:review-import": "tsx scripts/import-capture-review.ts",

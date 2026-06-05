@@ -39,12 +39,13 @@ subscriber/dispatch adapter; projectkit's `CONTRACT` stays emit/dispatch-only.
    the operator cross-tenant board now exists in the dirty checkout, and the dirty
    checkout now has a local lost-callback reconciler that turns an acknowledged-but-
    silent dispatch into an explicit `agent.callback_missing` timeline event.
-3. **"How might we use the Gemini API / Gemini-Antigravity CLI?"** — Behind one
-   `MediaProcessor` interface with two adapters: **Gemini CLI (zero-cash, rides
-   subscription)** for local/interactive understanding, and **Gemini API (explicit
-   cash opt-in, structured JSON via `responseFormat`)** for headless/batchable
-   understanding. Local whisper remains the STT path. Antigravity is a registered
-   family but its canary is **not yet flipped** — treat as future adapter.
+3. **"How might we use local models / Gemini API / Gemini-Antigravity CLI?"** —
+   Behind one `MediaProcessor` interface: **llama-swap (zero-cash, local GPU)**
+   for the workstation media worker, **Gemini CLI (zero-cash, rides subscription)**
+   as a subscription fallback, and **Gemini API (explicit cash opt-in, structured
+   JSON via `responseFormat`)** for headless/batchable understanding. Local
+   whisper remains the STT path. Antigravity is a registered family but its
+   canary is **not yet flipped** — treat as future adapter.
 
 **The pipeline is no longer greenfield.** The media interface and worker hooks are
 implemented in `capture-board-lanes` and replayed locally; the work is to validate
@@ -77,9 +78,12 @@ The gap between these two layers is the whole subject of this doc.
   STT is handled by the local GPU media worker described in
   `docs/CAPTURE_LOCAL_GPU_MEDIA_WORKER_DECISION_2026-06-04.md`;
   direct host workers can use `http://127.0.0.1:5678`.
+- **llama-swap multimodal (primary local VLM, $0).** `llama-swap.service` exposes
+  `http://127.0.0.1:8081/v1` and serves `gemma4-12b-vision` for sampled frame +
+  transcript understanding.
 - **Gemini CLI multimodal.** `gemini-video` skill (`~/.claude/skills/gemini-video/SKILL.md`,
   vendored in dotfiles) — `gemini -p "<prompt> @<file>"`, handles webm/mp4/mov +
-  mp3/wav/aac/ogg/flac, ~1 fps. The "Claude can't read media → hand to Gemini" path.
+  mp3/wav/aac/ogg/flac, ~1 fps. The "local VLM is unavailable → hand to Gemini" path.
 
 ### 2.2 Media capture + storage
 

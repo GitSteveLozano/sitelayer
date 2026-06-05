@@ -9,10 +9,11 @@
 // subscriber. Swapping the adapter must not change the issue/timeline shapes —
 // the One-Line Boundary Test for this feature.
 //
-// Cost posture (`~/CLAUDE.md` rules 3/4/7): the default engine is the Gemini CLI
-// which rides the operator's subscription ($0); the cash Gemini API path is
-// opt-in behind an explicit enable flag + key. The deterministic stub keeps the
-// pipeline inert/testable when nothing is configured.
+// Cost posture (`~/CLAUDE.md` rules 3/4/7): the local-GPU engine rides
+// llama-swap ($0 cash) and the Gemini CLI rides the operator's subscription
+// ($0 cash); the cash Gemini API path is opt-in behind an explicit enable flag
+// + key. The deterministic stub keeps the pipeline inert/testable when nothing
+// is configured.
 
 export const MEDIA_UNDERSTANDING_SEVERITIES = ['low', 'normal', 'high', 'urgent'] as const
 export type MediaUnderstandingSeverity = (typeof MEDIA_UNDERSTANDING_SEVERITIES)[number]
@@ -52,15 +53,16 @@ export interface MediaProcessor {
   understand(input: MediaUnderstandInput): Promise<MediaUnderstanding>
 }
 
-export type MediaUnderstandMode = 'off' | 'gemini-cli' | 'gemini-api' | 'stub'
+export type MediaUnderstandMode = 'off' | 'llama-swap' | 'gemini-cli' | 'gemini-api' | 'stub'
 
-const MEDIA_UNDERSTAND_MODES: readonly MediaUnderstandMode[] = ['off', 'gemini-cli', 'gemini-api', 'stub']
+const MEDIA_UNDERSTAND_MODES: readonly MediaUnderstandMode[] = ['off', 'llama-swap', 'gemini-cli', 'gemini-api', 'stub']
 
 export function resolveMediaUnderstandMode(raw?: string | null): MediaUnderstandMode {
   const normalized = raw?.trim().toLowerCase()
   // Back-compat aliases so the video-analysis mode value ('gemini') maps to the
   // subscription-first CLI engine by default.
   if (normalized === 'gemini') return 'gemini-cli'
+  if (normalized === 'llamaswap' || normalized === 'local-llm' || normalized === 'local-gpu') return 'llama-swap'
   if (normalized && (MEDIA_UNDERSTAND_MODES as readonly string[]).includes(normalized)) {
     return normalized as MediaUnderstandMode
   }

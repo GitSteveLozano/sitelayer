@@ -9,6 +9,7 @@ import {
 import { createMediaUnderstandingProcessor } from './create-media-understanding-processor.js'
 import { createGeminiCliUnderstandingProcessor, type GeminiCliRunner } from './gemini-cli-processor.js'
 import { createGeminiApiUnderstandingProcessor, extractCandidateText } from './gemini-api-processor.js'
+import { createLlamaSwapUnderstandingProcessor, extractOpenAIChatText } from './llama-swap-processor.js'
 
 function frame(index: number): MediaUnderstandFrame {
   return { index, time_seconds: index, content_type: 'image/jpeg', bytes: Buffer.from(`frame-${index}`) }
@@ -25,6 +26,9 @@ const VALID = JSON.stringify({
 describe('resolveMediaUnderstandMode', () => {
   it('maps the video-mode alias and unknowns', () => {
     expect(resolveMediaUnderstandMode('gemini')).toBe('gemini-cli')
+    expect(resolveMediaUnderstandMode('llama-swap')).toBe('llama-swap')
+    expect(resolveMediaUnderstandMode('llamaswap')).toBe('llama-swap')
+    expect(resolveMediaUnderstandMode('local-gpu')).toBe('llama-swap')
     expect(resolveMediaUnderstandMode('gemini-cli')).toBe('gemini-cli')
     expect(resolveMediaUnderstandMode('gemini-api')).toBe('gemini-api')
     expect(resolveMediaUnderstandMode('stub')).toBe('stub')
@@ -165,6 +169,54 @@ describe('extractCandidateText', () => {
   })
 })
 
+describe('createLlamaSwapUnderstandingProcessor', () => {
+  it('posts OpenAI-compatible multimodal chat content and parses the response', async () => {
+    const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: VALID } }] }), { status: 200 })
+    })
+    const proc = createLlamaSwapUnderstandingProcessor({
+      fetchImpl,
+      baseUrl: 'http://127.0.0.1:8081',
+      model: 'gemma4-12b-vision',
+    })
+    const out = await proc.understand({
+      frames: [frame(1)],
+      transcript: 'the save button did nothing',
+      context: { kind: 'video', route: '/estimate' },
+    })
+    expect(out.analyzer).toBe('llama-swap-v1')
+    expect(out.suggested_severity).toBe('high')
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    const [url, init] = fetchImpl.mock.calls[0]!
+    expect(url).toBe('http://127.0.0.1:8081/v1/chat/completions')
+    const body = JSON.parse(String(init.body)) as {
+      model?: string
+      messages?: Array<{ content?: Array<Record<string, unknown>> }>
+    }
+    expect(body.model).toBe('gemma4-12b-vision')
+    expect(JSON.stringify(body.messages)).toContain('image_url')
+    expect(JSON.stringify(body.messages)).toContain('the save button did nothing')
+  })
+
+  it('throws a clear error on non-200', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 500 }))
+    const proc = createLlamaSwapUnderstandingProcessor({ fetchImpl, baseUrl: 'http://127.0.0.1:8081' })
+    await expect(proc.understand({ frames: [frame(1)], context: { kind: 'video' } })).rejects.toThrow(/500/)
+  })
+})
+
+describe('extractOpenAIChatText', () => {
+  it('extracts string message content', () => {
+    expect(extractOpenAIChatText(JSON.stringify({ choices: [{ message: { content: VALID } }] }))).toBe(VALID)
+  })
+
+  it('extracts array message content', () => {
+    expect(
+      extractOpenAIChatText(JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: VALID }] } }] })),
+    ).toBe(VALID)
+  })
+})
+
 describe('createMediaUnderstandingProcessor factory', () => {
   const ENV_KEYS = [
     'MEDIA_UNDERSTANDING_GEMINI_API_ENABLED',
@@ -187,9 +239,10 @@ describe('createMediaUnderstandingProcessor factory', () => {
     }
   })
 
-  it('off -> null, stub -> stub, gemini-cli -> processor', () => {
+  it('off -> null, stub -> stub, llama-swap/gemini-cli -> processors', () => {
     expect(createMediaUnderstandingProcessor('off')).toBeNull()
     expect(createMediaUnderstandingProcessor('stub')?.analyzer).toBe('media-understanding-stub-v1')
+    expect(createMediaUnderstandingProcessor('llama-swap')?.analyzer).toBe('llama-swap-v1')
     expect(createMediaUnderstandingProcessor('gemini-cli')?.analyzer).toBe('gemini-cli-v1')
   })
 

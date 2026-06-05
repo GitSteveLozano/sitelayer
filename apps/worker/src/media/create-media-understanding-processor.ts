@@ -11,11 +11,13 @@ import {
   type FetchLike,
 } from './gemini-api-processor.js'
 import { createGeminiCliUnderstandingProcessor, type GeminiCliRunner } from './gemini-cli-processor.js'
+import { createLlamaSwapUnderstandingProcessor, type LlamaSwapFetchLike } from './llama-swap-processor.js'
 import { createStubUnderstandingProcessor, type MediaProcessor, type MediaUnderstandMode } from './media-processor.js'
 
 export type CreateMediaUnderstandingDeps = {
   cliRunner?: GeminiCliRunner
   fetchImpl?: FetchLike
+  llamaSwapFetchImpl?: LlamaSwapFetchLike
   apiKey?: string
 }
 
@@ -28,6 +30,10 @@ export function createMediaUnderstandingProcessor(
       return null
     case 'stub':
       return createStubUnderstandingProcessor()
+    case 'llama-swap':
+      return createLlamaSwapUnderstandingProcessor(
+        deps.llamaSwapFetchImpl ? { fetchImpl: deps.llamaSwapFetchImpl } : undefined,
+      )
     case 'gemini-cli':
       return createGeminiCliUnderstandingProcessor(deps.cliRunner ? { runner: deps.cliRunner } : undefined)
     case 'gemini-api': {

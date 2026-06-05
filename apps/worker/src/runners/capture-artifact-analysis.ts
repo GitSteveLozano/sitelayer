@@ -150,9 +150,10 @@ async function analyzeCaptureArtifacts(
   const videoFrameCount = Math.min(readPositiveInt('CAPTURE_ARTIFACT_VIDEO_FRAME_COUNT', 3), 12)
   // Multimodal-understanding engine, built once per run, applied to BOTH audio
   // transcripts and sampled video frames. Master toggle is
-  // MEDIA_UNDERSTANDING_ENGINE (off | gemini-cli=$0 subscription | gemini-api=
-  // cash/gated | stub=offline); the legacy CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE
-  // ='gemini' acts as a back-compat alias that turns the CLI engine on.
+  // MEDIA_UNDERSTANDING_ENGINE (off | llama-swap=$0 local GPU |
+  // gemini-cli=$0 subscription | gemini-api=cash/gated | stub=offline); the
+  // legacy CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE='gemini' acts as a back-compat
+  // alias that turns the CLI engine on.
   const understandMode = resolveMediaUnderstandMode(
     process.env.MEDIA_UNDERSTANDING_ENGINE ?? (videoMode === 'gemini' ? 'gemini-cli' : 'off'),
   )
