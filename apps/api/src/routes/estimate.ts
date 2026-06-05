@@ -1183,6 +1183,90 @@ export async function handleEstimateRoutes(
     return true
   }
 
+  // GET /api/projects/:projectId/estimate/tax — sales tax breakdown (gap G4).
+  // Taxable basis (v1 default): material + freight + un-exploded flat lines;
+  // labor + sub are exempt. Rate is project.tax_rate, overridable via ?rate=
+  // for a what-if.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/tax$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'bookkeeper'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const result = await withCompanyClient(ctx.company.id, async (c) => {
+      const proj = await c.query<{ tax_rate: string | null }>(
+        'select tax_rate from projects where company_id = $1 and id = $2',
+        [ctx.company.id, projectId],
+      )
+      if (proj.rows.length === 0) return null
+      const sums = await c.query<{ taxable: string; non_taxable: string }>(
+        `select
+           coalesce(sum(case when kind in ('labor', 'sub') then 0 else amount end), 0)::text as taxable,
+           coalesce(sum(case when kind in ('labor', 'sub') then amount else 0 end), 0)::text as non_taxable
+         from estimate_lines
+        where company_id = $1 and project_id = $2`,
+        [ctx.company.id, projectId],
+      )
+      return {
+        projectTaxRate: Number(proj.rows[0]?.tax_rate ?? 0),
+        taxable: Number(sums.rows[0]?.taxable ?? 0),
+        nonTaxable: Number(sums.rows[0]?.non_taxable ?? 0),
+      }
+    })
+    if (!result) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    let rate = result.projectTaxRate
+    const overrideRaw = url.searchParams.get('rate')
+    if (overrideRaw !== null) {
+      const r = Number(overrideRaw)
+      if (!Number.isFinite(r) || r < 0 || r > 1) {
+        ctx.sendJson(400, { error: 'rate must be a number between 0 and 1 (e.g. 0.0825 for 8.25%)' })
+        return true
+      }
+      rate = r
+    }
+    const taxAmount = result.taxable * rate
+    ctx.sendJson(200, {
+      tax_rate: rate,
+      taxable_subtotal: result.taxable.toFixed(2),
+      non_taxable_subtotal: result.nonTaxable.toFixed(2),
+      tax_amount: taxAmount.toFixed(2),
+      grand_total: (result.taxable + result.nonTaxable + taxAmount).toFixed(2),
+    })
+    return true
+  }
+
+  // PUT /api/projects/:projectId/estimate/tax — set the project's sales tax rate.
+  if (req.method === 'PUT' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/tax$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const body = (await ctx.readBody()) as Record<string, unknown>
+    const rate = Number(body.tax_rate)
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+      ctx.sendJson(400, { error: 'tax_rate must be a number between 0 and 1 (e.g. 0.0825 for 8.25%)' })
+      return true
+    }
+    const updated = await withMutationTx(async (client) =>
+      client.query<{ id: string; tax_rate: string }>(
+        'update projects set tax_rate = $1, updated_at = now(), version = version + 1 where company_id = $2 and id = $3 returning id, tax_rate',
+        [rate, ctx.company.id, projectId],
+      ),
+    )
+    if (updated.rows.length === 0) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    ctx.sendJson(200, { tax_rate: Number(updated.rows[0]?.tax_rate ?? rate) })
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
