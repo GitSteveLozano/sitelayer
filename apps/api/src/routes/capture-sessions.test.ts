@@ -121,6 +121,11 @@ class FakeCapturePool {
   supportPackets: JsonRecord[] = []
   workItems: JsonRecord[] = []
   handoffEvents: JsonRecord[] = []
+  notifications: JsonRecord[] = []
+  // Seeded company admins for the operator-notification fan-out. Includes the
+  // default submitter ('user-1') so the authed path's submitter-exclusion is
+  // actually exercised.
+  adminUserIds: string[] = ['user-1', 'admin-2']
   private eventCounter = 0
   private artifactCounter = 0
   private supportCounter = 0
@@ -553,6 +558,28 @@ class FakeCapturePool {
       const [companyId, workItemId] = params as [string, string]
       const rows = this.handoffEvents.filter((e) => e.company_id === companyId && e.work_item_id === workItemId)
       return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.includes('from company_memberships') && normalized.includes("role = 'admin'")) {
+      return {
+        rows: this.adminUserIds.map((clerk_user_id) => ({ clerk_user_id })),
+        rowCount: this.adminUserIds.length,
+      }
+    }
+    if (normalized.startsWith('insert into notifications')) {
+      const row = {
+        id: `00000000-0000-4000-b000-${String(this.notifications.length + 1).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        recipient_clerk_user_id: (params[1] as string | null) ?? null,
+        recipient_email: (params[2] as string | null) ?? null,
+        kind: params[3] as string,
+        subject: params[4] as string,
+        body_text: params[5] as string,
+        body_html: (params[6] as string | null) ?? null,
+        payload: JSON.parse((params[7] as string | undefined) ?? '{}') as JsonRecord,
+      }
+      this.notifications.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
     }
 
     throw new Error(`unexpected SQL: ${normalized.slice(0, 260)}`)
@@ -1152,6 +1179,16 @@ describe('capture session routes', () => {
         expect.objectContaining({ event_type: 'session.stopped' }),
       ]),
     })
+    // Operators are pinged on finalize, excluding the submitter ('user-1') — so
+    // only 'admin-2' from the seeded admins gets a row. (Runs after the tx
+    // commits on requirePool(), not inside withMutationTx.)
+    expect(pool.notifications).toHaveLength(1)
+    expect(pool.notifications[0]).toMatchObject({
+      recipient_clerk_user_id: 'admin-2',
+      kind: 'capture_work_item_created',
+    })
+    expect(pool.notifications[0]?.recipient_clerk_user_id).not.toBe('user-1')
+    expect((pool.notifications[0]?.payload as JsonRecord).work_item_id).toBe(pool.workItems[0]?.id)
 
     const replay = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {})
     expect(replay.responses[0]).toMatchObject({
@@ -1180,6 +1217,8 @@ describe('capture session routes', () => {
     expect(pool.workItems).toHaveLength(1)
     expect(pool.artifacts).toHaveLength(1)
     expect(pool.events.map((event) => event.event_type)).toEqual(['ui.click', 'session.stopped', 'session.finalized'])
+    // The idempotent replay returns before the notify call, so no duplicate ping.
+    expect(pool.notifications).toHaveLength(1)
   })
 
   it('can promote trusted authenticated feedback captures to agent routing behind an env flag', async () => {

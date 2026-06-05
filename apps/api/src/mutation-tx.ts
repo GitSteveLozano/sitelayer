@@ -176,6 +176,42 @@ export async function enqueueAdminAlert(
   }
 }
 
+/**
+ * Best-effort operator ping when a capture/feedback submission becomes a work
+ * item (Bell feed). Runs on requirePool() — a SEPARATE connection — and MUST be
+ * called AFTER the work-item tx commits, never inside withMutationTx: a notify
+ * query that errors inside the tx would leave the connection in aborted state,
+ * turning the subsequent COMMIT into a silent ROLLBACK and discarding the work
+ * item. `excludeUserId` skips the submitter (an operator filing their own
+ * feedback shouldn't self-notify); the portal guest path passes none. All
+ * failures are swallowed so a notification hiccup never affects the submission.
+ */
+export async function notifyCaptureWorkItem(input: {
+  companyId: string
+  excludeUserId?: string | null
+  subject: string
+  text: string
+  payload: Record<string, unknown>
+}): Promise<void> {
+  try {
+    const recipients = (await listCompanyAdminIds(requirePool(), input.companyId)).filter(
+      (uid) => uid !== input.excludeUserId,
+    )
+    for (const recipientUserId of recipients) {
+      await enqueueNotification({
+        companyId: input.companyId,
+        recipientUserId,
+        kind: 'capture_work_item_created',
+        subject: input.subject,
+        text: input.text,
+        payload: input.payload,
+      })
+    }
+  } catch (err) {
+    getLogger()?.warn({ err, companyId: input.companyId }, '[notifications] capture work-item alert enqueue failed')
+  }
+}
+
 export async function recordSyncEvent(
   companyId: string,
   entityType: string,

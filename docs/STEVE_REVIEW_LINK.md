@@ -75,7 +75,7 @@ do **not** send `/collab/steve` to a production user.
 For a real, logged-out collaborator in prod, use the **signed feedback-invite
 portal** instead: mint an invite token (`feedback_invites`, served at
 `/feedback?token=…`, `apps/api/src/routes/feedback-invites.ts` +
-`apps/web/src/portal/FeedbackInviteEntry.tsx`). The signed token _is_ the auth
+`apps/web/src/screens/feedback/FeedbackInviteEntry.tsx`). The signed token _is_ the auth
 (`authority: signed_feedback_invite_token`) — still browser-only, nothing to
 install — and it round-trips through the same capture-session → work-item path.
 Requires `FEEDBACK_INVITE_SECRET` set in the prod env.
