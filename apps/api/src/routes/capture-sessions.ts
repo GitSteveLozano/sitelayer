@@ -348,19 +348,86 @@ function finalizeSummary(body: Record<string, unknown>, snapshot: CaptureFinaliz
     .join(' ')
 }
 
-function shouldAutoDispatchTrustedCapture(
+type CaptureRoutingGate = {
+  passed: boolean
+  reason: string
+}
+
+type CaptureRoutingDecision = {
+  lane: WorkItemLane
+  autoDispatch: boolean
+  policyId: string
+  willingnessTier: string
+  promotionProfile: string
+  reason: string
+  gates: Record<string, CaptureRoutingGate>
+}
+
+/**
+ * Decide where a finalized capture routes (human triage vs. trusted
+ * auto-dispatch) AND record WHY, gate by gate. The auto-dispatch outcome is the
+ * same AND of conditions the old boolean used; the value-add is the auditable
+ * `gates` / willingness-tier / promotion-profile that rides into the work item
+ * so triage (and an agent) can see exactly which gate held a capture back.
+ * (Idea salvaged from the retired `feat/usage-capture` branch, re-applied on top
+ * of the current consent-enforcing route.)
+ */
+function evaluateCaptureRoutingPolicy(
   ctx: CaptureSessionRouteCtx,
   snapshot: CaptureFinalizeSnapshot,
   category: string,
   requestedLane: WorkItemLane,
-): boolean {
-  if (process.env.CAPTURE_AUTH_AUTO_DISPATCH !== '1') return false
-  if (requestedLane !== 'triage') return false
-  if (!TRUSTED_CAPTURE_AUTO_DISPATCH_ROLES.includes(ctx.company.role)) return false
-  if (snapshot.session.consent_authority !== 'authenticated_company_user') return false
-  if (!['feedback', 'desktop', 'native'].includes(snapshot.session.mode)) return false
-  if (category === 'portal_capture_session') return false
-  return true
+): CaptureRoutingDecision {
+  const gates: Record<string, CaptureRoutingGate> = {
+    env_allows_dispatch: {
+      passed: process.env.CAPTURE_AUTH_AUTO_DISPATCH === '1',
+      reason: 'CAPTURE_AUTH_AUTO_DISPATCH must be enabled',
+    },
+    requested_lane_default_triage: {
+      passed: requestedLane === 'triage',
+      reason: 'only default triage requests are trusted-promoted automatically',
+    },
+    trusted_actor: {
+      passed: TRUSTED_CAPTURE_AUTO_DISPATCH_ROLES.includes(ctx.company.role),
+      reason: 'company role must be allowed for trusted capture promotion',
+    },
+    authenticated_consent: {
+      passed: snapshot.session.consent_authority === 'authenticated_company_user',
+      reason: 'session consent authority must be authenticated company user',
+    },
+    eligible_mode: {
+      passed: ['feedback', 'desktop', 'native'].includes(snapshot.session.mode),
+      reason: 'only feedback, desktop, and native captures can auto-promote',
+    },
+    not_portal_capture: {
+      passed: category !== 'portal_capture_session',
+      reason: 'portal captures must remain triage-first',
+    },
+  }
+  const autoDispatch = Object.values(gates).every((gate) => gate.passed)
+  return {
+    lane: autoDispatch ? 'both' : requestedLane,
+    autoDispatch,
+    policyId: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
+    willingnessTier: autoDispatch ? 'T4' : 'T2',
+    promotionProfile: autoDispatch ? 'trusted_authenticated_auto_dispatch' : 'human_triage',
+    reason: autoDispatch ? 'trusted_authenticated_capture_promoted' : 'capture_requires_triage_or_review',
+    gates,
+  }
+}
+
+function routingDecisionMetadata(decision: CaptureRoutingDecision, requestedLane: WorkItemLane): JsonRecord {
+  return {
+    schema: 'sitelayer.capture_routing_policy.v1',
+    policy_id: decision.policyId,
+    willingness_tier: decision.willingnessTier,
+    promotion_profile: decision.promotionProfile,
+    reason: decision.reason,
+    requested_lane: requestedLane,
+    resolved_lane: decision.lane,
+    auto_dispatch: decision.autoDispatch,
+    gates: decision.gates,
+  }
 }
 
 // Permissive wire-format schemas. Every field stays optional/nullish and the
@@ -1052,8 +1119,10 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   const summary = finalizeSummary(body, snapshot)
   const clientRequestId = optionalText(body.client_request_id, 160) ?? `capture_session_finalize:${id}`
   const category = optionalText(body.category, 120) ?? 'capture_session'
-  const autoDispatch = shouldAutoDispatchTrustedCapture(ctx, snapshot, category, requestedLane)
-  const lane: WorkItemLane = autoDispatch ? 'both' : requestedLane
+  const routingDecision = evaluateCaptureRoutingPolicy(ctx, snapshot, category, requestedLane)
+  const autoDispatch = routingDecision.autoDispatch
+  const lane: WorkItemLane = routingDecision.lane
+  const routingMetadata = routingDecisionMetadata(routingDecision, requestedLane)
   const rawClient: JsonRecord = {
     capture_session_id: id,
     path: route ? { route } : null,
@@ -1077,6 +1146,7 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       lane,
       severity,
       capture_auto_dispatch: autoDispatch,
+      capture_policy: routingMetadata,
     },
   }
   const client = supportJsonRecord(rawClient)
@@ -1132,7 +1202,8 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           artifact_count: snapshot.artifact_count,
           private_artifact_count: snapshot.private_artifact_count,
           capture_auto_dispatch: autoDispatch,
-          capture_routing_policy: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
+          capture_routing_policy: routingDecision.policyId,
+          capture_policy: routingMetadata,
           requested_lane: requestedLane,
         },
       })
@@ -1160,7 +1231,8 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           source: 'capture_session_finalize',
           capture_session_id: id,
           capture_auto_dispatch: autoDispatch,
-          capture_routing_policy: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
+          capture_routing_policy: routingDecision.policyId,
+          capture_policy: routingMetadata,
           evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
         },
         idempotencyKey: `capture_session:finalize:${id}:work_item_created`,

@@ -1165,6 +1165,23 @@ describe('capture session routes', () => {
       event_count: 2,
       artifact_count: 1,
       private_artifact_count: 1,
+      // Structured, auditable routing policy (salvaged from feat/usage-capture):
+      // a non-triage request can never auto-promote, and the decision records
+      // which gate held it back.
+      capture_auto_dispatch: false,
+      capture_routing_policy: 'default_triage',
+      capture_policy: {
+        schema: 'sitelayer.capture_routing_policy.v1',
+        policy_id: 'default_triage',
+        willingness_tier: 'T2',
+        promotion_profile: 'human_triage',
+        auto_dispatch: false,
+        requested_lane: 'agent',
+        resolved_lane: 'agent',
+        gates: {
+          requested_lane_default_triage: { passed: false },
+        },
+      },
     })
     expect(pool.supportPackets[0]?.server_context).toMatchObject({
       capture_session_id: SESSION_ID,
