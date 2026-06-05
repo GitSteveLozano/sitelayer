@@ -3,7 +3,9 @@ import { PassThrough } from 'node:stream'
 import {
   buildEstimatePdfInputFromSummary,
   buildEstimatePdfResponse,
+  groupEstimatePdfLines,
   renderEstimatePdf,
+  type EstimatePdfDivision,
   type EstimatePdfInput,
 } from './pdf.js'
 
@@ -177,6 +179,87 @@ describe('report kinds (Phase 3 report builder)', () => {
       })
       expect(result.kind).toBe('ok')
       if (result.kind === 'ok') expect(result.filename).toMatch(pattern)
+    }
+  })
+})
+
+describe('groupEstimatePdfLines (gap G4 grouped reports)', () => {
+  const lines: EstimatePdfDivision[] = [
+    { description: 'EPS', qty: 100, unit: 'sqft', rate: 12.5, ext: 1250, kind: 'material', division_code: 'D1' },
+    { description: 'LAB', qty: 10, unit: 'hr', rate: 60, ext: 600, kind: 'labor', division_code: 'D1' },
+    { description: 'DRY', qty: 50, unit: 'sqft', rate: 8, ext: 400, kind: 'material', division_code: 'D2' },
+    { description: 'X', qty: 1, unit: 'ea', rate: 0, ext: 0, kind: null, division_code: null },
+  ]
+
+  it('groups + subtotals by division, sorted by subtotal desc, with a null bucket', () => {
+    const { axis, groups } = groupEstimatePdfLines(lines, 'division')
+    expect(axis).toBe('division')
+    expect(groups.find((g) => g.key === 'D1')).toMatchObject({ subtotal: 1850, lineCount: 2 }) // 1250 + 600
+    expect(groups.find((g) => g.key === 'D2')?.subtotal).toBe(400)
+    expect(groups.find((g) => g.key === '(no division)')?.lineCount).toBe(1)
+    expect(groups[0]!.key).toBe('D1') // highest subtotal first
+  })
+
+  it('groups + subtotals by cost type (kind)', () => {
+    const { axis, groups } = groupEstimatePdfLines(lines, 'kind')
+    expect(axis).toBe('cost type')
+    expect(groups.find((g) => g.key === 'material')?.subtotal).toBe(1650) // 1250 + 400
+    expect(groups.find((g) => g.key === 'labor')?.subtotal).toBe(600)
+    expect(groups.find((g) => g.key === '(unclassified)')?.lineCount).toBe(1)
+  })
+})
+
+describe('grouped report kinds (gap G4)', () => {
+  const company = { name: 'LA Operations', slug: 'la-operations' }
+  const taggedSummary = {
+    ...baseSummary,
+    estimateLines: [
+      {
+        service_item_code: 'EPS',
+        quantity: 100,
+        unit: 'sqft',
+        rate: 12.5,
+        amount: 1250,
+        kind: 'material',
+        division_code: 'D1',
+      },
+      { service_item_code: 'LAB', quantity: 10, unit: 'hr', rate: 60, amount: 600, kind: 'labor', division_code: 'D1' },
+      {
+        service_item_code: 'DRY',
+        quantity: 50,
+        unit: 'sqft',
+        rate: 8,
+        amount: 400,
+        kind: 'material',
+        division_code: 'D2',
+      },
+    ],
+  }
+
+  it('by_cost_type attaches a cost-type breakdown', () => {
+    const input = buildEstimatePdfInputFromSummary({ company, report: 'by_cost_type', summary: taggedSummary })
+    expect(input.breakdown?.axis).toBe('cost type')
+    expect(input.breakdown?.groups.find((g) => g.key === 'material')?.subtotal).toBe(1650)
+    expect(input.breakdown?.groups.find((g) => g.key === 'labor')?.subtotal).toBe(600)
+  })
+
+  it('by_division attaches a division breakdown', () => {
+    const input = buildEstimatePdfInputFromSummary({ company, report: 'by_division', summary: taggedSummary })
+    expect(input.breakdown?.axis).toBe('division')
+    expect(input.breakdown?.groups.find((g) => g.key === 'D1')?.subtotal).toBe(1850)
+  })
+
+  it('non-grouped reports carry no breakdown', () => {
+    const input = buildEstimatePdfInputFromSummary({ company, report: 'summary', summary: taggedSummary })
+    expect(input.breakdown).toBeUndefined()
+  })
+
+  it('renders a valid PDF for the grouped kinds', async () => {
+    for (const report of ['by_division', 'by_cost_type'] as const) {
+      const input = buildEstimatePdfInputFromSummary({ company, report, summary: taggedSummary })
+      const buf = await collectPdf(input)
+      expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF')
+      expect(buf.subarray(-32).toString('ascii')).toContain('%%EOF')
     }
   })
 })

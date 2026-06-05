@@ -143,8 +143,8 @@ export async function summarizeProject(
     ? 'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
     : 'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 and deleted_at is null order by created_at asc'
   const estimateLinesSql = draftId
-    ? 'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 and draft_id = $3 order by created_at asc'
-    : 'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 order by created_at asc'
+    ? 'select service_item_code, quantity, unit, rate, amount, kind, division_code, created_at from estimate_lines where company_id = $1 and project_id = $2 and draft_id = $3 order by created_at asc'
+    : 'select service_item_code, quantity, unit, rate, amount, kind, division_code, created_at from estimate_lines where company_id = $1 and project_id = $2 order by created_at asc'
   const scopedParams = draftId ? [companyId, projectId, draftId] : [companyId, projectId]
 
   const [measurementsResult, estimateLinesResult, laborEntriesResult, materialBillsResult, bonusRuleResult] =

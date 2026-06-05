@@ -34,6 +34,10 @@ export type EstimatePdfDivision = {
   unit: string
   rate: number | string
   ext: number | string
+  // Gap G4 grouped reports: per-line cost type + division so by_cost_type /
+  // by_division can subtotal. Optional — flat reports ignore them.
+  kind?: string | null
+  division_code?: string | null
 }
 
 /**
@@ -46,7 +50,7 @@ export type EstimatePdfDivision = {
  *                    with a blank "Your price" column; no rates/totals.
  *   - cost_vs_sell — internal margin analysis: cost vs sell + margin $ / %.
  */
-export type ReportKind = 'summary' | 'customer' | 'rfq' | 'cost_vs_sell'
+export type ReportKind = 'summary' | 'customer' | 'rfq' | 'cost_vs_sell' | 'by_division' | 'by_cost_type'
 
 type ReportConfig = {
   /** Document + heading title. */
@@ -63,6 +67,8 @@ type ReportConfig = {
   totals: 'costs' | 'sell_only' | 'cost_vs_sell' | 'none'
   /** Internal bid-vs-scope variance block. */
   showVariance: boolean
+  /** Gap G4 grouped reports: render a per-axis subtotal breakdown section. */
+  breakdownBy?: 'division' | 'kind'
 }
 
 export const REPORT_CONFIG: Record<ReportKind, ReportConfig> = {
@@ -102,10 +108,62 @@ export const REPORT_CONFIG: Record<ReportKind, ReportConfig> = {
     totals: 'cost_vs_sell',
     showVariance: true,
   },
+  by_division: {
+    title: 'Estimate by Division',
+    showTenantSlug: true,
+    showRate: true,
+    showExt: true,
+    showPriceColumn: false,
+    totals: 'costs',
+    showVariance: false,
+    breakdownBy: 'division',
+  },
+  by_cost_type: {
+    title: 'Estimate by Cost Type',
+    showTenantSlug: true,
+    showRate: true,
+    showExt: true,
+    showPriceColumn: false,
+    totals: 'costs',
+    showVariance: false,
+    breakdownBy: 'kind',
+  },
 }
 
 export function isReportKind(value: unknown): value is ReportKind {
-  return value === 'summary' || value === 'customer' || value === 'rfq' || value === 'cost_vs_sell'
+  return (
+    value === 'summary' ||
+    value === 'customer' ||
+    value === 'rfq' ||
+    value === 'cost_vs_sell' ||
+    value === 'by_division' ||
+    value === 'by_cost_type'
+  )
+}
+
+/**
+ * Pure subtotal grouping for the grouped report kinds (gap G4). Groups the
+ * estimate lines by division_code or kind (cost type), summing the extended
+ * amount per group. Null/blank keys fall into a labeled bucket.
+ */
+export function groupEstimatePdfLines(
+  divisions: EstimatePdfDivision[],
+  axis: 'division' | 'kind',
+): { axis: string; groups: Array<{ key: string; subtotal: number; lineCount: number }> } {
+  const byKey = new Map<string, { subtotal: number; lineCount: number }>()
+  for (const d of divisions) {
+    const raw = axis === 'division' ? d.division_code : d.kind
+    const key =
+      raw && String(raw).trim() ? String(raw).trim() : axis === 'division' ? '(no division)' : '(unclassified)'
+    const cur = byKey.get(key) ?? { subtotal: 0, lineCount: 0 }
+    cur.subtotal += Number(d.ext) || 0
+    cur.lineCount += 1
+    byKey.set(key, cur)
+  }
+  const groups = Array.from(byKey.entries())
+    .map(([key, v]) => ({ key, subtotal: v.subtotal, lineCount: v.lineCount }))
+    .sort((a, b) => b.subtotal - a.subtotal || a.key.localeCompare(b.key))
+  return { axis: axis === 'division' ? 'division' : 'cost type', groups }
 }
 
 export type EstimatePdfInput = {
@@ -122,6 +180,8 @@ export type EstimatePdfInput = {
     scope_total?: number | string | null
   }
   divisions: EstimatePdfDivision[]
+  /** Gap G4 grouped reports: per-axis subtotal breakdown (by_division / by_cost_type). */
+  breakdown?: { axis: string; groups: Array<{ key: string; subtotal: number; lineCount: number }> }
   totals: {
     labor: number
     material: number
@@ -165,6 +225,8 @@ export function buildEstimatePdfInputFromSummary(args: {
       unit: string
       rate: number | string
       amount: number | string
+      kind?: string | null
+      division_code?: string | null
     }>
   }
   appUrl?: string
@@ -177,7 +239,13 @@ export function buildEstimatePdfInputFromSummary(args: {
     unit: line.unit,
     rate: line.rate,
     ext: line.amount,
+    kind: line.kind ?? null,
+    division_code: line.division_code ?? null,
   }))
+
+  // Grouped report kinds (gap G4) attach a per-axis subtotal breakdown.
+  const cfg = REPORT_CONFIG[args.report ?? 'summary']
+  const breakdown = cfg.breakdownBy ? groupEstimatePdfLines(divisions, cfg.breakdownBy) : undefined
 
   // Overhead: anything in totalCost beyond labor + material + sub. Defensive
   // against future cost categories without forcing a release.
@@ -199,6 +267,7 @@ export function buildEstimatePdfInputFromSummary(args: {
       scope_total: summary.project.scope_total ?? null,
     },
     divisions,
+    ...(breakdown ? { breakdown } : {}),
     totals: {
       labor,
       material: material + sub,
@@ -338,6 +407,22 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
       for (const [label, value] of totalsLines) {
         doc.text(label, 380, doc.y, { continued: true })
         doc.text(`  ${value}`, { align: 'right' })
+      }
+    }
+
+    // Breakdown by axis (gap G4: by_division / by_cost_type report). Rendered
+    // with the same label/right-aligned-value primitive as the totals block.
+    if (input.breakdown && input.breakdown.groups.length > 0) {
+      doc.moveDown(0.8)
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(11)
+        .fillColor('#000000')
+        .text(`Breakdown by ${input.breakdown.axis}`, 54, doc.y)
+      doc.font('Helvetica').fontSize(10)
+      for (const g of input.breakdown.groups) {
+        doc.text(`${g.key} (${g.lineCount})`, 380, doc.y, { continued: true })
+        doc.text(`  ${money(g.subtotal)}`, { align: 'right' })
       }
     }
 
