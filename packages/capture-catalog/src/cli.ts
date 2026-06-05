@@ -40,7 +40,7 @@ function main(): void {
     console.error('Missing required <takeoff> arg')
     process.exit(1)
   }
-  const opts = program.opts<CliOptions>()
+  const opts = program.opts() as CliOptions
   const laborRate = Number.parseFloat(opts.laborRate)
   if (!Number.isFinite(laborRate) || laborRate < 0) {
     console.error(`Invalid --labor-rate ${opts.laborRate}`)
