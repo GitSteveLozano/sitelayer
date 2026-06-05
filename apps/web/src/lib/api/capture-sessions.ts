@@ -255,6 +255,70 @@ export async function uploadCaptureArtifact(
   return (await response.json()) as CaptureArtifactUploadResponse
 }
 
+/**
+ * One captured artifact as snapshotted into a support packet's
+ * `server_context.capture_session.artifacts[]` at finalize time. `byte_size`
+ * arrives as a string (bigint::text from postgres) so we keep it loose.
+ */
+export type CaptureArtifactSummary = {
+  id: string
+  kind: string
+  content_type: string | null
+  byte_size: string | number | null
+  duration_ms: number | null
+  pii_level: string | null
+  access_policy: string | null
+  created_at: string | null
+}
+
+/**
+ * Pull the artifact list out of a loaded support packet's server_context.
+ * Defensive: the shape is operator-supplied JSON, so anything missing/odd
+ * yields an empty list rather than throwing in the detail view.
+ */
+export function readCaptureArtifactsFromServerContext(serverContext: unknown): CaptureArtifactSummary[] {
+  if (typeof serverContext !== 'object' || serverContext === null) return []
+  const captureSession = (serverContext as { capture_session?: unknown }).capture_session
+  if (typeof captureSession !== 'object' || captureSession === null) return []
+  const artifacts = (captureSession as { artifacts?: unknown }).artifacts
+  if (!Array.isArray(artifacts)) return []
+  return artifacts.flatMap((entry): CaptureArtifactSummary[] => {
+    if (typeof entry !== 'object' || entry === null) return []
+    const row = entry as Record<string, unknown>
+    if (typeof row.id !== 'string') return []
+    return [
+      {
+        id: row.id,
+        kind: typeof row.kind === 'string' ? row.kind : 'unknown',
+        content_type: typeof row.content_type === 'string' ? row.content_type : null,
+        byte_size: typeof row.byte_size === 'string' || typeof row.byte_size === 'number' ? row.byte_size : null,
+        duration_ms: typeof row.duration_ms === 'number' ? row.duration_ms : null,
+        pii_level: typeof row.pii_level === 'string' ? row.pii_level : null,
+        access_policy: typeof row.access_policy === 'string' ? row.access_policy : null,
+        created_at: typeof row.created_at === 'string' ? row.created_at : null,
+      },
+    ]
+  })
+}
+
+/**
+ * Fetch one capture artifact's bytes through the authed file route. The route
+ * either streams inline (local FS storage) or 302-redirects to a presigned
+ * object-store URL; `fetch` follows the redirect either way. Returns a Blob the
+ * caller can wrap in an object URL for `<video>`/`<audio>`/`<img>` or download.
+ * NOTE: prod presigned rendering requires object-store CORS for the web origin
+ * (same prerequisite as BLUEPRINT_DOWNLOAD_PRESIGNED).
+ */
+export async function fetchCaptureArtifactBlob(captureSessionId: string, artifactId: string): Promise<Blob> {
+  const headers = await buildAuthHeaders()
+  const path = `/api/capture-sessions/${encodeURIComponent(captureSessionId)}/artifacts/${encodeURIComponent(
+    artifactId,
+  )}/file`
+  const response = await fetch(`${API_URL}${path}`, { method: 'GET', headers })
+  if (!response.ok) throw await parseMultipartError(response, path)
+  return response.blob()
+}
+
 export async function stopCaptureSession(captureSessionId: string): Promise<CaptureSessionResponse> {
   const response = await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
     method: 'PATCH',

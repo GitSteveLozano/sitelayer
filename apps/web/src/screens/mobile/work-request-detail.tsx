@@ -18,7 +18,9 @@ import {
 } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestContextPreview } from '../../components/work-requests/WorkRequestContextPreview.js'
+import { CaptureMediaPanel } from '../../components/work-requests/CaptureMediaPanel.js'
 import { WorkRequestTimeline } from '../../components/work-requests/WorkRequestTimeline.js'
+import { readCaptureArtifactsFromServerContext } from '@/lib/api/capture-sessions'
 import {
   WorkRequestReversibilityBadge,
   WorkRequestSeverityPill,
@@ -483,6 +485,21 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                         value={JSON.stringify(supportPacket.data.support_packet, null, 2)}
                         rows={10}
                       />
+                      {(() => {
+                        const artifacts = readCaptureArtifactsFromServerContext(
+                          supportPacket.data.support_packet.server_context,
+                        )
+                        if (artifacts.length === 0) return null
+                        return (
+                          <>
+                            <MSectionH>Captured media</MSectionH>
+                            <CaptureMediaPanel
+                              captureSessionId={supportPacket.data.support_packet.capture_session_id}
+                              artifacts={artifacts}
+                            />
+                          </>
+                        )
+                      })()}
                     </>
                   ) : null}
                   {supportPacketAccessLog.error ? (
