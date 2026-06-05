@@ -10,7 +10,7 @@
  * Shares the data layer (hooks, entity APIs) and v2 tokens with mobile; only
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { lazy, Suspense, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -48,6 +48,7 @@ import { usePendingApprovalsSummary } from '@/lib/api/approvals'
 import { useInventoryItems } from '@/lib/api/rentals'
 import { useUserInitials, useUserFullName } from '@/lib/user'
 import { normalizeMobileShellRole } from '@/lib/active-context'
+import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { membershipRoleToPersona, RoleContext, type Role } from '@/lib/role'
 import {
   DCommandPalette,
@@ -449,6 +450,40 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     const companyRole = normalizeMobileShellRole(sessionRole)
     return companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
   }, [sessionRole])
+
+  // Redacted state-provider for the desktop workspace shell — the surface a
+  // reviewer (e.g. Steve) lands on by default (`/desktop`), which previously
+  // captured no operator context on feedback submit (G10). Snapshots only the
+  // active route + human section label + persona/role + active project, so a
+  // capture from any `/desktop/*` route carries "where the reviewer was".
+  // Low-PII; the registry sanitizer strips sensitive keys + caps strings.
+  useEffect(() => {
+    return registerCaptureStateProvider('desktop-workspace', ({ reason }) => ({
+      schema: 'sitelayer.capture.desktop-workspace.v1',
+      kind: 'state_snapshot',
+      piiLevel: 'internal',
+      payload: {
+        reason,
+        route_path: location.pathname,
+        section: sectionCrumb,
+        crumb,
+        persona,
+        session_role: sessionRole,
+        active_project_id: probeRoute.projectId ?? null,
+        active_project_name: activeProjectName,
+        pending_approvals: pendingApprovals.count,
+      },
+    }))
+  }, [
+    location.pathname,
+    sectionCrumb,
+    crumb,
+    persona,
+    sessionRole,
+    probeRoute.projectId,
+    activeProjectName,
+    pendingApprovals.count,
+  ])
 
   // ⌘K command palette — fuzzy over projects/clients/items + nav targets.
   const q = cmdkQuery.trim().toLowerCase()
