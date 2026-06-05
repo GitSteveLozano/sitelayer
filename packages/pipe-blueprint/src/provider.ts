@@ -93,6 +93,83 @@ export function createCliProvider(opts: {
   }
 }
 
+export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
+
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
+
+/**
+ * Paid Gemini API provider (the scale path). Sends prompt + inline image to
+ * generateContent and prices the run from the RESPONSE's real usageMetadata
+ * (promptTokenCount already includes image tokens), so cost is actual, not
+ * estimated. `tier: 'batch'` prices at the 50%-off Batch rate.
+ */
+export function createGeminiApiProvider(opts: {
+  model: string
+  apiKey?: string
+  fetchImpl?: FetchLike
+  timeoutMs?: number
+  maxOutputTokens?: number
+  tier?: 'standard' | 'batch'
+}): TakeoffVisionProvider {
+  const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
+  const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as FetchLike | undefined)
+  const timeoutMs = opts.timeoutMs ?? 120_000
+  return {
+    id: 'gemini-api',
+    async run(req: TakeoffVisionRequest): Promise<TakeoffVisionResult> {
+      if (!apiKey) throw new Error('gemini-api provider requires GEMINI_API_KEY')
+      if (!fetchImpl) throw new Error('gemini-api provider requires a fetch implementation')
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      let raw: string
+      let status: number
+      try {
+        const resp = await fetchImpl(`${GEMINI_API_BASE}/models/${encodeURIComponent(opts.model)}:generateContent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: req.prompt }, { inline_data: { mime_type: req.page.mimeType, data: req.page.base64 } }],
+              },
+            ],
+            generationConfig: { maxOutputTokens: req.maxOutputTokens ?? opts.maxOutputTokens ?? 8192 },
+          }),
+          signal: controller.signal,
+        })
+        status = resp.status
+        raw = await resp.text()
+      } finally {
+        clearTimeout(timer)
+      }
+      if (status < 200 || status >= 300) throw new Error(`gemini-api ${opts.model}: ${status} ${raw.slice(0, 240)}`)
+      const parsed = JSON.parse(raw) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+      }
+      const text = (parsed.candidates?.[0]?.content?.parts ?? [])
+        .map((p) => (typeof p.text === 'string' ? p.text : ''))
+        .join('')
+        .trim()
+      const inTok = parsed.usageMetadata?.promptTokenCount ?? approxTokens(req.prompt)
+      const outTok = parsed.usageMetadata?.candidatesTokenCount ?? approxTokens(text)
+      return {
+        text,
+        // Real usage: promptTokenCount already folds in image tokens, so pass it
+        // as promptTokens with no pages (imageTokens stays 0 — folded into input).
+        cost: estimateTakeoffCost({
+          provider: 'gemini-api',
+          model: opts.model,
+          pages: [],
+          promptTokens: inTok,
+          outputTokens: outTok,
+          ...(opts.tier ? { tier: opts.tier } : {}),
+        }),
+      }
+    },
+  }
+}
+
 const STUB_EXTRACT =
   '{"imageSize":{"width":0,"height":0},"rooms":[],"walls":[],"openings":[],"dimensionStrings":[],"notes":["stub"]}'
 

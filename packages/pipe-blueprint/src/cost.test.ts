@@ -29,12 +29,12 @@ describe('estimateTakeoffCost', () => {
 
   it('FREE path (gemini-cli) bills $0 but reports the shadow API cost (the price of flipping to paid)', () => {
     const est = estimateTakeoffCost({ provider: 'gemini-cli', ...onePage })
-    expect(est.model).toBe('gemini-2.5-pro') // what the CLI actually runs
+    expect(est.model).toBe('gemini-3.1-flash-lite') // the bang-for-buck scale model
     expect(est.imageTokens).toBe(258 * 4)
     expect(est.inputTokens).toBe(258 * 4 + 2000)
     expect(est.billedUsd).toBe(0) // subscription
-    // shadow = input 3032/1e6 × 1.25 + output 3000/1e6 × 10 = 0.00379 + 0.03 = 0.03379
-    expect(est.shadowApiUsd).toBeCloseTo(0.0338, 3)
+    // shadow = input 3032/1e6 × 0.25 + output 3000/1e6 × 1.5 = 0.000758 + 0.0045 = 0.005258
+    expect(est.shadowApiUsd).toBeCloseTo(0.0053, 4)
     expect(est.shadowApiUsd).toBeGreaterThan(0) // the free→paid delta is visible
   })
 
@@ -58,6 +58,17 @@ describe('estimateTakeoffCost', () => {
     const est = estimateTakeoffCost({ provider: 'anthropic-api', model: 'claude-sonnet-4-5', ...onePage })
     expect(est.imageTokens).toBe(anthropicImageTokens(1536, 1536)) // not 258*4
     expect(est.billedUsd).toBeGreaterThan(0)
+  })
+
+  it('batch tier halves the metered cost (takeoff is async → the real scale rate)', () => {
+    const std = estimateTakeoffCost({ provider: 'gemini-api', model: 'gemini-3.1-flash-lite', ...onePage })
+    const batch = estimateTakeoffCost({
+      provider: 'gemini-api',
+      model: 'gemini-3.1-flash-lite',
+      ...onePage,
+      tier: 'batch',
+    })
+    expect(batch.billedUsd).toBeCloseTo(std.billedUsd / 2, 3) // both round to 4dp
   })
 
   it('throws on an unknown model', () => {

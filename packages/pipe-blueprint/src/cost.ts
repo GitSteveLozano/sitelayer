@@ -31,28 +31,70 @@ export interface ModelPricing {
 }
 
 /**
- * Metered per-model rates, AS OF 2026-06-05 — VERIFY before relying on absolute
- * dollars. These are the rates a run would be billed at if routed to the paid
- * API (the "shadow" rate when on a free path).
+ * Metered Standard-tier rates (text/image input), VERIFIED against
+ * ai.google.dev/gemini-api/docs/pricing on 2026-06-05. These are what a run is
+ * billed at on the paid API (the "shadow" rate when on a free path). For the
+ * tiered Pro models the ≤200K-token input rate is used — a single-sheet takeoff
+ * is far under 200K, so that's the right tier. Anthropic rates are the existing
+ * pipe-blueprint path; verify those separately.
+ *
+ * NOTE: Batch tier is 50% off (BATCH_DISCOUNT) — a takeoff is async, so Batch is
+ * the real per-takeoff rate at scale. estimateTakeoffCost(tier:'batch') applies it.
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
-  'gemini-2.0-flash': { inputPerMillion: 0.1, outputPerMillion: 0.4, imageModel: 'gemini' },
+  // Gemini 2.5 (prior gen, still served + cheapest)
+  'gemini-2.5-flash-lite': { inputPerMillion: 0.1, outputPerMillion: 0.4, imageModel: 'gemini' },
   'gemini-2.5-flash': { inputPerMillion: 0.3, outputPerMillion: 2.5, imageModel: 'gemini' },
   'gemini-2.5-pro': { inputPerMillion: 1.25, outputPerMillion: 10, imageModel: 'gemini' },
+  // Gemini 3.x (current gen, 2026-06)
+  'gemini-3.1-flash-lite': { inputPerMillion: 0.25, outputPerMillion: 1.5, imageModel: 'gemini' },
+  'gemini-3-flash-preview': { inputPerMillion: 0.5, outputPerMillion: 3, imageModel: 'gemini' },
+  'gemini-3.5-flash': { inputPerMillion: 1.5, outputPerMillion: 9, imageModel: 'gemini' },
+  'gemini-3.1-pro-preview': { inputPerMillion: 2, outputPerMillion: 12, imageModel: 'gemini' },
+  // Anthropic (the existing pipe-blueprint Claude path) — verify rates separately.
   'claude-haiku-4-5': { inputPerMillion: 1, outputPerMillion: 5, imageModel: 'anthropic' },
   'claude-sonnet-4-5': { inputPerMillion: 3, outputPerMillion: 15, imageModel: 'anthropic' },
   'claude-opus-4-x': { inputPerMillion: 15, outputPerMillion: 75, imageModel: 'anthropic' },
 }
 
+/** Batch-tier multiplier vs Standard (Gemini Batch + Anthropic batch ≈ 50% off).
+ *  Takeoff is async → batchable → this is the real per-takeoff scale rate. */
+export const BATCH_DISCOUNT = 0.5
+
+/** Every Gemini model the cost model knows, for the bang-for-buck comparison. */
+export const GEMINI_MODELS = [
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-3.5-flash',
+  'gemini-3.1-pro-preview',
+] as const
+
 /** The model a free CLI/local path is *actually running*, so its shadow cost is
  *  priced against the matching metered rate (gemini-cli ⇒ a Gemini model). */
+/**
+ * Bang-for-buck winner, from a real 7-model head-to-head on the sample blueprint
+ * (2026-06-05, scripts/takeoff-vision/compare-models.ts): the ENTIRE Gemini 2.5
+ * generation produced invalid/empty takeoffs; only Gemini 3.x worked, and
+ * gemini-3.1-flash-lite won on all three axes — cheapest ($0.003/takeoff,
+ * $0.0015 batch → $1.50/1000), fastest (~6s), AND best-balanced extraction (15
+ * rooms / 4 walls / 9 dims). The pricier 3.5-flash / 3.1-pro were worse or
+ * incomplete. (NOTE: "quality" = valid structured output volume, NOT verified
+ * geometric accuracy — that's a separate ground-truth step.)
+ */
+export const RECOMMENDED_TAKEOFF_MODEL = 'gemini-3.1-flash-lite'
+
 export const DEFAULT_SHADOW_MODEL: Record<TakeoffProvider, string> = {
-  'gemini-cli': 'gemini-2.5-pro',
-  'agy-cli': 'gemini-2.5-pro',
-  'local-gpu': 'gemini-2.0-flash', // closest paid analog to price the "if we had to pay" case
-  'gemini-api': 'gemini-2.5-flash',
+  // The CLIs auto-pick a model (no -m); empirically a 3.x, so price the shadow
+  // against the recommended scale model rather than guessing the CLI's pick.
+  'gemini-cli': RECOMMENDED_TAKEOFF_MODEL,
+  'agy-cli': RECOMMENDED_TAKEOFF_MODEL,
+  'local-gpu': 'gemini-2.5-flash-lite', // closest paid analog to price the "if we had to pay" case
+  'gemini-api': RECOMMENDED_TAKEOFF_MODEL,
   'anthropic-api': 'claude-sonnet-4-5',
-  stub: 'gemini-2.0-flash',
+  stub: 'gemini-2.5-flash-lite',
 }
 
 const GEMINI_TILE_PX = 768
@@ -91,6 +133,9 @@ export interface TakeoffCostInput {
   promptTokens?: number
   /** Expected JSON output tokens (detected quantities). */
   outputTokens?: number
+  /** 'batch' applies the 50%-off Batch tier — the real per-takeoff rate at scale
+   *  since takeoff is async. Defaults to 'standard'. */
+  tier?: 'standard' | 'batch'
 }
 
 export interface TakeoffCostEstimate {
@@ -121,8 +166,10 @@ export function estimateTakeoffCost(input: TakeoffCostInput): TakeoffCostEstimat
   const inputTokens = imgTokens + (input.promptTokens ?? 0)
   const outputTokens = input.outputTokens ?? 0
 
+  const tierMult = input.tier === 'batch' ? BATCH_DISCOUNT : 1
   const meteredUsd =
-    (inputTokens / 1_000_000) * pricing.inputPerMillion + (outputTokens / 1_000_000) * pricing.outputPerMillion
+    ((inputTokens / 1_000_000) * pricing.inputPerMillion + (outputTokens / 1_000_000) * pricing.outputPerMillion) *
+    tierMult
   const billedUsd = METERED_PROVIDERS.has(provider) ? meteredUsd : 0
 
   return {
