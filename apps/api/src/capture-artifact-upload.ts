@@ -73,6 +73,8 @@ function defaultFileNameFor(kind: string): string {
       return 'transcript.txt'
     case 'rrweb':
       return 'replay.json'
+    case 'repro_bracket':
+      return 'repro-bracket.json'
     case 'canvas_geometry':
       return 'canvas-geometry.json'
     case 'video':

@@ -14,6 +14,7 @@ export type CaptureStream =
 export type CaptureArtifactKind =
   | 'audio'
   | 'canvas_geometry'
+  | 'repro_bracket'
   | 'rrweb'
   | 'screen_context'
   | 'state_snapshot'
@@ -119,6 +120,34 @@ export function buildAuthenticatedScreenRecordingConsentScope(): CaptureConsentS
       video_clip_manifest: true,
     },
     event_classes: ['authenticated_feedback'],
+  })
+}
+
+/**
+ * Reproduction-bracket consent scope. A reproduction is a user-bracketed
+ * "start condition → steps → end condition" recording (see
+ * `repro-bracket.ts`). It always allows the typed note, registered state
+ * snapshots (the before/after conditions), and the `repro_bracket` summary
+ * artifact; DOM replay is layered in only when the chosen capture level
+ * includes it. Audio/screen-video stay on their own explicit controls and are
+ * NOT implied by a reproduction bracket.
+ */
+export function buildReproBracketConsentScope({ domReplay }: { domReplay: boolean }): CaptureConsentScope {
+  const streams: CaptureStream[] = [
+    ...(domReplay ? (['dom_replay'] as const) : []),
+    'registered_artifacts',
+    'text_note',
+  ]
+  return withModeBooleans({
+    surface: 'authenticated_app',
+    streams,
+    artifacts: {
+      ...(domReplay ? { rrweb: true } : {}),
+      ...REGISTERED_ARTIFACTS,
+      text_note: true,
+      repro_bracket: true,
+    },
+    event_classes: ['repro', 'authenticated_feedback'],
   })
 }
 

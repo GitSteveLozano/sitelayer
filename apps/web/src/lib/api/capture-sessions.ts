@@ -135,6 +135,8 @@ function fileNameForArtifact(kind: string, file: Blob, explicit?: string): strin
       return 'screen-video.webm'
     case 'rrweb':
       return 'replay.json'
+    case 'repro_bracket':
+      return 'repro-bracket.json'
     case 'canvas_geometry':
       return 'canvas-geometry.json'
     case 'transcript':

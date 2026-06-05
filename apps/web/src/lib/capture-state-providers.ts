@@ -10,6 +10,8 @@ export type CaptureStateSnapshotReason =
   | 'recording_stopped'
   | 'screen_recording_stopped'
   | 'clip_boundary'
+  | 'repro_start'
+  | 'repro_end'
 
 export type CaptureStateProviderInput = {
   captureSessionId: string

@@ -73,6 +73,11 @@ export function captureConsentAllowsArtifactKind(scope: CaptureConsentScope | nu
       )
     case 'text_note':
       return truthy(scope.text_note) || streams.has('text_note')
+    case 'repro_bracket':
+      // The reproduction-bracket summary artifact is structured, low-PII JSON
+      // (start/end conditions + ordered marks). Allow it when the scope opts
+      // into it explicitly or carries the registered-artifacts grant.
+      return artifacts.has('repro_bracket') || truthy(scope.registered_artifacts) || streams.has('registered_artifacts')
     case 'canvas_geometry':
     case 'screen_context':
     case 'state_snapshot':

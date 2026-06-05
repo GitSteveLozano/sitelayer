@@ -4,6 +4,7 @@ import {
   buildAuthenticatedScreenRecordingConsentScope,
   buildAuthenticatedTextIssueConsentScope,
   buildPortalFeedbackConsentScope,
+  buildReproBracketConsentScope,
 } from './capture-policy'
 
 describe('capture consent policy builders', () => {
@@ -63,6 +64,38 @@ describe('capture consent policy builders', () => {
       },
       audio: false,
       screen_video: true,
+    })
+  })
+
+  it('allows the repro_bracket artifact and repro event class, with replay opt-in', () => {
+    expect(buildReproBracketConsentScope({ domReplay: true })).toMatchObject({
+      surface: 'authenticated_app',
+      streams: ['dom_replay', 'registered_artifacts', 'text_note'],
+      artifacts: {
+        repro_bracket: true,
+        rrweb: true,
+        text_note: true,
+        canvas_geometry: true,
+        screen_context: true,
+        state_snapshot: true,
+      },
+      event_classes: ['repro', 'authenticated_feedback'],
+      audio: false,
+      dom_replay: true,
+      registered_artifacts: true,
+      screen_video: false,
+    })
+  })
+
+  it('keeps a note-only reproduction free of microphone and replay consent', () => {
+    expect(buildReproBracketConsentScope({ domReplay: false })).toMatchObject({
+      streams: ['registered_artifacts', 'text_note'],
+      artifacts: {
+        repro_bracket: true,
+        text_note: true,
+      },
+      audio: false,
+      dom_replay: false,
     })
   })
 
