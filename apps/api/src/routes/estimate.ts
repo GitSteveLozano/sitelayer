@@ -1091,6 +1091,56 @@ export async function handleEstimateRoutes(
     return true
   }
 
+  // GET /api/projects/:projectId/estimate/rollup?axis=division|kind|service_item
+  // Multi-axis estimate rollup (gap G4): group the project's estimate lines by a
+  // selectable axis with subtotals. `kind` (material/labor/sub/freight) is the
+  // PlanSwift Material/Labor/Sub/Equipment report grouping that was missing;
+  // `division` and `service_item` give the other rollup axes. (The G6 org tags
+  // phase/location/zone/folder live on takeoff_measurements, not estimate_lines,
+  // so those axes are a follow-up once the tags are threaded onto lines at
+  // explode time.)
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/rollup$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'bookkeeper'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    // Whitelist axis -> column so no caller-supplied string ever reaches the SQL.
+    const AXIS_COLUMN: Record<string, { col: string; placeholder: string }> = {
+      division: { col: 'division_code', placeholder: '(no division)' },
+      kind: { col: 'kind', placeholder: '(unclassified)' },
+      service_item: { col: 'service_item_code', placeholder: '(no code)' },
+    }
+    const axis = (url.searchParams.get('axis') ?? 'division').toLowerCase()
+    const mapping = AXIS_COLUMN[axis]
+    if (!mapping) {
+      ctx.sendJson(400, { error: `axis must be one of: ${Object.keys(AXIS_COLUMN).join(', ')}` })
+      return true
+    }
+    const rollup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ group_key: string; line_count: number; quantity: string; amount: string }>(
+        `select coalesce(nullif(trim(${mapping.col}), ''), $3) as group_key,
+                count(*)::int as line_count,
+                coalesce(sum(quantity), 0)::text as quantity,
+                coalesce(sum(amount), 0)::text as amount
+           from estimate_lines
+          where company_id = $1 and project_id = $2
+          group by 1
+          order by sum(amount) desc, group_key asc`,
+        [ctx.company.id, projectId, mapping.placeholder],
+      ),
+    )
+    const totalAmount = rollup.rows.reduce((sum, r) => sum + Number(r.amount), 0)
+    ctx.sendJson(200, {
+      axis,
+      groups: rollup.rows,
+      group_count: rollup.rows.length,
+      total_amount: totalAmount.toFixed(2),
+    })
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
