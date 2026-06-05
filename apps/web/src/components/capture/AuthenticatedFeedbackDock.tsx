@@ -397,8 +397,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startRecording() {
     setError(null)
     setReceipt(null)
-    const active = getActiveCaptureSession()
-    if (active?.mode === 'feedback') {
+    if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
       return
@@ -454,8 +453,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startScreenRecording() {
     setError(null)
     setReceipt(null)
-    const active = getActiveCaptureSession()
-    if (active?.mode === 'feedback') {
+    if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
       return
@@ -512,8 +510,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startRepro() {
     setError(null)
     setReceipt(null)
-    const active = getActiveCaptureSession()
-    if (active?.mode === 'feedback') {
+    if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
       return

@@ -599,6 +599,35 @@ describe('AuthenticatedFeedbackDock', () => {
     expect(window.sessionStorage.getItem(CAPTURE_SESSION_STORAGE_KEY)).toBeNull()
   })
 
+  it('lets Steve start a reproduction even with the text-issue prewarm active', async () => {
+    // Regression: the Steve dock auto-opens and prewarms an (idle) text-issue
+    // feedback session. The start-guard must not mistake that for an active
+    // recording, or "Reproduce a bug" / "Start" / "Record screen" are blocked
+    // in the primary Steve path with a false "Recording is already active."
+    window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
+    window.localStorage.setItem(AUTH_FEEDBACK_AUTO_OPEN_STORAGE_KEY, '1')
+    window.localStorage.setItem(STEVE_COLLAB_MODE_STORAGE_KEY, STEVE_COLLAB_MODE_VALUE)
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
+    const prewarm = captureApi.createCaptureSession.mock.calls[0]?.[0] as { metadata: Record<string, unknown> }
+    expect(prewarm.metadata).toMatchObject({ capture_profile: 'text_issue_prewarm' })
+
+    fireEvent.click(screen.getByRole('button', { name: /reproduce a bug/i }))
+
+    // The reproduction starts (a 2nd session with repro consent) instead of erroring.
+    await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(2))
+    const reproPayload = captureApi.createCaptureSession.mock.calls[1]?.[0] as {
+      consent_scope: Record<string, unknown>
+    }
+    expect(reproPayload.consent_scope).toMatchObject({
+      artifacts: expect.objectContaining({ repro_bracket: true }),
+      event_classes: expect.arrayContaining(['repro']),
+    })
+    expect(screen.getByText('Reproducing a bug')).toBeTruthy()
+    expect(screen.queryByText('Recording is already active.')).toBeNull()
+  })
+
   it('brackets a reproduction with start/end conditions, a mark, and a repro_bracket artifact', async () => {
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
