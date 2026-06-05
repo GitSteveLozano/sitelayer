@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { MButton } from '../m/index.js'
 import { fetchCaptureArtifactBlob, type CaptureArtifactSummary } from '@/lib/api/capture-sessions'
+import { ReproReplayPanel } from './ReproReplayPanel'
 
 type CaptureMediaPanelProps = {
   captureSessionId: string | null | undefined
@@ -105,10 +106,6 @@ function ArtifactRow({ captureSessionId, artifact }: { captureSessionId: string;
           </MButton>
         ) : null}
       </div>
-
-      {artifact.kind === 'rrweb' ? (
-        <div style={noteStyle}>DOM session replay — download for now; in-app playback is a follow-up.</div>
-      ) : null}
     </div>
   )
 }
@@ -118,14 +115,25 @@ function ArtifactRow({ captureSessionId, artifact }: { captureSessionId: string;
  * screen recording, mic audio, screenshots, transcript. Reads the artifact
  * list already snapshotted into the support packet's
  * `server_context.capture_session.artifacts[]`; each item fetches its bytes
- * on demand through the authed file route. rrweb playback is intentionally a
- * follow-up (needs a player lib).
+ * on demand through the authed file route. The DOM replay (`rrweb`) and the
+ * reproduction summary (`repro_bracket`) are surfaced together in
+ * `ReproReplayPanel`, which plays the replay in-app and seeks to marks.
  */
 export function CaptureMediaPanel({ captureSessionId, artifacts }: CaptureMediaPanelProps) {
   if (!captureSessionId || artifacts.length === 0) return null
+  const rrwebArtifact = artifacts.find((a) => a.kind === 'rrweb') ?? null
+  const reproArtifact = artifacts.find((a) => a.kind === 'repro_bracket') ?? null
+  const rest = artifacts.filter((a) => a.kind !== 'rrweb' && a.kind !== 'repro_bracket')
   return (
     <div style={{ display: 'grid', gap: 10 }}>
-      {artifacts.map((artifact) => (
+      {rrwebArtifact || reproArtifact ? (
+        <ReproReplayPanel
+          captureSessionId={captureSessionId}
+          reproArtifact={reproArtifact}
+          rrwebArtifact={rrwebArtifact}
+        />
+      ) : null}
+      {rest.map((artifact) => (
         <ArtifactRow key={artifact.id} captureSessionId={captureSessionId} artifact={artifact} />
       ))}
     </div>
@@ -158,4 +166,3 @@ const textStyle: CSSProperties = {
 }
 const errorStyle: CSSProperties = { color: '#b4231f', fontSize: 12 }
 const linkStyle: CSSProperties = { fontSize: 13, color: '#2d5fa6', alignSelf: 'center' }
-const noteStyle: CSSProperties = { fontSize: 12, color: '#8a7f70' }

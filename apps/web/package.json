@@ -29,6 +29,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.14.2",
+    "rrweb": "^2.0.0-alpha.20",
     "serve": "^14.2.0",
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",
