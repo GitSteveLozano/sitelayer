@@ -30,6 +30,10 @@ type Measurement = {
   unit: string
   notes: string | null
   division_code: string | null
+  phase?: string | null
+  location?: string | null
+  zone?: string | null
+  folder?: string | null
   is_deduction: boolean
   assembly_id: string | null
   condition_id?: string | null
@@ -124,21 +128,41 @@ function makeExecutor(opts: {
       // estimate_lines INSERT (unnest)
       if (/^insert into estimate_lines/i.test(sql)) {
         // Reconstruct the rows from the parallel arrays so we can assert them.
-        const [, , codes, quantities, units, rates, amounts, divisions, , assemblyIds, componentIds, kinds] =
-          params as [
-            string,
-            string,
-            string[],
-            string[],
-            string[],
-            string[],
-            string[],
-            (string | null)[],
-            string | null,
-            string[],
-            string[],
-            (string | null)[],
-          ]
+        const [
+          ,
+          ,
+          codes,
+          quantities,
+          units,
+          rates,
+          amounts,
+          divisions,
+          ,
+          assemblyIds,
+          componentIds,
+          kinds,
+          phases,
+          locations,
+          zones,
+          folders,
+        ] = params as [
+          string,
+          string,
+          string[],
+          string[],
+          string[],
+          string[],
+          string[],
+          (string | null)[],
+          string | null,
+          string[],
+          string[],
+          (string | null)[],
+          (string | null)[],
+          (string | null)[],
+          (string | null)[],
+          (string | null)[],
+        ]
         const rows = codes.map((code, i) => ({
           service_item_code: code,
           quantity: quantities[i],
@@ -149,6 +173,10 @@ function makeExecutor(opts: {
           assembly_id: assemblyIds[i] === '' ? null : assemblyIds[i],
           assembly_component_id: componentIds[i] === '' ? null : componentIds[i],
           kind: kinds[i],
+          phase: phases[i],
+          location: locations[i],
+          zone: zones[i],
+          folder: folders[i],
           created_at: '2026-01-01T00:00:00.000Z',
         }))
         inserted.rows = rows
@@ -171,6 +199,8 @@ const flatMeasurement: Measurement = {
   unit: 'sqft',
   notes: null,
   division_code: 'D1',
+  phase: 'Phase 2',
+  location: 'Building A',
   is_deduction: false,
   assembly_id: null,
 }
@@ -216,6 +246,9 @@ describe('createEstimateFromMeasurements assembly explosion', () => {
     expect(inserted.rows).toHaveLength(1)
     expect(inserted.rows[0]!.assembly_id).toBeNull()
     expect(inserted.rows[0]!.kind).toBeNull()
+    // Gap G4: the line inherits the measurement's org tags (phase/location/...).
+    expect(inserted.rows[0]!.phase).toBe('Phase 2')
+    expect(inserted.rows[0]!.location).toBe('Building A')
     // 1000 × 4.85 = 4850
     expect(Number(inserted.rows[0]!.amount)).toBe(4850)
   })
@@ -235,6 +268,8 @@ describe('createEstimateFromMeasurements assembly explosion', () => {
       expect(r.assembly_id).toBe(ASSEMBLY_ID)
       expect(['material', 'labor']).toContain(r.kind)
       expect(r.division_code).toBe('D1')
+      // Gap G4: every exploded component line inherits the measurement's org tag.
+      expect(r.phase).toBe('Phase 2')
     }
     const sum = inserted.rows.reduce((s, r) => s + Number(r.amount), 0)
     // material 1000×4.85=4850 + labor 1000×0.05×60=3000 = 7850 (no markup uplift)

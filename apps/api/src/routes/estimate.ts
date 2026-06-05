@@ -240,14 +240,18 @@ export async function createEstimateFromMeasurements(
     unit: string
     notes: string | null
     division_code: string | null
+    phase: string | null
+    location: string | null
+    zone: string | null
+    folder: string | null
     is_deduction: boolean
     assembly_id: string | null
     condition_id: string | null
     geometry: unknown
   }>(
     draftId
-      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      ? 'select service_item_code, quantity, unit, notes, division_code, phase, location, zone, folder, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code, phase, location, zone, folder, is_deduction, assembly_id, condition_id, geometry from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
     draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
@@ -343,11 +347,23 @@ export async function createEstimateFromMeasurements(
     const assemblyIds: (string | null)[] = []
     const assemblyComponentIds: (string | null)[] = []
     const kinds: (string | null)[] = []
+    // Gap G4: org tags flow measurement -> every estimate line it produces, so
+    // the multi-axis rollup can group by phase/location/zone/folder.
+    const phases: (string | null)[] = []
+    const locations: (string | null)[] = []
+    const zones: (string | null)[] = []
+    const folders: (string | null)[] = []
     for (const measurement of measurementsResult.rows) {
       // Per WhatsApp:227-229: an estimate line inherits the measurement's
       // division_code when the takeoff captured one, otherwise falls back to
       // the project's division_code so existing flows keep working.
       const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
+      // Org tags inherit straight from the source measurement (no project
+      // fallback — these are per-item, not project-level).
+      const mPhase = measurement.phase ?? null
+      const mLocation = measurement.location ?? null
+      const mZone = measurement.zone ?? null
+      const mFolder = measurement.folder ?? null
 
       const attached = measurement.assembly_id ? assembliesById.get(measurement.assembly_id) : undefined
       if (attached) {
@@ -384,6 +400,10 @@ export async function createEstimateFromMeasurements(
           assemblyIds.push(line.assembly_id)
           assemblyComponentIds.push(line.assembly_component_id)
           kinds.push(line.kind)
+          phases.push(mPhase)
+          locations.push(mLocation)
+          zones.push(mZone)
+          folders.push(mFolder)
         }
         continue
       }
@@ -436,6 +456,10 @@ export async function createEstimateFromMeasurements(
           assemblyIds.push(null)
           assemblyComponentIds.push(null)
           kinds.push(null)
+          phases.push(mPhase)
+          locations.push(mLocation)
+          zones.push(mZone)
+          folders.push(mFolder)
         }
         continue
       }
@@ -462,11 +486,15 @@ export async function createEstimateFromMeasurements(
       assemblyIds.push(null)
       assemblyComponentIds.push(null)
       kinds.push(null)
+      phases.push(mPhase)
+      locations.push(mLocation)
+      zones.push(mZone)
+      folders.push(mFolder)
     }
     if (codes.length > 0) {
       const insertResult = await actualExecutor.query<EstimateLineRow>(
         `
-      insert into estimate_lines (company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind)
+      insert into estimate_lines (company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind, phase, location, zone, folder)
       select
         $1::uuid,
         $2::uuid,
@@ -479,9 +507,13 @@ export async function createEstimateFromMeasurements(
         division_code,
         nullif(assembly_id, '')::uuid,
         nullif(assembly_component_id, '')::uuid,
-        kind
-      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $10::text[], $11::text[], $12::text[])
-        as t(code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind)
+        kind,
+        phase,
+        location,
+        zone,
+        folder
+      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $10::text[], $11::text[], $12::text[], $13::text[], $14::text[], $15::text[], $16::text[])
+        as t(code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind, phase, location, zone, folder)
       returning service_item_code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind, created_at
       `,
         [
@@ -499,6 +531,10 @@ export async function createEstimateFromMeasurements(
           assemblyIds.map((v) => v ?? ''),
           assemblyComponentIds.map((v) => v ?? ''),
           kinds,
+          phases,
+          locations,
+          zones,
+          folders,
         ],
       )
       createdLines = insertResult.rows
@@ -1111,6 +1147,12 @@ export async function handleEstimateRoutes(
       division: { col: 'division_code', placeholder: '(no division)' },
       kind: { col: 'kind', placeholder: '(unclassified)' },
       service_item: { col: 'service_item_code', placeholder: '(no code)' },
+      // Gap G4 (cont.): the G6 org tags, now threaded onto estimate_lines at
+      // explode time, so the estimate rolls up by any PlanSwift axis.
+      phase: { col: 'phase', placeholder: '(no phase)' },
+      location: { col: 'location', placeholder: '(no location)' },
+      zone: { col: 'zone', placeholder: '(no zone)' },
+      folder: { col: 'folder', placeholder: '(no folder)' },
     }
     const axis = (url.searchParams.get('axis') ?? 'division').toLowerCase()
     const mapping = AXIS_COLUMN[axis]

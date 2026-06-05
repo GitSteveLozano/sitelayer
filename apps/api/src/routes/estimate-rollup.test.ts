@@ -90,6 +90,16 @@ describe('handleEstimateRoutes — GET /estimate/rollup (gap G4)', () => {
     expect(pool.lastAxisCol).toBe('division_code')
   })
 
+  it('accepts the G4 org-tag axes (phase) now that estimate_lines carry them', async () => {
+    const pool = new FakePool()
+    pool.rollupRows = [{ group_key: 'Phase 2', line_count: 5, quantity: '300', amount: '7850.00' }]
+    const { ctx, responses } = makeCtx(pool)
+    await handleEstimateRoutes({ method: 'GET' } as never, ROLLUP('?axis=phase'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as { axis: string }).axis).toBe('phase')
+    expect(pool.lastAxisCol).toBe('phase')
+  })
+
   it('rejects an unknown axis (400) without touching the db — whitelist keeps raw input out of SQL', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
