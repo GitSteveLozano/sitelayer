@@ -122,6 +122,40 @@ function buildEstimateCsv(
   return `\ufeff${rows.join('\r\n')}\r\n`
 }
 
+// Injection-safe axis -> column whitelist for the estimate rollup (gap G4),
+// shared by GET /estimate/rollup (JSON) and /estimate/rollup.csv so the two can
+// never drift on which axes are allowed. A caller-supplied axis only ever
+// selects a key here; the column string is ours.
+const ROLLUP_AXIS_COLUMN: Record<string, { col: string; placeholder: string }> = {
+  division: { col: 'division_code', placeholder: '(no division)' },
+  kind: { col: 'kind', placeholder: '(unclassified)' },
+  service_item: { col: 'service_item_code', placeholder: '(no code)' },
+  phase: { col: 'phase', placeholder: '(no phase)' },
+  location: { col: 'location', placeholder: '(no location)' },
+  zone: { col: 'zone', placeholder: '(no zone)' },
+  folder: { col: 'folder', placeholder: '(no folder)' },
+}
+
+function buildRollupCsv(
+  projectLabel: string,
+  axis: string,
+  groups: Array<{ group_key: string; line_count: number; quantity: string; amount: string }>,
+): string {
+  const rows: string[] = [
+    ['Project', projectLabel].map(csvCell).join(','),
+    ['Rollup axis', axis].map(csvCell).join(','),
+    '',
+    [axis, 'Lines', 'Quantity', 'Amount'].map(csvCell).join(','),
+  ]
+  let total = 0
+  for (const g of groups) {
+    rows.push([g.group_key, g.line_count, g.quantity, g.amount].map(csvCell).join(','))
+    total += Number(g.amount) || 0
+  }
+  rows.push(['Total', '', '', total.toFixed(2)].map(csvCell).join(','))
+  return `\ufeff${rows.join('\r\n')}\r\n`
+}
+
 /**
  * PlanSwift-parity Excel export (Phase 0). Same line-item shape as the CSV, but
  * a real .xlsx workbook with a bold header, numeric Rate/Amount columns, and a
@@ -1143,21 +1177,10 @@ export async function handleEstimateRoutes(
       return true
     }
     // Whitelist axis -> column so no caller-supplied string ever reaches the SQL.
-    const AXIS_COLUMN: Record<string, { col: string; placeholder: string }> = {
-      division: { col: 'division_code', placeholder: '(no division)' },
-      kind: { col: 'kind', placeholder: '(unclassified)' },
-      service_item: { col: 'service_item_code', placeholder: '(no code)' },
-      // Gap G4 (cont.): the G6 org tags, now threaded onto estimate_lines at
-      // explode time, so the estimate rolls up by any PlanSwift axis.
-      phase: { col: 'phase', placeholder: '(no phase)' },
-      location: { col: 'location', placeholder: '(no location)' },
-      zone: { col: 'zone', placeholder: '(no zone)' },
-      folder: { col: 'folder', placeholder: '(no folder)' },
-    }
     const axis = (url.searchParams.get('axis') ?? 'division').toLowerCase()
-    const mapping = AXIS_COLUMN[axis]
+    const mapping = ROLLUP_AXIS_COLUMN[axis]
     if (!mapping) {
-      ctx.sendJson(400, { error: `axis must be one of: ${Object.keys(AXIS_COLUMN).join(', ')}` })
+      ctx.sendJson(400, { error: `axis must be one of: ${Object.keys(ROLLUP_AXIS_COLUMN).join(', ')}` })
       return true
     }
     const rollup = await withCompanyClient(ctx.company.id, (c) =>
@@ -1180,6 +1203,40 @@ export async function handleEstimateRoutes(
       group_count: rollup.rows.length,
       total_amount: totalAmount.toFixed(2),
     })
+    return true
+  }
+
+  // GET /api/projects/:projectId/estimate/rollup.csv?axis=... — the rollup as a
+  // downloadable CSV report (the PlanSwift Division / Material / Labor / Sub
+  // report set, by axis). Shares the injection-safe axis whitelist above.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/rollup\.csv$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'bookkeeper'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const axis = (url.searchParams.get('axis') ?? 'division').toLowerCase()
+    const mapping = ROLLUP_AXIS_COLUMN[axis]
+    if (!mapping) {
+      ctx.sendJson(400, { error: `axis must be one of: ${Object.keys(ROLLUP_AXIS_COLUMN).join(', ')}` })
+      return true
+    }
+    const rollup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ group_key: string; line_count: number; quantity: string; amount: string }>(
+        `select coalesce(nullif(trim(${mapping.col}), ''), $3) as group_key,
+                count(*)::int as line_count,
+                coalesce(sum(quantity), 0)::text as quantity,
+                coalesce(sum(amount), 0)::text as amount
+           from estimate_lines
+          where company_id = $1 and project_id = $2
+          group by 1
+          order by sum(amount) desc, group_key asc`,
+        [ctx.company.id, projectId, mapping.placeholder],
+      ),
+    )
+    const csv = buildRollupCsv(projectId, axis, rollup.rows)
+    ctx.sendFileContent('text/csv; charset=utf-8', `estimate-rollup-${axis}.csv`, csv)
     return true
   }
 

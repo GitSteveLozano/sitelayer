@@ -62,6 +62,7 @@ function makeCtx(pool: FakePool, overrides: Partial<EstimateRouteCtx> = {}) {
 
 const url = (path: string) => new URL(`http://localhost${path}`)
 const ROLLUP = (qs = '') => url(`/api/projects/${PROJECT_ID}/estimate/rollup${qs}`)
+const ROLLUP_CSV = (qs = '') => url(`/api/projects/${PROJECT_ID}/estimate/rollup.csv${qs}`)
 
 describe('handleEstimateRoutes — GET /estimate/rollup (gap G4)', () => {
   it('rolls up by kind with subtotals + grand total', async () => {
@@ -124,6 +125,36 @@ describe('handleEstimateRoutes — GET /estimate/rollup (gap G4)', () => {
     const { ctx } = makeCtx(pool, { requireRole: () => false })
     const handled = await handleEstimateRoutes({ method: 'GET' } as never, ROLLUP('?axis=kind'), ctx)
     expect(handled).toBe(true)
+    expect(pool.lastAxisCol).toBeNull()
+  })
+
+  it('renders the rollup as a downloadable CSV report', async () => {
+    const pool = new FakePool()
+    pool.rollupRows = [
+      { group_key: 'material', line_count: 3, quantity: '120', amount: '4500.00' },
+      { group_key: 'labor', line_count: 2, quantity: '40', amount: '2000.00' },
+    ]
+    const files: Array<{ mime: string; name: string; content: string }> = []
+    const { ctx } = makeCtx(pool, {
+      sendFileContent: (mime, name, content) => files.push({ mime, name, content: String(content) }),
+    })
+    const handled = await handleEstimateRoutes({ method: 'GET' } as never, ROLLUP_CSV('?axis=kind'), ctx)
+    expect(handled).toBe(true)
+    expect(files).toHaveLength(1)
+    expect(files[0]!.mime).toContain('text/csv')
+    expect(files[0]!.name).toBe('estimate-rollup-kind.csv')
+    expect(files[0]!.content).toContain('material')
+    expect(files[0]!.content).toContain('4500.00')
+    expect(files[0]!.content).toContain('Total')
+    expect(files[0]!.content).toContain('6500.00') // 4500 + 2000
+    expect(pool.lastAxisCol).toBe('kind')
+  })
+
+  it('rejects an unknown axis for the CSV report (400)', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleEstimateRoutes({ method: 'GET' } as never, ROLLUP_CSV('?axis=bogus'), ctx)
+    expect(responses[0]?.status).toBe(400)
     expect(pool.lastAxisCol).toBeNull()
   })
 })
