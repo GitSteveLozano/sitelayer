@@ -927,11 +927,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             </label>
             {captureHotkeysSupported() ? (
               <label style={hotkeyToggleStyle} title={hotkeyHintText()}>
-                <input
-                  type="checkbox"
-                  checked={hotkeysEnabled}
-                  onChange={(e) => setHotkeysEnabled(e.target.checked)}
-                />
+                <input type="checkbox" checked={hotkeysEnabled} onChange={(e) => setHotkeysEnabled(e.target.checked)} />
                 Shortcuts
               </label>
             ) : null}

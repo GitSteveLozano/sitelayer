@@ -618,20 +618,18 @@ describe('AuthenticatedFeedbackDock', () => {
       event_classes: expect.arrayContaining(['repro']),
     })
     await waitFor(() =>
-      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
-        startPayload.capture_session_id,
-        [expect.objectContaining({ event_type: 'repro.bracket_started', event_class: 'repro' })],
-      ),
+      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
+        expect.objectContaining({ event_type: 'repro.bracket_started', event_class: 'repro' }),
+      ]),
     )
     expect(screen.getByText('Reproducing a bug')).toBeTruthy()
 
     // Mark a moment ("the bug is here").
     fireEvent.click(screen.getByRole('button', { name: /mark this moment/i }))
     await waitFor(() =>
-      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(
-        startPayload.capture_session_id,
-        [expect.objectContaining({ event_type: 'repro.mark', event_class: 'repro' })],
-      ),
+      expect(captureApi.appendCaptureSessionEvents).toHaveBeenCalledWith(startPayload.capture_session_id, [
+        expect.objectContaining({ event_type: 'repro.mark', event_class: 'repro' }),
+      ]),
     )
 
     // End condition + report.
