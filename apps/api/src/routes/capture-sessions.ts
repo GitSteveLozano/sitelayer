@@ -19,6 +19,7 @@ import {
   type WorkItemSeverity,
 } from '../context-handoff.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import { enqueueNotificationRow, listCompanyAdminIds } from '../notifications.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
@@ -1199,6 +1200,36 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           capture_auto_dispatch: autoDispatch,
         },
       })
+      // Ping the other operators (Bell feed) so a submission isn't poll-only.
+      // Best-effort: never roll back the work item over a notification failure.
+      // Exclude the submitter so an operator filing their own feedback doesn't
+      // self-notify.
+      try {
+        const operatorIds = (await listCompanyAdminIds(c, ctx.company.id)).filter((uid) => uid !== ctx.identity.userId)
+        for (const recipientUserId of operatorIds) {
+          await enqueueNotificationRow(c, {
+            companyId: ctx.company.id,
+            recipientUserId,
+            kind: 'capture_work_item_created',
+            subject: `New feedback: ${item.title}`,
+            text: `${item.summary} (${route})`,
+            payload: {
+              work_item_id: item.id,
+              support_packet_id: packet.id,
+              capture_session_id: id,
+              route,
+              lane: item.lane,
+              severity: item.severity,
+            },
+          })
+        }
+      } catch (notifyError) {
+        console.warn('[capture] operator notification enqueue failed (non-fatal)', {
+          work_item_id: item.id,
+          capture_session_id: id,
+          err: String(notifyError),
+        })
+      }
       return { packet, item, event }
     })
   } catch (error) {

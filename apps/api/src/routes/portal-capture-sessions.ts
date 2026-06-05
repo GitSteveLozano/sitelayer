@@ -16,6 +16,7 @@ import {
   type WorkItemSeverity,
 } from '../context-handoff.js'
 import { isValidUuid } from '../http-utils.js'
+import { enqueueNotificationRow, listCompanyAdminIds } from '../notifications.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
@@ -874,6 +875,38 @@ export async function finalizePortalCaptureSession(
           portal_authority: actor.authority,
         },
       })
+      // Ping the operators so a Steve submission surfaces in the Bell feed
+      // instead of relying on the 30s Work-screen poll. Best-effort: a
+      // notification failure must never roll back the work item itself, so we
+      // swallow inside the tx. Recipients are the company's operators (admins),
+      // never the portal-guest submitter (actorUserId).
+      try {
+        const operatorIds = await listCompanyAdminIds(clientTx, actor.companyId)
+        for (const recipientUserId of operatorIds) {
+          await enqueueNotificationRow(clientTx, {
+            companyId: actor.companyId,
+            recipientUserId,
+            kind: 'capture_work_item_created',
+            subject: `New feedback: ${item.title}`,
+            text: `${item.summary} (${route})`,
+            payload: {
+              work_item_id: item.id,
+              support_packet_id: packet.id,
+              capture_session_id: id,
+              route,
+              lane: item.lane,
+              severity: item.severity,
+              portal_surface: actor.surface,
+            },
+          })
+        }
+      } catch (notifyError) {
+        console.warn('[capture] operator notification enqueue failed (non-fatal)', {
+          work_item_id: item.id,
+          capture_session_id: id,
+          err: String(notifyError),
+        })
+      }
       return { packet, item, event }
     })
   } catch (error) {

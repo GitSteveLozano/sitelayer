@@ -33,7 +33,7 @@ function roleToActAs(raw: string | null): string {
   return `e2e-${role}`
 }
 
-function audioFlag(params: URLSearchParams): string {
+export function audioFlag(params: URLSearchParams): string {
   // Steve records mic audio in his own browser (getUserMedia + MediaRecorder);
   // the browser's permission prompt is the only gate. Default ON so the one-link
   // gives the full kit (screen + mic + interaction events); allow ?audio=0 to opt out.
@@ -42,7 +42,7 @@ function audioFlag(params: URLSearchParams): string {
   return isTruthyFlag(raw) ? '1' : '0'
 }
 
-function targetWithCaptureFlags(target: string, params: URLSearchParams): string {
+export function targetWithCaptureFlags(target: string, params: URLSearchParams): string {
   const url = new URL(target, window.location.origin)
   url.searchParams.set('capture_feedback', '1')
   url.searchParams.set('capture_replay', '1')
