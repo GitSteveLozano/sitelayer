@@ -184,6 +184,15 @@ if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose"
 else echo "ERROR: docker compose not installed"; exit 1; fi
 
+persist_app_image() {
+  local image="$1"
+  if grep -q '^APP_IMAGE=' .env; then
+    sed -i "s#^APP_IMAGE=.*#APP_IMAGE=${image}#" .env
+  else
+    printf '\nAPP_IMAGE=%s\n' "$image" >> .env
+  fi
+}
+
 cd /app/sitelayer
 [ -f .env ] || { echo "ERROR: /app/sitelayer/.env missing (run a full GitHub deploy once to seed it)"; exit 1; }
 
@@ -271,6 +280,7 @@ if [ "$health_ok" != "1" ]; then
           sleep 5
         done
         if [ "$rb_ok" = "1" ]; then
+          persist_app_image "$rollback_image"
           echo "==> AUTO-ROLLBACK succeeded: prod is back on $previous_sha and healthy."
           echo "    The failed SHA $GIT_SHA was NOT recorded as successful."
           echo "    Investigate $GIT_SHA before redeploying."
@@ -297,6 +307,7 @@ fi
 
 EXPECTED_SHA="$GIT_SHA" scripts/verify-prod-deploy.sh || true
 
+persist_app_image "$APP_IMAGE"
 [ -n "$previous_sha" ] && printf '%s\n' "$previous_sha" > .last_previous_deployed_sha
 printf '%s\n' "$GIT_SHA" > .last_successful_deployed_sha
 printf '%s\n' "$APP_IMAGE" > .last_successful_app_image
