@@ -541,16 +541,19 @@ export {
 export {
   useAcceptInvite,
   useCompanyInvites,
+  useCompleteFirstRun,
   useCreateInvite,
   useInviteView,
   useRevokeInvite,
   type AcceptInviteResponse,
   type CompanyInvite,
+  type CompleteFirstRunResponse,
   type CreateInviteRequest,
   type CreateInviteResponse,
   type InviteStatus,
   type InviteViewResponse,
   type ListInvitesResponse,
+  type MembershipFirstRun,
   type PublicInviteView,
 } from './invites'
 

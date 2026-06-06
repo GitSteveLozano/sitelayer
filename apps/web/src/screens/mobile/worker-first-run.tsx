@@ -20,14 +20,17 @@
  * Worker = dark theme, so it applies its own `.m-dark` wrapper. All colors
  * come from `var(--m-*)` tokens; no hardcoded dark values.
  *
- * Presentational only (orientation copy + permission handoff).
- * TODO(wire): mark first-run complete on the membership so we don't show
- * this again.
+ * When the invite-accept flow forwards the accepted membership id as `?mid=`,
+ * the terminal action (starting the permission chain) marks first-run complete
+ * via POST /api/memberships/:id/first-run-complete so this priming isn't shown
+ * again on the next login. The mark is best-effort + idempotent server-side, so
+ * a transient failure never blocks the handoff into the workspace.
  */
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MShell, MBody, MButton, MButtonStack, MI } from '@/components/m'
+import { useCompleteFirstRun } from '@/lib/api'
 
 const STEPS: ReadonlyArray<{
   eyebrow: string
@@ -53,6 +56,8 @@ export function WorkerFirstRunScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const next = searchParams.get('next') ?? '/today'
+  const membershipId = searchParams.get('mid')
+  const completeFirstRun = useCompleteFirstRun()
   const [step, setStep] = useState(0)
 
   const current = STEPS[step] ?? STEPS[0]
@@ -62,14 +67,24 @@ export function WorkerFirstRunScreen() {
 
   // Chain the two existing prime routes, ending on `next`. Inner `next`
   // values are URL-encoded so each route reads the whole remaining chain.
-  const startPermissions = () => {
+  const startPermissions = async () => {
+    // Mark first-run complete (best-effort, idempotent) so this priming isn't
+    // shown again. Never block the permission handoff on the API call.
+    if (membershipId) {
+      try {
+        await completeFirstRun.mutateAsync({ membershipId })
+      } catch {
+        // Swallow — the priming flow must continue regardless. A re-login that
+        // re-resolves the membership without the flag will just re-prime once.
+      }
+    }
     const notif = `/permissions/notifications?next=${encodeURIComponent(next)}`
     const location = `/permissions/location?next=${encodeURIComponent(notif)}`
     navigate(location, { replace: true })
   }
 
   const onPrimary = () => {
-    if (isLast) startPermissions()
+    if (isLast) void startPermissions()
     else setStep((step_) => step_ + 1)
   }
 
@@ -104,7 +119,7 @@ export function WorkerFirstRunScreen() {
                 <MButton variant="primary" data-size="worker" onClick={onPrimary}>
                   {isLast ? 'Set up location & alerts' : 'Next'}
                 </MButton>
-                <MButton variant="ghost" onClick={startPermissions}>
+                <MButton variant="ghost" onClick={() => void startPermissions()}>
                   Skip the tour
                 </MButton>
               </MButtonStack>

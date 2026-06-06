@@ -18,13 +18,16 @@
  * Full-screen takeover mounted in App.tsx (pre-workspace, like /welcome).
  * Estimator = office role = default light theme.
  *
- * Presentational only (orientation copy + permission handoff).
- * TODO(wire): mark first-run complete on the membership so we don't show
- * this again.
+ * When the invite-accept flow forwards the accepted membership id as `?mid=`,
+ * the terminal action (starting the permission chain) marks first-run complete
+ * via POST /api/memberships/:id/first-run-complete so this priming isn't shown
+ * again on the next login. The mark is best-effort + idempotent server-side, so
+ * a transient failure never blocks the handoff into the estimates surface.
  */
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MShell, MBody, MButton, MButtonStack, MI } from '@/components/m'
+import { useCompleteFirstRun } from '@/lib/api'
 
 const STEPS: ReadonlyArray<{
   eyebrow: string
@@ -53,6 +56,8 @@ export function EstimatorFirstRunScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const next = searchParams.get('next') ?? '/estimates'
+  const membershipId = searchParams.get('mid')
+  const completeFirstRun = useCompleteFirstRun()
   const [step, setStep] = useState(0)
 
   const current = STEPS[step] ?? STEPS[0]
@@ -62,12 +67,21 @@ export function EstimatorFirstRunScreen() {
 
   // Estimators get notification priming only (no clock-in location). The
   // inner `next` is URL-encoded so the prime route reads the full chain.
-  const startPermissions = () => {
+  const startPermissions = async () => {
+    // Mark first-run complete (best-effort, idempotent) so this priming isn't
+    // shown again. Never block the permission handoff on the API call.
+    if (membershipId) {
+      try {
+        await completeFirstRun.mutateAsync({ membershipId })
+      } catch {
+        // Swallow — the priming flow must continue regardless.
+      }
+    }
     navigate(`/permissions/notifications?next=${encodeURIComponent(next)}`, { replace: true })
   }
 
   const onPrimary = () => {
-    if (isLast) startPermissions()
+    if (isLast) void startPermissions()
     else setStep((step_) => step_ + 1)
   }
 
@@ -172,7 +186,7 @@ export function EstimatorFirstRunScreen() {
                 <MButton variant="primary" onClick={onPrimary}>
                   {isLast ? 'Turn on bid alerts' : 'Next'}
                 </MButton>
-                <MButton variant="ghost" onClick={startPermissions}>
+                <MButton variant="ghost" onClick={() => void startPermissions()}>
                   Skip the tour
                 </MButton>
               </MButtonStack>

@@ -12,12 +12,17 @@
  * so it is NOT inside MobileShell — it wraps itself in MShell. Foreman is
  * the default light theme, so no `.m-dark`.
  *
- * Presentational only.
- * TODO(wire): invite/accept API (GET invite by token, POST accept).
+ * The `?token=` query param (from the SMS/email tap link) resolves to
+ * company/owner/role via GET /api/invites/:token; accept binds the foreman
+ * membership via POST /api/invites/:token/accept and chains into first-run with
+ * the membership id. With no token (the standalone design/demo route) it falls
+ * back to the query-param copy.
  */
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { MShell, MBody, MTopBar, MButton, MButtonStack, MI } from '@/components/m'
+import { MShell, MBody, MTopBar, MButton, MButtonStack, MBanner, MI } from '@/components/m'
+import { useAcceptInvite, useInviteView } from '@/lib/api'
+import { setActiveCompanySlug } from '@/lib/api/client'
 
 const CAPABILITIES: ReadonlyArray<{ title: string; detail: string }> = [
   { title: 'Run the crew', detail: 'Schedule, dispatch, and approve hours' },
@@ -29,19 +34,34 @@ export function ForemanInviteScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // TODO(wire): resolve from the invite token instead of query/defaults.
-  const company = searchParams.get('company') ?? 'LA Operations'
+  const token = searchParams.get('token')
+  const view = useInviteView(token)
+  const accept = useAcceptInvite(token ?? '')
+
+  const invite = view.data?.invite
+  const company = invite?.company_name ?? searchParams.get('company') ?? 'LA Operations'
   const owner = searchParams.get('from') ?? 'Steve Lozano'
 
-  const onAccept = () => {
+  const onAccept = async () => {
     setBusy(true)
-    // TODO(wire): POST accept, then persist the foreman membership.
-    navigate('/foreman/first-run?next=/today', { replace: true })
+    setError(null)
+    let next = '/foreman/first-run?next=/today'
+    try {
+      if (token) {
+        const result = await accept.mutateAsync()
+        setActiveCompanySlug(result.company.slug)
+        next = `/foreman/first-run?next=/today&mid=${encodeURIComponent(result.membership.id)}`
+      }
+      navigate(next, { replace: true })
+    } catch (err) {
+      setBusy(false)
+      setError(err instanceof Error ? err.message : 'Could not accept the invitation. Please try again.')
+    }
   }
 
   const onDecline = () => {
-    // TODO(wire): POST decline.
     navigate('/sign-in', { replace: true })
   }
 
@@ -108,6 +128,11 @@ export function ForemanInviteScreen() {
           </div>
 
           <div style={{ padding: '24px 20px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
+            {error ? (
+              <div style={{ marginBottom: 14 }}>
+                <MBanner tone="error" title="Could not accept" body={error} />
+              </div>
+            ) : null}
             <MButtonStack>
               <MButton variant="primary" onClick={onAccept} disabled={busy}>
                 {busy ? 'Setting up…' : `Accept foreman role`}

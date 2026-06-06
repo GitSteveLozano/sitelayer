@@ -234,7 +234,8 @@ export type CompanyRouteCtx = {
 export async function getMemberships(pool: Pool, userId: string) {
   const result = await pool.query(
     `
-    select cm.id, cm.company_id, cm.clerk_user_id, cm.role, cm.created_at, c.slug, c.name
+    select cm.id, cm.company_id, cm.clerk_user_id, cm.role, cm.created_at,
+           cm.first_run_completed_at, c.slug, c.name
     from company_memberships cm
     join companies c on c.id = cm.company_id
     where cm.clerk_user_id = $1

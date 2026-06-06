@@ -14,35 +14,58 @@
  * own `.m-dark` wrapper. All colors come from `var(--m-*)` tokens; no
  * hardcoded dark values.
  *
- * Presentational only — no invite API. The token in the URL would be
- * resolved to company/foreman/role by the integrator.
- * TODO(wire): invite/accept API (GET invite by token, POST accept).
+ * The `?token=` query param (from the SMS tap link) is resolved to
+ * company/foreman/role via GET /api/invites/:token; accept binds the
+ * membership via POST /api/invites/:token/accept and chains into first-run
+ * with the membership id so first-run can mark itself complete. When no token
+ * is present (the standalone design/demo route) it falls back to the
+ * query-param copy so the screen still renders.
  */
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MShell, MBody, MButton, MButtonStack } from '@/components/m'
+import { useAcceptInvite, useInviteView } from '@/lib/api'
+import { setActiveCompanySlug } from '@/lib/api/client'
 
 export function WorkerInviteScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // TODO(wire): resolve these from the invite token instead of query/defaults.
-  const company = searchParams.get('company') ?? 'LA Operations'
+  const token = searchParams.get('token')
+  const view = useInviteView(token)
+  const accept = useAcceptInvite(token ?? '')
+
+  // Prefer the resolved invite; fall back to query/defaults for the demo route.
+  const invite = view.data?.invite
+  const company = invite?.company_name ?? searchParams.get('company') ?? 'LA Operations'
   const foreman = searchParams.get('from') ?? 'Ana Castillo'
-  const role = searchParams.get('role') ?? 'Crew'
+  const role = invite?.role ?? searchParams.get('role') ?? 'Crew'
 
-  const onAccept = () => {
+  const onAccept = async () => {
     setBusy(true)
-    // TODO(wire): POST accept, then persist the membership.
+    setError(null)
     // Chain into the dark worker-specific first-run (not the foreman light
     // carousel), which primes permissions → Today.
-    navigate('/worker/first-run?next=/today', { replace: true })
+    let next = '/worker/first-run?next=/today'
+    try {
+      if (token) {
+        const result = await accept.mutateAsync()
+        setActiveCompanySlug(result.company.slug)
+        next = `/worker/first-run?next=/today&mid=${encodeURIComponent(result.membership.id)}`
+      }
+      navigate(next, { replace: true })
+    } catch (err) {
+      setBusy(false)
+      setError(err instanceof Error ? err.message : 'Could not accept the invitation. Please try again.')
+    }
   }
 
   const onDecline = () => {
-    // TODO(wire): POST decline. For now just bounce to sign-in.
+    // Declining is a client-side bounce — the invite stays pending so an admin
+    // can re-send or revoke it.
     navigate('/sign-in', { replace: true })
   }
 
@@ -71,6 +94,11 @@ export function WorkerInviteScreen() {
             </div>
 
             <div>
+              {error ? (
+                <div style={ms.error} role="alert">
+                  {error}
+                </div>
+              ) : null}
               <MButtonStack>
                 <MButton variant="primary" data-size="worker" onClick={onAccept} disabled={busy}>
                   {busy ? 'Setting up…' : 'Accept & join'}
@@ -154,5 +182,14 @@ const ms: Record<string, CSSProperties> = {
     color: 'var(--m-ink-4)',
     marginTop: 12,
     lineHeight: 1.4,
+  },
+  error: {
+    fontSize: 13,
+    lineHeight: 1.4,
+    color: 'var(--m-danger, #ff6b6b)',
+    background: 'var(--m-card-soft)',
+    border: '1px solid var(--m-line)',
+    padding: '10px 12px',
+    marginBottom: 12,
   },
 }

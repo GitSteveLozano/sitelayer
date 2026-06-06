@@ -191,6 +191,10 @@ export type SessionResponse = {
     created_at: string
     slug: string
     name: string
+    // Set once the member finishes their role-specific first-run priming
+    // (migration 007). NULL = first-run not yet completed → the invite/first-run
+    // flow should run. Optional so an older API build still type-checks.
+    first_run_completed_at?: string | null
   }>
 }
 

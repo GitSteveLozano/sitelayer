@@ -372,6 +372,37 @@ export async function handleInviteRoutes(req: http.IncomingMessage, url: URL, ct
     return true
   }
 
+  // ---- POST /api/memberships/:id/first-run-complete — self, idempotent -----
+  // After a freshly-accepted teammate walks their role-specific first-run
+  // priming (worker/foreman/estimator-first-run.tsx) we persist a per-membership
+  // flag so the priming isn't shown again on the next login. The flag is
+  // owner-scoped: a member can only complete first-run for their OWN membership
+  // row (`clerk_user_id = caller`), never another user's. Idempotent — the first
+  // completion latches `first_run_completed_at`; a re-POST coalesces to the
+  // existing timestamp so a double-tap / replayed nav doesn't move it forward.
+  const firstRunMatch = url.pathname.match(/^\/api\/memberships\/([^/]+)\/first-run-complete$/)
+  if (req.method === 'POST' && firstRunMatch) {
+    const membershipId = firstRunMatch[1]!
+    if (ctx.isAnonymous) {
+      sendJson(401, { error: 'authentication required' })
+      return true
+    }
+    const updated = await pool.query<MembershipRow & { first_run_completed_at: string | null }>(
+      `update company_memberships
+          set first_run_completed_at = coalesce(first_run_completed_at, now())
+        where id = $1 and clerk_user_id = $2
+       returning id, company_id, clerk_user_id, role, created_at, first_run_completed_at`,
+      [membershipId, userId],
+    )
+    const membership = updated.rows[0]
+    if (!membership) {
+      sendJson(404, { error: 'membership not found' })
+      return true
+    }
+    sendJson(200, { membership })
+    return true
+  }
+
   // ---- GET /api/invites/:token — PUBLIC view (no auth) ----------------------
   const tokenViewMatch = url.pathname.match(/^\/api\/invites\/([^/]+)$/)
   if (req.method === 'GET' && tokenViewMatch) {
