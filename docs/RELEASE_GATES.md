@@ -44,6 +44,7 @@ deleted on 2026-06-02 (the deploy workflows had already been removed in
 `scripts/deploy.sh` runs it before it ships. It covers:
 
 - shell syntax checks for `scripts/*.sh`
+- package-lock sync (`npm ci --dry-run`) — fails if `package-lock.json` drifts from any `package.json` (a dep bumped/added without `npm install --package-lock-only`, or a vendored `file:./operator-*.tgz` whose version string changed), catching the deploy-time `npm ci` EUSAGE failure at push instead
 - lint + Prettier format check
 - workspace typecheck
 - workspace tests
@@ -115,5 +116,5 @@ Production deploys run from the fleet via `scripts/deploy.sh prod`. There is no 
 
 Safety now depends on:
 
-- **The local gate `scripts/verify-local.sh`, run by `scripts/deploy.sh prod` on the exact deploy SHA before the image is pushed.** The prod deploy runs the **standard** gate locally (shell-syntax, migration-immutability, prettier, lint, typecheck, unit tests, the dockerfile-import guard, then `web:bundle-budget` after the build, plus the docker-compose DB-backed **integration** suite) and aborts the deploy on failure. The Playwright **e2e** suite is an opt-in `--full` level (`npm run verify:full`) for a quiet/dedicated box — it is resource-heavy and deliberately not part of the deploy gate. There is no `gh api` / GitHub-CI dependency; the break-glass override is `FORCE_DEPLOY_UNCHECKED=1`.
+- **The local gate `scripts/verify-local.sh`, run by `scripts/deploy.sh prod` on the exact deploy SHA before the image is pushed.** The prod deploy runs the **standard** gate locally (shell-syntax, package-lock sync, migration-immutability, prettier, lint, typecheck, unit tests, the dockerfile-import guard, then `web:bundle-budget` after the build, plus the docker-compose DB-backed **integration** suite) and aborts the deploy on failure. The Playwright **e2e** suite is an opt-in `--full` level (`npm run verify:full`) for a quiet/dedicated box — it is resource-heavy and deliberately not part of the deploy gate. There is no `gh api` / GitHub-CI dependency; the break-glass override is `FORCE_DEPLOY_UNCHECKED=1`.
 - **Optional branch protection on `main`** (PR + review, apply via `scripts/configure-github-protection.sh`) is code-review hygiene, not the deploy authority. With no GitHub Actions left there is no `Quality` status check to require; the deploy never queries any GitHub status.
