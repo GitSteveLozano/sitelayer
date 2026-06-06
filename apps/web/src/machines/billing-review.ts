@@ -1,3 +1,4 @@
+import { RENTAL_BILLING_WORKFLOW_NAME } from '@sitelayer/workflows'
 import {
   dispatchBillingRunEvent,
   fetchBillingRun,
@@ -13,6 +14,7 @@ import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from '
  */
 const { machine, useHook } = createHeadlessWorkflowMachine<RentalBillingSnapshot, RentalBillingHumanEvent>({
   id: 'billingReview',
+  workflowName: RENTAL_BILLING_WORKFLOW_NAME,
   load: (runId) => fetchBillingRun(runId),
   submit: (runId, event, stateVersion) => dispatchBillingRunEvent(runId, event, stateVersion),
 })

@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
+import { workflowEventRef } from '@sitelayer/workflows'
 import { compactTraceEventType, compactWorkflowSnapshot, emitControlPlaneTrace } from '@/lib/control-plane-trace'
 
 /**
@@ -74,6 +75,14 @@ export type HeadlessWorkflowHookResult<TSnapshot, TEvent> = {
 export type HeadlessWorkflowConfig<TSnapshot extends WorkflowSnapshotLike, TEvent> = {
   /** xstate machine id — useful in devtools/Inspector traces. */
   id: string
+  /**
+   * Canonical backend workflow_name (e.g. `rental_billing_run`) used to compute
+   * the transition-anchor `event_ref`. It MUST match the DB `workflow_name` so
+   * the client trace and the server `workflow_event_log` row name the same
+   * transition. Defaults to `id` for back-compat, but supply the DB name on
+   * any workflow whose UI machine id differs from it (most do).
+   */
+  workflowName?: string
   /** Fetch the current server snapshot for the entity. */
   load: (entityId: string, companySlug: string) => Promise<TSnapshot>
   /**
@@ -192,6 +201,21 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
     },
   })
 
+  // Canonical backend workflow_name for the transition-anchor; falls back to
+  // the UI machine id when a consumer hasn't pinned the DB name.
+  const workflowName = config.workflowName ?? config.id
+
+  /**
+   * The keystone: compute the SAME `workflow_event:<name>:<sha16>:<version>`
+   * anchor the server forwarder stamps, so a load/dispatch trace and the
+   * backend `workflow_event_log` row correlate at mesh ingest. Returns null
+   * before the first snapshot arrives (no state_version to anchor on yet).
+   */
+  function computeEventRef(entityId: string, stateVersion: number | null | undefined): string | null {
+    if (entityId === '' || typeof stateVersion !== 'number') return null
+    return workflowEventRef({ workflow_name: workflowName, entity_id: entityId, state_version: stateVersion })
+  }
+
   function useHook(entityId: string, companySlug: string): HeadlessWorkflowHookResult<TSnapshot, TEvent> {
     const [state, send] = useMachine(machine, { input: { entityId, companySlug } })
 
@@ -206,6 +230,7 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
         workflow_id: config.id,
         entity_id: state.context.entityId,
         company_slug: state.context.companySlug,
+        event_ref: computeEventRef(state.context.entityId, snapshot.state_version),
         snapshot: compactWorkflowSnapshot(snapshot),
         out_of_sync: state.context.outOfSync,
         has_error: Boolean(state.context.error),
@@ -227,6 +252,7 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
           company_slug: state.context.companySlug,
           event_type: compactTraceEventType(event),
           state_version: state.context.snapshot?.state_version ?? null,
+          event_ref: computeEventRef(state.context.entityId, state.context.snapshot?.state_version),
         })
         send({ type: 'DISPATCH', event })
       },

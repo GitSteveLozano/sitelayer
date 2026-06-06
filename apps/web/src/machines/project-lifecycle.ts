@@ -1,3 +1,4 @@
+import { PROJECT_LIFECYCLE_WORKFLOW_NAME } from '@sitelayer/workflows'
 import {
   dispatchProjectLifecycleEvent,
   fetchProjectLifecycle,
@@ -22,6 +23,7 @@ const { machine, useHook } = createHeadlessWorkflowMachine<
   ProjectLifecycleHumanEventEnvelope
 >({
   id: 'projectLifecycle',
+  workflowName: PROJECT_LIFECYCLE_WORKFLOW_NAME,
   load: (projectId) => fetchProjectLifecycle(projectId),
   submit: (projectId, event, stateVersion) => dispatchProjectLifecycleEvent(projectId, event, stateVersion),
 })

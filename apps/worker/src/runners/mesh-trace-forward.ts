@@ -7,6 +7,7 @@ import {
   type ProjectEventEnvelope,
   type SignFn,
 } from '@operator/projectkit'
+import { workflowEventRef as workflowEventRefShared } from '@sitelayer/workflows'
 
 /**
  * Mesh trace forwarder — the SERVER lane of the observability spectrum (T3,
@@ -160,12 +161,16 @@ type CaptureForwardRow = CaptureEventRow & {
   company_id: string
 }
 
+// The transition-anchor id is now the SHARED keystone from @sitelayer/workflows
+// (workflowEventRef) so the frontend trace and this server forwarder name the
+// exact same transition. This wrapper just adapts a workflow_event_log Row onto
+// the pure {workflow_name, entity_id, state_version} contract.
 function workflowEventRef(r: Row): string {
-  const digest = createHash('sha256')
-    .update(`${r.workflow_name}:${r.entity_id}:${r.state_version}`)
-    .digest('hex')
-    .slice(0, 16)
-  return `workflow_event:${r.workflow_name}:${digest}:${r.state_version}`
+  return workflowEventRefShared({
+    workflow_name: r.workflow_name,
+    entity_id: r.entity_id,
+    state_version: r.state_version,
+  })
 }
 
 function toTraceEvent(r: Row) {
