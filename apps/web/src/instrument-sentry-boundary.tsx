@@ -31,7 +31,8 @@ const { ErrorBoundary } = SentryImpl
 
 type Props = {
   children?: ReactNode
-  fallback: ReactNode
+  /** Receives Sentry's eventId so the fallback can show the user a quotable id. */
+  fallback: (info: { eventId?: string | undefined }) => ReactNode
 }
 
 function SentryBoundary({ children, fallback }: Props) {
@@ -49,7 +50,7 @@ function SentryBoundary({ children, fallback }: Props) {
           recoverFromChunkError(error)
         }
       }}
-      fallback={() => <>{fallback}</>}
+      fallback={({ eventId }: { eventId?: string }) => <>{fallback({ eventId })}</>}
     >
       {children}
     </ErrorBoundary>

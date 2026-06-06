@@ -41,7 +41,7 @@ const root = createRoot(container)
 
 root.render(
   <StrictMode>
-    <LazyErrorBoundary fallback={<RootError />}>
+    <LazyErrorBoundary fallback={(info) => <RootError eventId={info.eventId} />}>
       <App />
     </LazyErrorBoundary>
   </StrictMode>,
@@ -67,7 +67,13 @@ installChunkReloadHandler()
 // every client without a manual cache-clear. No-op in dev / unbuilt.
 initVersionGuard()
 
-function LazyErrorBoundary({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
+function LazyErrorBoundary({
+  children,
+  fallback,
+}: {
+  children: ReactNode
+  fallback: (info: { eventId?: string | undefined }) => ReactNode
+}) {
   // Suspense fallback IS the children: while the Sentry boundary chunk
   // is loading the app renders unprotected (the entire SPA wouldn't be
   // crashing during the 1-frame load anyway). This avoids the user
@@ -79,13 +85,37 @@ function LazyErrorBoundary({ children, fallback }: { children: ReactNode; fallba
   )
 }
 
-function RootError() {
+function RootError({ eventId }: { eventId?: string | undefined }) {
+  // Give the user a copy-pasteable block to quote in a report. error id ->
+  // Sentry; time + page -> the incident tool's vague lookup
+  // (scripts/incident.ts --around <time> --route <page>). Without this, an
+  // unhandled-error report has nothing to trace from.
+  const ref = [
+    eventId ? `error id: ${eventId}` : null,
+    `time: ${new Date().toISOString()}`,
+    typeof location !== 'undefined' ? `page: ${location.pathname}${location.search}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
   return (
     <div style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
       <h1 style={{ fontSize: 18, marginBottom: 8 }}>Sitelayer hit an error.</h1>
       <p style={{ fontSize: 14, color: '#5b544c' }}>
-        Reload the page. If this keeps happening, ping #sitelayer-support.
+        Reload the page. If this keeps happening, ping #sitelayer-support and include this:
       </p>
+      <pre
+        style={{
+          fontSize: 12,
+          background: '#f5f3f0',
+          border: '1px solid #e0dcd5',
+          borderRadius: 6,
+          padding: 12,
+          marginTop: 8,
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {ref}
+      </pre>
     </div>
   )
 }
