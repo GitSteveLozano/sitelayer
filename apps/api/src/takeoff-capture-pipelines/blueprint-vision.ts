@@ -1,4 +1,8 @@
-import { PIPELINE_VERSION as BLUEPRINT_PIPELINE_VERSION, buildBlueprintTakeoff } from '@sitelayer/pipe-blueprint'
+import {
+  PIPELINE_VERSION as BLUEPRINT_PIPELINE_VERSION,
+  buildBlueprintTakeoff,
+  RECOMMENDED_TAKEOFF_MODEL,
+} from '@sitelayer/pipe-blueprint'
 import { applyReviewFloor, type TakeoffResult } from '@sitelayer/capture-schema'
 import { compact } from './shared.js'
 
@@ -234,7 +238,10 @@ async function geminiBlueprintTakeoff(
 ): Promise<Array<{ description: string; value: number; unit: DemoUnit; confidence: number }> | null> {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
   if (!apiKey) return null
-  const model = process.env.GEMINI_VISION_MODEL?.trim() || 'gemini-3.5-flash'
+  // Default to the bang-for-buck winner from the 2026-06-05 model comparison
+  // (docs/AI_TAKEOFF_PIPELINE.md): gemini-3.1-flash-lite — cheapest, fastest, and
+  // best extraction; gemini-3.5-flash cost 4-5x more for worse output here.
+  const model = process.env.GEMINI_VISION_MODEL?.trim() || RECOMMENDED_TAKEOFF_MODEL
   const prompt =
     'You are a senior construction estimator performing a quantity takeoff from this blueprint sheet ' +
     'for an EIFS / stucco / exterior-finish scope. Read the drawing, dimensions, and title block, then ' +
