@@ -1,3 +1,4 @@
+import { DAILY_LOG_WORKFLOW_NAME } from '@sitelayer/workflows'
 import { dispatchDailyLogEvent, fetchDailyLogSnapshot, type DailyLogHumanEvent, type DailyLogSnapshot } from '@/lib/api'
 import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from './headless-workflow'
 
@@ -20,6 +21,7 @@ import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from '
  */
 const { machine, useHook } = createHeadlessWorkflowMachine<DailyLogSnapshot, DailyLogHumanEvent>({
   id: 'dailyLog',
+  workflowName: DAILY_LOG_WORKFLOW_NAME,
   load: (id) => fetchDailyLogSnapshot(id),
   submit: (id, event, stateVersion) => dispatchDailyLogEvent(id, event, stateVersion),
 })

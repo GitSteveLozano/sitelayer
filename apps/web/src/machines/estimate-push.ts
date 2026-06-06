@@ -1,3 +1,4 @@
+import { ESTIMATE_PUSH_WORKFLOW_NAME } from '@sitelayer/workflows'
 import {
   dispatchEstimatePushEvent,
   fetchEstimatePush,
@@ -13,6 +14,7 @@ import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from '
  */
 const { machine, useHook } = createHeadlessWorkflowMachine<EstimatePushSnapshot, EstimatePushHumanEvent>({
   id: 'estimatePush',
+  workflowName: ESTIMATE_PUSH_WORKFLOW_NAME,
   load: (pushId) => fetchEstimatePush(pushId),
   submit: (pushId, event, stateVersion) => dispatchEstimatePushEvent(pushId, event, stateVersion),
 })
