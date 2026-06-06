@@ -1,0 +1,1328 @@
+import { describe, it, expect } from 'vitest'
+import {
+  formatMoney,
+  calculateProjectCost,
+  calculateMargin,
+  calculateBonusPayout,
+  simulateBonusScenario,
+  calculatePolygonArea,
+  calculatePolygonCentroid,
+  calculateTakeoffQuantity,
+  clampBoardCoordinate,
+  compareBidVsScope,
+  repriceForTargetMargin,
+  MAX_TARGET_MARGIN,
+  DEFAULT_BONUS_RULE,
+  normalizePolygonGeometry,
+  normalizeLinealGeometry,
+  normalizeVolumeGeometry,
+  normalizeGeometry,
+  calculateLinealLength,
+  calculateLinealQuantity,
+  calculateVolumeQuantity,
+  calculatePolygonAreaScaled,
+  calculateLinealLengthScaled,
+  calculateGeometryQuantity,
+  computeProductivity,
+  calculateJobRentalBillingRun,
+  calculateRentalInvoice,
+  initialJobRentalNextBillingDate,
+  initialRentalNextInvoiceAt,
+  haversineDistanceMeters,
+  isInsideGeofence,
+  sumMoney,
+  calculateWorkerBurden,
+  splitStraightAndOt,
+  summarizeLaborBurden,
+  DEFAULT_OVERTIME_HOUR_THRESHOLD,
+} from './index.js'
+
+describe('domain functions', () => {
+  describe('formatMoney', () => {
+    it('formats positive currency correctly', () => {
+      expect(formatMoney(1234.56)).toBe('$1,234.56')
+    })
+
+    it('formats zero correctly', () => {
+      expect(formatMoney(0)).toBe('$0.00')
+    })
+
+    it('formats negative currency correctly', () => {
+      expect(formatMoney(-100.5)).toBe('-$100.50')
+    })
+
+    it('formats large amounts correctly', () => {
+      expect(formatMoney(1000000)).toBe('$1,000,000.00')
+    })
+  })
+
+  describe('sumMoney', () => {
+    it('returns 0.00 for an empty list', () => {
+      expect(sumMoney([])).toBe('0.00')
+    })
+
+    it('sums numeric strings exactly (the bug we are fixing)', () => {
+      // Plain JS: [0.1, 0.2, 0.3].reduce((s, v) => s + v, 0) === 0.6000000000000001
+      expect(sumMoney(['0.10', '0.20', '0.30'])).toBe('0.60')
+    })
+
+    it('sums JS numbers exactly', () => {
+      expect(sumMoney([0.1, 0.2, 0.3])).toBe('0.60')
+    })
+
+    it('handles mixed strings and numbers', () => {
+      expect(sumMoney(['1.05', 2.5, '0.95'])).toBe('4.50')
+    })
+
+    it('handles negative values', () => {
+      expect(sumMoney(['10.00', '-2.50', '-0.25'])).toBe('7.25')
+      expect(sumMoney(['-5.00', '-5.00'])).toBe('-10.00')
+    })
+
+    it('truncates beyond two decimal places (matches Postgres numeric(12,2) cast)', () => {
+      expect(sumMoney(['0.999'])).toBe('0.99')
+      expect(sumMoney(['1.005', '1.005'])).toBe('2.00')
+    })
+
+    it('treats null, undefined, NaN, infinity, and bad strings as zero', () => {
+      expect(sumMoney([null, undefined, '10.00'])).toBe('10.00')
+      expect(sumMoney([Number.NaN, '5.00'])).toBe('5.00')
+      expect(sumMoney([Number.POSITIVE_INFINITY, '5.00'])).toBe('5.00')
+      expect(sumMoney(['not-a-number', '5.00'])).toBe('5.00')
+    })
+
+    it('handles a long sum without drift (regression: the running-sum bug)', () => {
+      const cents = Array.from({ length: 1000 }, () => '0.01')
+      expect(sumMoney(cents)).toBe('10.00')
+    })
+
+    it('returns a string suitable for Postgres numeric(12,2) writes', () => {
+      const result = sumMoney(['1234.56', '7.89'])
+      expect(result).toBe('1242.45')
+      expect(typeof result).toBe('string')
+    })
+  })
+
+  describe('calculateProjectCost', () => {
+    it('sums all cost components', () => {
+      const result = calculateProjectCost({
+        laborCost: 1000,
+        materialCost: 500,
+        subCost: 250,
+      })
+      expect(result).toBe(1750)
+    })
+
+    it('handles zero costs', () => {
+      const result = calculateProjectCost({
+        laborCost: 0,
+        materialCost: 0,
+        subCost: 0,
+      })
+      expect(result).toBe(0)
+    })
+
+    it('rounds to cents', () => {
+      const result = calculateProjectCost({
+        laborCost: 100.001,
+        materialCost: 50.005,
+        subCost: 25.004,
+      })
+      expect(result).toBe(175.01)
+    })
+  })
+
+  describe('calculateMargin', () => {
+    it('calculates positive margin correctly', () => {
+      const result = calculateMargin({
+        revenue: 1000,
+        cost: 600,
+      })
+      expect(result.profit).toBe(400)
+      expect(result.margin).toBeCloseTo(0.4, 4)
+    })
+
+    it('handles zero revenue', () => {
+      const result = calculateMargin({
+        revenue: 0,
+        cost: 500,
+      })
+      expect(result.profit).toBe(-500)
+      expect(result.margin).toBe(0)
+    })
+
+    it('handles negative margin', () => {
+      const result = calculateMargin({
+        revenue: 500,
+        cost: 600,
+      })
+      expect(result.profit).toBe(-100)
+      expect(result.margin).toBeLessThan(0)
+    })
+
+    it('calculates 50% margin correctly', () => {
+      const result = calculateMargin({
+        revenue: 1000,
+        cost: 500,
+      })
+      expect(result.margin).toBeCloseTo(0.5, 4)
+    })
+  })
+
+  describe('repriceForTargetMargin', () => {
+    it('prices the bid so the resulting margin equals the target', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 600, targetMarginPct: 0.4 })
+      // bid = 600 / (1 - 0.4) = 1000; margin = (1000 - 600)/1000 = 0.4
+      expect(bidTotal).toBe(1000)
+      expect(marginPct).toBeCloseTo(0.4, 4)
+      const verify = calculateMargin({ revenue: bidTotal, cost: 600 })
+      expect(verify.margin).toBeCloseTo(0.4, 4)
+    })
+
+    it('returns a zero bid when there is no cost basis', () => {
+      expect(repriceForTargetMargin({ cost: 0, targetMarginPct: 0.3 }).bidTotal).toBe(0)
+      expect(repriceForTargetMargin({ cost: -5, targetMarginPct: 0.3 }).bidTotal).toBe(0)
+    })
+
+    it('clamps an over-100% margin to the safe maximum (no divide-by-zero)', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 100, targetMarginPct: 1.5 })
+      expect(marginPct).toBeCloseTo(MAX_TARGET_MARGIN, 4)
+      expect(Number.isFinite(bidTotal)).toBe(true)
+      expect(bidTotal).toBeGreaterThan(100)
+    })
+
+    it('clamps a negative margin to 0 (sell at cost, never below)', () => {
+      const { bidTotal, marginPct } = repriceForTargetMargin({ cost: 250, targetMarginPct: -0.2 })
+      expect(marginPct).toBe(0)
+      expect(bidTotal).toBe(250)
+    })
+  })
+
+  describe('calculateBonusPayout', () => {
+    it('returns zero when below threshold', () => {
+      const result = calculateBonusPayout(0.1, 10000, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(false)
+      expect(result.payout).toBe(0)
+    })
+
+    it('pays at first tier', () => {
+      const result = calculateBonusPayout(0.15, 10000, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(true)
+      expect(result.payout).toBe(400)
+    })
+
+    it('pays at second tier', () => {
+      const result = calculateBonusPayout(0.2, 10000, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(true)
+      expect(result.payout).toBe(900)
+    })
+
+    it('pays at highest applicable tier', () => {
+      const result = calculateBonusPayout(0.3, 10000, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(true)
+      expect(result.payout).toBe(1900)
+    })
+
+    it('handles boundary values at tier min margin', () => {
+      const result = calculateBonusPayout(0.149, 10000, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(false)
+      expect(result.payout).toBe(0)
+    })
+
+    it('handles zero bonus pool', () => {
+      const result = calculateBonusPayout(0.25, 0, DEFAULT_BONUS_RULE.tiers)
+      expect(result.eligible).toBe(true)
+      expect(result.payout).toBe(0)
+    })
+  })
+
+  describe('simulateBonusScenario', () => {
+    it('pays the tier exactly at a tier edge and projects the next threshold', () => {
+      // revenue 100k, cost 85k → 15% margin → first tier (4%).
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 85_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.15, 4)
+      expect(result.profit).toBe(15_000)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.04, 4)
+      expect(result.payout).toBe(400)
+      expect(result.next_tier_threshold).toBeCloseTo(0.2, 4)
+      // cost / (1 - 0.2) = 106,250 → need $6,250 more revenue.
+      expect(result.revenue_to_next_tier).toBeCloseTo(6_250, 2)
+    })
+
+    it('handles a margin strictly between tiers', () => {
+      // 17% margin → tier 1 active, tier 2 (20%) next.
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 83_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.17, 4)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.04, 4)
+      expect(result.next_tier_threshold).toBeCloseTo(0.2, 4)
+      // cost / (1 - 0.2) = 103,750 → $3,750 more revenue.
+      expect(result.revenue_to_next_tier).toBeCloseTo(3_750, 2)
+    })
+
+    it('reports null projections above the top tier', () => {
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 50_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.5, 4)
+      expect(result.eligible).toBe(true)
+      // top tier (30% → 19%) is active.
+      expect(result.payout_percent).toBeCloseTo(0.19, 4)
+      expect(result.payout).toBe(1900)
+      expect(result.next_tier_threshold).toBeNull()
+      expect(result.revenue_to_next_tier).toBeNull()
+    })
+
+    it('reports zero-revenue case as 0% margin, not eligible, with a null projection when cost is also zero', () => {
+      const result = simulateBonusScenario({
+        revenue: 0,
+        cost: 0,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBe(0)
+      expect(result.profit).toBe(0)
+      expect(result.eligible).toBe(false)
+      expect(result.payout).toBe(0)
+      // First tier threshold is exposed for UI, but with zero cost we can't
+      // tell the user how much extra revenue to chase.
+      expect(result.next_tier_threshold).toBeCloseTo(0.15, 4)
+      expect(result.revenue_to_next_tier).toBeNull()
+    })
+
+    it('reports a concrete revenue gap when cost is non-zero and revenue is zero', () => {
+      const result = simulateBonusScenario({
+        revenue: 0,
+        cost: 50_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBe(0)
+      expect(result.profit).toBe(-50_000)
+      expect(result.eligible).toBe(false)
+      expect(result.next_tier_threshold).toBeCloseTo(0.15, 4)
+      // cost / (1 - 0.15) ≈ 58,823.53 → that's the gap since current revenue is 0.
+      expect(result.revenue_to_next_tier).toBeCloseTo(58_823.53, 1)
+    })
+
+    it('returns eligibility with zero payout when the bonus pool is empty', () => {
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 70_000,
+        bonus_pool: 0,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.3, 4)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.19, 4)
+      expect(result.payout).toBe(0)
+      expect(result.next_tier_threshold).toBeNull()
+      expect(result.revenue_to_next_tier).toBeNull()
+    })
+  })
+
+  describe('compareBidVsScope', () => {
+    it('reports ok when scope and bid match exactly', () => {
+      const result = compareBidVsScope({ bidTotal: 19200, scopeTotal: 19200 })
+      expect(result.delta).toBe(0)
+      expect(result.delta_pct).toBe(0)
+      expect(result.status).toBe('ok')
+      expect(result.bid_total).toBe(19200)
+      expect(result.scope_total).toBe(19200)
+    })
+
+    it('reports ok inside the 1% band', () => {
+      // 1% of 19267.50 is 192.675; a 67.50 delta stays comfortably inside.
+      const result = compareBidVsScope({ bidTotal: 19267.5, scopeTotal: 19200 })
+      expect(result.delta).toBe(67.5)
+      expect(result.delta_pct).toBeCloseTo(0.0035, 4)
+      expect(result.status).toBe('ok')
+    })
+
+    it('reports warn in the 1–5% band', () => {
+      // 2% delta.
+      const result = compareBidVsScope({ bidTotal: 20000, scopeTotal: 19600 })
+      expect(result.delta).toBe(400)
+      expect(result.delta_pct).toBeCloseTo(0.02, 4)
+      expect(result.status).toBe('warn')
+    })
+
+    it('reports mismatch when drift exceeds 5%', () => {
+      // 10% delta.
+      const result = compareBidVsScope({ bidTotal: 20000, scopeTotal: 18000 })
+      expect(result.delta).toBe(2000)
+      expect(result.delta_pct).toBeCloseTo(0.1, 4)
+      expect(result.status).toBe('mismatch')
+    })
+
+    it('treats scope above bid symmetrically (negative delta, still banded by |delta_pct|)', () => {
+      const result = compareBidVsScope({ bidTotal: 10000, scopeTotal: 10200 })
+      expect(result.delta).toBe(-200)
+      expect(result.delta_pct).toBeCloseTo(0.02, 4)
+      expect(result.status).toBe('warn')
+    })
+
+    it('returns ok/0 for a fully zero bid and zero scope', () => {
+      const result = compareBidVsScope({ bidTotal: 0, scopeTotal: 0 })
+      expect(result.delta).toBe(0)
+      expect(result.delta_pct).toBe(0)
+      expect(result.status).toBe('ok')
+    })
+
+    it('returns mismatch when bid is zero but scope is non-zero', () => {
+      const result = compareBidVsScope({ bidTotal: 0, scopeTotal: 1 })
+      expect(result.status).toBe('mismatch')
+      expect(result.delta_pct).toBe(1)
+    })
+
+    it('coerces non-finite inputs to zero rather than NaN-poisoning the result', () => {
+      const result = compareBidVsScope({ bidTotal: Number.NaN, scopeTotal: 500 })
+      expect(result.bid_total).toBe(0)
+      expect(result.scope_total).toBe(500)
+      expect(result.status).toBe('mismatch')
+    })
+  })
+
+  describe('takeoff geometry', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ]
+
+    it('calculates polygon area and takeoff quantity', () => {
+      expect(calculatePolygonArea(square)).toBe(100)
+      expect(calculateTakeoffQuantity(square, 1.25)).toBe(125)
+    })
+
+    it('calculates centroid independent of winding direction', () => {
+      expect(calculatePolygonCentroid(square)).toEqual({ x: 5, y: 5 })
+      expect(calculatePolygonCentroid([...square].reverse())).toEqual({ x: 5, y: 5 })
+    })
+
+    it('clamps board coordinates for pointer input', () => {
+      expect(clampBoardCoordinate(-5)).toBe(0)
+      expect(clampBoardCoordinate(125)).toBe(100)
+      expect(clampBoardCoordinate(42.5)).toBe(42.5)
+    })
+
+    it('normalizes valid polygon geometry', () => {
+      expect(
+        normalizePolygonGeometry({
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10.129, y: 0 },
+            { x: 10, y: 10 },
+          ],
+          sheet_scale: '2.5',
+          calibration_length: '100',
+          calibration_unit: 'feet but this string is intentionally long enough to trim',
+        }),
+      ).toEqual({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10.13, y: 0 },
+          { x: 10, y: 10 },
+        ],
+        sheet_scale: 2.5,
+        calibration_length: 100,
+        calibration_unit: 'feet but this string is intentio',
+      })
+    })
+
+    it('passes per-axis world scale through normalize (the API write path)', () => {
+      const g = normalizePolygonGeometry({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
+        ],
+        world_per_board_x: 0.4,
+        world_per_board_y: 0.2,
+      })
+      expect(g?.world_per_board_x).toBe(0.4)
+      expect(g?.world_per_board_y).toBe(0.2)
+      // normalize → calculateGeometryQuantity is exactly the server write path
+      expect(calculateGeometryQuantity(g!)).toBeCloseTo(800, 2)
+    })
+
+    it('rejects malformed polygon geometry', () => {
+      expect(normalizePolygonGeometry({ kind: 'line', points: square })).toBeNull()
+      expect(normalizePolygonGeometry({ kind: 'polygon', points: square.slice(0, 2) })).toBeNull()
+      expect(
+        normalizePolygonGeometry({
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 110, y: 0 },
+            { x: 0, y: 10 },
+          ],
+        }),
+      ).toBeNull()
+    })
+  })
+
+  describe('lineal geometry', () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 3, y: 4 },
+      { x: 3, y: 14 },
+    ]
+
+    it('calculates the total path length and applies multiplier', () => {
+      expect(calculateLinealLength(path)).toBe(15)
+      expect(calculateLinealQuantity(path, 2)).toBe(30)
+    })
+
+    it('normalizes a valid lineal geometry with >=2 points', () => {
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+          ],
+          sheet_scale: '1.5',
+          calibration_unit: 'ft',
+        }),
+      ).toEqual({
+        kind: 'lineal',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+        ],
+        sheet_scale: 1.5,
+        calibration_unit: 'ft',
+      })
+    })
+
+    it('rejects lineal geometry with <2 points or out-of-bounds points', () => {
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [{ x: 5, y: 5 }],
+        }),
+      ).toBeNull()
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 200, y: 50 },
+          ],
+        }),
+      ).toBeNull()
+      expect(normalizeLinealGeometry({ kind: 'polygon', points: path })).toBeNull()
+    })
+  })
+
+  describe('volume geometry', () => {
+    it('computes L*W*H', () => {
+      expect(calculateVolumeQuantity({ length: 2, width: 3, height: 4 })).toBe(24)
+    })
+
+    it('normalizes a valid volume box with positive dims', () => {
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: 10,
+          width: 2,
+          height: 3.5,
+          unit: 'ft',
+        }),
+      ).toEqual({
+        kind: 'volume',
+        length: 10,
+        width: 2,
+        height: 3.5,
+        unit: 'ft',
+      })
+    })
+
+    it('rejects negative / zero / non-finite dimensions', () => {
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: -1,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: 0,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: Number.POSITIVE_INFINITY,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+    })
+  })
+
+  describe('normalizeGeometry (discriminator)', () => {
+    it('dispatches on kind to the right normalizer', () => {
+      const polygon = normalizeGeometry({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+        ],
+      })
+      expect(polygon?.kind).toBe('polygon')
+
+      const lineal = normalizeGeometry({
+        kind: 'lineal',
+        points: [
+          { x: 0, y: 0 },
+          { x: 5, y: 0 },
+        ],
+      })
+      expect(lineal?.kind).toBe('lineal')
+
+      const volume = normalizeGeometry({
+        kind: 'volume',
+        length: 2,
+        width: 2,
+        height: 2,
+      })
+      expect(volume?.kind).toBe('volume')
+
+      expect(normalizeGeometry({ kind: 'circle', radius: 5 })).toBeNull()
+      expect(normalizeGeometry(null)).toBeNull()
+    })
+
+    it('dispatches calculateGeometryQuantity correctly', () => {
+      expect(
+        calculateGeometryQuantity({
+          kind: 'volume',
+          length: 2,
+          width: 3,
+          height: 4,
+        }),
+      ).toBe(24)
+      expect(
+        calculateGeometryQuantity({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+          ],
+        }),
+      ).toBe(10)
+    })
+
+    it('applies per-axis world scale (anisotropic): area = boardArea·wx·wy', () => {
+      const square = [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+        { x: 0, y: 100 },
+      ]
+      // board area 10000; wx=0.4, wy=0.2 → 40ft × 20ft = 800 sqft
+      expect(calculatePolygonAreaScaled(square, 0.4, 0.2)).toBeCloseTo(800, 4)
+      expect(
+        calculateGeometryQuantity({ kind: 'polygon', points: square, world_per_board_x: 0.4, world_per_board_y: 0.2 }),
+      ).toBeCloseTo(800, 2)
+      // a horizontal 50-unit lineal at wx=0.4 → 20 lf; a vertical at wy=0.2 → 10 lf
+      expect(
+        calculateLinealLengthScaled(
+          [
+            { x: 0, y: 0 },
+            { x: 50, y: 0 },
+          ],
+          0.4,
+          0.2,
+        ),
+      ).toBeCloseTo(20, 6)
+      expect(
+        calculateGeometryQuantity({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 50 },
+          ],
+          world_per_board_x: 0.4,
+          world_per_board_y: 0.2,
+        }),
+      ).toBeCloseTo(10, 2)
+    })
+  })
+
+  describe('computeProductivity', () => {
+    it('returns zero metrics for empty input', () => {
+      const result = computeProductivity({ entries: [] })
+      expect(result.samples).toBe(0)
+      expect(result.avg).toBe(0)
+      expect(result.p50).toBeNull()
+      expect(result.p90).toBeNull()
+    })
+
+    it('skips p50/p90 when samples <3', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 100, hours: 2 },
+          { quantity: 200, hours: 4 },
+        ],
+      })
+      expect(result.samples).toBe(2)
+      expect(result.total_quantity).toBe(300)
+      expect(result.total_hours).toBe(6)
+      expect(result.avg).toBe(50)
+      expect(result.p50).toBeNull()
+      expect(result.p90).toBeNull()
+    })
+
+    it('computes avg / p50 / p90 across >=3 samples', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 50, hours: 1 },
+          { quantity: 40, hours: 1 },
+          { quantity: 60, hours: 1 },
+          { quantity: 70, hours: 1 },
+          { quantity: 100, hours: 1 },
+        ],
+      })
+      expect(result.samples).toBe(5)
+      expect(result.avg).toBe(64)
+      expect(result.p50).toBe(60)
+      expect(result.p90).toBeCloseTo(88, 1)
+    })
+
+    it('ignores non-positive or non-finite entries', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 0, hours: 2 },
+          { quantity: 50, hours: 0 },
+          { quantity: Number.NaN, hours: 2 },
+          { quantity: 100, hours: 2 },
+          { quantity: 50, hours: 1 },
+          { quantity: 30, hours: 1 },
+        ],
+      })
+      expect(result.samples).toBe(3)
+      expect(result.total_quantity).toBe(180)
+      expect(result.total_hours).toBe(4)
+    })
+  })
+
+  describe('calculateRentalInvoice', () => {
+    it('bills one full cadence window from delivery when no prior invoice exists', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 25,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-08',
+      )
+      expect(result.days).toBe(7)
+      expect(result.amount).toBe(175)
+      expect(result.period_start).toBe('2026-04-01')
+      expect(result.period_end).toBe('2026-04-07')
+      expect(result.invoiced_through).toBe('2026-04-07')
+      expect(result.next_invoice_at).toBe('2026-04-08T00:00:00.000Z')
+      expect(result.next_status).toBe('active')
+    })
+
+    it('bills only elapsed days when reference date is mid-window', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 30,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-04',
+      )
+      // Delivered 2026-04-01 through reference 2026-04-04 = 4 days * 30 = 120
+      expect(result.days).toBe(4)
+      expect(result.amount).toBe(120)
+      expect(result.period_end).toBe('2026-04-04')
+    })
+
+    it('returns zero days when delivered_on is in the future', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 40,
+          delivered_on: '2026-05-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-20',
+      )
+      expect(result.days).toBe(0)
+      expect(result.amount).toBe(0)
+      expect(result.next_status).toBe('active')
+    })
+
+    it('caps the invoice period at returned_on and closes the rental', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 10,
+          delivered_on: '2026-04-01',
+          returned_on: '2026-04-05',
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-10',
+      )
+      // 2026-04-01 through 2026-04-05 = 5 days * 10 = 50
+      expect(result.days).toBe(5)
+      expect(result.amount).toBe(50)
+      expect(result.period_end).toBe('2026-04-05')
+      expect(result.next_status).toBe('closed')
+      expect(result.next_invoice_at).toBeNull()
+    })
+
+    it('returns zero days when returned_on precedes the last invoiced period', () => {
+      // Item returned 2026-04-04, but we already invoiced through 2026-04-07.
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 10,
+          delivered_on: '2026-04-01',
+          returned_on: '2026-04-04',
+          invoice_cadence_days: 7,
+          last_invoiced_through: '2026-04-07',
+        },
+        '2026-04-10',
+      )
+      expect(result.days).toBe(0)
+      expect(result.amount).toBe(0)
+      expect(result.next_status).toBe('closed')
+      expect(result.next_invoice_at).toBeNull()
+    })
+
+    it('advances billing after an existing last_invoiced_through value', () => {
+      // Previously billed 2026-04-01 through 2026-04-07; reference 2026-04-14
+      // -> next period is 2026-04-08 through 2026-04-14 = 7 days.
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 12,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: '2026-04-07',
+        },
+        '2026-04-14',
+      )
+      expect(result.period_start).toBe('2026-04-08')
+      expect(result.period_end).toBe('2026-04-14')
+      expect(result.days).toBe(7)
+      expect(result.amount).toBe(84)
+      expect(result.next_status).toBe('active')
+    })
+
+    it('rounds sub-cent amounts to two decimal places', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 3.333,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 3,
+          last_invoiced_through: null,
+        },
+        '2026-04-10',
+      )
+      // 3 days at 3.333 = 9.999 -> rounded to 10.00
+      expect(result.days).toBe(3)
+      expect(result.amount).toBe(10)
+    })
+  })
+
+  describe('initialRentalNextInvoiceAt', () => {
+    it('sets the first invoice tick cadence_days after delivery', () => {
+      expect(initialRentalNextInvoiceAt('2026-04-01', 7)).toBe('2026-04-08T00:00:00.000Z')
+    })
+
+    it('defaults to weekly when cadence is invalid', () => {
+      expect(initialRentalNextInvoiceAt('2026-04-01', 0)).toBe('2026-04-08T00:00:00.000Z')
+    })
+  })
+
+  describe('calculateJobRentalBillingRun', () => {
+    it('bills a full 25-day cycle using agreed cycle pricing', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+          last_billed_through: null,
+        },
+        [
+          {
+            id: 'line-1',
+            inventory_item_id: 'item-1',
+            item_code: 'FRAME',
+            item_description: 'Scaffold frame',
+            quantity: 10,
+            agreed_rate: 4,
+            rate_unit: 'cycle',
+            on_rent_date: '2026-04-01',
+            billable: true,
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.period_start).toBe('2026-04-01')
+      expect(result.period_end).toBe('2026-04-25')
+      expect(result.due_date).toBe('2026-04-26')
+      expect(result.next_billing_date).toBe('2026-05-21')
+      expect(result.is_due).toBe(true)
+      expect(result.lines).toHaveLength(1)
+      expect(result.lines[0]?.billable_days).toBe(25)
+      expect(result.lines[0]?.amount).toBe(40)
+      expect(result.subtotal).toBe(40)
+    })
+
+    it('prorates cycle pricing when the line starts mid-cycle', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 2,
+            agreed_rate: 100,
+            rate_unit: 'cycle',
+            on_rent_date: '2026-04-11',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_start).toBe('2026-04-11')
+      expect(result.lines[0]?.period_end).toBe('2026-04-25')
+      expect(result.lines[0]?.billable_days).toBe(15)
+      expect(result.lines[0]?.amount).toBe(120)
+    })
+
+    it('does not double-bill a line already billed through part of the period', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            last_billed_through: '2026-04-10',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_start).toBe('2026-04-11')
+      expect(result.lines[0]?.billable_days).toBe(15)
+      expect(result.lines[0]?.amount).toBe(150)
+    })
+
+    it('clips billing at off_rent_date', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 3,
+            agreed_rate: 5,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            off_rent_date: '2026-04-05',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_end).toBe('2026-04-05')
+      expect(result.lines[0]?.billable_days).toBe(5)
+      expect(result.lines[0]?.amount).toBe(75)
+    })
+
+    it('applies a tiered rate when billable_days falls into a tier window', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10, // daily fallback
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              {
+                id: 't1',
+                job_rental_line_id: 'line-1',
+                min_days: 1,
+                max_days: 7,
+                rate: 10,
+                rate_unit: 'day',
+                sort_order: 1,
+              },
+              {
+                id: 't2',
+                job_rental_line_id: 'line-1',
+                min_days: 8,
+                max_days: 30,
+                rate: 50,
+                rate_unit: 'week',
+                sort_order: 2,
+              },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      // 25 billable days falls into the 8-30 tier, so the weekly $50 rate
+      // applies: 25 days × $50/wk × (25/7) = $178.57; the rate_unit on the
+      // result line reflects the tier override.
+      expect(result.lines[0]?.rate_unit).toBe('week')
+      expect(result.lines[0]?.agreed_rate).toBe(50)
+      expect(result.lines[0]?.amount).toBeCloseTo(178.57, 2)
+      expect(result.lines[0]?.description).toMatch(/tier 8-30/)
+    })
+
+    it('falls back to agreed_rate when no tier matches the billable_days', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              // Tier starts at day 30 — billable_days=25 doesn't qualify.
+              {
+                id: 't1',
+                job_rental_line_id: 'line-1',
+                min_days: 30,
+                max_days: null,
+                rate: 1,
+                rate_unit: 'day',
+                sort_order: 1,
+              },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.agreed_rate).toBe(10)
+      expect(result.lines[0]?.rate_unit).toBe('day')
+      expect(result.lines[0]?.amount).toBe(250)
+    })
+
+    it('picks the tier with the lowest sort_order when multiple match (overlap)', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 99,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              {
+                id: 't2',
+                job_rental_line_id: 'line-1',
+                min_days: 1,
+                max_days: 30,
+                rate: 20,
+                rate_unit: 'day',
+                sort_order: 2,
+              },
+              {
+                id: 't1',
+                job_rental_line_id: 'line-1',
+                min_days: 1,
+                max_days: 30,
+                rate: 5,
+                rate_unit: 'day',
+                sort_order: 1,
+              },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.agreed_rate).toBe(5)
+    })
+  })
+
+  describe('initialJobRentalNextBillingDate', () => {
+    it('sets the first 25-day rental billing due date after the covered period', () => {
+      expect(initialJobRentalNextBillingDate('2026-04-01', 25)).toBe('2026-04-26')
+    })
+
+    it('defaults invalid cadence to 25 days', () => {
+      expect(initialJobRentalNextBillingDate('2026-04-01', 0)).toBe('2026-04-26')
+    })
+  })
+
+  // Rental-billing workflow tests moved to @sitelayer/workflows.
+  // See packages/workflows/src/rental-billing.test.ts.
+
+  describe('geofence math', () => {
+    // Centre chosen near a Winnipeg residential lot; any city-scale
+    // lat/lng works the same because construction-site radii (100m) are
+    // well inside the regime where spherical earth is accurate to <<1m.
+    const site = { lat: 49.8951, lng: -97.1384 }
+
+    it('reports zero distance for identical points', () => {
+      expect(haversineDistanceMeters(site, site)).toBe(0)
+    })
+
+    it('approximates 1 degree of latitude at ~111 km', () => {
+      const oneDegreeNorth = { lat: site.lat + 1, lng: site.lng }
+      const distance = haversineDistanceMeters(site, oneDegreeNorth)
+      // Allow 0.5% slop for the mean-radius approximation.
+      expect(distance).toBeGreaterThan(110_000)
+      expect(distance).toBeLessThan(112_000)
+    })
+
+    it('accepts a point inside a 100m fence', () => {
+      // ~50m north of centre: 50m / 111320 m per degree ~= 0.000449°.
+      const nearby = { lat: site.lat + 0.000449, lng: site.lng }
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: nearby,
+        }),
+      ).toBe(true)
+    })
+
+    it('rejects a point outside a 100m fence', () => {
+      // ~200m north of centre.
+      const farAway = { lat: site.lat + 0.001797, lng: site.lng }
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: farAway,
+        }),
+      ).toBe(false)
+    })
+
+    it('treats the fence edge as inside (inclusive boundary)', () => {
+      // Synthesise a point exactly radius_m away using the measured distance
+      // so we do not depend on an analytical earth radius constant here.
+      const candidate = { lat: site.lat + 0.000898, lng: site.lng }
+      const distance = haversineDistanceMeters(site, candidate)
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: Math.ceil(distance),
+          point: candidate,
+        }),
+      ).toBe(true)
+    })
+
+    it('returns false when radius is zero or negative', () => {
+      expect(isInsideGeofence({ lat: site.lat, lng: site.lng, radius_m: 0, point: site })).toBe(false)
+      expect(isInsideGeofence({ lat: site.lat, lng: site.lng, radius_m: -50, point: site })).toBe(false)
+    })
+
+    it('returns false when centre coordinates are missing', () => {
+      expect(
+        isInsideGeofence({
+          lat: Number.NaN,
+          lng: Number.NaN,
+          radius_m: 100,
+          point: site,
+        }),
+      ).toBe(false)
+    })
+
+    it('handles pole-adjacent centres without NaN-poisoning the result', () => {
+      // Near the north pole, 1 degree of latitude is still ~111 km away
+      // (polar circumference is unchanged). Confirms haversine stays finite
+      // when one endpoint is within a hair of the pole.
+      const polar = { lat: 89.999, lng: 0 }
+      const polarDeg = { lat: 88.999, lng: 0 }
+      const distance = haversineDistanceMeters(polar, polarDeg)
+      expect(Number.isFinite(distance)).toBe(true)
+      expect(distance).toBeGreaterThan(110_000)
+      expect(
+        isInsideGeofence({
+          lat: polar.lat,
+          lng: polar.lng,
+          radius_m: 100,
+          point: polarDeg,
+        }),
+      ).toBe(false)
+    })
+
+    it('accepts a point exactly at the centre', () => {
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: site,
+        }),
+      ).toBe(true)
+    })
+  })
+
+  describe('labor burden', () => {
+    it('splitStraightAndOt: zero hours → zero straight + zero ot', () => {
+      expect(splitStraightAndOt(0)).toEqual({ straight_hours: 0, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: under threshold → all straight', () => {
+      expect(splitStraightAndOt(7.5)).toEqual({ straight_hours: 7.5, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: at threshold → all straight (boundary)', () => {
+      expect(splitStraightAndOt(DEFAULT_OVERTIME_HOUR_THRESHOLD)).toEqual({ straight_hours: 8, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: over threshold → straight=threshold, ot=remainder', () => {
+      expect(splitStraightAndOt(10.5)).toEqual({ straight_hours: 8, ot_hours: 2.5 })
+    })
+    it('splitStraightAndOt: custom threshold', () => {
+      expect(splitStraightAndOt(11, 9)).toEqual({ straight_hours: 9, ot_hours: 2 })
+    })
+
+    it('calculateWorkerBurden: straight only with default 28% burden', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-1',
+        straight_hours: 8,
+        ot_hours: 0,
+        base_hourly_cents: 4000, // $40/hr
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      // loaded = 4000 * 1.28 = 5120 cents/hr
+      // straight = 5120 * 8 = 40_960 cents = $409.60
+      expect(result.loaded_hourly_cents).toBe(5120)
+      expect(result.straight_cents).toBe(40960)
+      expect(result.ot_cents).toBe(0)
+      expect(result.total_cents).toBe(40960)
+    })
+
+    it('calculateWorkerBurden: OT loaded with 50% premium', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-2',
+        straight_hours: 8,
+        ot_hours: 2,
+        base_hourly_cents: 4000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      // straight = 5120 * 8 = 40_960
+      // ot loaded = 5120 * 1.5 = 7680, ot_cents = 7680 * 2 = 15_360
+      // total = 56_320
+      expect(result.straight_cents).toBe(40960)
+      expect(result.ot_cents).toBe(15360)
+      expect(result.total_cents).toBe(56320)
+      expect(result.ot_loaded_hourly_cents).toBe(7680)
+    })
+
+    it('calculateWorkerBurden: zero base rate → zero dollars', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-3',
+        straight_hours: 8,
+        ot_hours: 4,
+        base_hourly_cents: 0,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      expect(result.total_cents).toBe(0)
+    })
+
+    it('summarizeLaborBurden: blended hourly = total / total_hours', () => {
+      const r1 = calculateWorkerBurden({
+        worker_id: 'a',
+        straight_hours: 8,
+        ot_hours: 0,
+        base_hourly_cents: 4000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      const r2 = calculateWorkerBurden({
+        worker_id: 'b',
+        straight_hours: 6,
+        ot_hours: 0,
+        base_hourly_cents: 3000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      const summary = summarizeLaborBurden([r1, r2])
+      expect(summary.total_hours).toBeCloseTo(14)
+      expect(summary.total_cents).toBe(r1.total_cents + r2.total_cents)
+      expect(summary.blended_loaded_hourly_cents).toBe(Math.round(summary.total_cents / 14))
+    })
+
+    it('summarizeLaborBurden: empty list → zeros', () => {
+      const summary = summarizeLaborBurden([])
+      expect(summary).toEqual({
+        total_cents: 0,
+        total_straight_hours: 0,
+        total_ot_hours: 0,
+        total_hours: 0,
+        blended_loaded_hourly_cents: 0,
+        per_worker: [],
+      })
+    })
+  })
+})

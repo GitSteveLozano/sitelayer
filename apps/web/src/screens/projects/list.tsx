@@ -1,0 +1,314 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Card, MobileButton, Pill } from '@/components/mobile'
+import { Attribution } from '@/components/ai'
+import { EmptyState } from '@/components/shell/EmptyState'
+import { ErrorState } from '@/components/shell/ErrorState'
+import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
+import { useProjects, useSchedules, useTimeReviewRuns, type ProjectListRow, type ProjectStatus } from '@/lib/api'
+
+/**
+ * `prj-list` — Projects list with status filter chips.
+ *
+ * Filter chips mirror the design (Active / Bids / Closeout / Archive).
+ * The API's project status vocabulary ('lead', 'active', 'completed',
+ * 'archived') doesn't exactly match the chip labels — we map below.
+ *
+ * Tap a row → /projects/:id (Phase 2B detail shell).
+ */
+type FilterChip = 'active' | 'bids' | 'closeout' | 'archive'
+
+const FILTERS: ReadonlyArray<{ key: FilterChip; label: string; status: ProjectStatus | undefined }> = [
+  { key: 'active', label: 'Active', status: 'active' },
+  { key: 'bids', label: 'Bids', status: 'lead' },
+  { key: 'closeout', label: 'Closeout', status: 'completed' },
+  { key: 'archive', label: 'Archive', status: 'archived' },
+]
+
+export function ProjectsListScreen() {
+  const [chip, setChip] = useState<FilterChip>('active')
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  // Debounce the search box so we don't fire a request per keystroke.
+  // 200ms is below the 'sluggish' threshold but lets bursts of typing
+  // collapse into a single fetch.
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQ(searchInput.trim()), 200)
+    return () => window.clearTimeout(id)
+  }, [searchInput])
+  const filter = FILTERS.find((f) => f.key === chip)!
+  const params: { status?: ProjectStatus; q?: string } = {}
+  if (filter.status) params.status = filter.status
+  if (debouncedQ) params.q = debouncedQ
+  const projects = useProjects(params)
+  const rows = projects.data?.projects ?? []
+
+  // Action-row signals — pending review counts + this-week schedule
+  // counts joined per project. Only fetched on the Active chip since
+  // the action rows are scoped to in-progress projects per the design.
+  const showActionRows = chip === 'active'
+  const range = useMemo(() => {
+    const today = new Date()
+    const monday = new Date(today)
+    const dow = monday.getDay()
+    const offsetToMonday = (dow + 6) % 7
+    monday.setDate(monday.getDate() - offsetToMonday)
+    const sunday = new Date(monday)
+    sunday.setDate(sunday.getDate() + 6)
+    return {
+      from: monday.toISOString().slice(0, 10),
+      to: sunday.toISOString().slice(0, 10),
+    }
+  }, [])
+  const reviewRuns = useTimeReviewRuns(undefined, { enabled: showActionRows })
+  const schedules = useSchedules(showActionRows ? range : {}, { enabled: showActionRows })
+  const signalsByProject = useMemo(
+    () => buildProjectSignals(reviewRuns.data?.timeReviewRuns ?? [], schedules.data?.schedules ?? []),
+    [reviewRuns.data, schedules.data],
+  )
+
+  return (
+    <div className="flex flex-col">
+      <div className="px-5 pt-6 pb-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tab · Projects</div>
+        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Projects</h1>
+        <div className="text-[12px] text-ink-3 mt-1">{projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}</div>
+      </div>
+
+      <div className="px-4 pb-2">
+        <label className="relative block">
+          <span className="sr-only">Search projects</span>
+          <span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              width="16"
+              height="16"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+          </span>
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by name or customer"
+            className="w-full h-10 pl-9 pr-3 rounded-[12px] bg-card-soft border border-line text-[14px] focus:outline-none focus:border-accent"
+          />
+        </label>
+      </div>
+
+      <div className="px-4 pb-2 flex gap-1.5 overflow-x-auto scrollbar-hide">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            onClick={() => setChip(f.key)}
+            className={`shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium border transition-colors ${
+              chip === f.key ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-4 pt-2 pb-8">
+        {projects.isPending ? (
+          <SkeletonRows count={4} className="px-0" />
+        ) : projects.isError ? (
+          <ErrorState
+            title={`Couldn't load ${chip} projects`}
+            body="Something on our side hiccuped. Try again or come back in a minute."
+            retry={
+              <MobileButton variant="primary" onClick={() => void projects.refetch()}>
+                Try again
+              </MobileButton>
+            }
+            tertiary={
+              <Link to="/more" className="text-[12px] text-ink-3 underline-offset-2 hover:underline">
+                Get help
+              </Link>
+            }
+          />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title={`No ${chip} projects yet`}
+            body={
+              chip === 'bids'
+                ? 'Bids land here when a project is created with status=lead.'
+                : chip === 'closeout'
+                  ? 'Projects move here once you close them out.'
+                  : 'Add your first project to start estimating, scheduling, and billing.'
+            }
+            primaryAction={
+              chip === 'active' ? (
+                <Link
+                  to="/onboarding"
+                  className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
+                >
+                  + New project
+                </Link>
+              ) : null
+            }
+            secondaryAction={
+              chip === 'active' ? (
+                <Link
+                  to="/more/integrations/qbo"
+                  className="w-full h-9 rounded-[10px] bg-card-soft text-ink text-[14px] font-medium inline-flex items-center justify-center"
+                >
+                  Import from QuickBooks
+                </Link>
+              ) : null
+            }
+          />
+        ) : (
+          <div className="space-y-2">
+            <Attribution source={`Live from /api/projects?status=${filter.status ?? 'any'}`} />
+            {rows.map((p) => (
+              <ProjectRow
+                key={p.id}
+                project={p}
+                signals={showActionRows ? (signalsByProject.get(p.id) ?? null) : null}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ProjectRow({ project, signals }: { project: ProjectListRow; signals: ProjectSignals | null }) {
+  const updated = formatRelative(project.updated_at)
+  const tone = project.status === 'active' ? 'good' : project.status === 'completed' ? 'default' : 'warn'
+  const bid = Number(project.bid_total)
+  return (
+    <Link to={`/projects/${project.id}`} className="block">
+      <Card>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-[14px] font-semibold truncate">{project.name}</div>
+            <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+              {project.customer_name ?? 'No customer'}
+              {project.division_code ? ` · ${project.division_code}` : ''}
+            </div>
+          </div>
+          <Pill tone={tone}>{project.status}</Pill>
+        </div>
+        <div className="flex items-center justify-between mt-2 text-[11px] text-ink-3">
+          <span className="num">{bid > 0 ? `$${bid.toLocaleString()}` : 'No bid set'}</span>
+          <span>updated {updated}</span>
+        </div>
+        {signals?.pendingApprovals || signals?.scheduleSummary ? (
+          <div className="mt-2 pt-2 border-t border-line space-y-1">
+            {signals.pendingApprovals ? (
+              <ActionRow
+                label="Crew & hours"
+                detail={signals.pendingApprovals}
+                tone={signals.pendingHasAnomaly ? 'warn' : 'accent'}
+              />
+            ) : null}
+            {signals.scheduleSummary ? (
+              <ActionRow label="Schedule" detail={signals.scheduleSummary} tone="default" />
+            ) : null}
+          </div>
+        ) : null}
+      </Card>
+    </Link>
+  )
+}
+
+function ActionRow({ label, detail, tone }: { label: string; detail: string; tone: 'accent' | 'warn' | 'default' }) {
+  const detailClass =
+    tone === 'warn' ? 'text-warn font-medium' : tone === 'accent' ? 'text-accent font-medium' : 'text-ink-2'
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-[12px]">
+      <span className="text-ink-3">{label}</span>
+      <span className={`truncate ${detailClass}`}>{detail}</span>
+    </div>
+  )
+}
+
+interface ProjectSignals {
+  pendingApprovals: string | null
+  pendingHasAnomaly: boolean
+  scheduleSummary: string | null
+}
+
+/**
+ * Roll cross-project review-runs + this-week schedules into per-project
+ * action-row signals. Only emits a string when there's something to
+ * say — calm-by-default — so a project with nothing pending and
+ * nothing scheduled this week shows no extra rows.
+ *
+ * Schedule day-range is derived from the min/max scheduled_for for
+ * each project this week (e.g. "Mon–Fri") plus the unique crew count.
+ */
+function buildProjectSignals(
+  runs: Array<{ project_id: string | null; state: string; anomaly_count: number }>,
+  schedules: Array<{ project_id: string; scheduled_for: string; crew: unknown }>,
+): Map<string, ProjectSignals> {
+  const reviewByProject = new Map<string, { pending: number; anomaly: number }>()
+  for (const r of runs) {
+    if (!r.project_id || r.state !== 'pending') continue
+    const cur = reviewByProject.get(r.project_id) ?? { pending: 0, anomaly: 0 }
+    cur.pending += 1
+    cur.anomaly += r.anomaly_count
+    reviewByProject.set(r.project_id, cur)
+  }
+
+  type ScheduleAgg = { dows: Set<number>; crew: Set<string> }
+  const schedByProject = new Map<string, ScheduleAgg>()
+  for (const s of schedules) {
+    const cur = schedByProject.get(s.project_id) ?? { dows: new Set(), crew: new Set() }
+    const dow = new Date(`${s.scheduled_for}T00:00:00`).getDay()
+    cur.dows.add(dow)
+    if (Array.isArray(s.crew)) {
+      for (const id of s.crew as unknown[]) {
+        if (typeof id === 'string') cur.crew.add(id)
+      }
+    }
+    schedByProject.set(s.project_id, cur)
+  }
+
+  const out = new Map<string, ProjectSignals>()
+  const allKeys = new Set([...reviewByProject.keys(), ...schedByProject.keys()])
+  for (const projectId of allKeys) {
+    const r = reviewByProject.get(projectId)
+    const s = schedByProject.get(projectId)
+    out.set(projectId, {
+      pendingApprovals: r ? `${r.pending} entr${r.pending === 1 ? 'y' : 'ies'} to approve` : null,
+      pendingHasAnomaly: !!r && r.anomaly > 0,
+      scheduleSummary: s ? formatScheduleSummary(s.dows, s.crew.size) : null,
+    })
+  }
+  return out
+}
+
+const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+function formatScheduleSummary(dows: Set<number>, crewCount: number): string {
+  const sorted = [...dows].sort((a, b) => a - b)
+  if (sorted.length === 0) return ''
+  const range =
+    sorted.length === 1 ? DOW_NAMES[sorted[0]!] : `${DOW_NAMES[sorted[0]!]}–${DOW_NAMES[sorted[sorted.length - 1]!]}`
+  return crewCount > 0 ? `${range} · ${crewCount} crew` : `${range}`
+}
+
+function formatRelative(iso: string): string {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return iso
+  const delta = Date.now() - ms
+  const minutes = Math.floor(delta / 60_000)
+  if (minutes < 60) return `${Math.max(1, minutes)}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days}d ago`
+  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}

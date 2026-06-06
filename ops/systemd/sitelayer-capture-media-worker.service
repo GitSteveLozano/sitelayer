@@ -1,0 +1,30 @@
+[Unit]
+Description=Sitelayer local GPU capture media worker
+Documentation=file:%h/projects/sitelayer-worktrees/dev-land/docs/CAPTURE_LOCAL_GPU_MEDIA_WORKER_DECISION_2026-06-04.md
+After=network-online.target voice-tools-whisper.service llama-swap.service
+Wants=network-online.target voice-tools-whisper.service llama-swap.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/sitelayer-worktrees/dev-land
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CAPTURE_MEDIA_WORKER_INTERVAL_MS=30000
+Environment=CAPTURE_MEDIA_WORKER_GPU_YIELD=1
+Environment=CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE=local-whisper
+Environment=CAPTURE_ARTIFACT_WHISPER_URL=http://127.0.0.1:5678
+Environment=CAPTURE_ARTIFACT_WHISPER_PAYLOAD_MODE=base64
+Environment=CAPTURE_ARTIFACT_WHISPER_TIMEOUT_MS=120000
+Environment=CAPTURE_ARTIFACT_WHISPER_UNAVAILABLE_POLICY=retry
+Environment=CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE=frames-only
+Environment=MEDIA_UNDERSTANDING_ENGINE=llama-swap
+Environment=MEDIA_UNDERSTANDING_LLAMASWAP_URL=http://127.0.0.1:8081/v1
+Environment=MEDIA_UNDERSTANDING_LLAMASWAP_MODEL=gemma4-12b-vision
+EnvironmentFile=-%h/.config/sitelayer/capture-media-worker.env
+ExecStart=/usr/bin/env bash -lc 'exec npm run capture:media-worker'
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=2min
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

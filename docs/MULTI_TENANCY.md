@@ -1,0 +1,278 @@
+# Multi-Tenancy: Invariants + Audit
+
+Sitelayer is a **multi-tenant** platform: one deployment serves many construction
+companies. The operator is onboarding multiple companies, so every code path must
+treat a 2nd/Nth company as first-class. This doc states the RULES future code must
+follow and records the audit (`feat/tenant-hazard-sweep`) that swept the codebase
+for remaining single-tenant assumptions after the worker went multi-company
+(`d3d870e1`).
+
+## Tenancy model (verified)
+
+- `companies` + `company_memberships` (Clerk user → role) define tenants and access.
+- **RLS** isolates child rows: the `app.company_id` GUC (`app_current_company_id()`)
+  is set via `SET LOCAL` inside `withMutationTx` / `withCompanyClient`
+  (`apps/api/src/mutation-tx.ts`). Prod connects as a **non-owner `NOBYPASSRLS`**
+  role so `FORCE ROW LEVEL SECURITY` applies. The RLS FORCE audit
+  (`apps/api/src/routes/rls-force-audit.ts`) is a **blocking gate** with an
+  allowlist ratchet over every table that has a `company_id` column.
+- `companies` is the tenant **registry** (its `id` IS the `company_id`); it has no
+  `company_id` column, is not in the RLS-FORCE set, and access to a company row is
+  gated in the app layer by a `company_memberships` lookup (`getCompany()`).
+  Per-company config columns therefore live on `companies` without a new RLS policy.
+- Per-tenant integration config lives on the per-company row, NOT in process env:
+  `integration_connections` (per `company_id` + `provider`) carries QBO/CompanyCam
+  tokens + flags; `companies` carries profile/feature columns (`modules`,
+  `portal_settings`, `labor_payroll_auto_post_*`, and — new in migration 150 —
+  `notification_from_*`).
+
+---
+
+## RULES (the invariants future code MUST follow)
+
+1. **Always scope DB access via the company seam.** Multi-statement reads go
+   through `withCompanyClient(companyId, …)`; writes go through
+   `withMutationTx(companyId, …)`. Both `SET LOCAL app.company_id` so RLS does the
+   isolation. A single `pool.query` is only acceptable when it ALSO carries an
+   explicit `where company_id = $1` (app-layer scoping), and even then RLS-FORCE
+   is the backstop. Never run a bare `pool.query` against a `company_id` table
+   without one of: (a) the GUC bound, or (b) an explicit `company_id =` predicate.
+
+   **Why this is the REAL control (and FORCE RLS alone is not):** the
+   `company_isolation` policy is permissive —
+   `app_current_company_id() IS NULL OR company_id = app_current_company_id()`.
+   When the GUC is unbound that **IS-NULL escape** makes the policy `TRUE` for
+   every row, so a bare query **sees ALL tenants even with RLS ENABLED + FORCED.**
+   FORCE only stops the table owner from bypassing RLS; it does not make an
+   unbound query safe. Route-level GUC binding (or the explicit `company_id`
+   predicate) is what actually isolates tenants. See `docs/SECURITY_RLS.md`.
+
+   **Enforced statically across the WHOLE route directory** by
+   `apps/api/src/routes/rls-route-lint.test.ts` (unit stage, no DB): it scans
+   every `apps/api/src/routes/*.ts`, fails on any raw `pool.query` that binds
+   neither the GUC nor a `company_id` predicate, and ratchets new files (a
+   brand-new handler with a raw, unscoped query fails) so cross-tenant exposure
+   cannot grow silently as the route count climbs. The narrower 20-route
+   `rls-phase3-audit.test.ts` only inspects hand-picked high-impact routes; the
+   lint covers the long tail. The only exempt files are on the lint's documented
+   `RAW_QUERY_REVIEWED` allowlist: the tenant-registry surface (companies has no
+   `company_id`), the platform-admin cross-tenant surface, documented
+   append-only/debug reads, and global non-company tables (e.g. `clerk_users`,
+   `dispatch_lanes`).
+
+2. **Never hardcode a company.** No `'la-operations'`, no default-company UUID, no
+   `ACTIVE_COMPANY_SLUG`/`ACTIVE_USER_ID` constant in a runtime decision. Resolve
+   the company from the request (`x-sitelayer-company-id` / `x-sitelayer-company-slug`
+   → membership) or, in the worker, from `listActiveCompanies()`. The env defaults
+   exist ONLY as a dev/auth-bypass fallback for a single-tenant local stack and
+   must never reach a real multi-tenant decision (see Finding 1).
+
+3. **Per-tenant config goes in the DB, not env.** If a setting can differ between
+   two companies (feature flag, integration toggle, live/dry-run, sender identity,
+   rate cap, model key, bucket prefix), it belongs on a per-company row, NOT a
+   global `process.env`. The ONLY legitimate env role for such a setting is a
+   **cluster-wide kill switch** that can force ALL companies off (the
+   `QBO_LIVE_* = '1'` pattern): `effective = clusterKillSwitchOn AND perCompanyFlag`.
+
+   **A NEW per-company setting is a CODE change, not a migration — RULE 9.** Use
+   the `company_settings` key→jsonb store via `getCompanySetting` /
+   `setCompanySetting` (`@sitelayer/domain`). Do NOT add a new column +
+   migration for the 20th flag the way migrations 144 / 150 did for the first two.
+
+4. **The worker drains EVERY company.** New per-company runners take a `companyId`
+   and are called from the per-company loop in `apps/worker/src/worker.ts`
+   (`for (const company of companies)`). Company-agnostic maintenance (global
+   tables, cross-tenant notification drain) runs ONCE per heartbeat — never assume
+   "the one company."
+
+5. **In-memory caches/singletons must be keyed by `company_id`** when they hold
+   per-tenant data. A module-level `Map`/`Set` that memoizes tenant rows without a
+   `company_id` in the key is a cross-tenant leak. (Global-by-design caches — e.g.
+   the `dispatch_lanes` kill-switch cache keyed by lane name, the Clerk-user-email
+   cache keyed by the globally-unique Clerk id — are fine; document WHY.)
+
+6. **External resources are per-company.** Blueprint/photo storage keys are
+   `companyId`-prefixed and validated by `assertKeyInCompany`. Each company OAuths
+   its OWN QBO/CompanyCam (`integration_connections` per `company_id`; the OAuth
+   state token carries `companyId`). Email senders resolve per company with an env
+   fallback (migration 150 + `resolveCompanyNotificationSender`).
+
+7. **Cross-company endpoints are platform-admin gated.** Any route that
+   intentionally reads across tenants (`/api/admin/*`) MUST go through
+   `authorizePlatformAdmin` first. Regular entity routes resolve exactly one
+   company and never widen.
+
+   **The per-tenant data export is the inverse — strictly single-company.**
+   `GET /api/company/export` (`apps/api/src/routes/company-export.ts`,
+   admin-only) is portability/offboarding table-stakes for a paying pilot and a
+   precursor to per-tenant restore: it bundles the **requesting** company's rows
+   as JSON (default) or CSV (`?format=csv`). It is belt-and-suspenders scoped —
+   the whole read runs inside `withCompanyClient(companyId, …)` (GUC bound) AND
+   every per-table `select` carries an explicit `where company_id = $1`. The
+   exported table set is discovered from the live catalog (every `public` table
+   with a `company_id` column) MINUS `EXPORT_TABLE_DENYLIST` (append-only audit/
+   queue ledgers, integration secrets, bootstrap/provisioning internals), so the
+   export tracks schema growth without ever shipping operational/secret rows.
+   This is NOT a cross-tenant route and does NOT use `authorizePlatformAdmin` —
+   it never widens past the caller's own company.
+
+8. **Schema changes are expand → backfill → contract** and forward-only. Add a new
+   numbered migration in `docker/postgres/init/` (never edit an applied one — the
+   `schema_migrations` sha256 ledger rejects a checksum change). New code tolerates
+   the old schema during rollout (catch `42703` undefined_column → safe default).
+
+9. **A new per-company setting is a CODE change, not a migration.** Per-company
+   config kept accreting as new COLUMNS — one migration per setting
+   (`integration_connections.qbo_live_enabled` mig 144,
+   `companies.notification_from_*` mig 150). On the only durable tier (DO Managed
+   Postgres) every migration is forward-only + immutable + checksum-ledgered, so
+   "add the 20th per-company flag" is a real DB change through the deploy gate.
+   The generic `company_settings` store (migration 152) ends that churn: a
+   `(company_id, key) → jsonb value` table read/written through the typed helper
+   in `@sitelayer/domain`. **THE convention for the next 20 settings:**
+
+   ```ts
+   import { getCompanySetting, setCompanySetting } from '@sitelayer/domain'
+
+   // READ (call-site default = the key's type + fallback; no migration):
+   const digestOn = await getCompanySetting(client, companyId, 'notifications.digest_enabled', false)
+   const invoiceCap = await getCompanySetting(client, companyId, 'billing.auto_invoice_cap', 0)
+
+   // WRITE (admin route / worker):
+   await setCompanySetting(client, companyId, 'notifications.digest_enabled', true)
+   ```
+
+   - `client` is any `{ query }` — a `Pool`, a `PoolClient`, or a
+     `withCompanyClient`-scoped client. The helper lives in `@sitelayer/domain`
+     (no `pg` dep — structural `SettingsExecutor`) so api AND worker share it.
+   - Every helper statement carries an explicit `where company_id = $1`, so
+     isolation holds even under the CI/dev `sitelayer` role that BYPASSes RLS. In
+     prod `company_settings` is RLS **ENABLE + FORCE**'d (migration 152) — the
+     same `app.company_id` policy every tenant child table has, and the
+     **forced-coverage audit** (`rls-force-audit.ts`) blocks the deploy gate if it
+     ever regresses (`company_settings` is deliberately NOT on the allowlist).
+   - A missing row → the call-site default. A stored value whose JSON type does
+     not match the default → the default (a corrupt/legacy value can't crash a
+     reader). A table that predates migration 152 (`42P01`) → the default on read.
+   - **Do NOT** widen the typed `companies.modules` feature-pack (migration 062)
+     for a new arbitrary setting, and do NOT add a new per-company column. `modules`
+     stays the typed boolean feature-pack it is; `company_settings` is everything
+     else.
+   - **Read-through for the two pre-existing columns.** `qbo_live_enabled` (144)
+     and `notification_from_*` (150) WORK and are tested — they are NOT ripped out.
+     The helper exposes `getQboLiveEnabled()` / `getNotificationFrom()` +
+     `LEGACY_COLUMN_SETTING_KEYS` so future code can read them through the same
+     vocabulary; those readers hit the real columns (no dual-write, no drift — the
+     column stays the source of truth). New settings must NOT add a reader here.
+
+---
+
+## AUDIT FINDINGS (this slice)
+
+Each runtime hazard was classified **REAL** (a multi-tenant bug, fixed here) or
+**BENIGN** (a legit dev/test default or a correctly global concern).
+
+### Finding 1 — auto-onboard inserted into the WRONG tenant — **REAL (fixed)**
+
+`apps/api/src/server.ts` first-user self-onboard used the process-wide
+`activeCompanySlug` (`ACTIVE_COMPANY_SLUG ?? 'la-operations'`) for the
+`company_memberships` insert and for the 404 message, instead of the slug the
+REQUEST resolved to. With multiple companies, a request for company B that hadn't
+onboarded would (a) grant the user `admin` on **la-operations** (the wrong tenant)
+and (b) still 404 on company B with a misleading "company slug la-operations not
+found". Fixed: the onboard now uses `getCurrentCompanySlug(req)` (the same resolver
+`getCompany()` uses), extracted into the pure, tested `autoOnboardFirstAdmin`
+(`apps/api/src/auto-onboard.ts`). Single-tenant dev behavior is unchanged (the
+resolver still falls back to the env default when no header is present).
+Tests: `apps/api/src/auto-onboard.test.ts`.
+
+### Finding 2 — email `from` lives in a global env — **REAL (expand shipped + flagged)**
+
+Every outbound email (invites, estimate shares, sync-failure alerts, welcome
+emails) is sent from a single `EMAIL_FROM` env
+(`apps/{api,worker}/src/email.ts:loadEmailConfig`). That is the SAME
+config-in-global-env class migration 144 moved for QBO-live: a setting that
+legitimately differs per company. **Expand step shipped:** migration 150 adds
+`companies.notification_from_email` / `notification_from_name` (nullable, default
+NULL → env fallback), and `resolveCompanyNotificationSender`
+(`apps/worker/src/company-notification-sender.ts`) reads them with the env as the
+fallback, so behavior is byte-for-byte unchanged for every existing company.
+Tests: `apps/worker/src/company-notification-sender.test.ts`. **Flagged** — see
+"Flagged follow-ups" below for the verification/send-path/contract work that is
+larger than this slice.
+
+### BENIGN (verified correct, no change)
+
+- **`server.ts` `activeCompanySlug` / `activeUserId` env defaults** — dev/auth-bypass
+  fallbacks only. The web client always sends `x-sitelayer-company-slug`; the
+  defaults never reach a multi-tenant decision once the header is present. After
+  Finding 1, the remaining use is purely the no-header local-dev fallback.
+- **Worker multi-tenant drain** (`worker.ts`, `companies.ts`) — `listActiveCompanies`
+  iterates ALL companies; `ACTIVE_COMPANY_SLUG` is an OPTIONAL single-company
+  override. Per-company runners are all `companyId`-scoped. Correct.
+- **QBO live gating** (`qbo-live.ts` + runners) — per-company flag
+  (`integration_connections.qbo_live_enabled`) AND the env kill switch. The
+  legacy `selectLaborPayrollPush` helper has zero callers (dead). Correct.
+- **CompanyCam poll** (`companycam-poll.ts`) — API key read from
+  `integration_connections.access_token` per `company_id`; `LIVE_COMPANYCAM` is the
+  cluster kill switch. Every query company-scoped. Gold-standard pattern.
+- **Rate limiter** (`rate-limit.ts`) — composite `scope:key` buckets, with a
+  dedicated per-COMPANY bucket; user key is the globally-unique Clerk id. Already
+  multi-tenant-aware.
+- **`dispatch_lanes` cache** (`dispatch-lanes.ts`) — keyed by lane name; the table
+  is intentionally global (fleet-wide kill switch, no `company_id` — migration 094).
+  Benign.
+- **Clerk-hydrate / clerk-email caches** — keyed by the globally-unique Clerk user
+  id, not per tenant. Benign.
+- **`company_bootstrap_state`** read — `where company_id = $1`. Scoped.
+- **Storage keys** (`storage.ts`) — `companyId`-prefixed + `assertKeyInCompany`
+  blocks path-traversal cross-tenant access. Correct.
+- **`takeoff_drafts`, `rental_rate_tiers`, pricing-overrides** (RLS allowlisted
+  "known gaps", not yet FORCE'd) — every app-layer query carries an explicit
+  `where company_id = $1`, so app-layer scoping is correct today; the sibling RLS
+  slice forces them at the DB layer as the backstop.
+- **`/api/admin/*`** — `authorizePlatformAdmin` gate runs before any cross-company
+  query; intentionally cross-tenant by design.
+
+---
+
+## Flagged follow-ups (larger than this slice)
+
+- **Per-company email send-path (Finding 2 contract step).** Before the worker may
+  actually send FROM a per-company address, each company needs domain/sender
+  **verification** (SPF/DKIM/DMARC via SES/Resend), an operator UI to set + verify
+  it, and a `notification_from_verified` state column gating use. Only after a
+  company is verified should `resolveCompanyNotificationSender` feed the send path;
+  then the env `EMAIL_FROM` becomes the unverified-fallback. Until then the resolver
+  is read-only/fallback-safe and not wired into `sendEmail`.
+- **RLS FORCE the remaining allowlisted `company_id` tables** (pricing overrides,
+  `rental_rate_tiers`, `takeoff_drafts`, `takeoff_capture_artifacts`,
+  `qbo_sync_runs`) — owned by the sibling RLS slice; app-layer scoping is correct in
+  the meantime.
+- **`dispatch_lanes` per-company kill switches** — global today (acceptable for the
+  current cohort, documented in migration 094). Revisit if a tenant needs an
+  isolated lane pause.
+- **In-memory rate-limit + idempotency caches are per-replica.** Single API replica
+  today; moving to N replicas needs a shared store (the composite keys are already
+  tenant-correct, so it is a storage swap, not a keying change).
+
+## Migrations introduced by this slice
+
+- `docker/postgres/init/150_company_notification_sender.sql` — adds
+  `companies.notification_from_email` + `notification_from_name` (additive,
+  nullable, env-fallback; no backfill, no new RLS policy — `companies` is the
+  membership-gated registry, not an RLS-FORCE'd child table). **RENUMBER FLAG:**
+  numbered 150 to leave 146–149 for the sibling RLS
+  slice; if both land, renumber whichever lands second (pure rename — additive
+  content).
+- `docker/postgres/init/152_company_settings.sql` — adds the generic
+  `company_settings` `(company_id, key) → jsonb value` store (RULE 9), the
+  migration-free convention for the NEXT per-company settings. Company-scoped with
+  the standard `company_isolation` RLS **ENABLE + FORCE** (so the forced-coverage
+  audit protects it — `company_settings` is deliberately off
+  `RLS_FORCE_AUDIT_ALLOWLIST`). Additive / idempotent; no backfill — the existing
+  `qbo_live_enabled` (144) / `notification_from_*` (150) columns are untouched and
+  remain the source of truth (the helper offers a read-through, not a migration of
+  the data). **RENUMBER FLAG:** numbered 152 to clear the unused 151 gap and sit
+  above 150; renumber on collision (pure rename — additive content). Helper:
+  `packages/domain/src/company-settings.ts`.

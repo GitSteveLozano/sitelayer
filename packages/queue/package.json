@@ -1,0 +1,25 @@
+{
+  "name": "@sitelayer/queue",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run typecheck",
+    "format": "npm run typecheck",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sitelayer/domain": "file:../domain",
+    "@sitelayer/workflows": "file:../workflows",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11",
+    "@vitest/coverage-v8": "^4.1.5",
+    "vitest": "^4.1.5"
+  }
+}

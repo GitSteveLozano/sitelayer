@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars (gitignored) OR export as TF_VAR_* env vars.
+# NEVER commit terraform.tfvars — it holds secrets. The non-secret values below
+# already default to the live footprint in variables.tf, so a minimal tfvars
+# only needs the credentials.
+#
+# Prefer environment variables for the secrets so they never touch disk:
+#   export TF_VAR_do_token="dop_v1_..."
+#   export TF_VAR_cloudflare_api_token="..."
+#   export TF_VAR_spaces_access_id="..."
+#   export TF_VAR_spaces_secret_key="..."
+
+# ---- Credentials (REQUIRED; do not commit real values) --------------------
+do_token             = "REPLACE_WITH_DO_API_TOKEN"
+cloudflare_api_token = "REPLACE_WITH_CLOUDFLARE_DNS_TOKEN"
+
+# Spaces (S3) keys — only needed when managing the spaces_bucket resources.
+spaces_access_id  = "REPLACE_WITH_SPACES_ACCESS_ID"
+spaces_secret_key = "REPLACE_WITH_SPACES_SECRET_KEY"
+
+# Per-tier app-role passwords. Leave blank on first import (passwords stay
+# DO-managed); set + apply only when you deliberately rotate.
+# db_password_prod    = ""
+# db_password_dev     = ""
+# db_password_preview = ""
+# db_password_demo    = ""
+
+# ---- Non-secret overrides (defaults match the live footprint) -------------
+# region              = "tor1"
+# cloudflare_zone     = "sandolab.xyz"
+# ssh_allow_cidrs     = ["50.71.113.46/32"]
+# reserved_ip_prod    = "159.203.51.158"
+# reserved_ip_preview = "159.203.53.218"

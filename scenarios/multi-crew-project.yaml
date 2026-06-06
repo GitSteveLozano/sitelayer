@@ -1,0 +1,87 @@
+# Multi-crew project — 2 foremen + 1 worker tied to one project, plus a
+# `worker_issue` open with severity=stopped backdated 20 minutes so the
+# auto-escalation path (field-event reducer + scheduled escalation check)
+# has something to grab.
+#
+# What this exercises:
+#   - company_memberships: two foreman ids + one member id, all attached
+#     to the same project via clock_events later if a test wants.
+#   - field_event auto-escalation: `severity='stopped'` and
+#     `created_at < now() - 15 min` is the predicate the periodic task
+#     uses to fire ESCALATE. With no `issue_event_log` specified, the
+#     row stays in state=open so the periodic check is the one that
+#     transitions it.
+#   - clock_events: each crew member has an `in` event so dashboards
+#     showing "who's on this job" populate.
+#
+# How to use:
+#   npx tsx scripts/seed-scenario.ts scenarios/multi-crew-project.yaml
+#   # Then either run the field-event escalation periodic task, or hit
+#   # PATCH /api/worker-issues/<id> with an ESCALATE event payload.
+
+company:
+  slug: acme-multicrew
+  name: Acme Multi-Crew
+
+members:
+  - clerk_user_id: e2e-admin
+    role: admin
+  - clerk_user_id: e2e-foreman-a
+    role: foreman
+  - clerk_user_id: e2e-foreman-b
+    role: foreman
+  - clerk_user_id: e2e-member-1
+    role: member
+
+customers:
+  - ref: customer-bigco
+    name: Big Customer Co.
+
+workers:
+  - ref: foreman-a
+    name: Foreman A
+    role: foreman
+  - ref: foreman-b
+    name: Foreman B
+    role: foreman
+  - ref: member-1
+    name: Crew Member One
+    role: crew
+
+projects:
+  - ref: project-multi
+    name: Multi-Crew Office Fitout
+    customer_ref: customer-bigco
+    division_code: D4
+    status: active
+    bid_total: 120000.00
+    lifecycle_state: in_progress
+    lifecycle_state_version: 4
+
+worker_issues:
+  - ref: stopped-issue
+    project_ref: project-multi
+    worker_ref: member-1
+    reporter_clerk_user_id: e2e-member-1
+    kind: materials_out
+    severity: stopped
+    message: 'Crew stopped — materials short on north elevation'
+    # 20 minutes in the past — past the 15-min auto-escalation threshold.
+    created_offset_minutes: -20
+
+clock_events:
+  - worker_ref: foreman-a
+    project_ref: project-multi
+    clerk_user_id: e2e-foreman-a
+    event_type: 'in'
+    occurred_at: '2026-01-15T08:00:00.000Z'
+  - worker_ref: foreman-b
+    project_ref: project-multi
+    clerk_user_id: e2e-foreman-b
+    event_type: 'in'
+    occurred_at: '2026-01-15T08:05:00.000Z'
+  - worker_ref: member-1
+    project_ref: project-multi
+    clerk_user_id: e2e-member-1
+    event_type: 'in'
+    occurred_at: '2026-01-15T08:10:00.000Z'

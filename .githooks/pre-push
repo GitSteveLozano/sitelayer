@@ -1,4 +1,91 @@
 #!/usr/bin/env bash
+#
+# Sitelayer pre-push gate hook (versioned, installed via core.hooksPath).
+#
+# Makes land-time gating REAL: when you push to the `dev` or `main` branch,
+# this runs the STANDARD local verification gate (`npm run verify` =
+# scripts/verify-local.sh: static + build + unit + docker-postgres integration)
+# and BLOCKS the push on failure. This is the enforcement the dev/demo
+# auto-deploy watcher (scripts/fleet-auto-deploy.sh) ASSUMES happened — that
+# watcher ships SKIP_VERIFY=1 on the premise that the SHA was gated at land
+# time. Before this hook, nothing enforced that premise.
+#
+# Scope:
+#   - Only pushes whose REMOTE ref is refs/heads/dev or refs/heads/main are
+#     gated. Pushing any other branch (feature branches, tags) is NOT gated —
+#     the gate runs at the integration point, not on every WIP push.
+#   - e2e is deliberately OUT of this hook (the standard level excludes it).
+#     The Playwright e2e suite belongs on the async runner / `npm run verify:full`
+#     on a quiet box; blocking an interactive push on it would be slow + flaky.
+#
+# Bypass: the standard `git push --no-verify` (skips ALL pre-push hooks). Use it
+# only for an emergency / when you have already run the gate out of band.
+#
+# Install: scripts/install-git-hooks.sh (sets git config core.hooksPath .githooks).
+#
+# Hook contract: git feeds "<local ref> <local sha> <remote ref> <remote sha>"
+# lines on STDIN, one per ref being pushed. We gate if ANY pushed remote ref is
+# dev or main.
+#
 set -euo pipefail
-echo "STUB_VERSIONED_HOOK_RAN target=${PREPUSH_GATED_BRANCHES:-dev main}"
-exit "${STUB_EXIT:-0}"
+
+# Branches whose push triggers the gate (space-separated; override for testing).
+GATED_BRANCHES="${PREPUSH_GATED_BRANCHES:-dev main}"
+# The verify level the hook enforces. STANDARD = static+build+unit+integration.
+VERIFY_LEVEL="${PREPUSH_VERIFY_LEVEL:-standard}"
+# Escape hatch for the rare case `npm` is genuinely unavailable in the shell
+# that invoked git (e.g. a constrained CI bot that already gated out of band).
+# Loud, and distinct from --no-verify so it shows up in logs.
+PREPUSH_SKIP="${PREPUSH_SKIP:-0}"
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Read the ref lines git passes on stdin and decide whether to gate.
+should_gate=0
+gated_ref=""
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  # Deleting a remote ref pushes an all-zero local sha — never gate a delete.
+  case "$_local_sha" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+  for branch in $GATED_BRANCHES; do
+    if [ "$remote_ref" = "refs/heads/$branch" ]; then
+      should_gate=1
+      gated_ref="$branch"
+      break
+    fi
+  done
+  [ "$should_gate" = "1" ] && break
+done
+
+if [ "$should_gate" != "1" ]; then
+  # Not a push to a gated branch — let it through untouched.
+  exit 0
+fi
+
+echo "==> pre-push: push targets '$gated_ref' — running the $VERIFY_LEVEL verification gate (npm run verify)."
+echo "    Bypass (emergency only): git push --no-verify"
+
+if [ "$PREPUSH_SKIP" = "1" ]; then
+  echo "############################################################" >&2
+  echo "## WARNING: PREPUSH_SKIP=1 — pre-push verification gate SKIPPED." >&2
+  echo "## Pushing to '$gated_ref' WITHOUT running npm run verify." >&2
+  echo "############################################################" >&2
+  exit 0
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: pre-push gate needs 'npm' on PATH but it was not found." >&2
+  echo "       Run the gate manually (npm run verify) and push with --no-verify," >&2
+  echo "       or fix your PATH. Refusing to push an ungated SHA to '$gated_ref'." >&2
+  exit 1
+fi
+
+if ! ( cd "$REPO_ROOT" && VERIFY_LEVEL="$VERIFY_LEVEL" npm run verify ); then
+  echo "ERROR: verification gate FAILED — refusing to push to '$gated_ref'." >&2
+  echo "       Fix the failures and re-push, or 'git push --no-verify' to override." >&2
+  exit 1
+fi
+
+echo "==> pre-push: verification gate passed — allowing push to '$gated_ref'."
+exit 0

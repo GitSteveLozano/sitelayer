@@ -1,0 +1,794 @@
+import type http from 'node:http'
+import type { PoolClient } from 'pg'
+import { z } from 'zod'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import { assertKeyInCompany } from '../storage.js'
+import {
+  parseInventoryMovementPhotoMultipart,
+  InventoryMovementPhotoUploadError,
+} from '../inventory-movement-photo-upload.js'
+import {
+  INVENTORY_ITEM_COLUMNS,
+  INVENTORY_LOCATION_COLUMNS,
+  INVENTORY_MOVEMENT_COLUMNS,
+  LOCATION_TYPES,
+  MOVEMENT_TYPES,
+  TRACKING_MODES,
+  existsInCompany,
+  normalizeEnum,
+  optionalString,
+  parseNonNegativeNumber,
+  parsePositiveNumber,
+  todayISO,
+  type InventoryItemRow,
+  type InventoryLocationRow,
+  type InventoryMovementRow,
+  type RentalInventoryRouteCtx,
+} from './rental-inventory.types.js'
+
+/**
+ * Handle the inventory catalog CRUD surface — items, locations, and the
+ * movement ledger. These are the read/write paths that maintain the
+ * "what stock do we own and where is it" picture; the contract/billing
+ * surfaces live in `rental-contracts.ts`, `rental-contract-lines.ts`, and
+ * `rental-billing-state.ts`.
+ *
+ * Routes:
+ * - GET    /api/inventory/items                — list non-deleted items
+ * - POST   /api/inventory/items                — create item (admin/office)
+ * - PATCH  /api/inventory/items/:id            — versioned update
+ * - DELETE /api/inventory/items/:id            — versioned soft-delete
+ * - GET    /api/inventory/locations            — list non-deleted locations
+ * - POST   /api/inventory/locations            — create location (admin/office)
+ * - GET    /api/inventory/movements            — recent movements (filterable)
+ * - POST   /api/inventory/movements            — append movement
+ *
+ * The CSV bulk-upsert endpoint (`/api/inventory/items/import`) lives in
+ * `rental-inventory-csv.ts`, and the materialized availability view lives in
+ * `inventory-availability.ts`.
+ *
+ * Condition-photo routes for the dispatch/return flows also live here:
+ * - POST /api/inventory/movements/:id/photos            — upload one photo
+ * - GET  /api/inventory/movements/:id/photos            — list photos
+ * - GET  /api/inventory/movements/:id/photos/:key/file  — stream bytes
+ */
+export type InventoryMovementPhotoRow = {
+  id: string
+  company_id: string
+  inventory_movement_id: string
+  storage_key: string
+  mime_type: string
+  size_bytes: string | number
+  created_at: string
+}
+
+const MOVEMENT_PHOTO_COLUMNS = `
+  id, company_id, inventory_movement_id, storage_key, mime_type, size_bytes, created_at
+`
+
+// Permissive wire-format schemas — every field optional/nullish so existing
+// partial-create / partial-PATCH semantics survive; downstream
+// optionalString / parseNonNegativeNumber / normalizeEnum still coerce
+// defensively. Numerics accept string-or-number. No `.strict()` — `.loose()`
+// passes unknown keys through. The multipart photo-upload route is NOT
+// covered here (it streams via busboy, not ctx.readBody()).
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const InventoryItemCreateBodySchema = z
+  .object({
+    code: z.string().nullish(),
+    description: z.string().nullish(),
+    category: z.string().nullish(),
+    unit: z.string().nullish(),
+    default_rental_rate: NumericInputSchema.nullish(),
+    replacement_value: NumericInputSchema.nullish(),
+    tracking_mode: z.string().nullish(),
+    active: z.boolean().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const InventoryItemPatchBodySchema = z
+  .object({
+    code: z.string().nullish(),
+    description: z.string().nullish(),
+    category: z.string().nullish(),
+    unit: z.string().nullish(),
+    default_rental_rate: NumericInputSchema.nullish(),
+    replacement_value: NumericInputSchema.nullish(),
+    tracking_mode: z.string().nullish(),
+    active: z.boolean().nullish(),
+    notes: z.string().nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const InventoryItemDeleteBodySchema = z
+  .object({
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+const InventoryLocationCreateBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    project_id: z.string().nullish(),
+    location_type: z.string().nullish(),
+    is_default: z.boolean().nullish(),
+  })
+  .loose()
+
+const InventoryMovementCreateBodySchema = z
+  .object({
+    inventory_item_id: z.string().nullish(),
+    quantity: NumericInputSchema.nullish(),
+    from_location_id: z.string().nullish(),
+    to_location_id: z.string().nullish(),
+    project_id: z.string().nullish(),
+    occurred_on: z.string().nullish(),
+    worker_id: z.string().nullish(),
+    scan_payload: z.string().nullish(),
+    scanned_at: z.string().nullish(),
+    lat: NumericInputSchema.nullish(),
+    lng: NumericInputSchema.nullish(),
+    movement_type: z.string().nullish(),
+    ticket_number: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+export async function handleRentalInventoryCrudRoutes(
+  req: http.IncomingMessage,
+  url: URL,
+  ctx: RentalInventoryRouteCtx,
+): Promise<boolean> {
+  if (req.method === 'GET' && url.pathname === '/api/inventory/items') {
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryItemRow>(
+        `
+      select ${INVENTORY_ITEM_COLUMNS}
+      from inventory_items
+      where company_id = $1 and deleted_at is null
+      order by active desc, code asc
+      `,
+        [ctx.company.id],
+      ),
+    )
+    ctx.sendJson(200, { inventoryItems: result.rows })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/inventory/items') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const parsedBody = parseJsonBody(InventoryItemCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    const code = String(body.code ?? '').trim()
+    const description = String(body.description ?? '').trim()
+    if (!code || !description) {
+      ctx.sendJson(400, { error: 'code and description are required' })
+      return true
+    }
+    const defaultRentalRate = parseNonNegativeNumber(body.default_rental_rate, 0)
+    const replacementValue =
+      body.replacement_value === undefined || body.replacement_value === null || body.replacement_value === ''
+        ? null
+        : parseNonNegativeNumber(body.replacement_value, 0)
+    if (!Number.isFinite(defaultRentalRate) || (replacementValue !== null && !Number.isFinite(replacementValue))) {
+      ctx.sendJson(400, { error: 'rates must be non-negative numbers' })
+      return true
+    }
+    const item = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<InventoryItemRow>(
+        `
+        insert into inventory_items (
+          company_id, code, description, category, unit, default_rental_rate,
+          replacement_value, tracking_mode, active, notes
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, true), $10)
+        returning ${INVENTORY_ITEM_COLUMNS}
+        `,
+        [
+          ctx.company.id,
+          code,
+          description,
+          optionalString(body.category) ?? 'scaffold',
+          optionalString(body.unit) ?? 'ea',
+          defaultRentalRate,
+          replacementValue,
+          normalizeEnum(body.tracking_mode, TRACKING_MODES, 'quantity'),
+          body.active ?? true,
+          optionalString(body.notes),
+        ],
+      )
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory item insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'inventory_item',
+        entityId: row.id,
+        action: 'create',
+        row,
+      })
+      return row
+    })
+    ctx.sendJson(201, item)
+    return true
+  }
+
+  if (req.method === 'PATCH' && url.pathname.match(/^\/api\/inventory\/items\/[^/]+$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const itemId = url.pathname.split('/')[4] ?? ''
+    const parsedBody = parseJsonBody(InventoryItemPatchBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'inventory_item',
+      entityName: 'inventory item',
+      table: 'inventory_items',
+      id: itemId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query<InventoryItemRow>(
+          `
+          update inventory_items
+          set
+            code = coalesce($3, code),
+            description = coalesce($4, description),
+            category = coalesce($5, category),
+            unit = coalesce($6, unit),
+            default_rental_rate = coalesce($7, default_rental_rate),
+            replacement_value = coalesce($8, replacement_value),
+            tracking_mode = coalesce($9, tracking_mode),
+            active = coalesce($10, active),
+            notes = coalesce($11, notes),
+            version = version + 1,
+            updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($12::int is null or version = $12)
+          returning ${INVENTORY_ITEM_COLUMNS}
+          `,
+          [
+            ctx.company.id,
+            itemId,
+            optionalString(body.code),
+            optionalString(body.description),
+            optionalString(body.category),
+            optionalString(body.unit),
+            body.default_rental_rate ?? null,
+            body.replacement_value ?? null,
+            body.tracking_mode ? normalizeEnum(body.tracking_mode, TRACKING_MODES, 'quantity') : null,
+            body.active ?? null,
+            optionalString(body.notes),
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          action: 'update',
+          row,
+          idempotencyKey: `inventory_item:update:${itemId}:${row.version}`,
+        })
+        return row
+      },
+    })
+  }
+
+  if (req.method === 'DELETE' && url.pathname.match(/^\/api\/inventory\/items\/[^/]+$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const itemId = url.pathname.split('/')[4] ?? ''
+    const parsedBody = parseJsonBody(InventoryItemDeleteBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'inventory_item',
+      entityName: 'inventory item',
+      table: 'inventory_items',
+      id: itemId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query<InventoryItemRow>(
+          `
+          update inventory_items
+          set deleted_at = now(), active = false, version = version + 1, updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($3::int is null or version = $3)
+          returning ${INVENTORY_ITEM_COLUMNS}
+          `,
+          [ctx.company.id, itemId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          action: 'delete',
+          row,
+        })
+        return row
+      },
+    })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/inventory/locations') {
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryLocationRow>(
+        `
+      select ${INVENTORY_LOCATION_COLUMNS}
+      from inventory_locations
+      where company_id = $1 and deleted_at is null
+      order by is_default desc, name asc
+      `,
+        [ctx.company.id],
+      ),
+    )
+    ctx.sendJson(200, { inventoryLocations: result.rows })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/inventory/locations') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const parsedBody = parseJsonBody(InventoryLocationCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    const name = String(body.name ?? '').trim()
+    if (!name) {
+      ctx.sendJson(400, { error: 'name is required' })
+      return true
+    }
+    const projectId = optionalString(body.project_id)
+    if (projectId && !(await existsInCompany(ctx.pool, 'projects', ctx.company.id, projectId))) {
+      ctx.sendJson(404, { error: 'project_id not found for company' })
+      return true
+    }
+    const location = await withMutationTx(async (client: PoolClient) => {
+      if (body.is_default) {
+        await client.query('update inventory_locations set is_default = false where company_id = $1', [ctx.company.id])
+      }
+      const result = await client.query<InventoryLocationRow>(
+        `
+        insert into inventory_locations (company_id, project_id, name, location_type, is_default)
+        values ($1, $2, $3, $4, coalesce($5, false))
+        returning ${INVENTORY_LOCATION_COLUMNS}
+        `,
+        [
+          ctx.company.id,
+          projectId,
+          name,
+          normalizeEnum(body.location_type, LOCATION_TYPES, projectId ? 'job' : 'yard'),
+          body.is_default ?? false,
+        ],
+      )
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory location insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'inventory_location',
+        entityId: row.id,
+        action: 'create',
+        row,
+      })
+      return row
+    })
+    ctx.sendJson(201, location)
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/inventory/movements') {
+    const values: unknown[] = [ctx.company.id]
+    const clauses = ['m.company_id = $1']
+    const itemId = url.searchParams.get('item_id')
+    const projectId = url.searchParams.get('project_id')
+    const movementType = url.searchParams.get('type')
+    if (itemId) {
+      values.push(itemId)
+      clauses.push(`m.inventory_item_id = $${values.length}`)
+    }
+    if (projectId) {
+      values.push(projectId)
+      clauses.push(`m.project_id = $${values.length}`)
+    }
+    if (movementType && MOVEMENT_TYPES.has(movementType)) {
+      values.push(movementType)
+      clauses.push(`m.movement_type = $${values.length}`)
+    }
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<
+        InventoryMovementRow & {
+          item_code: string | null
+          item_description: string | null
+          from_location_name: string | null
+          to_location_name: string | null
+          project_name: string | null
+        }
+      >(
+        `
+      select
+        m.id,
+        m.company_id,
+        m.inventory_item_id,
+        m.from_location_id,
+        m.to_location_id,
+        m.project_id,
+        m.movement_type,
+        m.quantity,
+        to_char(m.occurred_on, 'YYYY-MM-DD') as occurred_on,
+        m.ticket_number,
+        m.notes,
+        m.version,
+        m.created_at,
+        i.code as item_code,
+        i.description as item_description,
+        fl.name as from_location_name,
+        tl.name as to_location_name,
+        p.name as project_name
+      from inventory_movements m
+      left join inventory_items i on i.company_id = m.company_id and i.id = m.inventory_item_id
+      left join inventory_locations fl on fl.company_id = m.company_id and fl.id = m.from_location_id
+      left join inventory_locations tl on tl.company_id = m.company_id and tl.id = m.to_location_id
+      left join projects p on p.company_id = m.company_id and p.id = m.project_id
+      where ${clauses.join(' and ')}
+      order by m.occurred_on desc, m.created_at desc
+      limit 500
+      `,
+        values,
+      ),
+    )
+    ctx.sendJson(200, { inventoryMovements: result.rows })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/inventory/movements') {
+    // Workers can scan-dispatch from the field but only with full scan
+    // context; admin/foreman/office can post any movement (e.g. yard
+    // adjustments without a scan).
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'worker'])) return true
+    const parsedBody = parseJsonBody(InventoryMovementCreateBodySchema, await ctx.readBody())
+    if (!parsedBody.ok) {
+      ctx.sendJson(400, { error: parsedBody.error })
+      return true
+    }
+    const body = parsedBody.value
+    const itemId = optionalString(body.inventory_item_id)
+    const quantity = parsePositiveNumber(body.quantity)
+    if (!itemId || quantity === null) {
+      ctx.sendJson(400, { error: 'inventory_item_id and positive quantity are required' })
+      return true
+    }
+    if (!(await existsInCompany(ctx.pool, 'inventory_items', ctx.company.id, itemId))) {
+      ctx.sendJson(404, { error: 'inventory_item_id not found for company' })
+      return true
+    }
+    const fromLocationId = optionalString(body.from_location_id)
+    const toLocationId = optionalString(body.to_location_id)
+    if (!(await existsInCompany(ctx.pool, 'inventory_locations', ctx.company.id, fromLocationId))) {
+      ctx.sendJson(404, { error: 'from_location_id not found for company' })
+      return true
+    }
+    if (!(await existsInCompany(ctx.pool, 'inventory_locations', ctx.company.id, toLocationId))) {
+      ctx.sendJson(404, { error: 'to_location_id not found for company' })
+      return true
+    }
+    const projectId = optionalString(body.project_id)
+    if (projectId && !(await existsInCompany(ctx.pool, 'projects', ctx.company.id, projectId))) {
+      ctx.sendJson(404, { error: 'project_id not found for company' })
+      return true
+    }
+    const occurredOn = optionalString(body.occurred_on) ?? todayISO()
+    if (!isValidDateInput(occurredOn)) {
+      ctx.sendJson(400, { error: 'occurred_on must be YYYY-MM-DD' })
+      return true
+    }
+
+    // Phase 4 scan dispatch context — all optional. When the worker
+    // app POSTs from rnt-scan-dispatch it stamps worker_id (looked up
+    // from the auth context if not supplied), the raw QR/barcode
+    // payload, and the device geolocation so the audit trail can show
+    // "Mike scanned cup-lock at 8:42a near 165 Front St."
+    const workerId = optionalString(body.worker_id)
+    if (workerId && !(await existsInCompany(ctx.pool, 'workers', ctx.company.id, workerId))) {
+      ctx.sendJson(404, { error: 'worker_id not found for company' })
+      return true
+    }
+    const scanPayload = optionalString(body.scan_payload)
+    const scannedAtRaw = optionalString(body.scanned_at)
+    const scannedAt = scannedAtRaw && !Number.isNaN(Date.parse(scannedAtRaw)) ? scannedAtRaw : null
+    const lat = body.lat === undefined ? null : Number(body.lat)
+    const lng = body.lng === undefined ? null : Number(body.lng)
+    if (lat !== null && (!Number.isFinite(lat) || lat < -90 || lat > 90)) {
+      ctx.sendJson(400, { error: 'lat must be between -90 and 90' })
+      return true
+    }
+    if (lng !== null && (!Number.isFinite(lng) || lng < -180 || lng > 180)) {
+      ctx.sendJson(400, { error: 'lng must be between -180 and 180' })
+      return true
+    }
+
+    // Workers may only POST scan-driven movements — no manual yard
+    // adjustments. The scan_payload + worker_id pair is the audit
+    // trail; without them the worker should be using fm-rentals
+    // through their foreman. The cast is needed because CompanyRole
+    // doesn't yet include 'worker' as a value — the role table will
+    // gain it when worker-direct auth lands; the gate stays in place
+    // so the contract is documented.
+    if ((ctx.company.role as string) === 'worker' && (!scanPayload || !workerId)) {
+      ctx.sendJson(403, { error: 'workers may only create scan-driven movements (scan_payload + worker_id required)' })
+      return true
+    }
+
+    const normalizedMovementType = normalizeEnum(body.movement_type, MOVEMENT_TYPES, 'adjustment')
+
+    const movement = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<InventoryMovementRow>(
+        `
+        insert into inventory_movements (
+          company_id, inventory_item_id, from_location_id, to_location_id,
+          project_id, movement_type, quantity, occurred_on, ticket_number, notes,
+          worker_id, clerk_user_id, scan_payload, scanned_at, lat, lng
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $14, $15, $16)
+        returning ${INVENTORY_MOVEMENT_COLUMNS}
+        `,
+        [
+          ctx.company.id,
+          itemId,
+          fromLocationId,
+          toLocationId,
+          projectId,
+          normalizedMovementType,
+          quantity,
+          occurredOn,
+          optionalString(body.ticket_number),
+          optionalString(body.notes),
+          workerId,
+          // The clerk user is implied by auth — we always stamp who hit
+          // the endpoint (whether or not a worker_id was attached).
+          scanPayload || scannedAt || workerId ? ctx.currentUserId : null,
+          scanPayload,
+          scannedAt,
+          lat,
+          lng,
+        ],
+      )
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory movement insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'inventory_movement',
+        entityId: row.id,
+        action: 'create',
+        row,
+      })
+
+      // Auto-bill replacement cost on damage / loss reconciliation —
+      // Avontus parity. When a `damaged` or `lost` movement lands on a
+      // project AND the inventory item has a `replacement_value > 0`,
+      // open a damage_charges row (status='open') that the office can
+      // approve/waive. The existing damage-charge-push worker handles
+      // the QBO invoice push on approval. Skips silently if the
+      // item has no replacement_value (the item type isn't billable for
+      // damage — e.g. consumables) or the movement isn't project-bound
+      // (yard adjustments don't bill to a customer).
+      if ((normalizedMovementType === 'damaged' || normalizedMovementType === 'lost') && projectId) {
+        const item = await client.query<{
+          replacement_value: string | null
+          description: string | null
+          code: string | null
+        }>(
+          `select replacement_value, description, code from inventory_items
+           where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+          [ctx.company.id, itemId],
+        )
+        const replacementValue = Number(item.rows[0]?.replacement_value ?? 0)
+        if (item.rows[0] && replacementValue > 0) {
+          const proj = await client.query<{ customer_id: string | null }>(
+            `select customer_id from projects where company_id = $1 and id = $2 limit 1`,
+            [ctx.company.id, projectId],
+          )
+          const customerId = proj.rows[0]?.customer_id ?? null
+          const itemLabel =
+            [item.rows[0].code, item.rows[0].description].filter(Boolean).join(' - ') || 'Inventory item'
+          const totalAmount = Number((quantity * replacementValue).toFixed(2))
+          const charge = await client.query<{ id: string }>(
+            `insert into damage_charges (
+               company_id, project_id, customer_id, inventory_item_id, kind,
+               quantity, unit_amount, total_amount, description, status, notes
+             )
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10)
+             returning id`,
+            [
+              ctx.company.id,
+              projectId,
+              customerId,
+              itemId,
+              normalizedMovementType === 'damaged' ? 'damage' : 'loss',
+              quantity,
+              replacementValue,
+              totalAmount,
+              `${normalizedMovementType === 'damaged' ? 'Damaged' : 'Lost'} ${itemLabel} (qty ${quantity})`,
+              `Auto-opened from inventory_movement ${row.id}`,
+            ],
+          )
+          const chargeRow = charge.rows[0]
+          if (!chargeRow) throw new HttpError(500, 'damage charge insert returned no row')
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'damage_charge',
+            entityId: chargeRow.id,
+            action: 'create',
+            row: {
+              source: 'inventory_movement_auto',
+              source_movement_id: row.id,
+              kind: normalizedMovementType === 'damaged' ? 'damage' : 'loss',
+              total_amount: totalAmount,
+            },
+          })
+        }
+      }
+
+      return row
+    })
+    ctx.sendJson(201, movement)
+    return true
+  }
+
+  // -------------------------------------------------------------------
+  // Condition photos for dispatch / return movements.
+  //
+  // The desktop owner-rentals-dispatch / owner-rentals-return screens and
+  // the mobile rentals-scan flow capture condition photos. The movement is
+  // created first (POST /api/inventory/movements above returns the row id);
+  // the screen then uploads each photo to this movement. One file per
+  // request keeps a single failed photo retryable without re-creating the
+  // movement. Mirrors the worker-issue attachment routes.
+  // -------------------------------------------------------------------
+  const photosMatch = url.pathname.match(/^\/api\/inventory\/movements\/([^/]+)\/photos$/)
+  if (req.method === 'POST' && photosMatch) {
+    // Same role gate as creating a movement — workers can scan-dispatch /
+    // scan-return from the field, so they must be able to attach the
+    // condition photo their flow captured.
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'worker'])) return true
+    const movementId = photosMatch[1]!
+    // Confirm the movement exists + is owned by this company before we
+    // accept upload bytes.
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(`select id from inventory_movements where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        movementId,
+      ]),
+    )
+    if (!existing.rows[0]) {
+      ctx.sendJson(404, { error: 'inventory_movement not found' })
+      return true
+    }
+
+    let upload
+    try {
+      upload = await parseInventoryMovementPhotoMultipart(req, ctx.storage, ctx.company.id, movementId, {
+        maxFileBytes: ctx.maxMovementPhotoBytes,
+      })
+    } catch (err) {
+      if (err instanceof InventoryMovementPhotoUploadError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
+    const inserted = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<InventoryMovementPhotoRow>(
+        `insert into inventory_movement_photos
+           (company_id, inventory_movement_id, storage_key, mime_type, size_bytes)
+         values ($1, $2, $3, $4, $5)
+         returning ${MOVEMENT_PHOTO_COLUMNS}`,
+        [ctx.company.id, movementId, upload.storagePath, upload.mimeType, upload.bytes],
+      )
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory movement photo insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'inventory_movement_photo',
+        entityId: row.id,
+        action: 'create',
+        row,
+        actorUserId: ctx.currentUserId,
+      })
+      return row
+    })
+
+    const photos = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2
+         order by created_at asc`,
+        [ctx.company.id, movementId],
+      ),
+    )
+
+    ctx.sendJson(201, { photo: inserted, photos: photos.rows })
+    return true
+  }
+
+  if (req.method === 'GET' && photosMatch) {
+    const movementId = photosMatch[1]!
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2
+         order by created_at asc`,
+        [ctx.company.id, movementId],
+      ),
+    )
+    ctx.sendJson(200, { photos: result.rows })
+    return true
+  }
+
+  // GET /api/inventory/movements/:id/photos/:key/file — stream bytes (or 302
+  // to a presigned URL). The storage key is URL-encoded in the path because
+  // keys contain `/`.
+  const photoFileMatch = url.pathname.match(/^\/api\/inventory\/movements\/([^/]+)\/photos\/([^/]+)\/file$/)
+  if (req.method === 'GET' && photoFileMatch) {
+    const movementId = photoFileMatch[1]!
+    const rawKey = photoFileMatch[2]!
+    const key = decodeURIComponent(rawKey)
+    try {
+      assertKeyInCompany(ctx.company.id, key)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid key' })
+      return true
+    }
+    // Defense-in-depth: assertKeyInCompany proves company scope; the row
+    // check proves the key actually belongs to this movement.
+    const lookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2 and storage_key = $3
+         limit 1`,
+        [ctx.company.id, movementId, key],
+      ),
+    )
+    const row = lookup.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'photo not found on this movement' })
+      return true
+    }
+    if (ctx.movementPhotoDownloadPresigned) {
+      const presigned = await ctx.storage.getDownloadUrl(key)
+      if (presigned) {
+        ctx.sendFileRedirect(presigned)
+        return true
+      }
+    }
+    const buf = await ctx.storage.get(key)
+    const fileName = key.split('/').pop() || 'photo.jpg'
+    ctx.sendFileContent(row.mime_type || 'application/octet-stream', fileName, buf)
+    return true
+  }
+
+  return false
+}

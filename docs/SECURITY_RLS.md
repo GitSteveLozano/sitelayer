@@ -1,0 +1,312 @@
+# Row-Level Security (RLS)
+
+## ⚠️ FORCE RLS does NOT protect an unbound bare query (read this first)
+
+The single most important thing to understand about this codebase's tenancy
+model: **`FORCE ROW LEVEL SECURITY` is NOT, by itself, the cross-tenant
+control.** The `company_isolation` policy is deliberately permissive:
+
+```sql
+USING (app_current_company_id() IS NULL OR company_id = app_current_company_id())
+```
+
+That `app_current_company_id() IS NULL OR ...` branch — the **IS-NULL escape** —
+means that when the `app.company_id` GUC is **unbound**, the policy evaluates to
+`TRUE` for every row and the query **sees ALL tenants**. FORCE only changes WHO
+the policy applies to (it stops the table owner from bypassing RLS); it does
+**not** make an unbound query safe. A bare `pool.query('select * from projects')`
+with no GUC bound and no explicit `company_id` predicate is a full cross-tenant
+read even with RLS ENABLED + FORCED.
+
+**The real control is route-level GUC binding.** Every company-scoped read/write
+must do ONE of:
+
+1. **Bind the GUC** — go through `withCompanyClient(companyId, …)` (reads) or
+   `withMutationTx(companyId, …)` (writes). Both run `SELECT set_config('app.company_id', $companyId, true)` (SET LOCAL) so the policy's
+   equality branch is the one that fires and rows are scoped to the company.
+2. **Carry an explicit `where company_id = $1` predicate** (app-layer scoping
+   per `docs/MULTI_TENANCY.md` RULE 1). FORCE RLS is then the backstop, not the
+   primary control.
+
+Never run a bare `pool.query` against a `company_id` table with neither. The
+permissive clause exists so legacy/debug tooling (`psql`, replay scripts) keeps
+working with no GUC; that same clause is exactly why an unbound app query leaks.
+
+This is enforced statically by **two gates**:
+
+- **`apps/api/src/routes/rls-route-lint.test.ts`** (unit stage, no DB) scans
+  **every** `apps/api/src/routes/*.ts` and FAILS on any raw `pool.query(` (incl.
+  `pool.query<T>(`) that binds neither the GUC nor a `company_id` predicate,
+  unless the file is on its documented `RAW_QUERY_REVIEWED` allowlist
+  (registry / platform-admin / append-only-debug / global-table surface). It
+  ALSO ratchets new files: a brand-new handler with a raw, unscoped query fails
+  rather than silently widening cross-tenant exposure. This is broader than the
+  20-route `rls-phase3-audit.test.ts` below, which only inspects hand-picked
+  high-impact routes.
+- **`apps/api/src/routes/rls-phase3-audit.test.ts`** (the 20-route static audit
+  - the live forced-coverage audit) — see below.
+
+## Status
+
+**Phase 3 — company-scoped surface ENFORCED + gated (current).** RLS is
+ENABLED + FORCED across the company-scoped domain tables: the bulk flip
+landed in `085_rls_enable_phase_3.sql` (the ~65 tables from the 066
+policy sweep), `101_v2_rls.sql` (the v2 entity tables), and the
+per-table migrations that flip RLS in the same file that creates a new
+company-scoped table (e.g. `088`, `092`, `103`, `104`, `105`, `120`,
+`124`, `125`, `131`, `145_asset_deployments_rls.sql`, and
+`146_rls_force_close_gaps.sql`). The policy still permits NULL GUC
+(`app_current_company_id() IS NULL OR company_id = ...`), so legacy/debug
+paths keep working, but every read inside a `withCompanyClient` /
+`withMutationTx` closure is filtered and every INSERT/UPDATE is checked
+under WITH CHECK.
+
+`146_rls_force_close_gaps.sql` closed the last batch of `KNOWN GAP`
+company-scoped tables the forced-coverage audit was tracking as
+exemptions: `company_pricing_overrides`, `customer_pricing_overrides`,
+`project_pricing_overrides`, `qbo_sync_runs`, `rental_rate_tiers`,
+`takeoff_capture_artifacts`, and `takeoff_drafts`. Each is `company_id
+NOT NULL` and genuinely per-tenant (verified against its create migration
+and every read/write path in `apps/api` + `apps/worker`), so the correct
+fix was the standard `company_isolation` policy + ENABLE + FORCE — not a
+different policy and not an exemption. They were removed from
+`RLS_FORCE_AUDIT_ALLOWLIST` in the same change so the gate now protects
+them.
+
+`asset_deployments` was the canonical gap: migration `118` created it
+with `company_id NOT NULL` AFTER the 085 flip but added no policy and
+never enabled RLS, so it shipped unforced. `145_asset_deployments_rls.sql`
+closes it (policy + ENABLE + FORCE, mirroring 066/085/101), and the
+**forced-coverage audit is now a blocking gate** so the next such table
+fails verification instead of shipping silently — see
+[The RLS audit is a blocking gate](#the-rls-audit-is-a-blocking-gate).
+
+**Still ENABLE-not-FORCE (intentional).** The four append-only / queue
+tables `audit_events`, `workflow_event_log`, `mutation_outbox`,
+`sync_events` are ENABLED but NOT FORCED, so `pg_dump` running as the
+table owner can still back them up (migration
+`078_rls_no_force_for_owner_dumps.sql`). The app role is a non-owner and
+stays filtered by the policy. The only other unforced entries are a small
+set of nullable-`company_id` globals / internal caches (e.g.
+`scaffold_manufacturers`, `tenant_provisions`, `company_bootstrap_state`);
+they are enumerated in `RLS_FORCE_AUDIT_ALLOWLIST` (see the gate section),
+each with a one-line reason, so the gate stays green while still blocking
+new offenders. There are no remaining `company_id NOT NULL` "known gap"
+tables — migration `146` closed the last batch.
+
+**Phase 1 — shadow mode (historical).** Migration `066_row_level_security.sql`
+defines `company_isolation` policies on every company-scoped table. The
+policy uses `app_current_company_id() IS NULL OR company_id =
+app_current_company_id()`, so when the GUC is unset the policy is
+permissive — existing tooling (`psql`, replay scripts, dev queries) keeps
+working.
+
+What is wired:
+
+- `apps/api/src/server.ts` stamps `requestContext.companyId` after
+  `getCompany()` resolves. This goes into the request-scoped
+  AsyncLocalStorage from `@sitelayer/logger`.
+- `apps/api/src/mutation-tx.ts:withMutationTx()` reads
+  `getRequestContext().companyId` and runs
+  `SELECT set_config('app.company_id', $companyId, true)` at the start of
+  every BEGIN/COMMIT block. The `true` argument means SET LOCAL — scoped
+  to this transaction only; the pool client returns clean.
+- `apps/api/src/mutation-tx.ts:withCompanyClient()` is the read-side analog
+  for multi-statement reads (e.g. `/api/bootstrap` fan-out). As of Phase 2
+  (#NNN), every `ctx.pool.query(...)` hot-path reader in `apps/api/src/routes/*.ts`
+  has been wrapped in `withCompanyClient(ctx.company.id, (c) => c.query(...))`.
+- `apps/worker/src/worker.ts:setCompanyGuc()` sets the same GUC inside the
+  worker's BEGIN/COMMIT blocks so drain queries against company-scoped
+  tables (including the 4 RLS-enforced ones) pass the policy.
+
+What is **not** wired:
+
+- Cross-company admin endpoints (`/api/webhooks/qbo`, the share-token
+  portal routes, `/api/debug/traces/:id`) deliberately query without
+  binding the GUC. They rely on the permissive `IS NULL OR` clause and
+  filter explicitly in SQL. These are documented in-code with a comment
+  per call site.
+
+## How RLS is enabled (Phase 2 — when ready)
+
+Per-table flip, in a new migration:
+
+```sql
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects FORCE ROW LEVEL SECURITY;
+```
+
+`FORCE` is required: by default the table owner bypasses RLS, but on DO
+Managed Postgres the migrator runs as `doadmin` while the app connects as
+`sitelayer`, so without FORCE the migrations would test RLS behavior the
+app never actually sees.
+
+Recommended sequence (smallest blast radius first):
+
+1. `audit_events` — append-only, no reads from app **(done in Phase 2)**
+2. `mutation_outbox`, `sync_events` — worker-only, well-bounded **(done in Phase 2)**
+3. `workflow_event_log` — append-only **(done in Phase 2)**
+4. `clock_events`, `labor_entries`, `daily_logs` — high-volume per-tenant data
+5. `projects`, `blueprint_documents`, `takeoff_measurements`,
+   `estimate_lines` — the core takeoff loop
+6. Reference data (`workers`, `customers`, `service_items`, etc.)
+
+After each batch: run integration tests, smoke staging, watch for empty
+result-set anomalies (= a route did a `pool.query()` without setting
+`app.company_id`).
+
+## Testing the policies
+
+`apps/api/src/rls.test.ts` (gated on `RUN_API_INTEGRATION=1`) enables RLS
+on `projects` for the duration of the test, inserts two companies' worth
+of fixtures, and asserts:
+
+- `SET LOCAL app.company_id = A` → only A's rows are visible.
+- `SET LOCAL app.company_id = B` → only B's rows are visible.
+- No `app.company_id` set → all rows visible (the permissive fallback).
+- INSERT into `projects` with a `company_id` that doesn't match
+  `app.company_id` → `WITH CHECK` rejection with a `row-level security`
+  error.
+
+To run locally against a fresh DB:
+
+```bash
+docker compose up -d db
+DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
+  RUN_API_INTEGRATION=1 \
+  npm --workspace=@sitelayer/api test -- rls.test.ts
+```
+
+### Phase 3 runtime probe (constrained role)
+
+`apps/api/src/routes/rls-phase3-audit.test.ts` is a second test that
+audits every high-impact route's source for `withCompanyClient` /
+`withMutationTx` usage (static) and exercises a non-`BYPASSRLS` role
+against the `projects` table (runtime). The runtime probe needs a role
+that does NOT bypass RLS; migration `087_constrained_role_for_rls_probe.sql`
+provisions `sitelayer_constrained` for that purpose in every non-prod
+database (the DO block tier-gates on `current_database() ~
+'^sitelayer_prod'` and is a no-op there).
+
+Local:
+
+```bash
+CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer \
+  npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
+```
+
+Local gate: `scripts/verify-local.sh`'s docker-compose integration check
+exports the same URL automatically once the migration has run against the
+ephemeral Postgres service.
+
+Preview deploys intentionally skip the constrained-role migration. The
+preview stack connects to the managed preview database as the app role, which
+does not have `CREATEROLE`; the preview app does not need the runtime probe
+login role. Local Docker and the local integration gate still run the
+migration and exercise the probe.
+
+## The RLS audit is a blocking gate
+
+`apps/api/src/routes/rls-phase3-audit.test.ts` runs in the integration
+stage of `scripts/verify-local.sh`, which sets `RLS_PHASE3_FAIL_ON_LEAK=1`.
+With that flag the audit is a **hard gate**, not a report. Two checks fail
+the build:
+
+1. **Static route audit.** Any audited route that issues a raw
+   `pool.query(` outside a `withCompanyClient` / `withMutationTx` closure
+   (and is not a documented cross-company admin read marked with
+   `rawQueryExemptReason`) fails.
+
+2. **Forced-coverage audit (the asset_deployments-gap catcher).** Defined
+   in `apps/api/src/routes/rls-force-audit.ts`, it queries the live
+   post-migration schema for every `public` table with a `company_id`
+   column and reads `pg_class.relforcerowsecurity`. Any table that is NOT
+   forced AND NOT on `RLS_FORCE_AUDIT_ALLOWLIST` is a failure. This is what
+   would have caught `asset_deployments` at gate time.
+
+Run it locally:
+
+```bash
+docker compose up -d db
+DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
+  RUN_API_INTEGRATION=1 RLS_PHASE3_FAIL_ON_LEAK=1 \
+  npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
+```
+
+The pure pass/fail logic also has database-free unit coverage in
+`apps/api/src/routes/rls-force-audit.test.ts` (runs in the unit stage).
+
+### The whole-directory route lint (no DB, unit stage)
+
+`apps/api/src/routes/rls-route-lint.test.ts` complements the 20-route audit by
+scanning **every** handler in `apps/api/src/routes/`. Because the
+`company_isolation` policy keeps the IS-NULL escape (see the top of this doc), a
+raw `pool.query` whose GUC is unbound AND that lacks a `company_id` predicate is
+a cross-tenant leak — and the 20-route audit would never look at a brand-new
+96th route file. The lint fails on any such bare-unscoped query and ratchets new
+files: a new handler with a raw, unscoped query fails unless it is wired through
+`withCompanyClient` / `withMutationTx`, carries an explicit `where company_id =
+$1`, or is added to the file's documented `RAW_QUERY_REVIEWED` allowlist (only
+the tenant-registry, platform-admin, documented append-only-debug, or global
+non-company-table surface qualifies). It is pure static analysis, so it runs in
+the unit stage with no Postgres.
+
+## When you add a new company-scoped table
+
+Add the policy AND enable+force RLS in the same migration that creates the
+table (mirror `101_v2_rls.sql` / `145_asset_deployments_rls.sql`):
+
+```sql
+CREATE POLICY company_isolation ON your_new_table
+  FOR ALL
+  USING (app_current_company_id() IS NULL OR company_id = app_current_company_id())
+  WITH CHECK (app_current_company_id() IS NULL OR company_id = app_current_company_id());
+ALTER TABLE your_new_table ENABLE ROW LEVEL SECURITY;
+ALTER TABLE your_new_table FORCE ROW LEVEL SECURITY;
+```
+
+If you skip the ENABLE/FORCE, the forced-coverage gate above will fail your
+build — by design. If the table is genuinely not tenant-isolated (e.g. a
+nullable-`company_id` global catalog), add it to `RLS_FORCE_AUDIT_ALLOWLIST`
+in `apps/api/src/routes/rls-force-audit.ts` with a one-line reason instead.
+
+Do **not** edit migration 066; it is immutable per `CLAUDE.md` deploy rules.
+
+## The `companies` tenant root is gated by membership, not app.company_id
+
+`companies` is the tenant ROOT. It deliberately has **no** `company_id`
+column (its PK is `id`), so it is not part of the forced-coverage surface
+and must **not** carry an `app.company_id` RLS policy. The resolution
+order is why:
+
+- `getCompany()` in `apps/api/src/server.ts` looks up the `companies` row
+  by slug/id **before** any `app.company_id` GUC exists — resolving the
+  company is precisely what establishes which company the request is
+  scoped to. An `app.company_id` policy on `companies` would be circular
+  (you'd need the GUC to read the row that tells you the GUC).
+- Access is then gated by a `company_memberships` lookup
+  (`where company_id = $1 and clerk_user_id = $2`); no membership row →
+  `getCompany` returns `null` → 403. The **membership table** is the real
+  cross-tenant boundary for the root, and it is ENABLE+FORCE'd by
+  migration `085`.
+
+So `companies` is an intentional structural exemption (documented here),
+and it never appears in `RLS_FORCE_AUDIT_ALLOWLIST` because the audit only
+scans `company_id` tables. The unit test in
+`apps/api/src/routes/rls-force-close-gaps.test.ts` asserts neither
+`companies` nor `company_memberships` is allowlisted, anchoring this
+reasoning.
+
+## Open work
+
+- Drop the `app_current_company_id() IS NULL OR ...` permissive clause
+  (the IS-NULL escape) once every read goes through a scoped client; tighten the
+  policy to a strict equality check. Until then, FORCE RLS is NOT the
+  cross-tenant control on its own — route-level GUC binding (or an explicit
+  `company_id` predicate) is, and `rls-route-lint.test.ts` is what enforces it
+  across the whole route directory. Removing the IS-NULL branch is the durable
+  fix; the lint is the interim ratchet.
+- Provision a non-superuser app role in the integration gate so the
+  runtime probe (`CONSTRAINED_DB_URL`) runs by default (currently
+  `sitelayer` is BYPASSRLS in the docker-compose integration check, so the
+  probe tests skip).

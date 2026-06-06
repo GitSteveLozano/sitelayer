@@ -1,0 +1,472 @@
+// Generic workflow types — see docs/DETERMINISTIC_WORKFLOWS.md.
+//
+// Every deterministic workflow exports its own State + Event + Snapshot
+// types. This package holds the shared shape that ties them to a UI/API
+// surface (next_events list, snapshot envelope) so screens never invent
+// a separate vocabulary.
+
+export type WorkflowNextEvent<EventType extends string> = {
+  type: EventType
+  label: string
+  disabled_reason?: string
+}
+
+export type WorkflowSnapshot<State extends string, EventType extends string, Context> = {
+  state: State
+  state_version: number
+  context: Context
+  next_events: Array<WorkflowNextEvent<EventType>>
+}
+
+export {
+  isHumanRentalBillingEvent,
+  nextRentalBillingEvents,
+  parseRentalBillingEventRequest,
+  RentalBillingEventRequestSchema,
+  RENTAL_BILLING_ALL_STATES,
+  RENTAL_BILLING_EVENT_TYPES,
+  RENTAL_BILLING_TERMINAL_STATES,
+  RENTAL_BILLING_WORKFLOW_NAME,
+  RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+  rentalBillingRowToSnapshot,
+  rentalBillingWorkflow,
+  transitionRentalBillingWorkflow,
+  type RentalBillingEventParseResult,
+  type RentalBillingRowLike,
+  type RentalBillingEventRequest,
+  type RentalBillingHumanEventType,
+  type RentalBillingWorkflowEvent,
+  type RentalBillingWorkflowSnapshot,
+  type RentalBillingWorkflowState,
+} from './rental-billing.js'
+
+export {
+  __resetWorkflowRegistryForTests,
+  getWorkflow,
+  listWorkflows,
+  registerWorkflow,
+  type WorkflowDefinition,
+} from './registry.js'
+
+export { applyEventLog, snapshotsEqual, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
+
+export {
+  buildWorkflowEventLogInsert,
+  WORKFLOW_EVENT_LOG_COLUMNS,
+  type WorkflowEventLogInsertArgs,
+  type WorkflowEventLogInsertOptions,
+} from './event-log-insert.js'
+
+export {
+  matchesWorkflowEventRef,
+  parseWorkflowEventRef,
+  workflowEventRef,
+  WORKFLOW_EVENT_REF_PREFIX,
+  type ParsedWorkflowEventRef,
+  type WorkflowEventRefInput,
+} from './workflow-event-ref.js'
+
+export {
+  applyEventSequence,
+  type ApplyEventSequenceArgs,
+  type ApplyEventSequenceResult,
+  type ApplyEventSequenceStep,
+  type QueryExecutor,
+} from './test-replay.js'
+
+export {
+  CREW_SCHEDULE_ALL_STATES,
+  CREW_SCHEDULE_EVENT_TYPES,
+  CREW_SCHEDULE_TERMINAL_STATES,
+  CREW_SCHEDULE_WORKFLOW_NAME,
+  CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+  CrewScheduleEventRequestSchema,
+  CrewScheduleLaborEntryInputSchema,
+  crewScheduleWorkflow,
+  isHumanCrewScheduleEvent,
+  nextCrewScheduleEvents,
+  parseCrewScheduleEventRequest,
+  transitionCrewScheduleWorkflow,
+  type CrewScheduleEventParseResult,
+  type CrewScheduleEventRequest,
+  type CrewScheduleHumanEventType,
+  type CrewScheduleLaborEntryInput,
+  type CrewScheduleWorkflowEvent,
+  type CrewScheduleWorkflowSnapshot,
+  type CrewScheduleWorkflowState,
+} from './crew-schedule.js'
+
+export {
+  PROJECT_CLOSEOUT_ALL_STATES,
+  PROJECT_CLOSEOUT_EVENT_TYPES,
+  PROJECT_CLOSEOUT_TERMINAL_STATES,
+  PROJECT_CLOSEOUT_WORKFLOW_NAME,
+  PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+  ProjectCloseoutEventRequestSchema,
+  projectCloseoutWorkflow,
+  isHumanProjectCloseoutEvent,
+  nextProjectCloseoutEvents,
+  parseProjectCloseoutEventRequest,
+  projectStatusToCloseoutState,
+  transitionProjectCloseoutWorkflow,
+  type ProjectCloseoutEventParseResult,
+  type ProjectCloseoutEventRequest,
+  type ProjectCloseoutHumanEventType,
+  type ProjectCloseoutWorkflowEvent,
+  type ProjectCloseoutWorkflowSnapshot,
+  type ProjectCloseoutWorkflowState,
+} from './project-closeout.js'
+
+export {
+  RENTAL_ALL_STATES,
+  RENTAL_EVENT_TYPES,
+  RENTAL_TERMINAL_STATES,
+  RENTAL_WORKFLOW_NAME,
+  RENTAL_WORKFLOW_SCHEMA_VERSION,
+  RentalEventRequestSchema,
+  rentalWorkflow,
+  isHumanRentalEvent,
+  nextRentalEvents,
+  parseRentalEventRequest,
+  transitionRentalWorkflow,
+  type RentalEventParseResult,
+  type RentalEventRequest,
+  type RentalHumanEventType,
+  type RentalWorkflowEvent,
+  type RentalWorkflowSnapshot,
+  type RentalWorkflowState,
+} from './rental.js'
+
+export {
+  ESTIMATE_PUSH_ALL_STATES,
+  ESTIMATE_PUSH_EVENT_TYPES,
+  ESTIMATE_PUSH_TERMINAL_STATES,
+  ESTIMATE_PUSH_WORKFLOW_NAME,
+  ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
+  EstimatePushEventRequestSchema,
+  estimatePushRowToSnapshot,
+  estimatePushWorkflow,
+  isHumanEstimatePushEvent,
+  nextEstimatePushEvents,
+  parseEstimatePushEventRequest,
+  transitionEstimatePushWorkflow,
+  type EstimatePushEventParseResult,
+  type EstimatePushEventRequest,
+  type EstimatePushHumanEventType,
+  type EstimatePushRowLike,
+  type EstimatePushWorkflowEvent,
+  type EstimatePushWorkflowSnapshot,
+  type EstimatePushWorkflowState,
+} from './estimate-push.js'
+
+export {
+  ESTIMATE_SHARE_ALL_STATES,
+  ESTIMATE_SHARE_EVENT_TYPES,
+  ESTIMATE_SHARE_TERMINAL_STATES,
+  ESTIMATE_SHARE_WORKFLOW_NAME,
+  ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+  EstimateShareEventRequestSchema,
+  estimateShareWorkflow,
+  isHumanEstimateShareEvent,
+  nextEstimateShareEvents,
+  parseEstimateShareEventRequest,
+  transitionEstimateShareWorkflow,
+  type EstimateShareEventParseResult,
+  type EstimateShareEventRequest,
+  type EstimateShareHumanEventType,
+  type EstimateShareWorkflowEvent,
+  type EstimateShareWorkflowSnapshot,
+  type EstimateShareWorkflowState,
+} from './estimate-share.js'
+
+export {
+  TIME_REVIEW_ALL_STATES,
+  TIME_REVIEW_EVENT_TYPES,
+  TIME_REVIEW_TERMINAL_STATES,
+  TIME_REVIEW_WORKFLOW_NAME,
+  TIME_REVIEW_WORKFLOW_SCHEMA_VERSION,
+  TimeReviewEventRequestSchema,
+  timeReviewWorkflow,
+  isHumanTimeReviewEvent,
+  nextTimeReviewEvents,
+  parseTimeReviewEventRequest,
+  transitionTimeReviewWorkflow,
+  type TimeReviewEventParseResult,
+  type TimeReviewEventRequest,
+  type TimeReviewHumanEventType,
+  type TimeReviewWorkflowEvent,
+  type TimeReviewWorkflowSnapshot,
+  type TimeReviewWorkflowState,
+} from './time-review.js'
+
+export {
+  PROJECT_LIFECYCLE_ALL_STATES,
+  PROJECT_LIFECYCLE_EVENT_TYPES,
+  PROJECT_LIFECYCLE_TERMINAL_STATES,
+  PROJECT_LIFECYCLE_WORKFLOW_NAME,
+  PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION,
+  ProjectLifecycleEventRequestSchema,
+  projectLifecycleWorkflow,
+  isHumanProjectLifecycleEvent,
+  nextProjectLifecycleEvents,
+  parseProjectLifecycleEventRequest,
+  projectStatusToLifecycleState,
+  transitionProjectLifecycleWorkflow,
+  type ProjectLifecycleEventParseResult,
+  type ProjectLifecycleEventRequest,
+  type ProjectLifecycleHumanEventType,
+  type ProjectLifecycleWorkflowEvent,
+  type ProjectLifecycleWorkflowSnapshot,
+  type ProjectLifecycleWorkflowState,
+} from './project-lifecycle.js'
+
+export {
+  FIELD_EVENT_ALL_STATES,
+  FIELD_EVENT_EVENT_TYPES,
+  FIELD_EVENT_RESOLUTION_ACTIONS,
+  FIELD_EVENT_TERMINAL_STATES,
+  FIELD_EVENT_WORKFLOW_NAME,
+  FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
+  FieldEventEventRequestSchema,
+  fieldEventWorkflow,
+  isHumanFieldEventEvent,
+  nextFieldEventEvents,
+  parseFieldEventEventRequest,
+  transitionFieldEventWorkflow,
+  type FieldEventEventParseResult,
+  type FieldEventEventRequest,
+  type FieldEventHumanEventType,
+  type FieldEventResolutionAction,
+  type FieldEventWorkflowEvent,
+  type FieldEventWorkflowSnapshot,
+  type FieldEventWorkflowState,
+} from './field-event.js'
+
+export {
+  LABOR_PAYROLL_ALL_STATES,
+  LABOR_PAYROLL_EVENT_TYPES,
+  LABOR_PAYROLL_TERMINAL_STATES,
+  LABOR_PAYROLL_WORKFLOW_NAME,
+  LABOR_PAYROLL_WORKFLOW_SCHEMA_VERSION,
+  LaborPayrollEventRequestSchema,
+  laborPayrollWorkflow,
+  isHumanLaborPayrollEvent,
+  nextLaborPayrollEvents,
+  parseLaborPayrollEventRequest,
+  transitionLaborPayrollWorkflow,
+  type LaborPayrollEventParseResult,
+  type LaborPayrollEventRequest,
+  type LaborPayrollHumanEventType,
+  type LaborPayrollWorkflowEvent,
+  type LaborPayrollWorkflowSnapshot,
+  type LaborPayrollWorkflowState,
+} from './labor-payroll.js'
+
+export {
+  SHIPMENT_ALL_STATES,
+  SHIPMENT_EVENT_TYPES,
+  SHIPMENT_TERMINAL_STATES,
+  SHIPMENT_WORKFLOW_NAME,
+  SHIPMENT_WORKFLOW_SCHEMA_VERSION,
+  ShipmentEventRequestSchema,
+  isHumanShipmentEvent,
+  nextShipmentEvents,
+  parseShipmentEventRequest,
+  shipmentWorkflow,
+  transitionShipmentWorkflow,
+  type ShipmentEventRequest,
+  type ShipmentHumanEventType,
+  type ShipmentWorkflowEvent,
+  type ShipmentWorkflowSnapshot,
+  type ShipmentWorkflowState,
+} from './shipment.js'
+
+export {
+  DAMAGE_CHARGE_SETTLEMENT_ALL_STATES,
+  DAMAGE_CHARGE_SETTLEMENT_EVENT_TYPES,
+  DAMAGE_CHARGE_SETTLEMENT_TERMINAL_STATES,
+  DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME,
+  DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_SCHEMA_VERSION,
+  DamageChargeSettlementEventRequestSchema,
+  damageChargeSettlementWorkflow,
+  isHumanDamageChargeSettlementEvent,
+  nextDamageChargeSettlementEvents,
+  parseDamageChargeSettlementEventRequest,
+  transitionDamageChargeSettlementWorkflow,
+  type DamageChargeSettlementEventParseResult,
+  type DamageChargeSettlementEventRequest,
+  type DamageChargeSettlementHumanEventType,
+  type DamageChargeSettlementWorkflowEvent,
+  type DamageChargeSettlementWorkflowSnapshot,
+  type DamageChargeSettlementWorkflowState,
+} from './damage-charge-settlement.js'
+
+export {
+  ASSET_DEPLOYMENT_ALL_STATES,
+  ASSET_DEPLOYMENT_EVENT_TYPES,
+  ASSET_DEPLOYMENT_TERMINAL_STATES,
+  ASSET_DEPLOYMENT_WORKFLOW_NAME,
+  ASSET_DEPLOYMENT_WORKFLOW_SCHEMA_VERSION,
+  AssetDeploymentEventRequestSchema,
+  assetDeploymentWorkflow,
+  isHumanAssetDeploymentEvent,
+  nextAssetDeploymentEvents,
+  parseAssetDeploymentEventRequest,
+  transitionAssetDeploymentWorkflow,
+  type AssetDeploymentEventParseResult,
+  type AssetDeploymentEventRequest,
+  type AssetDeploymentEventType,
+  type AssetDeploymentHumanEventType,
+  type AssetDeploymentWorkflowEvent,
+  type AssetDeploymentWorkflowSnapshot,
+  type AssetDeploymentWorkflowState,
+} from './asset-deployment.js'
+
+export {
+  RENTAL_REQUEST_APPROVAL_ALL_STATES,
+  RENTAL_REQUEST_APPROVAL_EVENT_TYPES,
+  RENTAL_REQUEST_APPROVAL_TERMINAL_STATES,
+  RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+  RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+  RentalRequestApprovalEventRequestSchema,
+  rentalRequestApprovalWorkflow,
+  isHumanRentalRequestApprovalEvent,
+  nextRentalRequestApprovalEvents,
+  parseRentalRequestApprovalEventRequest,
+  transitionRentalRequestApprovalWorkflow,
+  type RentalRequestApprovalEventParseResult,
+  type RentalRequestApprovalEventRequest,
+  type RentalRequestApprovalHumanEventType,
+  type RentalRequestApprovalWorkflowEvent,
+  type RentalRequestApprovalWorkflowSnapshot,
+  type RentalRequestApprovalWorkflowState,
+} from './rental-request-approval.js'
+
+export {
+  TENANT_PROVISION_ALL_STATES,
+  TENANT_PROVISION_EVENT_TYPES,
+  TENANT_PROVISION_HUMAN_EVENT_TYPES,
+  TENANT_PROVISION_TERMINAL_STATES,
+  TENANT_PROVISION_WORKFLOW_NAME,
+  TENANT_PROVISION_WORKFLOW_SCHEMA_VERSION,
+  TenantProvisionEventRequestSchema,
+  tenantProvisionWorkflow,
+  isHumanTenantProvisionEvent,
+  nextTenantProvisionEvents,
+  parseTenantProvisionEventRequest,
+  transitionTenantProvisionWorkflow,
+  type TenantProvisionEventParseResult,
+  type TenantProvisionEventRequest,
+  type TenantProvisionHumanEventType,
+  type TenantProvisionInvite,
+  type TenantProvisionSeedRequest,
+  type TenantProvisionWorkflowEvent,
+  type TenantProvisionWorkflowSnapshot,
+  type TenantProvisionWorkflowState,
+} from './tenant-provision.js'
+
+export {
+  QBO_SYNC_RUN_ALL_STATES,
+  QBO_SYNC_RUN_EVENT_TYPES,
+  QBO_SYNC_RUN_TERMINAL_STATES,
+  QBO_SYNC_RUN_WORKFLOW_NAME,
+  QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+  QboSyncRunEventRequestSchema,
+  qboSyncRunWorkflow,
+  isHumanQboSyncRunEvent,
+  nextQboSyncRunEvents,
+  parseQboSyncRunEventRequest,
+  transitionQboSyncRunWorkflow,
+  type QboSyncRunEventParseResult,
+  type QboSyncRunEventRequest,
+  type QboSyncRunHumanEventType,
+  type QboSyncRunWorkflowEvent,
+  type QboSyncRunWorkflowSnapshot,
+  type QboSyncRunWorkflowState,
+} from './qbo-sync-run.js'
+
+export {
+  SCAFFOLD_OPS_APPROVAL_ALL_STATES,
+  SCAFFOLD_OPS_APPROVAL_EVENT_TYPES,
+  SCAFFOLD_OPS_APPROVAL_TERMINAL_STATES,
+  SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME,
+  SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+  ScaffoldOpsApprovalEventRequestSchema,
+  scaffoldOpsApprovalWorkflow,
+  isHumanScaffoldOpsApprovalEvent,
+  nextScaffoldOpsApprovalEvents,
+  parseScaffoldOpsApprovalEventRequest,
+  transitionScaffoldOpsApprovalWorkflow,
+  type ScaffoldOpsApprovalEventParseResult,
+  type ScaffoldOpsApprovalEventRequest,
+  type ScaffoldOpsApprovalHumanEventType,
+  type ScaffoldOpsApprovalWorkflowEvent,
+  type ScaffoldOpsApprovalWorkflowSnapshot,
+  type ScaffoldOpsApprovalWorkflowState,
+} from './scaffold-ops-approval.js'
+
+export {
+  DAILY_LOG_ALL_STATES,
+  DAILY_LOG_EVENT_TYPES,
+  DAILY_LOG_TERMINAL_STATES,
+  DAILY_LOG_WORKFLOW_NAME,
+  DAILY_LOG_WORKFLOW_SCHEMA_VERSION,
+  DailyLogEventRequestSchema,
+  dailyLogStatusToWorkflowState,
+  dailyLogWorkflow,
+  isHumanDailyLogEvent,
+  nextDailyLogEvents,
+  parseDailyLogEventRequest,
+  transitionDailyLogWorkflow,
+  type DailyLogEventParseResult,
+  type DailyLogEventRequest,
+  type DailyLogHumanEventType,
+  type DailyLogWorkflowEvent,
+  type DailyLogWorkflowSnapshot,
+  type DailyLogWorkflowState,
+} from './daily-log.js'
+
+export {
+  NOTIFICATION_ALL_STATES,
+  NOTIFICATION_CHANNELS,
+  NOTIFICATION_EVENT_TYPES,
+  NOTIFICATION_FAILURE_KINDS,
+  NOTIFICATION_TERMINAL_STATES,
+  NOTIFICATION_WORKFLOW_NAME,
+  NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+  NotificationEventRequestSchema,
+  isHumanNotificationEvent,
+  nextNotificationEvents,
+  notificationStateToLegacyStatus,
+  notificationWorkflow,
+  parseNotificationEventRequest,
+  transitionNotificationWorkflow,
+  type NotificationChannel,
+  type NotificationEventParseResult,
+  type NotificationEventRequest,
+  type NotificationFailureKind,
+  type NotificationHumanEventType,
+  type NotificationWorkflowEvent,
+  type NotificationWorkflowSnapshot,
+  type NotificationWorkflowState,
+} from './notification.js'
+
+export {
+  CHANGE_ORDER_ALL_STATES,
+  CHANGE_ORDER_EVENT_TYPES,
+  CHANGE_ORDER_TERMINAL_STATES,
+  CHANGE_ORDER_WORKFLOW_NAME,
+  CHANGE_ORDER_WORKFLOW_SCHEMA_VERSION,
+  ChangeOrderEventRequestSchema,
+  changeOrderWorkflow,
+  isHumanChangeOrderEvent,
+  nextChangeOrderEvents,
+  parseChangeOrderEventRequest,
+  transitionChangeOrderWorkflow,
+  type ChangeOrderEventParseResult,
+  type ChangeOrderEventRequest,
+  type ChangeOrderHumanEventType,
+  type ChangeOrderWorkflowEvent,
+  type ChangeOrderWorkflowSnapshot,
+  type ChangeOrderWorkflowState,
+} from './change-order.js'

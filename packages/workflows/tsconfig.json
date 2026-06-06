@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // node types are for the package's own TESTS only (e.g. pinning
+    // workflow-event-ref against node:crypto). The package SOURCE stays
+    // node-free / isomorphic — see workflow-event-ref.ts (no node imports),
+    // which is what lets the browser bundle import it. apps/web resolves this
+    // package with its own tsconfig (no node types), so this does not leak
+    // node globals into the web build.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

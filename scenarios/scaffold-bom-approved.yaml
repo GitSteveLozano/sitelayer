@@ -1,0 +1,46 @@
+# Scaffold BOM approved — scaffold_ops_approval workflow.
+#
+# What this exercises:
+#   - scaffold_ops_approval reducer walked through APPROVE so the bom
+#     row lands in state=approved with state_version=2.
+#   - workflow_event_log carries one row (APPROVE) so
+#     scripts/replay-workflow.ts can verify reducer ↔ persisted row
+#     alignment.
+#
+# How to use:
+#   DATABASE_URL=postgres://... \
+#     npx tsx scripts/seed-scenario.ts scenarios/scaffold-bom-approved.yaml
+#   # Then inspect boms and confirm status='approved', state_version=2.
+
+company:
+  slug: acme-bom
+  name: Acme BOM
+
+members:
+  - clerk_user_id: e2e-admin
+    role: admin
+
+customers:
+  - ref: customer-bom
+    name: BOM Customer
+
+projects:
+  - ref: project-bom
+    name: BOM Approval Project
+    customer_ref: customer-bom
+    division_code: D4
+    status: active
+    bid_total: 125000.00
+
+boms:
+  - ref: bom-east-elev
+    project_ref: project-bom
+    name: 'East elevation scaffold BOM'
+    source: manual
+    notes: 'Hand-edited from Avontus export'
+    total_weight_kg: 1850.5
+    total_lines: 24
+    approval_event_log:
+      - type: APPROVE
+        approved_at: '2026-01-15T10:00:00.000Z'
+        approved_by: e2e-admin

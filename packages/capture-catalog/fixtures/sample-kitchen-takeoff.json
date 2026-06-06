@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "1.0.0",
+  "takeoffId": "92fbf7d5-4723-48c3-baf3-c00eabcb682d",
+  "projectId": "spike-001",
+  "capturedAt": "2026-05-06T19:30:00Z",
+  "producedAt": "2026-05-06T19:31:12Z",
+  "source": "manual",
+  "pipelineVersion": "0.1.0",
+  "units": "imperial",
+  "quantities": [
+    {
+      "id": "kt-q-1",
+      "description": "Kitchen — drywall (walls + ceiling, net of openings)",
+      "masterformatCode": "09 29 00",
+      "unit": "sqft",
+      "value": 240,
+      "confidence": 0.9,
+      "provenance": { "kind": "manual", "userId": "fixture", "note": "kitchen reno demo" }
+    },
+    {
+      "id": "kt-q-2",
+      "description": "Kitchen — baseboard MDF, 3-1/4\"",
+      "masterformatCode": "06 22 00",
+      "unit": "lft",
+      "value": 32,
+      "confidence": 0.9,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-3",
+      "description": "Kitchen — primer (1 coat) on drywall",
+      "masterformatCode": "09 91 23",
+      "unit": "sqft",
+      "value": 250,
+      "confidence": 0.85,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-4",
+      "description": "Kitchen — eggshell paint (2 coats) on drywall",
+      "masterformatCode": "09 91 23",
+      "unit": "sqft",
+      "value": 250,
+      "confidence": 0.85,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-5",
+      "description": "Kitchen — interior door, hollow-core 32\"",
+      "masterformatCode": "08 14 16",
+      "unit": "ea",
+      "value": 1,
+      "confidence": 0.95,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-6",
+      "description": "Kitchen — interior door, hollow-core 36\"",
+      "masterformatCode": "08 14 16",
+      "unit": "ea",
+      "value": 1,
+      "confidence": 0.95,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-7",
+      "description": "Kitchen — ceramic tile floor, 12x12",
+      "masterformatCode": "09 30 13",
+      "unit": "sqft",
+      "value": 85,
+      "confidence": 0.88,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    },
+    {
+      "id": "kt-q-8",
+      "description": "Kitchen — door/window casing MDF",
+      "masterformatCode": "06 22 00",
+      "unit": "lft",
+      "value": 25,
+      "confidence": 0.9,
+      "provenance": { "kind": "manual", "userId": "fixture" }
+    }
+  ]
+}

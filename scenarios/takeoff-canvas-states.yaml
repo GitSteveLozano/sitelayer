@@ -1,0 +1,204 @@
+# takeoff-canvas-states — one tenant whose projects each land the takeoff
+# canvas in a DISTINCT, renderable state, so a tester can seed once and switch
+# projects to exercise every canvas posture instead of click-pathing each by
+# hand. This is the DB half of canvas testability; the client-only states
+# (mid-draw, mid-calibration, AI-review-with-edits) are reachable on top of any
+# of these via the takeoff-session machine seed (`?seed=` dev affordance).
+#
+# What each project exercises:
+#   manual  → blueprint + SCALE-VERIFIED page + manual draft with real
+#             board-space geometry (polygon area + window cutout deduction +
+#             lineal run + count). The "drawn canvas, true sqft/lf" happy path.
+#   uncal   → same geometry but the page is NOT calibrated → the canvas shows
+#             the "board-space scale (no calibration)" degraded warning path.
+#   ai      → a blueprint_vision draft, review_required, with mixed high/med/low
+#             confidence quantities AND seeded geometry, so the AI review surface
+#             has proposals to accept / reject / edit.
+#   empty   → blueprint uploaded, calibrated, ZERO measurements → the cold-start
+#             "draw your first polygon" empty canvas.
+#
+# Seed (dev/demo only — refuses APP_TIER=prod):
+#   npx tsx scripts/seed-scenario.ts scenarios/takeoff-canvas-states.yaml
+#   # then open each project's /projects/:id/takeoff-canvas as e2e-admin.
+#
+# Geometry is 0–100 board space (what normalizeGeometry persists). Seeded
+# `quantity` is advisory — the server recomputes true quantity from geometry +
+# the page's per-axis world scale on the next write.
+
+company:
+  slug: takeoff-lab
+  name: Takeoff Lab
+
+members:
+  - { clerk_user_id: e2e-admin, role: admin }
+  - { clerk_user_id: e2e-office, role: office }
+  - { clerk_user_id: e2e-member, role: member }
+
+customers:
+  - { ref: cust, name: Canvas QA Customer }
+
+projects:
+  - {
+      ref: manual,
+      name: 'Manual takeoff — calibrated',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: uncal,
+      name: 'Manual takeoff — uncalibrated',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: ai,
+      name: 'AI takeoff — pending review',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+  - {
+      ref: empty,
+      name: 'Empty canvas — blueprint, no measurements',
+      customer_ref: cust,
+      division_code: D4,
+      status: active,
+      lifecycle_state: estimating,
+    }
+
+blueprints:
+  - ref: bp-manual
+    project_ref: manual
+    file_name: floor-plan.pdf
+    preview_type: pdf
+    # Real plan set from the repo — the seeder stores the actual PDF bytes so
+    # the canvas renders the drawing, not the empty grid. NOTE: the manual draft
+    # geometry below is synthetic board-space (0-100) tuned to a flat page; it
+    # renders OVER this real sheet but is not traced to its actual walls. The
+    # point is a real underlay + the measurement/condition engine, not a
+    # pixel-perfect trace.
+    source_file: blueprints_sample/blueprints_example.pdf
+    pages:
+      - ref: pg-manual
+        page_number: 1
+        # 24 ft along the bottom edge, verified.
+        calibration: { world_distance: 24, world_unit: ft, x1: 10, y1: 90, x2: 34, y2: 90, verified: true }
+  - ref: bp-uncal
+    project_ref: uncal
+    file_name: floor-plan.pdf
+    preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
+    pages:
+      - { ref: pg-uncal, page_number: 1 } # deliberately NO calibration
+  - ref: bp-ai
+    project_ref: ai
+    file_name: elevations.pdf
+    preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
+    pages:
+      - ref: pg-ai
+        page_number: 1
+        calibration: { world_distance: 20, world_unit: ft, x1: 5, y1: 95, x2: 25, y2: 95, verified: true }
+  - ref: bp-empty
+    project_ref: empty
+    file_name: site.pdf
+    preview_type: pdf
+    source_file: blueprints_sample/blueprints_example.pdf
+    pages:
+      - ref: pg-empty
+        page_number: 1
+        calibration: { world_distance: 30, world_unit: ft, x1: 10, y1: 90, x2: 40, y2: 90, verified: true }
+
+takeoff_conditions:
+  - {
+      ref: cond-wall,
+      name: 'Exterior wall (EIFS)',
+      color: '#2f7d32',
+      measurement_kind: area,
+      emit_area: true,
+      emit_linear: true,
+    }
+
+takeoff_drafts:
+  - ref: manual-draft
+    project_ref: manual
+    name: 'Manual takeoff v1'
+    source: manual
+    kind: takeoff
+    measurements:
+      # Building footprint area — tagged to the exterior-wall condition + south elevation.
+      - service_item_code: EPS
+        unit: sqft
+        quantity: 1180
+        blueprint_ref: bp-manual
+        page_ref: pg-manual
+        condition_ref: cond-wall
+        elevation: south
+        geometry_kind: polygon
+        geometry: { points: [{ x: 20, y: 20 }, { x: 80, y: 20 }, { x: 80, y: 60 }, { x: 20, y: 60 }] }
+      # A window cutout — is_deduction nets out of the parent area downstream.
+      - service_item_code: EPS
+        unit: sqft
+        quantity: 60
+        is_deduction: true
+        blueprint_ref: bp-manual
+        page_ref: pg-manual
+        geometry_kind: polygon
+        geometry: { points: [{ x: 35, y: 30 }, { x: 45, y: 30 }, { x: 45, y: 42 }, { x: 35, y: 42 }] }
+      # Base coat along the bottom wall run (lineal).
+      - service_item_code: Basecoat
+        unit: lf
+        quantity: 60
+        blueprint_ref: bp-manual
+        page_ref: pg-manual
+        geometry_kind: lineal
+        geometry: { points: [{ x: 20, y: 60 }, { x: 80, y: 60 }] }
+      # Three openings (count).
+      - service_item_code: 'Finish Coat'
+        unit: ea
+        quantity: 3
+        blueprint_ref: bp-manual
+        page_ref: pg-manual
+        geometry_kind: count
+        geometry: { points: [{ x: 30, y: 25 }, { x: 50, y: 25 }, { x: 70, y: 25 }] }
+
+  - ref: uncal-draft
+    project_ref: uncal
+    name: 'Manual takeoff — no scale set'
+    source: manual
+    kind: takeoff
+    measurements:
+      - service_item_code: EPS
+        unit: sqft
+        quantity: 2000
+        blueprint_ref: bp-uncal
+        page_ref: pg-uncal
+        geometry_kind: polygon
+        geometry: { points: [{ x: 25, y: 25 }, { x: 75, y: 25 }, { x: 75, y: 65 }, { x: 25, y: 65 }] }
+
+  - ref: ai-draft
+    project_ref: ai
+    name: 'AI auto-takeoff'
+    source: blueprint_vision
+    kind: takeoff
+    review_required: true
+    result_json:
+      summary: { total_sqft: 2400, confidence: 0.82 }
+      quantities:
+        - { id: q1, service_item_code: EPS, quantity: 2400, unit: sqft, confidence: 0.93 }
+        - { id: q2, service_item_code: Basecoat, quantity: 320, unit: lf, confidence: 0.71 }
+        - { id: q3, service_item_code: 'Finish Coat', quantity: 6, unit: ea, confidence: 0.42 }
+    measurements:
+      - service_item_code: EPS
+        unit: sqft
+        quantity: 2400
+        blueprint_ref: bp-ai
+        page_ref: pg-ai
+        elevation: north
+        geometry_kind: polygon
+        geometry: { points: [{ x: 15, y: 30 }, { x: 60, y: 30 }, { x: 60, y: 70 }, { x: 15, y: 70 }] }

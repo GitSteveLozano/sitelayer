@@ -1,0 +1,269 @@
+// Offline mutation queue — IndexedDB-backed.
+//
+// When a mutation fails with a NetworkError (no response — caller is
+// offline or the API is unreachable) we enqueue a serializable
+// description of the call here. The replay engine in `replay.ts`
+// drains the queue when `online` fires (or every 15s) and applies the
+// mutations in order, dropping any that 4xx after replay (bad input
+// won't get fixed by retry) and keeping ones that 5xx for the next
+// cycle.
+//
+// Why IndexedDB and not localStorage:
+//   - the queue can grow large (a foreman who works a 4G-dead site for
+//     a day might queue dozens of clock events + 12 photos)
+//   - photos are File / Blob, not strings — IndexedDB stores binary
+//     natively, localStorage doesn't
+//   - we don't want to block the main thread on JSON.parse of the
+//     entire queue at startup
+//
+// The queue is small + boutique enough that we hand-roll the IDB
+// access rather than pull in idb-keyval. Keeps the dep floor flat.
+
+const DB_NAME = 'sitelayer-offline'
+const DB_VERSION = 1
+const STORE_NAME = 'mutations'
+
+/**
+ * Mutation kinds the queue knows how to replay. Each kind is paired
+ * with a payload shape; the replay engine has a switch on `kind` that
+ * calls the right `request()` invocation.
+ */
+export type OfflineMutationKind =
+  | 'clock_in'
+  | 'clock_out'
+  | 'clock_void'
+  | 'clock_event_photo_upload'
+  | 'daily_log_create'
+  | 'daily_log_patch'
+  | 'daily_log_submit'
+  | 'daily_log_photo_upload'
+  | 'daily_log_photo_delete'
+  | 'takeoff_measurement_create'
+  | 'time_review_event'
+  | 'notification_pref_save'
+  | 'capture_session_start'
+  | 'capture_artifact_upload'
+  | 'capture_session_finalize'
+
+export interface OfflineMutation {
+  /** Auto-generated. */
+  id: string
+  kind: OfflineMutationKind
+  /** Wall-clock timestamp at enqueue time. */
+  enqueued_at: number
+  /**
+   * Wall-clock timestamp of the most recent replay attempt — set by the
+   * replayer when it bumps `attempt_count`. The backoff window measures
+   * from this, not `enqueued_at`, so a row that's been on the queue for
+   * an hour doesn't bypass its 1-min retry gate.
+   */
+  last_attempt_at?: number
+  /** Re-stringified arguments. The replay handler casts to its expected shape. */
+  payload: Record<string, unknown>
+  /** Last error message captured during a failed replay attempt. */
+  last_error?: string | null
+  attempt_count: number
+}
+
+/**
+ * Thrown by enqueueOfflineMutation when the payload structure violates the
+ * kind's contract — most commonly a File/Blob in a slot that isn't allowed
+ * for that kind. IndexedDB stores Blobs natively, but if a future change
+ * pipes payloads through `JSON.stringify` (Sentry breadcrumbs, network
+ * tracing, replay re-serialization) the Blob is silently lost and the
+ * replayed request 400s. Catch the foot-gun at enqueue time instead.
+ */
+export class OfflineQueuePayloadError extends Error {
+  constructor(
+    readonly kind: OfflineMutationKind,
+    readonly path: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'OfflineQueuePayloadError'
+  }
+}
+
+/**
+ * Per-kind contract: which top-level slots may legally hold a File/Blob.
+ * Anything else with a Blob value (including nested) is rejected. Kinds
+ * that don't carry binary data list an empty set.
+ */
+const BLOB_SLOTS: Record<OfflineMutationKind, readonly string[]> = {
+  clock_in: [],
+  clock_out: [],
+  clock_void: [],
+  clock_event_photo_upload: ['file'],
+  daily_log_create: [],
+  daily_log_patch: [],
+  daily_log_submit: [],
+  daily_log_photo_upload: ['file'],
+  daily_log_photo_delete: [],
+  takeoff_measurement_create: [],
+  time_review_event: [],
+  notification_pref_save: [],
+  capture_session_start: [],
+  capture_artifact_upload: ['file'],
+  capture_session_finalize: [],
+}
+
+function isBlobLike(value: unknown): value is Blob {
+  // File extends Blob; either is structured-cloneable into IndexedDB.
+  return typeof Blob !== 'undefined' && value instanceof Blob
+}
+
+/**
+ * Walk the payload and reject any Blob/File that doesn't live at a slot
+ * allow-listed for this kind. Returns silently when the structure is fine.
+ *
+ * Allowed Blob slots are always top-level (the replay handler reads them
+ * via `row.payload.<slot>`); nested Blobs are a sign of misuse and are
+ * rejected outright.
+ */
+function validatePayloadBlobs(kind: OfflineMutationKind, payload: Record<string, unknown>): void {
+  const allowed = new Set(BLOB_SLOTS[kind] ?? [])
+  function walk(value: unknown, path: string): void {
+    if (isBlobLike(value)) {
+      // Top-level blob in an allowed slot is fine.
+      const isTopLevelAllowed = !path.includes('.') && allowed.has(path)
+      if (isTopLevelAllowed) return
+      throw new OfflineQueuePayloadError(kind, path, `offline kind ${kind} does not accept a Blob/File at ${path}`)
+    }
+    if (value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${path}[${i}]`))
+      return
+    }
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      walk(v, path ? `${path}.${k}` : k)
+    }
+  }
+  for (const [k, v] of Object.entries(payload)) {
+    walk(v, k)
+  }
+}
+
+let dbPromise: Promise<IDBDatabase> | null = null
+
+function openDb(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise
+  if (typeof indexedDB === 'undefined') {
+    return Promise.reject(new Error('IndexedDB not available'))
+  }
+  dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
+        store.createIndex('enqueued_at', 'enqueued_at')
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'))
+  })
+  return dbPromise
+}
+
+function nextMutationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+/** Add one mutation to the back of the queue. */
+export async function enqueueOfflineMutation(
+  kind: OfflineMutationKind,
+  payload: Record<string, unknown>,
+): Promise<OfflineMutation> {
+  validatePayloadBlobs(kind, payload)
+  const db = await openDb()
+  const mutation: OfflineMutation = {
+    id: nextMutationId(),
+    kind,
+    enqueued_at: Date.now(),
+    payload,
+    attempt_count: 0,
+  }
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).add(mutation)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB write failed'))
+  })
+  notifyChange()
+  return mutation
+}
+
+/** List queued mutations in insertion order. */
+export async function listOfflineMutations(): Promise<OfflineMutation[]> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const req = tx.objectStore(STORE_NAME).index('enqueued_at').getAll()
+    req.onsuccess = () => resolve(req.result as OfflineMutation[])
+    req.onerror = () => reject(req.error ?? new Error('IndexedDB read failed'))
+  })
+}
+
+/** Remove one mutation by id. Called after a successful replay. */
+export async function removeOfflineMutation(id: string): Promise<void> {
+  const db = await openDb()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).delete(id)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB delete failed'))
+  })
+  notifyChange()
+}
+
+/** Update a row (used to bump attempt_count + last_error after a failed replay). */
+export async function updateOfflineMutation(mutation: OfflineMutation): Promise<void> {
+  const db = await openDb()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).put(mutation)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB update failed'))
+  })
+  notifyChange()
+}
+
+/** Pure count for the offline banner badge. */
+export async function offlineMutationCount(): Promise<number> {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const req = tx.objectStore(STORE_NAME).count()
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error ?? new Error('IndexedDB count failed'))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Subscriber pattern — let the OfflineBanner re-render on enqueue/dequeue
+// without polling. Lightweight; we don't need pub-sub semantics beyond
+// "tell every active subscriber that the queue changed."
+// ---------------------------------------------------------------------------
+
+type Listener = () => void
+const listeners = new Set<Listener>()
+
+export function subscribeOfflineMutations(listener: Listener): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function notifyChange(): void {
+  for (const l of listeners) {
+    try {
+      l()
+    } catch {
+      // best-effort
+    }
+  }
+}

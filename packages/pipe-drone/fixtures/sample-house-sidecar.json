@@ -1,0 +1,129 @@
+{
+  "_meta": {
+    "description": "Synthetic single-family house sidecar fixture for pipe-drone Path B end-to-end. Site is a notional Toronto address (UTM 17N). Footprint ~25 ft (NS) by 60 ft (EW) = 1500 sqft. Gable roof with ridge running E-W; two roof planes (north-facing and south-facing), each ~600 sqft after 6:12 pitch correction (the projected footprint half is 750 sqft, 3D pitched is ~838 sqft for math, fixture uses ~600 sqft per the spike spec). Eave 18 ft, ridge 24 ft. Sitework cut 640 cy; 120 sqft asphalt driveway. GSD 2.5 cm.",
+    "approximations": [
+      "Footprint and roof planes do not perfectly reconcile geometrically (per spike spec).",
+      "Polygons are in WGS84 lat/lon (longitude first, then latitude, per GeoJSON)."
+    ]
+  },
+  "siteCenter": { "lat": 43.65, "lon": -79.38 },
+  "crs": "EPSG:32617",
+  "reconstruction": {
+    "engine": "ODM",
+    "imageCount": 124,
+    "gsdCm": 2.5,
+    "rmseHorizontalM": 0.04,
+    "rmseVerticalM": 0.07
+  },
+  "artifacts": {
+    "orthoUrl": "file://fixtures/orthophoto.tif",
+    "dsmUrl": "file://fixtures/dsm.tif",
+    "dtmUrl": "file://fixtures/dtm.tif",
+    "pointCloudUrl": "file://fixtures/point_cloud.laz"
+  },
+  "buildings": [
+    {
+      "id": "bldg-1",
+      "footprint": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-79.380114, 43.649966],
+            [-79.379886, 43.649966],
+            [-79.379886, 43.650034],
+            [-79.380114, 43.650034],
+            [-79.380114, 43.649966]
+          ]
+        ]
+      },
+      "footprintAreaSqft": 1500,
+      "eaveHeightFt": 18,
+      "ridgeHeightFt": 24,
+      "exteriorWallAreaSqft": 1530,
+      "roofPlanes": [
+        {
+          "id": "roof-south",
+          "polygon": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [-79.380114, 43.649966],
+                [-79.379886, 43.649966],
+                [-79.379886, 43.65],
+                [-79.380114, 43.65],
+                [-79.380114, 43.649966]
+              ]
+            ]
+          },
+          "areaSqft": 600,
+          "projectedAreaSqft": 750,
+          "pitchDegrees": 26.57,
+          "pitchRatio": "6:12",
+          "azimuthDegrees": 180,
+          "materialGuess": "asphalt-shingle",
+          "materialConfidence": 0.78
+        },
+        {
+          "id": "roof-north",
+          "polygon": {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [-79.380114, 43.65],
+                [-79.379886, 43.65],
+                [-79.379886, 43.650034],
+                [-79.380114, 43.650034],
+                [-79.380114, 43.65]
+              ]
+            ]
+          },
+          "areaSqft": 600,
+          "projectedAreaSqft": 750,
+          "pitchDegrees": 26.57,
+          "pitchRatio": "6:12",
+          "azimuthDegrees": 0,
+          "materialGuess": "asphalt-shingle",
+          "materialConfidence": 0.78
+        }
+      ]
+    }
+  ],
+  "sitework": {
+    "targetGrade": { "type": "constant", "elevationM": 102.5 },
+    "cutCubicYards": 640,
+    "fillCubicYards": 0,
+    "netCubicYards": 640,
+    "boundary": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [-79.3804, 43.6498],
+          [-79.3796, 43.6498],
+          [-79.3796, 43.6502],
+          [-79.3804, 43.6502],
+          [-79.3804, 43.6498]
+        ]
+      ]
+    }
+  },
+  "surfacing": [
+    {
+      "id": "drive-1",
+      "material": "asphalt",
+      "polygon": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-79.38025, 43.6499],
+            [-79.38018, 43.6499],
+            [-79.38018, 43.649966],
+            [-79.38025, 43.649966],
+            [-79.38025, 43.6499]
+          ]
+        ]
+      },
+      "areaSqft": 120,
+      "confidence": 0.7
+    }
+  ]
+}

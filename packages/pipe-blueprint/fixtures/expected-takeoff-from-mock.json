@@ -1,0 +1,319 @@
+{
+  "schemaVersion": "1.0.0",
+  "projectId": "test-project",
+  "source": "blueprint.vision",
+  "pipelineVersion": "0.1.0",
+  "units": "imperial",
+  "quantities": [
+    {
+      "id": "q_0_r1_floor",
+      "description": "BEDROOM 1 — floor area",
+      "uniformatCode": "B3010",
+      "unit": "sqft",
+      "value": 120,
+      "confidence": 0.6,
+      "provenance": {
+        "kind": "blueprint",
+        "pdfSha256": "__PDF_SHA256__",
+        "pageIndex": 0,
+        "bbox": [100, 100, 400, 350],
+        "scaleFt": 25,
+        "detector": "claude-opus-4-7",
+        "detectorVersion": "blueprint-vision/v0.3",
+        "dimensionSourceType": "measured"
+      },
+      "geometryRefs": ["s_0_r1"]
+    },
+    {
+      "id": "q_0_r1_drywall",
+      "description": "BEDROOM 1 — drywall (perimeter × 8ft − openings)",
+      "masterformatCode": "09 29 00",
+      "unit": "sqft",
+      "value": 310,
+      "confidence": 0.6,
+      "provenance": {
+        "kind": "blueprint",
+        "pdfSha256": "__PDF_SHA256__",
+        "pageIndex": 0,
+        "bbox": [100, 100, 400, 350],
+        "scaleFt": 25,
+        "detector": "claude-opus-4-7",
+        "detectorVersion": "blueprint-vision/v0.3",
+        "dimensionSourceType": "measured"
+      },
+      "geometryRefs": ["s_0_r1"]
+    },
+    {
+      "id": "q_0_r1_baseboard",
+      "description": "BEDROOM 1 — baseboard",
+      "masterformatCode": "06 22 00",
+      "unit": "lft",
+      "value": 38,
+      "confidence": 0.6,
+      "provenance": {
+        "kind": "blueprint",
+        "pdfSha256": "__PDF_SHA256__",
+        "pageIndex": 0,
+        "bbox": [100, 100, 400, 350],
+        "scaleFt": 25,
+        "detector": "claude-opus-4-7",
+        "detectorVersion": "blueprint-vision/v0.3",
+        "dimensionSourceType": "measured"
+      },
+      "geometryRefs": ["s_0_r1"]
+    },
+    {
+      "id": "q_0_r1_doors",
+      "description": "BEDROOM 1 — interior doors",
+      "masterformatCode": "08 14 00",
+      "unit": "ea",
+      "value": 1,
+      "confidence": 0.6,
+      "provenance": {
+        "kind": "blueprint",
+        "pdfSha256": "__PDF_SHA256__",
+        "pageIndex": 0,
+        "bbox": [100, 100, 400, 350],
+        "scaleFt": 25,
+        "detector": "claude-opus-4-7",
+        "detectorVersion": "blueprint-vision/v0.3",
+        "dimensionSourceType": "measured"
+      },
+      "geometryRefs": ["s_0_r1"]
+    },
+    {
+      "id": "q_0_r1_windows",
+      "description": "BEDROOM 1 — windows",
+      "masterformatCode": "08 50 00",
+      "unit": "ea",
+      "value": 1,
+      "confidence": 0.6,
+      "provenance": {
+        "kind": "blueprint",
+        "pdfSha256": "__PDF_SHA256__",
+        "pageIndex": 0,
+        "bbox": [100, 100, 400, 350],
+        "scaleFt": 25,
+        "detector": "claude-opus-4-7",
+        "detectorVersion": "blueprint-vision/v0.3",
+        "dimensionSourceType": "measured"
+      },
+      "geometryRefs": ["s_0_r1"]
+    }
+  ],
+  "geometry": {
+    "surfaces": [
+      {
+        "id": "s_0_r1",
+        "kind": "floor",
+        "areaSqFt": 120,
+        "polygon": [
+          [100, 100],
+          [400, 100],
+          [400, 350],
+          [100, 350]
+        ]
+      }
+    ]
+  },
+  "sourceArtifact": {
+    "kind": "blueprint",
+    "blueprint": {
+      "sourcePdfPath": "__PDF_PATH__",
+      "pdfSha256": "__PDF_SHA256__",
+      "pdfMeta": {
+        "pages": 2,
+        "pageSizesPts": [
+          {
+            "w": 1200,
+            "h": 900
+          }
+        ]
+      },
+      "modelVersion": "claude-opus-4-7",
+      "promptVersion": "blueprint-vision/v0.3",
+      "pages": [
+        {
+          "pageIndex": 0,
+          "imageSize": {
+            "widthPx": 1200,
+            "heightPx": 900
+          },
+          "classification": {
+            "kind": "floor_plan",
+            "confidence": 0.88
+          },
+          "titleblock": {
+            "projectName": "Sample Residence",
+            "sheetNumber": "A-101",
+            "sheetTitle": "First Floor Plan",
+            "scaleText": "1/4\" = 1'-0\"",
+            "northArrowDeg": 0,
+            "drawingDate": "2026-04-15"
+          },
+          "scale": {
+            "pixelsPerFoot": 25,
+            "source": "titleblock_text",
+            "confidence": 0.6
+          },
+          "scaleConfidence": 0.6,
+          "rooms": [
+            {
+              "id": "r1",
+              "name": "BEDROOM 1",
+              "polygon": [
+                {
+                  "x": 100,
+                  "y": 100
+                },
+                {
+                  "x": 400,
+                  "y": 100
+                },
+                {
+                  "x": 400,
+                  "y": 350
+                },
+                {
+                  "x": 100,
+                  "y": 350
+                }
+              ],
+              "areaSqFt": {
+                "value": 120,
+                "sourceType": "measured",
+                "confidence": 0.6
+              },
+              "perimeterFt": {
+                "value": 44,
+                "sourceType": "measured",
+                "confidence": 0.6
+              },
+              "openings": [
+                {
+                  "kind": "door",
+                  "position": {
+                    "x": 250,
+                    "y": 100
+                  },
+                  "widthFt": {
+                    "value": 3,
+                    "sourceType": "annotated",
+                    "confidence": 0.57
+                  },
+                  "swing": "right",
+                  "hostWallId": "w1"
+                },
+                {
+                  "kind": "window",
+                  "position": {
+                    "x": 100,
+                    "y": 225
+                  },
+                  "hostWallId": "w4"
+                }
+              ]
+            }
+          ],
+          "walls": [
+            {
+              "id": "w1",
+              "start": {
+                "x": 100,
+                "y": 100
+              },
+              "end": {
+                "x": 400,
+                "y": 100
+              },
+              "lengthFt": {
+                "value": 12,
+                "sourceType": "annotated",
+                "confidence": 0.57
+              }
+            },
+            {
+              "id": "w2",
+              "start": {
+                "x": 400,
+                "y": 100
+              },
+              "end": {
+                "x": 400,
+                "y": 350
+              },
+              "lengthFt": {
+                "value": 10,
+                "sourceType": "annotated",
+                "confidence": 0.57
+              }
+            },
+            {
+              "id": "w3",
+              "start": {
+                "x": 400,
+                "y": 350
+              },
+              "end": {
+                "x": 100,
+                "y": 350
+              },
+              "lengthFt": {
+                "value": 12,
+                "sourceType": "measured",
+                "confidence": 0.6
+              }
+            },
+            {
+              "id": "w4",
+              "start": {
+                "x": 100,
+                "y": 350
+              },
+              "end": {
+                "x": 100,
+                "y": 100
+              },
+              "lengthFt": {
+                "value": 10,
+                "sourceType": "measured",
+                "confidence": 0.6
+              }
+            }
+          ],
+          "notes": ["sample fixture for tests"],
+          "warnings": []
+        },
+        {
+          "pageIndex": 1,
+          "imageSize": {
+            "widthPx": 0,
+            "heightPx": 0
+          },
+          "classification": {
+            "kind": "non_drawing",
+            "confidence": 0.95
+          },
+          "scaleConfidence": 0,
+          "rooms": [],
+          "walls": [],
+          "notes": [],
+          "warnings": []
+        }
+      ]
+    }
+  },
+  "warnings": [
+    {
+      "code": "non_drawing_skipped",
+      "severity": "info",
+      "message": "Page 1 (non_drawing) skipped — not a plan sheet"
+    },
+    {
+      "code": "low_confidence_quantities",
+      "severity": "warn",
+      "message": "5 quantity(ies) below confidence floor 0.7"
+    }
+  ],
+  "reviewRequired": true
+}

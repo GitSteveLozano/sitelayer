@@ -1,0 +1,218 @@
+// Estimate pushes — financial workflow that drives QBO estimate sync.
+// Wraps /api/estimate-pushes and /api/estimate-pushes/:id/events in
+// apps/api/src/routes/estimate-pushes.ts.
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { EstimatePushHumanEventType, EstimatePushWorkflowState } from '@sitelayer/workflows'
+import { ApiError, request } from './client'
+
+// Re-exported under the v2 names. Canonical union lives in
+// @sitelayer/workflows so the reducer and the client agree.
+export type EstimatePushState = EstimatePushWorkflowState
+export type EstimatePushHumanEvent = EstimatePushHumanEventType
+
+export interface EstimatePushRow {
+  id: string
+  project_id: string
+  customer_id: string | null
+  subtotal: string
+  status: EstimatePushState
+  state_version: number
+  qbo_estimate_id: string | null
+  reviewed_at: string | null
+  reviewed_by: string | null
+  approved_at: string | null
+  approved_by: string | null
+  posted_at: string | null
+  failed_at: string | null
+  error: string | null
+  workflow_engine: string
+  workflow_run_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EstimatePushLine {
+  id: string
+  estimate_push_id: string
+  description: string
+  quantity: string
+  unit?: string | null
+  /**
+   * Older mocks/client types used `rate`; the current API row comes from
+   * `estimate_push_lines.unit_price`. Accept both so deployed rows do not
+   * render `NaN` while the server schema keeps its captured column name.
+   */
+  rate?: string | null
+  unit_price?: string | null
+  amount: string
+  service_item_code: string | null
+  sort_order: number
+}
+
+export function estimatePushLineRate(line: EstimatePushLine): string {
+  return line.rate ?? line.unit_price ?? '0'
+}
+
+export function estimatePushLineUnit(line: EstimatePushLine): string {
+  return typeof line.unit === 'string' ? line.unit.trim() : ''
+}
+
+export interface EstimatePushSnapshot {
+  state: EstimatePushState
+  state_version: number
+  next_events: Array<{ type: EstimatePushHumanEvent; label: string }>
+  context: {
+    id: string
+    project_id: string
+    customer_id: string | null
+    subtotal: string
+    qbo_estimate_id: string | null
+    reviewed_at: string | null
+    reviewed_by: string | null
+    approved_at: string | null
+    approved_by: string | null
+    posted_at: string | null
+    failed_at: string | null
+    error: string | null
+    workflow_engine: string
+    workflow_run_id: string | null
+    lines: EstimatePushLine[]
+  }
+}
+
+export interface EstimatePushListParams {
+  state?: EstimatePushState
+}
+
+export interface EstimatePushListResponse {
+  estimatePushes: EstimatePushRow[]
+}
+
+const KEYS = {
+  all: () => ['estimate-pushes'] as const,
+  list: (params: EstimatePushListParams) => [...KEYS.all(), 'list', params] as const,
+  detail: (id: string) => [...KEYS.all(), 'detail', id] as const,
+}
+
+export const estimatePushQueryKeys = KEYS
+
+export function fetchEstimatePushes(params: EstimatePushListParams = {}): Promise<EstimatePushListResponse> {
+  const search = new URLSearchParams()
+  if (params.state) search.set('state', params.state)
+  const qs = search.toString()
+  return request<EstimatePushListResponse>(`/api/estimate-pushes${qs ? `?${qs}` : ''}`)
+}
+
+export function fetchEstimatePush(id: string): Promise<EstimatePushSnapshot> {
+  return request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(id)}`)
+}
+
+/**
+ * Plain-function event dispatcher for XState actor invocations (the
+ * headless workflow factory in `machines/headless-workflow.ts`). React
+ * components should prefer `useDispatchEstimatePushEvent`.
+ */
+export function dispatchEstimatePushEvent(
+  pushId: string,
+  event: EstimatePushHumanEvent,
+  stateVersion: number,
+): Promise<EstimatePushSnapshot> {
+  return request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(pushId)}/events`, {
+    method: 'POST',
+    json: { event, state_version: stateVersion },
+  })
+}
+
+/**
+ * Snapshot the project's current estimate_lines into a new estimate_push.
+ * Returns the inserted row; callers typically follow up with a fetch via
+ * `fetchEstimatePush(row.id)` to get the full WorkflowSnapshot shape.
+ *
+ * 409 surfaces when an open (non-terminal) push already exists for the
+ * project; the response body carries `{open_id}` so callers can hop
+ * straight to the existing review screen.
+ */
+export type CreateEstimatePushResult =
+  | { kind: 'created'; pushId: string; snapshot: EstimatePushSnapshot }
+  | { kind: 'conflict'; openId: string }
+
+export async function createEstimatePush(projectId: string): Promise<CreateEstimatePushResult> {
+  try {
+    // Server returns the full WorkflowSnapshot (`state`, `state_version`,
+    // `next_events`, `context`) on 201 — not the bare row.
+    const snapshot = await request<EstimatePushSnapshot>(
+      `/api/projects/${encodeURIComponent(projectId)}/estimate-pushes`,
+      { method: 'POST', json: {} },
+    )
+    return { kind: 'created', pushId: snapshot.context.id, snapshot }
+  } catch (err) {
+    // 409 means a non-terminal push already exists. Surface the open id
+    // as a typed result so the caller can hop to the in-progress review
+    // screen instead of dead-ending on a generic error.
+    if (err instanceof ApiError && err.status === 409) {
+      const body = err.body
+      if (body && typeof body === 'object' && 'open_estimate_push_id' in body) {
+        const openId = (body as { open_estimate_push_id: unknown }).open_estimate_push_id
+        if (typeof openId === 'string') return { kind: 'conflict', openId }
+      }
+    }
+    throw err
+  }
+}
+
+export function useEstimatePushes(params: EstimatePushListParams = {}) {
+  return useQuery<EstimatePushListResponse>({
+    queryKey: KEYS.list(params),
+    queryFn: () => fetchEstimatePushes(params),
+  })
+}
+
+/**
+ * React wrapper around `createEstimatePush` — snapshots a project's current
+ * estimate_lines into a new estimate_push. Used by the mobile "Quick invoice"
+ * create flow. On a successful create the new snapshot is primed into the
+ * detail cache and the list cache is invalidated so the financial list +
+ * state-filter chips repaint. A 409 (open push already exists) is surfaced
+ * as a typed `{ kind: 'conflict', openId }` result rather than an error so
+ * callers can hop straight to the in-progress invoice.
+ */
+export function useCreateEstimatePush() {
+  const qc = useQueryClient()
+  return useMutation<CreateEstimatePushResult, Error, { projectId: string }>({
+    mutationFn: ({ projectId }) => createEstimatePush(projectId),
+    onSuccess: (result) => {
+      if (result.kind === 'created') {
+        qc.setQueryData(KEYS.detail(result.pushId), result.snapshot)
+      }
+      qc.invalidateQueries({ queryKey: KEYS.all() })
+    },
+  })
+}
+
+export function useEstimatePush(id: string | null | undefined) {
+  return useQuery<EstimatePushSnapshot>({
+    queryKey: KEYS.detail(id ?? ''),
+    queryFn: () => fetchEstimatePush(id!),
+    enabled: Boolean(id),
+  })
+}
+
+export function useDispatchEstimatePushEvent(id: string) {
+  const qc = useQueryClient()
+  return useMutation<EstimatePushSnapshot, Error, { event: EstimatePushHumanEvent; state_version: number }>({
+    mutationFn: (input) =>
+      request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(id)}/events`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: (data) => {
+      // Write the new snapshot directly so the detail screen renders
+      // the post-event state on the next tick instead of waiting for
+      // the invalidate-driven refetch round-trip. The list cache also
+      // gets refreshed for the state-filter chips to update.
+      qc.setQueryData(KEYS.detail(id), data)
+      qc.invalidateQueries({ queryKey: KEYS.all() })
+    },
+  })
+}
