@@ -513,6 +513,18 @@ class FakePool {
       }
     }
 
+    // ADDITIVE projectkit seam: the create flow merges a Concern snapshot onto
+    // metadata via `set metadata = metadata || jsonb_build_object('concern', ...)`.
+    // Apply the additive merge and return only the metadata column, matching the
+    // production query. Must be matched BEFORE the generic status/lane update.
+    if (normalized.startsWith('update context_work_items') && normalized.includes("jsonb_build_object('concern'")) {
+      const [companyId, workItemId, concernJson] = params as [string, string, string]
+      const row = this.workItems.find((item) => item.company_id === companyId && item.id === workItemId)
+      if (!row) return { rows: [], rowCount: 0 }
+      row.metadata = { ...row.metadata, concern: JSON.parse(concernJson) as JsonRecord }
+      return { rows: [{ metadata: row.metadata }], rowCount: 1 }
+    }
+
     if (normalized.startsWith('update context_work_items')) {
       if (normalized.includes('agent_callback_token_hash')) {
         const [companyId, workItemId, tokenHash] = params as [string, string, string]

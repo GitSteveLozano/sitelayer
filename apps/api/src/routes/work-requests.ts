@@ -39,6 +39,8 @@ import {
   supportJsonRecord,
   type JsonRecord,
 } from './support-packets.js'
+import type { WorkRequest as ProjectkitWorkRequest } from '@operator/projectkit'
+import { buildConcernSnapshot, buildWorkRequestSnapshot } from '../projectkit-concern.js'
 
 export type WorkRequestRouteCtx = {
   pool: Pool
@@ -122,6 +124,16 @@ type DispatchPayload = {
     token_type: 'scoped_bearer'
     expires_at: string
   }
+  /**
+   * ADDITIVE projectkit seam: a first-class @operator/projectkit `WorkRequest`
+   * (with the originating `Concern` embedded in its payload) carried NEXT TO
+   * the existing context_work_dispatch.v1 fields — it does not replace them. A
+   * subscriber other than mesh can read this to dispatch + call back using only
+   * the published projectkit shapes (the One-Line Boundary Test). Validated by
+   * apps/api/src/projectkit-concern.test.ts via validateWorkRequest /
+   * validateConcern.
+   */
+  dispatch_request: ProjectkitWorkRequest
 }
 
 type WorkRequestBriefTimelineEntry = {
@@ -998,6 +1010,29 @@ function buildDispatchPayload(
       expires_at: callback.expires_at,
     },
   })
+  // ADDITIVE projectkit seam: build the WorkRequest (with embedded Concern)
+  // from the SAME dispatch facts the legacy payload carries. It rides alongside
+  // the context_work_dispatch.v1 fields under `dispatch_request` — nothing
+  // existing is replaced. request_ref/concern_ref = work_item_id; the callback
+  // target is the adapter-agnostic { url, mode: 'webhook' } surface (the
+  // scoped-bearer token stays in the legacy `callback.token`, not this snapshot).
+  const dispatchRequest = buildWorkRequestSnapshot({
+    workItemId: row.id,
+    title: row.title,
+    summary: row.summary,
+    severity: row.severity,
+    status: dispatchStatus,
+    route: row.route,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    captureSessionId: row.capture_session_id,
+    supportPacketId: row.support_packet_id,
+    sourceEventRef: row.support_packet_id,
+    lane: dispatchLane,
+    kind: 'execute',
+    intent: 'fix',
+    callback: callback.url ? { url: callback.url, mode: 'webhook' } : { mode: 'webhook' },
+  })
   return {
     payload_version: CONTEXT_WORK_DISPATCH_PAYLOAD_VERSION,
     work_item_id: row.id,
@@ -1015,6 +1050,7 @@ function buildDispatchPayload(
     work_request_brief: brief,
     agent_brief_markdown: brief.agent_brief_markdown,
     callback,
+    dispatch_request: dispatchRequest,
   }
 }
 
@@ -1132,6 +1168,34 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
           support_packet_expires_at: packet.expires_at ?? expiresAt,
         },
       })
+      // ADDITIVE seam (projectkit Concern snapshot): stamp a portable,
+      // adapter-agnostic @operator/projectkit `Concern` onto metadata.concern.
+      // concern_ref = the work_item_id (only known after insert), so we merge it
+      // in with a JSONB `||` that preserves every existing metadata key — no
+      // behavior change, no schema change. This is the One-Line Boundary Test
+      // surface: a subscriber other than mesh can read the Concern shape here.
+      const concernSnapshot = buildConcernSnapshot({
+        workItemId: item.id,
+        title: item.title,
+        summary: item.summary,
+        severity: item.severity,
+        status: item.status,
+        route: item.route,
+        entityType: item.entity_type,
+        entityId: item.entity_id,
+        captureSessionId: item.capture_session_id,
+        supportPacketId: packet.id,
+        sourceEventRef: packet.id,
+        dispatchedAt: item.created_at,
+      })
+      const merged = await c.query<{ metadata: JsonRecord }>(
+        `update context_work_items
+            set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('concern', $3::jsonb)
+          where company_id = $1 and id = $2
+          returning metadata`,
+        [ctx.company.id, item.id, JSON.stringify(concernSnapshot)],
+      )
+      const itemWithConcern: ContextWorkItemRow = merged.rows[0] ? { ...item, metadata: merged.rows[0].metadata } : item
       const event = await appendContextHandoffEventTx(c, {
         companyId: ctx.company.id,
         workItemId: item.id,
@@ -1159,7 +1223,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         captureSessionId,
         buildSha: ctx.buildSha,
       })
-      return { packet, item, event }
+      return { packet, item: itemWithConcern, event }
     })
   } catch (error) {
     if (requestRef && isUniqueViolation(error)) {

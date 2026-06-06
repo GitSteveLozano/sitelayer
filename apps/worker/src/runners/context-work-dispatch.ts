@@ -17,6 +17,14 @@ export interface ContextWorkDispatchPayload {
   support_packet?: unknown
   work_request_brief?: unknown
   agent_brief_markdown?: string | null
+  // ADDITIVE projectkit seam: a first-class @operator/projectkit WorkRequest
+  // (with the originating Concern embedded) carried next to the
+  // context_work_dispatch.v1 fields by the API enqueuer
+  // (apps/api/src/routes/work-requests.ts buildDispatchPayload). The worker
+  // forwards it untouched into the mesh dispatch body so a subscriber other
+  // than mesh could route off the published projectkit shape. Optional +
+  // opaque here so in-flight outbox rows without it stay valid.
+  dispatch_request?: unknown
   callback?: {
     path?: string | null
     url?: string | null
@@ -197,6 +205,8 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     support_packet: payload.support_packet ?? null,
     work_request_brief: payload.work_request_brief ?? null,
     agent_brief_markdown: payload.agent_brief_markdown ?? null,
+    // ADDITIVE: forward the projectkit WorkRequest/Concern snapshot untouched.
+    dispatch_request: payload.dispatch_request ?? null,
     callback,
   }
   const route = cleanString(payload.route)
@@ -253,6 +263,10 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     context_handoff: contextHandoff,
     work_request_brief: payload.work_request_brief ?? null,
     agent_brief_markdown: cleanString(payload.agent_brief_markdown),
+    // ADDITIVE: surface the projectkit WorkRequest/Concern snapshot at the top
+    // level of execution_context too, so a subscriber can read it without
+    // descending into context_handoff.
+    dispatch_request: payload.dispatch_request ?? null,
   }
 
   if (isAgentLane) {

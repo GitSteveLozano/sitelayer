@@ -412,6 +412,60 @@ describe('createContextWorkDispatchRunner', () => {
     expect(body.properties.feature_brief).toBe('Investigate undefined feature')
   })
 
+  it('forwards the additive projectkit dispatch_request snapshot into the mesh body', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ task_id: 321 }), { status: 202 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const dispatchRequest = {
+      schema_version: '1.3.0',
+      project_key: 'sitelayer',
+      requested_at: '2026-06-06T12:00:00.000Z',
+      request_ref: '00000000-0000-4000-8000-0000000000a1',
+      intent: 'fix',
+      title: 'Carry the projectkit snapshot',
+      priority: 'normal',
+      payload: {
+        lane: 'agent',
+        concern: {
+          schema_version: '1.3.0',
+          project_key: 'sitelayer',
+          dispatched_at: '2026-06-06T12:00:00.000Z',
+          concern_ref: '00000000-0000-4000-8000-0000000000a1',
+          kind: 'execute',
+          title: 'Carry the projectkit snapshot',
+        },
+      },
+    }
+    const { pool } = makePool([
+      {
+        id: 'outbox-dispatch-request',
+        payload: {
+          work_item_id: '00000000-0000-4000-8000-0000000000a1',
+          support_packet_id: '00000000-0000-4000-8000-0000000000a2',
+          title: 'Carry the projectkit snapshot',
+          lane: 'agent',
+          dispatch_request: dispatchRequest,
+          callback: {
+            path: '/api/work-requests/00000000-0000-4000-8000-0000000000a1/agent-callback',
+            token: 'scoped-callback',
+            token_type: 'scoped_bearer',
+            expires_at: '2026-06-09T12:00:00.000Z',
+          },
+        },
+      },
+    ])
+    const runner = createContextWorkDispatchRunner({ pool })
+
+    await runner('company-1')
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as {
+      execution_context: { dispatch_request?: unknown; context_handoff: { dispatch_request?: unknown } }
+    }
+    expect(body.execution_context.dispatch_request).toEqual(dispatchRequest)
+    expect(body.execution_context.context_handoff.dispatch_request).toEqual(dispatchRequest)
+  })
+
   it('does not claim rows when Mesh dispatch is not configured', async () => {
     delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     const fetchSpy = vi.fn()
