@@ -416,7 +416,7 @@ function anchorIdFromPath(pathname: string): string | null {
 }
 
 export async function handleAnchorRoutes(ctx: AnchorRouteCtx): Promise<boolean> {
-  const { req, url, requestId, sendJson, pool, company, tier } = ctx
+  const { req, url, requestId, sendJson, company, tier } = ctx
   if (req.method !== 'GET' || !url.pathname.startsWith('/api/anchors/')) {
     return false
   }
