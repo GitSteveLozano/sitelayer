@@ -322,6 +322,66 @@ async function main(): Promise<void> {
     )
   log('')
 
+  // 6b) App log LINES from Axiom (the durable warehouse — Vector ships the
+  // Docker json-file logs there). Gated on AXIOM_TOKEN + AXIOM_DATASET, exactly
+  // like the Sentry block. Inlines the real Pino lines for the trace/request so
+  // the bundle is self-contained for an LLM (not just trace links).
+  log(`## App logs (Axiom)`)
+  const axTok = process.env.AXIOM_TOKEN
+  const axDs = process.env.AXIOM_DATASET
+  if (!axTok || !axDs) {
+    log(`- (set AXIOM_TOKEN + AXIOM_DATASET to inline the matching log lines here)`)
+  } else if (!traceId && !reqId && candidates.size === 0) {
+    log(`- no trace_id/request_id resolved to query by`)
+  } else {
+    const ids: string[] = []
+    if (traceId) ids.push(`trace_id == "${traceId}"`)
+    if (reqId) ids.push(`request_id == "${reqId}"`)
+    if (!ids.length) for (const id of [...candidates.keys()].slice(0, 1)) ids.push(`request_id == "${id}"`)
+    // generous time range: the event span ± 10min, else the window.
+    const ats = events.map((e) => new Date(e.at).getTime()).filter((n) => !Number.isNaN(n))
+    const lo = ats.length ? new Date(Math.min(...ats) - 600_000).toISOString() : since
+    const hi = ats.length ? new Date(Math.max(...ats) + 600_000).toISOString() : until
+    const apl = `['${axDs}'] | where ${ids.join(' or ')} | sort by _time asc | limit 300`
+    try {
+      const res = await fetch('https://api.axiom.co/v1/datasets/_apl?format=tabular', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${axTok}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ apl, startTime: lo, endTime: hi }),
+        signal: AbortSignal.timeout(8000),
+      })
+      if (!res.ok) {
+        log(`- Axiom query failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`)
+      } else {
+        const data = (await res.json()) as {
+          tables?: Array<{ columns?: unknown[][]; fields?: Array<{ name: string }> }>
+        }
+        const table = data.tables?.[0]
+        const fields = (table?.fields ?? []).map((f) => f.name)
+        const cols = table?.columns ?? []
+        const n = cols[0]?.length ?? 0
+        log(`- ${n} log lines (trace ${traceId ?? '—'} / req ${reqId ?? '—'}):`)
+        log('```')
+        const tIdx = fields.indexOf('_time')
+        const mIdx = fields.findIndex((f) => f === 'message' || f === 'msg')
+        const lIdx = fields.indexOf('level')
+        for (let i = 0; i < Math.min(n, 300); i += 1) {
+          const t = tIdx >= 0 ? fmt(cols[tIdx]?.[i]) : ''
+          const lvl = lIdx >= 0 ? fmt(cols[lIdx]?.[i]) : ''
+          const msg =
+            mIdx >= 0
+              ? fmt(cols[mIdx]?.[i])
+              : JSON.stringify(fields.reduce((o, f, fi) => ({ ...o, [f]: cols[fi]?.[i] }), {})).slice(0, 300)
+          log(`${tt(t)} ${lvl} ${msg}`.trim())
+        }
+        log('```')
+      }
+    } catch (e) {
+      log(`- Axiom fetch failed: ${(e as Error).message}`)
+    }
+  }
+  log('')
+
   // 7) go deeper
   log(`## Go deeper`)
   const focus = reqId || (candidates.size ? [...candidates.keys()][0] : null)

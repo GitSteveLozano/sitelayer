@@ -62,6 +62,13 @@ export function loadSentry(): Promise<SentryImplT | null> {
             // everywhere else 1.0.
             tracesSampleRate: ENV === 'production' ? 0.1 : 1.0,
             sendDefaultPii: false,
+            // Session Replay (rrweb, in-SDK): don't record random sessions
+            // (bandwidth/privacy), but capture the buffered session when an
+            // error fires — the one case worth a replay for debugging. Text +
+            // media masked. Correlates to the error's trace in Sentry.
+            integrations: [SentryImpl.replayIntegration({ maskAllText: true, blockAllMedia: true })],
+            replaysSessionSampleRate: 0,
+            replaysOnErrorSampleRate: 1.0,
           })
         } catch {
           // init failures must not break the host app — swallow and

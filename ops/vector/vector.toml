@@ -1,0 +1,27 @@
+# Vector: tail the sitelayer prod containers' Docker json-file logs, parse the
+# Pino JSON (lifting trace_id / span_id / request_id to top-level fields), and
+# ship to Axiom. This is the one hop that makes logs durable + LLM-queryable —
+# zero change to @sitelayer/logger or instrument.ts. Opt-in: only runs when you
+# bring up docker-compose.observability.yml with AXIOM_TOKEN + AXIOM_DATASET set.
+
+[sources.docker]
+type = "docker_logs"
+include_containers = ["sitelayer-api-1", "sitelayer-worker-1"]
+
+[transforms.parse]
+type = "remap"
+inputs = ["docker"]
+source = '''
+parsed, err = parse_json(.message)
+if err == null {
+  . = merge(., object(parsed) ?? {})
+}
+'''
+
+# Native Axiom sink — handles auth + batching. trace_id/request_id ride as
+# fields; query them in the incident tool via the APL REST API.
+[sinks.axiom]
+type = "axiom"
+inputs = ["parse"]
+token = "${AXIOM_TOKEN}"
+dataset = "${AXIOM_DATASET}"

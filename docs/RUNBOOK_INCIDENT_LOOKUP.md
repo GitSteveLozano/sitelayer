@@ -42,8 +42,39 @@ markdown with the Sentry links + "go deeper" pointers.
 - **Sentry** holds the spans + structured logs (keyed by `trace_id`, `enableLogs:true`). Set `SENTRY_ORG` + `SENTRY_AUTH_TOKEN` and the tool inlines the trace + gives the logs URL.
 - **App logs** are otherwise ephemeral (Docker json-file). Deep dive: `ssh sitelayer@<droplet> 'docker logs sitelayer-api-1 2>&1 | grep <request_id>'` (the tool prints this line).
 
+## Durable logs + replay (the long-term architecture, opt-in)
+
+Decision (research-backed): **emit once, dual-sink, query by `trace_id`.** Keep
+Sentry-native ingest; ship the existing Docker logs to **Axiom** (free tier) with
+**one Vector sidecar** — no app-code change. Explicitly NOT doing: OTel Collector,
+self-hosted Loki/Tempo/SigNoz, Datadog. Three pieces, all landed in code:
+
+1. **Sentry Session Replay** — already on (`apps/web/src/instrument.ts`):
+   `replaysOnErrorSampleRate: 1.0`, `replaysSessionSampleRate: 0`, text+media
+   masked. A replay is captured only when an error fires, correlated to its trace
+   in Sentry. Nothing to activate — it rides the existing DSN.
+
+2. **Durable logs → Axiom** (activate when you want it):
+   - sign up Axiom (free 500 GB/mo), make a `fleet` dataset + an ingest token.
+   - on the droplet, set `AXIOM_TOKEN` + `AXIOM_DATASET=fleet` (env / `.env`), then
+     `docker compose -f docker-compose.observability.yml up -d`.
+   - `ops/vector/vector.toml` tails `sitelayer-api-1` + `sitelayer-worker-1`'s
+     Docker json-file, parses the Pino JSON (lifts `trace_id`/`request_id`), ships
+     to Axiom. Logs stop being ephemeral; nothing in the app changes.
+
+3. **Incident bundle inlines the log LINES** — once `AXIOM_TOKEN` + `AXIOM_DATASET`
+   are set in the env you run `scripts/incident.ts` with, the bundle's **App logs
+   (Axiom)** section fetches the matching Pino lines by `trace_id`/`request_id` via
+   the APL REST API (inert without the token, like the Sentry block). The bundle is
+   then self-contained for an LLM.
+
+Defer-until-it-bites: point nhl/static apps at the same Axiom dataset; add
+`trace_id` to projectkit events for `event_id→trace` reverse lookup; the
+self-hosted OpenObserve swap (same Vector shipper, different sink URL) if you ever
+must own the log data.
+
 ## Gaps / when this falls short
 
-- **A pure 5xx with no DB write** leaves no `audit_events`/queue row — the timeline is thin; lean on the Sentry trace + the container-log grep (the tool points you there).
-- **No log aggregator** (Loki/Axiom) — only Sentry-by-trace + ephemeral container logs. If incident volume grows, add one; the request_id/trace_id are already on every line.
+- **A pure 5xx with no DB write** leaves no `audit_events`/queue row — the timeline is thin; lean on the Sentry trace + the Axiom logs + the container-log grep (the tool points you there).
+- **Until Axiom is activated**, app logs are Sentry-by-trace + ephemeral container logs only — the request_id/trace_id are already on every line, so activation is the one hop above.
 - **No event-id→trace reverse index** — a Sentry error id needs one Sentry-UI hop to get the trace.

@@ -14,7 +14,15 @@
  * vendor-sentry chunk that's roughly the same size as the old eager
  * one, just no longer on the critical path.
  */
-import { addBreadcrumb, captureException, captureMessage, ErrorBoundary, getTraceData, init } from '@sentry/react'
+import {
+  addBreadcrumb,
+  captureException,
+  captureMessage,
+  ErrorBoundary,
+  getTraceData,
+  init,
+  replayIntegration,
+} from '@sentry/react'
 
 export type SentryInitOptions = Parameters<typeof init>[0]
 
@@ -25,6 +33,7 @@ export const SentryImpl = {
   captureMessage,
   getTraceData,
   ErrorBoundary,
+  replayIntegration,
 }
 
 export type SentryImpl = typeof SentryImpl
