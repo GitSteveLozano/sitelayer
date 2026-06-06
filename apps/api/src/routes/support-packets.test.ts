@@ -274,6 +274,63 @@ describe('support packet sanitization', () => {
     })
   })
 
+  it('renders statechart anchors + replay divergence into the agent_prompt', async () => {
+    const pool = new FakeSupportPacketPool()
+    pool.supportPacket = {
+      ...pool.supportPacket,
+      server_context: {
+        request_ids: ['request-1'],
+        trace_ids: ['trace-1'],
+        anchors: [
+          {
+            event_ref: 'workflow_event:rental_billing_run:c83aab21680dc2bb:0',
+            workflow_name: 'rental_billing_run',
+            entity_type: 'rental_billing_run',
+            entity_id: '11111111-2222-3333-4444-555555555555',
+            state_version: 0,
+            event_type: 'APPROVE',
+            from_state: 'generated',
+            to_state: 'approved',
+            applied_at: '2026-06-06T00:00:01.000Z',
+            sentry_trace: 'abc-1',
+            replay_ok: false,
+            replay_available: true,
+            first_divergence: {
+              state_version: 1,
+              event_type: 'POST_REQUESTED',
+              reason: 'snapshot_divergence',
+              detail: 'state mismatch',
+            },
+          },
+        ],
+      },
+    }
+    const read = makeCtx(pool)
+    await handleSupportPacketRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/support-packets/${pool.supportPacket.id}`),
+      read.ctx,
+    )
+    expect(read.responses[0]?.status).toBe(200)
+    const prompt = (read.responses[0]?.body as { agent_prompt: string }).agent_prompt
+    expect(prompt).toContain('Statechart transition anchors')
+    expect(prompt).toContain('rental_billing_run generated -> approved via APPROVE')
+    expect(prompt).toContain('replay DIVERGED at state_version 1: snapshot_divergence (state mismatch)')
+  })
+
+  it('omits the anchors section when no statechart anchors were captured', async () => {
+    const pool = new FakeSupportPacketPool()
+    const read = makeCtx(pool)
+    await handleSupportPacketRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/support-packets/${pool.supportPacket.id}`),
+      read.ctx,
+    )
+    expect(read.responses[0]?.status).toBe(200)
+    const prompt = (read.responses[0]?.body as { agent_prompt: string }).agent_prompt
+    expect(prompt).not.toContain('Statechart transition anchors')
+  })
+
   it('includes related work-request context and handoff traces in server context', async () => {
     const pool = new FakeSupportPacketPool()
     const captureSessionId = '55555555-5555-4555-8555-555555555555'
