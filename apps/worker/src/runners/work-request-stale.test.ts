@@ -164,7 +164,8 @@ describe('createWorkRequestStaleRunner', () => {
         }>
       }
       const envelope = JSON.parse(String(firstInit?.body)) as ObservationEnvelope
-      expect(envelope.contract_version).toBe('1.0.0')
+      // projectkit 0.5.1 stamps the current contract version (was 1.0.0 on 0.1.0).
+      expect(envelope.contract_version).toBe('1.3.0')
       expect(envelope.project_key).toBe('sitelayer')
       const event = envelope.events[0]!
       expect(event.event_type).toBe('work_item_obstructed')
