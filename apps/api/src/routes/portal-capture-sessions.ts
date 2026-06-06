@@ -783,6 +783,8 @@ export async function finalizePortalCaptureSession(
       const item = await createContextWorkItemTx(clientTx, {
         companyId: actor.companyId,
         supportPacketId: packet.id,
+        // Portal capture-dock finalize → an app-issue (problem with the software).
+        domain: 'app_issue',
         title,
         summary,
         status: 'new',

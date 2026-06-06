@@ -1085,6 +1085,10 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
       const item = await createContextWorkItemTx(c, {
         companyId: ctx.company.id,
         supportPacketId: packet.id,
+        // WorkRequestAction / field_event flow → a field-request (contractor
+        // operational problem on a real job). Explicit even though it matches
+        // the column + arg default.
+        domain: 'field_request',
         title: title.value,
         summary,
         status: 'new',

@@ -1614,6 +1614,29 @@ export {
   type EffectivePermissionMap,
 } from './permissions.js'
 
+// Capability catalog + default role→capability map for the two non-bleeding
+// permission domains (app_issue platform-scope, field_request company-scope).
+// The keystone every consumer route gates on. See ./capabilities.ts and
+// apps/api/src/capability.ts (the requireCapability resolver).
+export {
+  APP_ISSUE_CAPABILITIES,
+  FIELD_REQUEST_CAPABILITIES,
+  CAPABILITIES,
+  CAPABILITY_DOMAINS,
+  DEFAULT_COMPANY_CAPABILITIES,
+  isCapability,
+  isAppIssueCapability,
+  isFieldRequestCapability,
+  capabilityDomain,
+  defaultCompanyCapabilities,
+  mergeCompanyCapabilities,
+  resolvePlatformCapabilities,
+  type Capability,
+  type AppIssueCapability,
+  type FieldRequestCapability,
+  type CapabilityDomain,
+} from './capabilities.js'
+
 // Typed unit-of-measure + conversion + dimensional-guard layer
 // (docs/TAKEOFF_DEEP_DIVE_2026-06-01.md §4 "Units"). Additive: sits ABOVE the
 // pervasive free-text `unit` columns; normalizeUnit returns null for unknown

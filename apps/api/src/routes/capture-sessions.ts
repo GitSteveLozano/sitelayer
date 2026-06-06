@@ -1184,6 +1184,8 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       const item = await createContextWorkItemTx(c, {
         companyId: ctx.company.id,
         supportPacketId: packet.id,
+        // Capture-dock finalize → an app-issue (problem with the software).
+        domain: 'app_issue',
         title,
         summary,
         status: 'new',
