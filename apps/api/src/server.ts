@@ -19,7 +19,7 @@ import { handleInviteRoutes } from './routes/invites.js'
 import { handleFeedbackInviteRoutes } from './routes/feedback-invites.js'
 import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapping } from './routes/qbo.js'
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
-import { resolveBlueprintVisionMode } from './takeoff-capture-pipelines/blueprint-vision.js'
+import { resolveBlueprintVisionProvider } from './takeoff-capture-pipelines/blueprint-vision.js'
 import { isAiChatEnabled } from './mesh-dispatcher.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
@@ -783,11 +783,14 @@ const server = http.createServer(async (req, res) => {
                   flags: appConfig.flags,
                   ribbon: appConfig.ribbon,
                   // Live blueprint AI sheet-read availability (C1 follow-up).
-                  // Read from the same env gate the capture pipeline uses
-                  // (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY); the SPA
-                  // only streams a multipart PDF for a real read when this is
-                  // true, otherwise it stays on the dry-run/demo path.
-                  blueprintVisionLive: resolveBlueprintVisionMode() === 'live',
+                  // True when a REAL blueprint read is available — gemini
+                  // (BLUEPRINT_VISION_MODE=gemini + GEMINI_API_KEY) OR anthropic
+                  // (live + ANTHROPIC_API_KEY). The SPA only streams a multipart
+                  // PDF for a real read when this is true, otherwise it stays on
+                  // the dry-run/demo path. Previously this only saw the anthropic
+                  // path, so the gemini path was live in the backend but hidden
+                  // in the UI.
+                  blueprintVisionLive: resolveBlueprintVisionProvider() !== 'dry-run',
                   // In-app operator AI chat availability — single gate in
                   // mesh-dispatcher.ts. Unset MESH_API_URL (no mesh access)
                   // ⇒ false ⇒ the operator-context chat widget hides its
