@@ -163,6 +163,35 @@ For Steve, keep these buttons secondary. The primary happy path is typed issue
 first, context attached automatically. Screen video is for reviewers who
 explicitly want richer evidence and are comfortable with the browser picker.
 
+## Local Dev Quickstart (collaborator testing on their own machine)
+
+A collaborator can exercise the full capture → support-packet path locally with
+no Clerk org, no mesh, and no operator credentials. See
+`docs/ONBOARDING_DEVELOPER.md` §5a for the long form. Short version:
+
+1. **DB must be at the rebaselined lineage.** A brand-new `docker compose up`
+   stack is already correct (`docker/postgres/init/*.sql` applies migrations
+   `007`/`009`/`010` on first boot). An **existing** local volume from before the
+   rebaseline is stale and will 500 on `/api/session`
+   (`column "first_run_completed_at" does not exist`) and 500/403 on the
+   `app_issue` capture routes. Fix by wiping the compose volume
+   (`docker compose down -v && docker compose up --build`) or, for a persistent
+   dev-tier DB, `RESET_DEV_DB_CONFIRM=1 scripts/reset-dev-db.sh`.
+2. **Enable the dock.** `/collab/steve` does it automatically — it writes
+   `sitelayer.auth-feedback-enabled = 'true'` and redirects with
+   `?capture_feedback=1`. Outside that route, set the same localStorage key or
+   append `?capture_feedback=1` to any in-app URL.
+3. **Superadmin path is free in non-prod.** When `APP_TIER !== 'prod'`, the dev
+   RoleSwitcher identity satisfies `app_issue.*` (tier-gated relaxation), so the
+   collaborator can finalize + read + download an issue without any Clerk/mesh
+   credentials. Never reachable in prod (gated on the tier).
+4. **End-to-end check.** `docker compose up` (fresh DB) → `npm run dev` →
+   open `/collab/steve` → **Reproduce a bug**, drive a real workflow transition
+   (e.g. approve a rental billing run; each commit stamps a `workflow.transition`
+   mark with the canonical `payload.event_ref`), End & report → then
+   `GET /api/support-packets/:id` shows `agent_prompt` with statechart anchors +
+   incident timeline, and the artifact downloads.
+
 ## Short-Term Data Flow
 
 Recommended flow:
