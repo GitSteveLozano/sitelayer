@@ -474,7 +474,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         identity: { ...identity, userId: currentUserId },
         tier: ctx.tier,
         buildSha: getBuildSha(),
-        requireRole,
+        // field_request.* capability gate (migration 009). Resolves on the
+        // company boundary from resolvedCompany.active.role ∪ custom_role_grants
+        // — the act-as override above only re-attributes actor/userId, not the
+        // role the cap resolves against. See work-requests.ts + capability.ts.
+        requireCapability: ctx.requireCapability,
         readBody,
         sendJson,
       }),
