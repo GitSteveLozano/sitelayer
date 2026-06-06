@@ -131,6 +131,31 @@ If you upgraded from a pre-Postgres-18 checkout, reset the volume on first boot:
 docker compose down -v && docker compose up --build
 ```
 
+> **Stale local DB → `/api/session` 500s.** A **brand-new** docker-compose
+> stack is already correct: the schema is applied from `docker/postgres/init/*.sql`
+> on first boot, which now includes the rebaselined lineage (migrations `007`
+> `first_run_completed_at`, `009` work-item domain/platform grants, `010` debug-bundle
+> lane). But if you have an **existing** local volume from before the rebaseline, it
+> will be missing those columns/tables and you will see symptoms like:
+>
+> - `GET /api/session` returns `500` with `column "first_run_completed_at" does not exist`
+> - the in-app issue / capture routes (`app_issue`) return `500` or `403`
+>
+> Fix it by rebuilding to the current lineage — either wipe the compose volume
+> (simplest for the local docker stack):
+>
+> ```bash
+> docker compose down -v && docker compose up --build
+> ```
+>
+> …or, for a persistent **dev**-tier DB (not the throwaway compose volume), run the
+> guarded reset (it drops + re-applies `docker/postgres/init/*.sql`; it refuses any
+> URL whose db name is not `sitelayer_dev`):
+>
+> ```bash
+> DATABASE_URL=postgres://.../sitelayer_dev RESET_DEV_DB_CONFIRM=1 scripts/reset-dev-db.sh
+> ```
+
 ### 4b. Host-process loop (run services on the host, DB in Docker)
 
 If you want hot-reload without rebuilding the api/web/worker images:
@@ -155,6 +180,48 @@ The repo ships a structurally-prod-safe dev auth bypass so you don't need Clerk 
 **With Clerk (preview-tier credentials, optional):** Set `VITE_CLERK_PUBLISHABLE_KEY=pk_test_…` (preview key is documented in `.env.example`) and the SPA mounts the real `/sign-in` and `/sign-up` Clerk components. If you need the API to resolve the real Clerk user id, set the matching `CLERK_JWT_KEY` too. If `CLERK_JWT_KEY` is left empty, the API cannot verify the Clerk bearer token and will use the local header/default fallback path instead; that is fine for UI sign-in smoke tests, but it is not a real Clerk-authenticated API session.
 
 For RoleSwitcher, company resolution is still normal Sitelayer tenancy: the user id in `x-sitelayer-act-as` must have a `company_memberships` row for the active company slug. Use the seeded `e2e-fixtures` tenant for the canned `e2e-*` roles, or create your own company/row as below.
+
+---
+
+## 5a. Report an issue from inside the app (capture dock)
+
+Sitelayer ships an in-app capture dock (`apps/web/src/components/capture/AuthenticatedFeedbackDock.tsx`) that records a "Report issue" / "Record feedback" episode — typed note, route + build context, registered page artifacts, optional DOM replay / screen video — and finalizes it into a **support packet** + **work item** you can read back end to end. It is the surface a collaborator uses to file a reproducible bug.
+
+### Enable the dock
+
+The dock is **off by default**. Turn it on with any one of:
+
+- **URL flag** (per tab, no persistence): append `?capture_feedback=1` to any in-app URL.
+- **localStorage** (sticky for the browser): in DevTools,
+  ```js
+  localStorage.setItem('sitelayer.auth-feedback-enabled', 'true')
+  location.reload()
+  ```
+  (`'1'`, `'true'`, `'yes'`, and `'on'` are all accepted.)
+- **Build-time env**: `VITE_AUTH_CAPTURE_FEEDBACK=1` (operator/CI builds only — not needed locally).
+
+Once enabled, a pill appears bottom-right; in Steve collab mode it is labelled **Report issue**.
+
+### The one-link collaborator path (Steve mode)
+
+The collaborator entry route `/collab/steve` (`apps/web/src/screens/collab/SteveCollabEntry.tsx`) does the enablement for you: it pins a dev actor + company, sets collab mode, and **writes `sitelayer.auth-feedback-enabled = 'true'` automatically**, then redirects to the target route with `?capture_feedback=1` already on the URL. So a collaborator opening `…/collab/steve` gets the dock on with **no DevTools step**. You can target a route with `…/collab/steve?target=/desktop`.
+
+### Local superadmin path — no Clerk/mesh/Taylor creds needed
+
+In production, the `app_issue.*` capabilities (finalize / read / download a software-issue support packet) require a verified Clerk superadmin session. **In non-prod (`APP_TIER !== 'prod'`), the dev RoleSwitcher identity satisfies `app_issue.*`** (a tier-gated relaxation), so a collaborator running the local stack can finalize an issue, read the support packet, and download the artifact **without any Clerk login, mesh access, or operator credentials**. Nothing here is reachable in prod — the relaxation is gated on the tier, the same way the RoleSwitcher header itself is.
+
+### End-to-end local test
+
+With the full local stack up (Section 4a) on a **fresh** DB (see the stale-DB note in Section 4a if `/api/session` 500s):
+
+1. `docker compose up --build` (fresh compose volume) → `npm run dev` for hot reload, or just use the compose web at `http://localhost:3000`.
+2. Open `http://localhost:3000/collab/steve` (auto-enables the dock) **or** any route with `?capture_feedback=1` and pick a role in the RoleSwitcher.
+3. Click **Reproduce a bug**, then **drive a real workflow transition** in the app (e.g. approve a rental billing run). Each committed transition stamps a `workflow.transition` recorder mark carrying the canonical `payload.event_ref` (`workflow_event:<name>:<digest>:<state_version>`) — that is what lets the server resolve deterministic anchors. End & report.
+4. The dock shows `Sent · packet <id> · work <id>`.
+5. Read it back: `GET /api/support-packets/<id>` returns `{ support_packet, agent_prompt }` — the `agent_prompt` renders the **statechart transition anchors**, the **incident timeline**, and the correlated requests/queue rows.
+6. Download the artifact (e.g. the rrweb replay / screen video) through the support-packet access path to confirm the full episode round-trips.
+
+If step 5 shows no anchors, the most common cause is that no real workflow transition was driven during the recording (a typed-only issue has nothing to anchor on), not a missing `event_ref` — the client stamps it on every transition.
 
 ---
 
