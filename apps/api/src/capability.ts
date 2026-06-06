@@ -29,9 +29,11 @@
  */
 
 import {
+  APP_ISSUE_CAPABILITIES,
   capabilityDomain,
   mergeCompanyCapabilities,
   resolvePlatformCapabilities,
+  type AppIssueCapability,
   type Capability,
 } from '@sitelayer/domain'
 import { isSuperadmin, type AdminQueryExecutor } from './admin-auth.js'
@@ -105,6 +107,22 @@ export async function resolveCapability(ctx: CapabilityContext, capability: Capa
   const caps = resolvePlatformCapabilities(superadmin, platformGrants)
   if ((caps as Set<string>).has(capability)) return { outcome: 'allowed' }
   return { outcome: 'denied', domain: 'app_issue', reason: 'not a platform admin / no platform grant' }
+}
+
+/**
+ * The caller's EFFECTIVE app_issue.* capabilities (the platform domain only).
+ * For surfacing to the SPA (e.g. /api/session) so the client can decide whether
+ * to render the /issues board entry. A non-Clerk identity short-circuits to an
+ * empty set without a DB hit — the same boundary `resolveCapability` enforces,
+ * so this can never over-report a guest/dev-act-as/header session. NEVER emits
+ * a field_request.* cap.
+ */
+export async function resolveAppIssueCapabilities(ctx: CapabilityContext): Promise<AppIssueCapability[]> {
+  if (ctx.identity.source !== 'clerk') return []
+  const superadmin = await isSuperadmin(ctx.client, ctx.identity.userId, ctx.superadminEnvIds)
+  const platformGrants = superadmin ? [] : await loadPlatformGrants(ctx.client, ctx.identity.userId)
+  const caps = resolvePlatformCapabilities(superadmin, platformGrants)
+  return APP_ISSUE_CAPABILITIES.filter((cap) => caps.has(cap))
 }
 
 /** Minimal `res`/`sendJson` shape the route helper needs to emit the 403. */

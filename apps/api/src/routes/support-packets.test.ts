@@ -184,11 +184,8 @@ function makeCtx(pool: FakeSupportPacketPool): {
       identity,
       tier: 'local',
       buildSha: 'test-build',
-      requireRole: (allowed) => {
-        const ok = allowed.includes('admin')
-        if (!ok) responses.push({ status: 403, body: { error: 'forbidden' } })
-        return ok
-      },
+      // app_issue.view gates the read paths. The fixture caller holds it.
+      requireCapability: async () => true,
       readBody: async () => ({}),
       sendJson: (status, body) => responses.push({ status, body }),
     },

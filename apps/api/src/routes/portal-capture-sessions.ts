@@ -29,6 +29,20 @@ const MODES = ['trace', 'feedback', 'desktop', 'native', 'manual_upload'] as con
 const MAX_EVENTS = 100
 const CAPTURE_REDACTION_VERSION = 'capture-session-v1'
 
+// The signed-share-token authorities that constitute the PLATFORM `app_issue.capture`
+// boundary on the guest path. A portal guest has no Clerk identity, so the
+// company-side `requireCapability` resolver (which denies app_issue.* for any
+// non-Clerk identity) can NEVER authorize them — the capture-authority IS the
+// cryptographically verified share token the calling route (estimate-shares-portal /
+// feedback-invites / portal-rentals) already validated before invoking finalize.
+// This set pins which token authorities may finalize an app_issue capture so the
+// boundary is explicit here, not just implied by the upstream token check.
+const PORTAL_APP_ISSUE_CAPTURE_AUTHORITIES: ReadonlySet<PortalCaptureActor['authority']> = new Set([
+  'signed_estimate_share_token',
+  'signed_rental_share_token',
+  'signed_feedback_invite_token',
+])
+
 export type PortalCaptureRouteCtx = {
   pool: Pool
   storage?: BlueprintStorage | undefined
@@ -676,6 +690,15 @@ export async function finalizePortalCaptureSession(
   actor: PortalCaptureActor,
   pathCaptureSessionId: string,
 ): Promise<void> {
+  // PLATFORM app_issue.capture boundary on the guest path: the verified signed
+  // share token IS the capture authority (a portal guest has no Clerk identity,
+  // so the company-side requireCapability resolver could never grant app_issue.*).
+  // The calling route already validated the token; this pins the allowed
+  // authorities so the boundary is explicit rather than only upstream-implied.
+  if (!PORTAL_APP_ISSUE_CAPTURE_AUTHORITIES.has(actor.authority)) {
+    ctx.sendJson(403, { error: 'forbidden: capture authority not permitted', capability: 'app_issue.capture' })
+    return
+  }
   const body = await ctx.readBody()
   const id = optionalText(pathCaptureSessionId, 80)
   if (!id || !isValidUuid(id)) {

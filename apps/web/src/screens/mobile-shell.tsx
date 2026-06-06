@@ -147,6 +147,7 @@ const MobileWorkRequests = lazy(() =>
   import('./mobile/work-requests.js').then((m) => ({ default: m.MobileWorkRequests })),
 )
 const MobileIssueBoard = lazy(() => import('./mobile/issue-board.js').then((m) => ({ default: m.MobileIssueBoard })))
+const MobileAppIssues = lazy(() => import('./mobile/app-issues.js').then((m) => ({ default: m.MobileAppIssuesGate })))
 const MobileWorkRequestDetail = lazy(() =>
   import('./mobile/work-request-detail.js').then((m) => ({ default: m.MobileWorkRequestDetail })),
 )
@@ -446,6 +447,11 @@ export function MobileShell({
             />
             <Route path="work/board" element={<MobileIssueBoard companyRole={companyRole} />} />
             <Route path="work/:workItemId" element={<MobileWorkRequestDetail companyRole={companyRole} />} />
+            {/* Internal APP-ISSUE board — capability-gated to app_issue.view
+                (MobileAppIssuesGate redirects non-platform-admins); the API
+                403s regardless. Must precede no catchall here. */}
+            <Route path="issues" element={<MobileAppIssues />} />
+            <Route path="issues/*" element={<MobileAppIssues />} />
             <Route path="more/*" element={<MoreRoute />} />
             <Route
               path="settings/*"

@@ -42,6 +42,16 @@ export type SystemRouteCtx = {
   actorUserId?: string | null
   /** 'self' | 'act_as' | 'impersonate' — how currentUserId was assumed. */
   authMode?: string
+  /**
+   * Resolve the caller's EFFECTIVE app_issue.* (platform) capabilities for the
+   * /api/session response, so the SPA can decide whether to render the /issues
+   * board entry. Resolves on the platform boundary (superadmin ∪
+   * platform_admin_grants over the RAW identity) — empty for a non-Clerk
+   * session. See capability.ts:resolveAppIssueCapabilities. Optional so the
+   * DebugTraceRouteCtx (which shares this shape but never serves /api/session)
+   * need not supply it; the session handler treats absence as no caps.
+   */
+  resolveAppIssueCapabilities?: () => Promise<string[]>
   sendJson: (status: number, body: unknown) => void
   /**
    * Per-response side-channels for headers we can't drive through sendJson.
@@ -98,7 +108,10 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
   }
 
   if (req.method === 'GET' && url.pathname === '/api/session') {
-    const membershipRows = await getMemberships(ctx.pool, ctx.currentUserId)
+    const [membershipRows, appIssueCapabilities] = await Promise.all([
+      getMemberships(ctx.pool, ctx.currentUserId),
+      ctx.resolveAppIssueCapabilities?.() ?? Promise.resolve([]),
+    ])
     ctx.sendJson(200, {
       user: { id: ctx.currentUserId, role: membershipRows[0]?.role ?? 'admin' },
       activeCompany: ctx.company,
@@ -106,6 +119,10 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
       // Impersonation surface for the SPA "viewing as X" banner (design §7).
       impersonated_by: ctx.actorUserId ?? null,
       mode: ctx.authMode ?? 'self',
+      // PLATFORM app_issue.* caps the caller effectively holds — drives the SPA
+      // /issues board entry. Empty for a non-Clerk session (the platform
+      // boundary is unreachable via company role / dev act-as / header).
+      app_issue_capabilities: appIssueCapabilities,
     })
     return true
   }

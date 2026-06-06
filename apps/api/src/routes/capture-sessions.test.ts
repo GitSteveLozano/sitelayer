@@ -626,6 +626,9 @@ function makeCtx(
         if (!ok) responses.push({ status: 403, body: { error: 'forbidden' } })
         return ok
       },
+      // app_issue.capture gates finalize; app_issue.view gates the artifact
+      // download. The fixture caller holds the platform capabilities.
+      requireCapability: async () => true,
       readBody: async () => body,
       sendJson: (status, responseBody) => responses.push({ status, body: responseBody }),
       sendFileContent: (mimeType, fileName, content) =>
