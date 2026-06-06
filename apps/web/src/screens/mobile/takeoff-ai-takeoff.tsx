@@ -13,8 +13,15 @@
  * own navigation targets):
  *   - TakeoffAiTakeoffSetup  — choose symbol→item targets + sheet scope, then RUN
  *     the AI auto-takeoff. → review.
- *   - TakeoffAiTakeoffReview — accept/adjust the AI-detected quantities, then
- *     ACCEPT DRAFT (promote the kept rows to committed `takeoff_measurements`).
+ *   - TakeoffAiTakeoffReview — keep/drop AND edit the AI-detected quantities
+ *     (per-row service_item_code override), then ACCEPT DRAFT (promote the kept
+ *     rows to committed `takeoff_measurements`). Edits ride along as the promote
+ *     endpoint's `service_item_code_overrides` map; the server runs each override
+ *     through the same curated-catalog gate as a manual takeoff write, so a code
+ *     that isn't in `service_item_divisions` comes back as a 422 `rejected[]`
+ *     (the offending input is highlighted inline). Rows the server couldn't
+ *     promote on a 2xx (missing unit / no derivable code) come back as
+ *     `skipped[]` and are summarized in the footer instead of navigating away.
  *
  * WIRED to the real capture pipeline. There are two RUN paths (preserved from the
  * desktop twin — the mobile twin only had the dry-run path; the merge gives mobile
@@ -38,9 +45,10 @@
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DLoadingState, type DColumn } from '../../components/d/index.js'
-import { MAiStripe, MBanner, MButton, MI, MPill, Spark } from '../../components/m/index.js'
+import { MAiStripe, MBanner, MButton, MI, MInput, MPill, Spark } from '../../components/m/index.js'
 import {
   fetchBlueprintFile,
+  promoteRejectionsFromError,
   useBlueprintVisionLiveAvailable,
   useCaptureBlueprintVisionLive,
   useCaptureTakeoffDraft,
@@ -48,6 +56,8 @@ import {
   useTakeoffDraftResult,
   useTakeoffDrafts,
   type CapturedQuantity,
+  type PromoteRejection,
+  type PromoteResponse,
 } from '../../lib/api/takeoff-drafts.js'
 import { useProjectBlueprints } from '../../lib/api/takeoff.js'
 
@@ -642,6 +652,37 @@ function formatQty(value: number, unit: string): string {
 }
 
 /**
+ * The service_item_code the API will derive for a quantity if the operator
+ * does NOT override it. Mirrors `deriveServiceItemCodeFromQuantity` in
+ * apps/api/src/routes/takeoff-drafts.ts: prefer MasterFormat, then UniFormat,
+ * then OmniClass. Returns '' when the AI proposed no usable code — the row
+ * then REQUIRES an override before it can be promoted (the server skips it
+ * with "no service_item_code on quantity" otherwise).
+ */
+function aiDerivedCode(q: CapturedQuantity): string {
+  return (q.masterformatCode ?? q.uniformatCode ?? q.omniclassCode ?? '').trim()
+}
+
+/** One-line summary of curated-catalog rejections (422 promote) for the footer
+ *  banner — the per-row inputs already carry the highlight + inline label. */
+function rejectionSummary(rejections: PromoteRejection[]): string {
+  const codes = Array.from(new Set(rejections.map((r) => r.service_item_code)))
+  const n = rejections.length
+  return `${n} ${n === 1 ? 'code is' : 'codes are'} not in your curated catalog: ${codes.join(', ')}. Fix or clear ${
+    n === 1 ? 'it' : 'them'
+  } and accept again.`
+}
+
+/** One-line summary of rows the server couldn't promote (2xx body `skipped[]`),
+ *  e.g. a quantity missing a unit or with no derivable service item code. */
+function skippedSummary(skipped: PromoteResponse['skipped']): string {
+  const n = skipped.length
+  return `Promoted the rest, but ${n} ${n === 1 ? 'row' : 'rows'} couldn't be committed: ${skipped
+    .map((s) => s.reason)
+    .join('; ')}`
+}
+
+/**
  * Resolve the draft id to review: prefer the one handed over by the setup screen
  * via navigation state; otherwise fall back to the most-recent capture-sourced
  * draft for the project (covers deep-links / refresh).
@@ -704,7 +745,35 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({})
   const decisionForId = (id: string, status: ReviewStatus): RowDecision =>
     decisions[id] ?? (status === 'ok' ? 'kept' : 'pending')
-  const setDecision = (id: string, decision: RowDecision) => setDecisions((prev) => ({ ...prev, [id]: decision }))
+
+  // EDIT — per-quantity service_item_code override, keyed by quantity id. Empty /
+  // absent means "use what the AI derived". A non-empty trimmed value that differs
+  // from the AI-derived code is sent as `service_item_code_overrides[id]` so the
+  // operator can re-route a mis-classified line onto the company's curated catalog
+  // code WITHOUT mutating the immutable captured result. The server runs the
+  // override through the same catalog gate as a manual takeoff write (uncurated
+  // codes come back as a 422 `rejected[]`).
+  const [codeEdits, setCodeEdits] = useState<Record<string, string>>({})
+  const editForId = (q: CapturedQuantity): string => codeEdits[q.id] ?? aiDerivedCode(q)
+
+  // Diagnostics surfaced after a promote attempt: `skipped` from a 2xx body (rows
+  // the server couldn't promote, e.g. missing unit), `rejected` from a 422 body
+  // (operator-typed codes not in the curated catalog). Both let the estimator see
+  // exactly which rows didn't land instead of a silent partial commit.
+  const [skipped, setSkipped] = useState<PromoteResponse['skipped']>([])
+
+  // Any edit/decision change invalidates the previous attempt's skip diagnostics
+  // (the operator is acting on them); clear so the footer doesn't show stale rows.
+  const setDecision = (id: string, decision: RowDecision) => {
+    setDecisions((prev) => ({ ...prev, [id]: decision }))
+    setSkipped((prev) => (prev.length > 0 ? [] : prev))
+  }
+  const setCodeEdit = (id: string, code: string) => {
+    setCodeEdits((prev) => ({ ...prev, [id]: code }))
+    setSkipped((prev) => (prev.length > 0 ? [] : prev))
+  }
+  const rejections = useMemo(() => promoteRejectionsFromError(promote.error), [promote.error])
+  const rejectedCodeIds = useMemo(() => new Set(rejections.map((r) => r.quantity_id)), [rejections])
 
   const counts = useMemo(
     () =>
@@ -719,16 +788,47 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
   )
   const needsReview = counts.review + counts.flag
 
-  const keptIds = quantities
-    .filter((q) => decisionForId(q.id, statusForConfidence(q.confidence)) === 'kept')
-    .map((q) => q.id)
+  const keptQuantities = quantities.filter((q) => decisionForId(q.id, statusForConfidence(q.confidence)) === 'kept')
+  const keptIds = keptQuantities.map((q) => q.id)
   const keptCount = keptIds.length
+
+  // Build the `service_item_code_overrides` map for the promote call: only kept
+  // rows whose edited code is non-empty AND differs from what the AI derived.
+  // (An edit equal to the AI code is a no-op — don't send it, so it bypasses the
+  // override-only catalog gate the same way an un-edited AI proposal does.)
+  const buildOverrides = (): Record<string, string> => {
+    const out: Record<string, string> = {}
+    for (const q of keptQuantities) {
+      const edited = (codeEdits[q.id] ?? '').trim()
+      if (edited.length > 0 && edited !== aiDerivedCode(q)) out[q.id] = edited
+    }
+    return out
+  }
 
   const accept = () => {
     if (!draftId || keptCount === 0 || promote.isPending) return
-    // Promote only the kept rows into committed `takeoff_measurements`, then
-    // route on (desktop → the project's estimate; mobile → the takeoff surface).
-    promote.mutate({ quantity_ids: keptIds }, { onSuccess: () => navigate(nav.afterAccept()) })
+    const overrides = buildOverrides()
+    // Promote only the kept rows into committed `takeoff_measurements` (carrying
+    // any per-row code overrides), then route on (desktop → the project's
+    // estimate; mobile → the takeoff surface). A 2xx body may still report
+    // `skipped` rows; surface them instead of navigating away so the estimator
+    // sees what didn't land.
+    promote.mutate(
+      {
+        quantity_ids: keptIds,
+        ...(Object.keys(overrides).length > 0 ? { service_item_code_overrides: overrides } : {}),
+      },
+      {
+        onSuccess: (res) => {
+          if (res.skipped_count > 0) {
+            setSkipped(res.skipped)
+            return
+          }
+          setSkipped([])
+          navigate(nav.afterAccept())
+        },
+      },
+    )
   }
   const accepting = promote.isPending
 
@@ -745,6 +845,11 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
       })),
     [quantities],
   )
+  const quantityById = useMemo(() => {
+    const map = new Map<string, CapturedQuantity>()
+    for (const q of quantities) map.set(q.id, q)
+    return map
+  }, [quantities])
   const columns: Array<DColumn<DesktopRow>> = [
     {
       key: 'status',
@@ -780,6 +885,42 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
           {r.confidence === 'HIGH' ? 'High' : r.confidence === 'MED' ? 'Medium' : 'Low'}
         </MPill>
       ),
+    },
+    {
+      key: 'code',
+      header: 'Service item code',
+      render: (r) => {
+        const q = quantityById.get(r.id)
+        if (!q) return null
+        const derived = aiDerivedCode(q)
+        const rejected = rejectedCodeIds.has(r.id)
+        const needsCode = derived === '' && editForId(q).trim() === ''
+        return (
+          <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 3, minWidth: 150 }}>
+            <MInput
+              value={editForId(q)}
+              onChange={(e) => setCodeEdit(q.id, e.target.value)}
+              placeholder={derived || 'Add a catalog code'}
+              aria-label={`Service item code for ${r.item}`}
+              aria-invalid={rejected || undefined}
+              style={
+                rejected || needsCode
+                  ? { borderColor: 'var(--m-red)', fontFamily: 'var(--m-num)', fontSize: 12 }
+                  : { fontFamily: 'var(--m-num)', fontSize: 12 }
+              }
+            />
+            {rejected ? (
+              <span style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 700, color: 'var(--m-red)' }}>
+                Not in catalog
+              </span>
+            ) : needsCode ? (
+              <span style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 700, color: 'var(--m-red)' }}>
+                No AI code — required
+              </span>
+            ) : null}
+          </span>
+        )
+      },
     },
     { key: 'qty', header: 'Qty', numeric: true, render: (r) => r.qty },
     {
@@ -897,56 +1038,110 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
           {quantities.map((q) => {
             const status = statusForConfidence(q.confidence)
             const isKept = decisionForId(q.id, status) === 'kept'
+            const derived = aiDerivedCode(q)
+            const rowRejected = rejectedCodeIds.has(q.id)
+            const needsCode = derived === '' && editForId(q).trim() === ''
             return (
-              <button
+              <div
                 key={q.id}
-                type="button"
-                onClick={() => setDecision(q.id, isKept ? 'rejected' : 'kept')}
-                aria-pressed={isKept}
                 style={{
-                  width: '100%',
-                  textAlign: 'left',
                   padding: '14px 20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  background: 'transparent',
-                  border: 'none',
                   borderBottom: '1px solid var(--m-line-2)',
-                  opacity: isKept ? 1 : 0.4,
-                  cursor: 'pointer',
                 }}
               >
-                <span style={{ width: 8, alignSelf: 'stretch', background: statusColor(status) }} aria-hidden />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontFamily: 'var(--m-font-display)',
-                      fontWeight: 700,
-                      fontSize: 15,
-                      textDecoration: isKept ? 'none' : 'line-through',
-                    }}
-                  >
-                    {q.description || q.masterformatCode || q.uniformatCode || q.id}
-                  </div>
-                  <div style={{ marginTop: 4 }}>
-                    <MPill tone={status === 'ok' ? 'green' : status === 'review' ? 'amber' : 'red'} dot>
-                      {confidenceLabel(q.confidence)} · {isKept ? 'KEEPING' : 'DROPPED'}
-                    </MPill>
-                  </div>
-                </div>
-                <div
+                {/* Keep/reject toggle — tap the row header to flip the decision. */}
+                <button
+                  type="button"
+                  onClick={() => setDecision(q.id, isKept ? 'rejected' : 'kept')}
+                  aria-pressed={isKept}
                   style={{
-                    fontFamily: 'var(--m-num)',
-                    fontSize: 14,
-                    fontWeight: 700,
-                    textAlign: 'right',
-                    fontVariantNumeric: 'tabular-nums',
+                    width: '100%',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 14,
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    opacity: isKept ? 1 : 0.4,
+                    cursor: 'pointer',
                   }}
                 >
-                  {formatQty(q.value, q.unit)}
-                </div>
-              </button>
+                  <span style={{ width: 8, alignSelf: 'stretch', background: statusColor(status) }} aria-hidden />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontFamily: 'var(--m-font-display)',
+                        fontWeight: 700,
+                        fontSize: 15,
+                        textDecoration: isKept ? 'none' : 'line-through',
+                      }}
+                    >
+                      {q.description || q.masterformatCode || q.uniformatCode || q.id}
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                      <MPill tone={status === 'ok' ? 'green' : status === 'review' ? 'amber' : 'red'} dot>
+                        {confidenceLabel(q.confidence)} · {isKept ? 'KEEPING' : 'DROPPED'}
+                      </MPill>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      textAlign: 'right',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {formatQty(q.value, q.unit)}
+                  </div>
+                </button>
+
+                {/* EDIT — service item code override. Only relevant for kept rows
+                    (a dropped row never reaches the promote endpoint), so hide it
+                    when the row is dropped to keep the list calm. */}
+                {isKept ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, paddingLeft: 22 }}>
+                    <label
+                      htmlFor={`code-${q.id}`}
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: 'var(--m-ink-3)',
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Code
+                    </label>
+                    <MInput
+                      id={`code-${q.id}`}
+                      value={editForId(q)}
+                      onChange={(e) => setCodeEdit(q.id, e.target.value)}
+                      placeholder={derived || 'Add a catalog code'}
+                      aria-label={`Service item code for ${q.description || q.id}`}
+                      aria-invalid={rowRejected || undefined}
+                      style={
+                        rowRejected || needsCode
+                          ? { borderColor: 'var(--m-red)', fontFamily: 'var(--m-num)', fontSize: 12, flex: 1 }
+                          : { fontFamily: 'var(--m-num)', fontSize: 12, flex: 1 }
+                      }
+                    />
+                    {rowRejected ? (
+                      <span style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 700, color: 'var(--m-red)' }}>
+                        NOT IN CATALOG
+                      </span>
+                    ) : needsCode ? (
+                      <span style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 700, color: 'var(--m-red)' }}>
+                        REQUIRED
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             )
           })}
         </div>
@@ -962,7 +1157,24 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
               borderTop: '2px solid var(--m-ink)',
             }}
           >
-            ● {promote.error.message || 'Promote failed — try again.'}
+            ●{' '}
+            {rejections.length > 0
+              ? rejectionSummary(rejections)
+              : promote.error.message || 'Promote failed — try again.'}
+          </div>
+        ) : null}
+        {skipped.length > 0 ? (
+          <div
+            style={{
+              padding: '10px 20px',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              color: 'var(--m-amber)',
+              borderTop: '2px solid var(--m-ink)',
+            }}
+          >
+            ● {skippedSummary(skipped)}
           </div>
         ) : null}
         <div style={{ padding: '14px 20px', borderTop: '2px solid var(--m-ink)', display: 'flex', gap: 8 }}>
@@ -998,7 +1210,15 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
 
           {promote.isError ? (
             <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-red)' }}>
-              ● {promote.error.message || 'Promote failed — try again.'}
+              ●{' '}
+              {rejections.length > 0
+                ? rejectionSummary(rejections)
+                : promote.error.message || 'Promote failed — try again.'}
+            </div>
+          ) : null}
+          {skipped.length > 0 ? (
+            <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-amber)' }}>
+              ● {skippedSummary(skipped)}
             </div>
           ) : null}
 

@@ -374,6 +374,44 @@ export interface PromoteResponse {
   skipped: Array<{ quantity_id: string; reason: string }>
 }
 
+/** One rejected service_item_code override from a 422 promote response. The
+ *  server returns these when an operator-typed `service_item_code_overrides`
+ *  value isn't in the company's curated `service_item_divisions` catalog. */
+export interface PromoteRejection {
+  quantity_id: string
+  service_item_code: string
+  reason: string
+}
+
+/**
+ * Pull the curated-catalog rejections out of a failed promote. The promote
+ * endpoint returns `422 { error, rejected[], rejected_codes[] }` when one or
+ * more operator-typed code overrides aren't in `service_item_divisions`; this
+ * digs that structured payload out of the thrown `ApiError` (whose `.body`
+ * carries the JSON error body) so the review UI can highlight the offending
+ * edit inputs instead of showing a bare error string. Returns `[]` for any
+ * other failure shape.
+ */
+export function promoteRejectionsFromError(error: unknown): PromoteRejection[] {
+  if (!(error instanceof ApiError)) return []
+  const body = error.body
+  if (!body || typeof body !== 'object') return []
+  const rejected = (body as { rejected?: unknown }).rejected
+  if (!Array.isArray(rejected)) return []
+  const out: PromoteRejection[] = []
+  for (const r of rejected) {
+    if (!r || typeof r !== 'object') continue
+    const row = r as Record<string, unknown>
+    if (typeof row.quantity_id !== 'string' || typeof row.service_item_code !== 'string') continue
+    out.push({
+      quantity_id: row.quantity_id,
+      service_item_code: row.service_item_code,
+      reason: typeof row.reason === 'string' ? row.reason : 'not in curated catalog',
+    })
+  }
+  return out
+}
+
 export function usePromoteCapturedQuantities(projectId: string, draftId: string | null | undefined) {
   const qc = useQueryClient()
   return useMutation<PromoteResponse, Error, PromoteRequestBody>({
