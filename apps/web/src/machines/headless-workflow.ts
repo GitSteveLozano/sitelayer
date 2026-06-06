@@ -3,6 +3,8 @@ import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 import { workflowEventRef } from '@sitelayer/workflows'
 import { compactTraceEventType, compactWorkflowSnapshot, emitControlPlaneTrace } from '@/lib/control-plane-trace'
+import { getActiveCaptureSession } from '@/lib/capture-session'
+import { markWorkflowTransition } from '@/lib/api/capture-sessions'
 
 /**
  * Generic factory for the headless workflow UI machines that wrap
@@ -95,9 +97,46 @@ export type HeadlessWorkflowConfig<TSnapshot extends WorkflowSnapshotLike, TEven
 
 const CONFLICT_RE = /\b409\b|state_version|not allowed|illegal/i
 
+/**
+ * Drop a timestamped mark on the active recorder timeline keyed to the
+ * transition that just committed (step 3 of the statechart-anchor follow-ons).
+ * No-op when there is no active capture session. Fire-and-forget: a mark POST
+ * must never break or block the transition the user just performed, so this
+ * swallows every error.
+ */
+function emitTransitionMark(args: {
+  workflowId: string
+  workflowName: string
+  entityId: string
+  stateVersion: number
+  eventType: string | null
+}): void {
+  const session = getActiveCaptureSession()
+  if (!session) return
+  if (args.entityId === '' || typeof args.stateVersion !== 'number') return
+  const eventRef = workflowEventRef({
+    workflow_name: args.workflowName,
+    entity_id: args.entityId,
+    state_version: args.stateVersion,
+  })
+  void markWorkflowTransition(session.id, {
+    eventRef,
+    workflowName: args.workflowName,
+    workflowId: args.workflowId,
+    entityType: 'workflow',
+    entityId: args.entityId,
+    stateVersion: args.stateVersion,
+    eventType: args.eventType,
+  }).catch(() => {})
+}
+
 export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshotLike, TEvent>(
   config: HeadlessWorkflowConfig<TSnapshot, TEvent>,
 ) {
+  // Canonical backend workflow_name for the transition-anchor; falls back to
+  // the UI machine id when a consumer hasn't pinned the DB name.
+  const workflowName = config.workflowName ?? config.id
+
   const machine = setup({
     types: {
       context: {} as Context<TSnapshot>,
@@ -111,6 +150,16 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
       submitEvent: fromPromise<SubmitOutput<TSnapshot>, SubmitInput<TEvent>>(async ({ input }) => {
         try {
           const next = await config.submit(input.entityId, input.event, input.stateVersion, input.companySlug)
+          // Step 3 — MARK AT EACH TRANSITION. The transition has committed
+          // server-side; the returned snapshot carries the post-transition
+          // state_version we anchor the recorder mark on.
+          emitTransitionMark({
+            workflowId: config.id,
+            workflowName,
+            entityId: input.entityId,
+            stateVersion: next.state_version,
+            eventType: compactTraceEventType(input.event),
+          })
           return { kind: 'ok', snapshot: next }
         } catch (caught) {
           const message = caught instanceof Error ? caught.message : 'unknown error'
@@ -200,10 +249,6 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
       },
     },
   })
-
-  // Canonical backend workflow_name for the transition-anchor; falls back to
-  // the UI machine id when a consumer hasn't pinned the DB name.
-  const workflowName = config.workflowName ?? config.id
 
   /**
    * The keystone: compute the SAME `workflow_event:<name>:<sha16>:<version>`

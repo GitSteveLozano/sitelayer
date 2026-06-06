@@ -218,6 +218,54 @@ export async function appendCaptureSessionEvents(
   })
 }
 
+export type WorkflowTransitionMark = {
+  /** The transition-anchor string (workflow_event:<name>:<digest>:<version>). */
+  eventRef: string
+  /** Canonical backend workflow_name (== workflow_event_log.workflow_name). */
+  workflowName: string
+  /** UI machine id that emitted the mark — useful for triage, not load-bearing. */
+  workflowId?: string
+  entityType?: string
+  entityId: string
+  /** The post-transition state_version this mark anchors on. */
+  stateVersion: number
+  /** The dispatched event type (e.g. APPROVE). */
+  eventType?: string | null
+}
+
+/**
+ * Drop a timestamped mark on the active recorder timeline keyed to a committed
+ * workflow transition. The `event_ref` rides in the event payload (no schema
+ * change) so the anchor-lookup surface can resolve the recorder sub-range
+ * between any two marks on the same workflow+entity.
+ *
+ * Best-effort + fire-and-forget at the call site: a capture session may be
+ * absent (returns null) and a failed POST must never break the transition the
+ * user just performed. The client_event_id is deterministic per
+ * (session, ref) so a retried mark de-dupes server-side.
+ */
+export async function markWorkflowTransition(
+  captureSessionId: string,
+  mark: WorkflowTransitionMark,
+): Promise<{ accepted: number }> {
+  const event: CaptureSessionEventInput = {
+    client_event_id: `workflow_transition:${captureSessionId}:${mark.eventRef}`,
+    event_type: 'workflow.transition',
+    event_class: 'workflow_event',
+    route_path: currentCaptureRoutePath(),
+    workflow_id: mark.workflowId ?? mark.workflowName,
+    entity_type: mark.entityType ?? 'workflow',
+    entity_id: mark.entityId,
+    payload: {
+      event_ref: mark.eventRef,
+      workflow_name: mark.workflowName,
+      state_version: mark.stateVersion,
+      ...(mark.eventType ? { event_type: mark.eventType } : {}),
+    },
+  }
+  return appendCaptureSessionEvents(captureSessionId, [event])
+}
+
 export async function appendCaptureArtifacts(
   captureSessionId: string,
   artifacts: CaptureArtifactInput[],

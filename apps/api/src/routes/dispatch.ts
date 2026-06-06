@@ -88,6 +88,7 @@ import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
 import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
+import { handleAnchorRoutes } from './anchors.js'
 import { getBuildSha } from '../lib/build-sha.js'
 import { rasterizePdfPageToPng } from '../blueprint-rasterize.js'
 
@@ -1196,6 +1197,22 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         send304: ctx.send304,
         requestId: ctx.requestId,
         tier: ctx.tier,
+      }),
+
+    // Statechart-anchor lookup — incident-tracking surface, same gate as
+    // debug-trace (Bearer DEBUG_TRACE_TOKEN, prod-gated). Resolves a one-string
+    // transition anchor (or a from/to pair) to its workflow_event_log row(s),
+    // linked capture session + artifacts, sentry_trace, and deterministic replay.
+    () =>
+      handleAnchorRoutes({
+        req,
+        url,
+        pool,
+        company,
+        tier: ctx.tier,
+        requestId: ctx.requestId,
+        sendJson,
+        setHeader: ctx.setHeader,
       }),
   ]
 
