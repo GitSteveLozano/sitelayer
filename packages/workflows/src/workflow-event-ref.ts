@@ -38,6 +38,53 @@ export function workflowEventRef(input: WorkflowEventRefInput): string {
   return `workflow_event:${input.workflow_name}:${digest}:${input.state_version}`
 }
 
+/** The fixed prefix every anchor string carries. */
+export const WORKFLOW_EVENT_REF_PREFIX = 'workflow_event:'
+
+/**
+ * The non-secret fields recoverable from an anchor string by structure alone:
+ * `workflow_event:<workflow_name>:<digest16>:<state_version>`.
+ *
+ * The digest is a one-way SHA-256 over `<workflow_name>:<entity_id>:<state_version>`,
+ * so `entity_id` is NOT recoverable from the ref — it must come from the row the
+ * ref points at (or any candidate row), then be confirmed via {@link matchesWorkflowEventRef}.
+ *
+ * Parses from the RIGHT (version = last segment, digest = second-to-last) so a
+ * `workflow_name` that ever contains a colon still parses unambiguously.
+ */
+export interface ParsedWorkflowEventRef {
+  workflow_name: string
+  digest: string
+  state_version: number
+}
+
+export function parseWorkflowEventRef(ref: string): ParsedWorkflowEventRef | null {
+  if (typeof ref !== 'string' || !ref.startsWith(WORKFLOW_EVENT_REF_PREFIX)) return null
+  const body = ref.slice(WORKFLOW_EVENT_REF_PREFIX.length)
+  const parts = body.split(':')
+  // Need at least <name>:<digest>:<version> → 3 segments.
+  if (parts.length < 3) return null
+  const versionPart = parts[parts.length - 1]!
+  const digest = parts[parts.length - 2]!
+  const workflow_name = parts.slice(0, parts.length - 2).join(':')
+  if (!workflow_name) return null
+  if (!/^[0-9a-f]{16}$/.test(digest)) return null
+  if (!/^\d+$/.test(versionPart)) return null
+  const state_version = Number(versionPart)
+  if (!Number.isSafeInteger(state_version)) return null
+  return { workflow_name, digest, state_version }
+}
+
+/**
+ * True iff `ref` is the anchor for the given `{workflow_name, entity_id, state_version}`.
+ * This is the safe direction: the caller supplies a candidate row (which carries
+ * the entity_id the digest was taken over) and this confirms the ref names that
+ * exact transition — recomputing the same isomorphic digest the frontend stamped.
+ */
+export function matchesWorkflowEventRef(ref: string, candidate: WorkflowEventRefInput): boolean {
+  return workflowEventRef(candidate) === ref
+}
+
 // --- dependency-free SHA-256 (FIPS 180-4) -----------------------------------
 // A self-contained, synchronous SHA-256 over a UTF-8 string. Kept private to
 // this module; the only public surface is workflowEventRef(). Pinned against

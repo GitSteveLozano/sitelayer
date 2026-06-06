@@ -57,7 +57,14 @@ export {
   type WorkflowEventLogInsertOptions,
 } from './event-log-insert.js'
 
-export { workflowEventRef, type WorkflowEventRefInput } from './workflow-event-ref.js'
+export {
+  matchesWorkflowEventRef,
+  parseWorkflowEventRef,
+  workflowEventRef,
+  WORKFLOW_EVENT_REF_PREFIX,
+  type ParsedWorkflowEventRef,
+  type WorkflowEventRefInput,
+} from './workflow-event-ref.js'
 
 export {
   applyEventSequence,
