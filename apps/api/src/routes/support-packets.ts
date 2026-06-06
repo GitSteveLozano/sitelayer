@@ -753,6 +753,63 @@ function renderAnchorLines(serverContext: JsonRecord): string[] {
   return lines
 }
 
+/** One persisted server_context.timeline event (see incident-timeline.ts). */
+type AgentPromptTimelineEvent = {
+  at?: unknown
+  source?: unknown
+  line?: unknown
+  is_error?: unknown
+  error?: unknown
+  request_id?: unknown
+  trace_id?: unknown
+}
+
+/** Drop the milliseconds + zone off an ISO timestamp for compact prompt lines. */
+function shortTimestamp(value: unknown): string {
+  const iso = asString(value)
+  if (!iso) return '?'
+  const parsed = Date.parse(iso)
+  if (Number.isNaN(parsed)) return iso
+  return new Date(parsed).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19)
+}
+
+/**
+ * Render the chronological incident timeline the finalize path wove into
+ * server_context.timeline — the "events leading up to the issue" across the
+ * audit / queue / capture / work-item tables, oldest first, with the error rows
+ * highlighted. Gives the LLM the in-window sequence so it doesn't have to
+ * reconstruct it from the raw server_context arrays. Returns [] when no timeline
+ * was captured (e.g. an older packet or a window with no rows).
+ */
+function renderTimelineLines(serverContext: JsonRecord): string[] {
+  const timeline = serverContext.timeline
+  if (!isRecord(timeline)) return []
+  const rawEvents = timeline.events
+  if (!Array.isArray(rawEvents) || rawEvents.length === 0) return []
+  const events = rawEvents.filter((entry): entry is AgentPromptTimelineEvent => isRecord(entry)).slice(0, 60)
+  if (!events.length) return []
+  const errorCount = events.filter((event) => event.is_error === true).length
+  const header =
+    errorCount > 0
+      ? `Timeline — events leading up to the issue (${events.length} shown, ${errorCount} error):`
+      : `Timeline — events leading up to the issue (${events.length} shown):`
+  const lines: string[] = ['', header]
+  for (const event of events) {
+    const when = shortTimestamp(event.at)
+    const source = asString(event.source) || 'event'
+    const line = asString(event.line) || ''
+    const requestId = asString(event.request_id)
+    const reqSuffix = requestId ? `  (req ${requestId})` : ''
+    if (event.is_error === true) {
+      const error = asString(event.error) || 'status failed'
+      lines.push(`- ${when} ${source}: ${line} — ERROR: ${error}${reqSuffix}`)
+    } else {
+      lines.push(`- ${when} ${source}: ${line}${reqSuffix}`)
+    }
+  }
+  return lines
+}
+
 function buildAgentPrompt(row: SupportPacketRow): string {
   const requestIds = Array.isArray(row.server_context.request_ids)
     ? row.server_context.request_ids.filter((entry) => typeof entry === 'string').slice(0, 12)
@@ -770,8 +827,9 @@ function buildAgentPrompt(row: SupportPacketRow): string {
     `Request IDs: ${requestIds.join(', ') || 'none captured'}`,
     `Trace IDs: ${traceIds.join(', ') || 'none captured'}`,
     ...renderAnchorLines(row.server_context),
+    ...renderTimelineLines(row.server_context),
     '',
-    'Use the attached support_packet JSON as the source of truth. Correlate the client timeline, API requests, audit events, queue rows, and domain snapshot before suggesting a cause. When a statechart transition anchor reports a replay divergence, treat that transition as the prime suspect.',
+    'Use the attached support_packet JSON as the source of truth. Correlate the client timeline, API requests, audit events, queue rows, and domain snapshot before suggesting a cause. When a statechart transition anchor reports a replay divergence, treat that transition as the prime suspect. The Timeline section lists the in-window events in order — the last error before the report is the usual starting point.',
   ].join('\n')
 }
 

@@ -331,6 +331,67 @@ describe('support packet sanitization', () => {
     expect(prompt).not.toContain('Statechart transition anchors')
   })
 
+  it('renders the incident timeline (errors highlighted) into the agent_prompt', async () => {
+    const pool = new FakeSupportPacketPool()
+    pool.supportPacket = {
+      ...pool.supportPacket,
+      server_context: {
+        request_ids: ['request-1'],
+        trace_ids: ['trace-1'],
+        timeline: {
+          window: { since: '2026-06-06T00:00:00.000Z', until: '2026-06-06T01:00:00.000Z' },
+          events: [
+            {
+              at: '2026-06-06T00:05:00.000Z',
+              source: 'audit',
+              line: 'estimate.recompute project proj-1 by user-1',
+              is_error: false,
+              request_id: 'req-A',
+            },
+            {
+              at: '2026-06-06T00:20:00.000Z',
+              source: 'mutation_outbox',
+              line: 'post_qbo_invoice rental_billing_run rbr-1 failed',
+              is_error: true,
+              error: 'QBO 401 unauthorized',
+              request_id: 'req-B',
+            },
+          ],
+          errors: [],
+          candidate_request_ids: ['req-B', 'req-A'],
+          candidate_trace_ids: [],
+          truncated: false,
+        },
+      },
+    }
+    const read = makeCtx(pool)
+    await handleSupportPacketRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/support-packets/${pool.supportPacket.id}`),
+      read.ctx,
+    )
+    expect(read.responses[0]?.status).toBe(200)
+    const prompt = (read.responses[0]?.body as { agent_prompt: string }).agent_prompt
+    expect(prompt).toContain('Timeline — events leading up to the issue (2 shown, 1 error)')
+    expect(prompt).toContain('2026-06-06 00:05:00 audit: estimate.recompute project proj-1 by user-1  (req req-A)')
+    expect(prompt).toContain(
+      '2026-06-06 00:20:00 mutation_outbox: post_qbo_invoice rental_billing_run rbr-1 failed — ERROR: QBO 401 unauthorized  (req req-B)',
+    )
+  })
+
+  it('omits the timeline section when no timeline was captured', async () => {
+    const pool = new FakeSupportPacketPool()
+    const read = makeCtx(pool)
+    await handleSupportPacketRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/support-packets/${pool.supportPacket.id}`),
+      read.ctx,
+    )
+    expect(read.responses[0]?.status).toBe(200)
+    const prompt = (read.responses[0]?.body as { agent_prompt: string }).agent_prompt
+    expect(prompt).not.toContain('Timeline — events leading up to the issue')
+  })
+
   it('includes related work-request context and handoff traces in server context', async () => {
     const pool = new FakeSupportPacketPool()
     const captureSessionId = '55555555-5555-4555-8555-555555555555'

@@ -22,10 +22,12 @@ import type { Capability } from '@sitelayer/domain'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { notifyCaptureWorkItem, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureSessionAnchors } from '../anchor-resolve.js'
+import { buildIncidentTimeline } from '../incident-timeline.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
   buildSupportServerContext,
   insertSupportPacket,
+  sanitizeSupportJson,
   supportJsonRecord,
   type JsonRecord,
 } from './support-packets.js'
@@ -66,6 +68,21 @@ const MAX_EVENTS = 100
 const MAX_ARTIFACTS = 25
 const CAPTURE_REDACTION_VERSION = 'capture-session-v1'
 const TRUSTED_CAPTURE_AUTO_DISPATCH_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'bookkeeper']
+// The incident timeline woven at finalize covers this session's window padded
+// by a small buffer either side, capped to keep server_context bounded.
+const CAPTURE_TIMELINE_BUFFER_MS = 60_000
+const CAPTURE_TIMELINE_LIMIT = 200
+
+/**
+ * Clamp a capture-session window edge to an ISO string, shifted by `offsetMs`
+ * (negative widens earlier, positive widens later). Falls back to now() if the
+ * edge is missing/unparseable so the timeline query always has valid bounds.
+ */
+function captureWindowBound(edge: string | null | undefined, offsetMs: number): string {
+  const base = edge ? Date.parse(edge) : Number.NaN
+  const millis = Number.isNaN(base) ? Date.now() : base
+  return new Date(millis + offsetMs).toISOString()
+}
 
 type CaptureSessionRow = {
   id: string
@@ -1194,7 +1211,27 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       // LLM. Fully defensive: a resolve failure is skipped, never thrown, so
       // finalize can't break on a bad anchor.
       const anchors = await buildCaptureSessionAnchors(c, ctx.company.id, id).catch(() => [])
-      const serverContextWithAnchors: JsonRecord = { ...(serverContext as JsonRecord), anchors }
+      // Weave the chronological incident timeline ("events leading up to it") on
+      // the SAME tx client, bounded by this capture session's window (started_at
+      // -> last_seen_at/stopped_at) with a small buffer either side so the row(s)
+      // that triggered the capture aren't clipped by an off-by-a-second boundary.
+      // In-process only, no network. Fully defensive: a failing read is skipped,
+      // never thrown, and the sanitized rows are capped before persisting so a
+      // noisy session can't bloat server_context.
+      const timeline = await buildIncidentTimeline(c, {
+        companyId: ctx.company.id,
+        since: captureWindowBound(snapshot.session.started_at, -CAPTURE_TIMELINE_BUFFER_MS),
+        until: captureWindowBound(
+          snapshot.session.stopped_at ?? snapshot.session.last_seen_at,
+          CAPTURE_TIMELINE_BUFFER_MS,
+        ),
+        limit: CAPTURE_TIMELINE_LIMIT,
+      }).catch(() => null)
+      const serverContextWithAnchors: JsonRecord = {
+        ...(serverContext as JsonRecord),
+        anchors,
+        ...(timeline ? { timeline: sanitizeSupportJson(timeline) as JsonRecord } : {}),
+      }
       const packet = await insertSupportPacket(c, {
         companyId: ctx.company.id,
         actorUserId: ctx.identity.userId,
