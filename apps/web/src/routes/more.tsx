@@ -13,6 +13,7 @@ import {
   DispatchLanesAdminScreen,
   HelpScreen,
   LoadedLaborScreen,
+  MemberCapabilitiesScreen,
   NotificationsQueueScreen,
   PricingBookScreen,
   ProfileScreen,
@@ -48,6 +49,7 @@ export default function MoreRoute() {
       <Route path="working-hours" element={<WorkingHoursScreen navigate={navigate} />} />
       <Route path="roles" element={<RolesScreen navigate={navigate} />} />
       <Route path="roles/custom" element={<CustomRoleScreen navigate={navigate} />} />
+      <Route path="roles/capabilities" element={<MemberCapabilitiesScreen navigate={navigate} />} />
       <Route path="profile" element={<ProfileScreen navigate={navigate} />} />
       <Route path="help" element={<HelpScreen navigate={navigate} />} />
       <Route path="catalog" element={<CatalogHubScreen />} />

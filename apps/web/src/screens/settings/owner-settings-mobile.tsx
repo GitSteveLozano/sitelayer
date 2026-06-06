@@ -25,7 +25,9 @@ import {
   BUILTIN_ROLE_PERMISSIONS,
   CONSTRAINABLE_ACTIONS,
   CONSTRAINT_ENFORCEMENT,
+  FIELD_REQUEST_CAPABILITIES,
   type BuiltinRole,
+  type FieldRequestCapability,
   type PermissionAction,
 } from '@sitelayer/domain'
 import type { BootstrapResponse } from '@/lib/api'
@@ -36,6 +38,10 @@ import {
   useUpdateWorkingHours,
   useCompanyRoles,
   useCreateCustomRole,
+  useMembershipCapabilities,
+  useGrantMembershipCapability,
+  useRevokeMembershipCapability,
+  type CompanyMembershipRow,
   type CustomRole,
   type CustomRoleGrant,
   type ServiceItem,
@@ -739,9 +745,12 @@ export function RolesScreen({ navigate }: { navigate: (path: string) => void }) 
           )}
         </div>
 
-        <div style={{ padding: '16px' }}>
+        <div style={{ padding: '16px', display: 'grid', gap: 8 }}>
           <MButton variant="ghost" onClick={() => navigate('/more/roles/custom')}>
             + Create custom role
+          </MButton>
+          <MButton variant="ghost" onClick={() => navigate('/more/roles/capabilities')}>
+            Member capabilities →
           </MButton>
         </div>
       </MBody>
@@ -1030,6 +1039,148 @@ export function CustomRoleScreen({ navigate }: { navigate: (path: string) => voi
         </div>
       </MBody>
     </>
+  )
+}
+
+// ===========================================================================
+// MEMBER CAPABILITIES — per-member field_request.* opt-in (company boundary)
+// ===========================================================================
+
+/** Short human label per field_request.* capability for the toggle list. */
+const FIELD_REQUEST_CAP_LABEL: Record<FieldRequestCapability, { title: string; blurb: string }> = {
+  'field_request.create': { title: 'Create', blurb: 'Open a field request / flag a job problem.' },
+  'field_request.view': { title: 'View', blurb: 'See field requests (members see their own).' },
+  'field_request.triage': { title: 'Triage', blurb: 'Route / assign / dispatch field requests.' },
+  'field_request.resolve': { title: 'Resolve', blurb: 'Mark a field request resolved.' },
+}
+
+/**
+ * Member capabilities (msg__89 sibling) — the admin surface that opts a single
+ * member into a COMPANY field_request.* capability beyond their role floor. The
+ * member's effective caps = the role default (always held, shown locked) ∪ the
+ * additive grants this screen toggles. app_issue.* (platform) caps NEVER appear
+ * here — those live on the superadmin /admin Platform-grants surface.
+ */
+export function MemberCapabilitiesScreen({ navigate }: { navigate: (path: string) => void }) {
+  const companyId = useActiveCompanyId()
+  const roles = useCompanyRoles(companyId)
+  const memberships = roles.data?.memberships ?? []
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // Default the selection to the first member once loaded.
+  useEffect(() => {
+    if (!selectedId && memberships.length) setSelectedId(memberships[0]!.id)
+  }, [memberships, selectedId])
+
+  const selected = memberships.find((m) => m.id === selectedId) ?? null
+
+  return (
+    <>
+      <MTopBar back eyebrow="Settings" title="Member capabilities" onBack={() => navigate('/more/roles')} />
+      <MBody>
+        <div style={{ padding: '14px 16px 8px' }}>
+          <Eyebrow>
+            {memberships.length} member{memberships.length === 1 ? '' : 's'}
+          </Eyebrow>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-3)', marginTop: 4 }}>
+            Grant a member extra field-request powers beyond their role. Role-floor powers are always on.
+          </div>
+        </div>
+
+        {roles.isError ? <EmptyRow>Could not load members.</EmptyRow> : null}
+        {!roles.isError && memberships.length === 0 ? <EmptyRow>No members yet.</EmptyRow> : null}
+
+        {/* Member picker */}
+        {memberships.length > 0 ? (
+          <div style={{ padding: '0 16px 8px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {memberships.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setSelectedId(m.id)}
+                style={{
+                  padding: '6px 12px',
+                  border: '2px solid var(--m-line)',
+                  background: m.id === selectedId ? 'var(--m-accent)' : 'transparent',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {m.clerk_user_id.slice(0, 14)} · {m.role}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {selected ? <MemberCapabilityEditor companyId={companyId ?? ''} member={selected} /> : null}
+      </MBody>
+    </>
+  )
+}
+
+function MemberCapabilityEditor({ companyId, member }: { companyId: string; member: CompanyMembershipRow }) {
+  const caps = useMembershipCapabilities(companyId, member.id)
+  const grant = useGrantMembershipCapability(companyId, member.id)
+  const revoke = useRevokeMembershipCapability(companyId, member.id)
+  const view = caps.data?.capabilities
+  const roleDefault = new Set(view?.role_default ?? [])
+  const granted = new Set(view?.granted ?? [])
+  const pending = grant.isPending || revoke.isPending
+
+  function toggle(capability: FieldRequestCapability, isOn: boolean) {
+    if (pending) return
+    if (isOn) revoke.mutate({ capability })
+    else grant.mutate({ capability })
+  }
+
+  if (caps.isLoading) return <EmptyRow>Loading capabilities…</EmptyRow>
+  if (caps.isError) return <EmptyRow>Could not load capabilities.</EmptyRow>
+
+  return (
+    <div style={{ padding: '4px 16px 24px' }}>
+      {FIELD_REQUEST_CAPABILITIES.map((capability) => {
+        const isDefault = roleDefault.has(capability)
+        const isGranted = granted.has(capability)
+        const isOn = isDefault || isGranted
+        const label = FIELD_REQUEST_CAP_LABEL[capability]
+        return (
+          <button
+            key={capability}
+            type="button"
+            disabled={isDefault || pending}
+            onClick={() => toggle(capability, isGranted)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              width: '100%',
+              textAlign: 'left',
+              padding: '12px 0',
+              borderBottom: '1px solid var(--m-line)',
+              background: 'transparent',
+              cursor: isDefault || pending ? 'default' : 'pointer',
+              opacity: isDefault ? 0.7 : 1,
+            }}
+          >
+            <Checkbox checked={isOn} />
+            <span style={{ flex: 1 }}>
+              <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: 'var(--m-ink)' }}>
+                {label.title}
+                {isDefault ? <span style={{ color: 'var(--m-ink-3)', fontWeight: 500 }}> · role default</span> : null}
+              </span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--m-ink-3)' }}>{label.blurb}</span>
+            </span>
+          </button>
+        )
+      })}
+      {grant.isError || revoke.isError ? (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'var(--m-danger, #b91c1c)' }}>
+          Could not update — try again.
+        </div>
+      ) : null}
+    </div>
   )
 }
 

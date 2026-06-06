@@ -575,15 +575,28 @@ export {
   useCreateCustomRole,
   useDeleteCustomRole,
   usePatchCustomRole,
+  useMembershipCapabilities,
+  useGrantMembershipCapability,
+  useRevokeMembershipCapability,
   type AssignMembershipRoleRequest,
   type AssignMembershipRoleResponse,
   type BuiltinRoleView,
+  type CompanyMembershipRow,
   type CompanyRolesResponse,
   type CreateCustomRoleRequest,
   type CustomRole,
   type CustomRoleGrant,
+  type MembershipCapabilities,
   type PatchCustomRoleRequest,
 } from './company-roles'
+
+export {
+  usePlatformGrants,
+  useGrantPlatformCapability,
+  useRevokePlatformCapability,
+  type PlatformGrant,
+  type PlatformGrantsResponse,
+} from './platform-grants'
 
 export { useActiveCompanyId, useActiveCompanyModules } from './active-company'
 

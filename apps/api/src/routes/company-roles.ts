@@ -5,12 +5,19 @@ import {
   BUILTIN_ROLES,
   BUILTIN_ROLE_PERMISSIONS,
   CONSTRAINABLE_ACTIONS,
+  FIELD_REQUEST_CAPABILITIES,
   PERMISSION_ACTIONS,
   builtinToCompanyRole,
+  companyRoleToBuiltin,
+  defaultCompanyCapabilities,
   isBuiltinRole,
   isConstrainableAction,
+  isFieldRequestCapability,
+  mergeCompanyCapabilities,
   normalizeCompanyRole,
   type BuiltinRole,
+  type CompanyRole,
+  type FieldRequestCapability,
   type PermissionAction,
 } from '@sitelayer/domain'
 import { recordAudit } from '../audit.js'
@@ -98,6 +105,19 @@ const AssignRoleSchema = z
   .refine((v) => v.custom_role_id !== undefined || v.builtin_role !== undefined, {
     message: 'custom_role_id or builtin_role is required',
   })
+
+/**
+ * Body for granting one company (field_request.*) capability to a membership.
+ * The capability MUST be a field_request.* name — the company boundary can
+ * never mint an app_issue.* cap (those live ONLY on the platform boundary via
+ * platform_admin_grants). The enum is the catalog slice from @sitelayer/domain.
+ */
+const FieldRequestCapabilityEnum = z.enum(FIELD_REQUEST_CAPABILITIES)
+const GrantCapabilitySchema = z
+  .object({
+    capability: FieldRequestCapabilityEnum,
+  })
+  .strict()
 
 type ParsedGrant = { action: PermissionAction; constraints: Record<string, number> | null }
 
@@ -427,6 +447,244 @@ export async function assignMembershipRoleTx(
 }
 
 // ---------------------------------------------------------------------------
+// Membership capability grants (the field_request.* opt-in surface)
+// ---------------------------------------------------------------------------
+//
+// The foundation (packages/domain/src/capabilities.ts +
+// apps/api/src/capability.ts) resolves a membership's effective COMPANY
+// capabilities as: the role-default field_request.* caps UNION the field_request.*
+// slice of the EXISTING additive custom_role_grants action rows attached to the
+// membership's custom role (server.ts loads those into `grantActions`). So to
+// "grant a company capability to a membership" we add a field_request.* action
+// row to that membership's custom role — the same row shape the keystone reads.
+//
+// A membership without a custom role has nowhere additive to live, so the grant
+// path auto-provisions a per-member custom role inheriting the member's current
+// builtin base (a behaviour-preserving no-op until a field_request.* row is
+// added). Revoke deletes the field_request.* row; it never strips a role-default
+// cap (you can't drop below the role floor — that's the system contract).
+
+type MembershipRow = {
+  id: string
+  clerk_user_id: string
+  role: string
+  custom_role_id: string | null
+}
+
+/** The shape returned by the capability GET / grant / revoke endpoints. */
+export type MembershipCapabilitiesView = {
+  membership_id: string
+  clerk_user_id: string
+  role: CompanyRole
+  /** The role-floor field_request.* caps (always held; never revocable). */
+  role_default: FieldRequestCapability[]
+  /** The additive field_request.* caps granted via custom_role_grants. */
+  granted: FieldRequestCapability[]
+  /** role_default ∪ granted — the membership's effective company caps. */
+  effective: FieldRequestCapability[]
+}
+
+const FIELD_REQUEST_CAPABILITY_ORDER: readonly FieldRequestCapability[] = FIELD_REQUEST_CAPABILITIES
+
+/** Stable catalog order so the response is deterministic. */
+function sortCaps(caps: Iterable<FieldRequestCapability>): FieldRequestCapability[] {
+  const set = new Set(caps)
+  return FIELD_REQUEST_CAPABILITY_ORDER.filter((c) => set.has(c))
+}
+
+/** Load a membership (asserts it belongs to the company). For-update optional. */
+async function loadMembership(
+  client: QueryExecutor,
+  companyId: string,
+  membershipId: string,
+  forUpdate: boolean,
+): Promise<MembershipRow> {
+  const result = await client.query<MembershipRow>(
+    `select id, clerk_user_id, role, custom_role_id from company_memberships
+       where id = $1 and company_id = $2${forUpdate ? ' for update' : ''}`,
+    [membershipId, companyId],
+  )
+  const row = result.rows[0]
+  if (!row) throw new HttpError(404, 'membership not found')
+  return row
+}
+
+/** The field_request.* action names granted on a (live) custom role. */
+async function selectFieldRequestGrants(
+  client: QueryExecutor,
+  companyId: string,
+  customRoleId: string | null,
+): Promise<FieldRequestCapability[]> {
+  if (!customRoleId) return []
+  const result = await client.query<{ action: string }>(
+    `select action from custom_role_grants where custom_role_id = $1 and company_id = $2`,
+    [customRoleId, companyId],
+  )
+  const out = new Set<FieldRequestCapability>()
+  for (const row of result.rows) {
+    if (isFieldRequestCapability(row.action)) out.add(row.action)
+  }
+  return sortCaps(out)
+}
+
+function membershipCapabilitiesView(row: MembershipRow, granted: FieldRequestCapability[]): MembershipCapabilitiesView {
+  const role = normalizeCompanyRole(row.role)
+  const effective = mergeCompanyCapabilities(role, granted)
+  return {
+    membership_id: row.id,
+    clerk_user_id: row.clerk_user_id,
+    role,
+    role_default: sortCaps(defaultCompanyCapabilities(role)),
+    granted: sortCaps(granted),
+    effective: sortCaps(effective),
+  }
+}
+
+/**
+ * Read a membership's effective company capabilities. Company-scoped via the
+ * GUC the caller already set (or the bare pool for the GET). Pure read.
+ */
+export async function readMembershipCapabilitiesTx(
+  client: QueryExecutor,
+  args: { companyId: string; membershipId: string },
+): Promise<MembershipCapabilitiesView> {
+  const membership = await loadMembership(client, args.companyId, args.membershipId, false)
+  const granted = await selectFieldRequestGrants(client, args.companyId, membership.custom_role_id)
+  return membershipCapabilitiesView(membership, granted)
+}
+
+/**
+ * Ensure a membership has a custom role to hang additive grants on. If it
+ * already has one, return it; otherwise mint a per-member role inheriting the
+ * member's current builtin base and link it. Returns the custom_role_id.
+ */
+async function ensureMembershipCustomRole(
+  client: QueryExecutor,
+  args: { companyId: string; membership: MembershipRow; actorUserId: string },
+): Promise<string> {
+  if (args.membership.custom_role_id) return args.membership.custom_role_id
+
+  const inheritFrom = companyRoleToBuiltin(normalizeCompanyRole(args.membership.role))
+  // Per-member role name keyed on the membership id so re-grants are stable and
+  // the name uniqueness (custom_roles unique (company_id, name)) never collides.
+  const name = `caps:${args.membership.id}`
+  let roleId: string
+  try {
+    const inserted = await client.query<{ id: string }>(
+      `insert into custom_roles (company_id, name, inherit_from, created_by)
+       values ($1, $2, $3, $4)
+       returning id`,
+      [args.companyId, name, inheritFrom, args.actorUserId],
+    )
+    const row = inserted.rows[0]
+    if (!row) throw new HttpError(500, 'per-member role insert returned no row')
+    roleId = row.id
+  } catch (err) {
+    // A prior grant may have created the per-member role then failed to link;
+    // recover by reusing it.
+    if (isUniqueViolation(err)) {
+      const existing = await client.query<{ id: string }>(
+        `select id from custom_roles where company_id = $1 and name = $2 and deleted_at is null limit 1`,
+        [args.companyId, name],
+      )
+      const row = existing.rows[0]
+      if (!row) throw err
+      roleId = row.id
+    } else {
+      throw err
+    }
+  }
+
+  await client.query(`update company_memberships set custom_role_id = $1 where id = $2 and company_id = $3`, [
+    roleId,
+    args.membership.id,
+    args.companyId,
+  ])
+  args.membership.custom_role_id = roleId
+  return roleId
+}
+
+/** Grant one field_request.* capability to a membership (idempotent). */
+export async function grantMembershipCapabilityTx(
+  client: QueryExecutor,
+  args: {
+    companyId: string
+    membershipId: string
+    capability: FieldRequestCapability
+    actorUserId: string
+  },
+): Promise<MembershipCapabilitiesView> {
+  const membership = await loadMembership(client, args.companyId, args.membershipId, true)
+
+  // A role-default cap is always held — granting it is a no-op (don't litter a
+  // redundant custom_role_grants row). Still surface the (unchanged) view.
+  const roleDefaults = defaultCompanyCapabilities(normalizeCompanyRole(membership.role))
+  if (!(roleDefaults as Set<string>).has(args.capability)) {
+    const customRoleId = await ensureMembershipCustomRole(client, {
+      companyId: args.companyId,
+      membership,
+      actorUserId: args.actorUserId,
+    })
+    // Idempotent insert — the (custom_role_id, action) unique key absorbs a re-grant.
+    await client.query(
+      `insert into custom_role_grants (custom_role_id, company_id, action, constraints)
+       values ($1, $2, $3, null)
+       on conflict (custom_role_id, action) do nothing`,
+      [customRoleId, args.companyId, args.capability],
+    )
+    await recordAudit(client, {
+      companyId: args.companyId,
+      actorUserId: args.actorUserId,
+      entityType: 'company_membership',
+      entityId: membership.id,
+      action: 'grant_capability',
+      after: { id: membership.id, capability: args.capability },
+    })
+  }
+
+  const granted = await selectFieldRequestGrants(client, args.companyId, membership.custom_role_id)
+  return membershipCapabilitiesView(membership, granted)
+}
+
+/**
+ * Revoke one field_request.* capability from a membership. Only removes an
+ * ADDITIVE grant row; a role-default cap can never be revoked (the floor is the
+ * system contract), so revoking one is a no-op that still 200s with the view.
+ */
+export async function revokeMembershipCapabilityTx(
+  client: QueryExecutor,
+  args: {
+    companyId: string
+    membershipId: string
+    capability: FieldRequestCapability
+    actorUserId: string
+  },
+): Promise<MembershipCapabilitiesView> {
+  const membership = await loadMembership(client, args.companyId, args.membershipId, true)
+
+  if (membership.custom_role_id) {
+    const deleted = await client.query(
+      `delete from custom_role_grants
+         where custom_role_id = $1 and company_id = $2 and action = $3`,
+      [membership.custom_role_id, args.companyId, args.capability],
+    )
+    if ((deleted as { rowCount?: number }).rowCount) {
+      await recordAudit(client, {
+        companyId: args.companyId,
+        actorUserId: args.actorUserId,
+        entityType: 'company_membership',
+        entityId: membership.id,
+        action: 'revoke_capability',
+        after: { id: membership.id, capability: args.capability },
+      })
+    }
+  }
+
+  const granted = await selectFieldRequestGrants(client, args.companyId, membership.custom_role_id)
+  return membershipCapabilitiesView(membership, granted)
+}
+
+// ---------------------------------------------------------------------------
 // Small SQL helpers
 // ---------------------------------------------------------------------------
 
@@ -483,6 +741,10 @@ export async function handleCompanyRoleRoutes(
   const rolesMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/roles$/)
   const roleByIdMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/roles\/([^/]+)$/)
   const assignMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/memberships\/([^/]+)\/role$/)
+  const capabilitiesMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/memberships\/([^/]+)\/capabilities$/)
+  const capabilityByNameMatch = url.pathname.match(
+    /^\/api\/companies\/([^/]+)\/memberships\/([^/]+)\/capabilities\/([^/]+)$/,
+  )
 
   // ---- GET /api/companies/:id/roles → builtins matrix + custom roles --------
   if (req.method === 'GET' && rolesMatch) {
@@ -503,9 +765,24 @@ export async function handleCompanyRoleRoutes(
         )
       : { rows: [] as GrantRow[] }
 
+    // The company's memberships, so the admin UI can assign per-member roles
+    // AND per-member field_request.* capabilities (the opt-in below) without a
+    // second round trip / a superadmin endpoint.
+    const memberships = await pool.query<MembershipRow>(
+      `select id, clerk_user_id, role, custom_role_id from company_memberships
+         where company_id = $1 order by role, clerk_user_id`,
+      [companyId],
+    )
+
     sendJson(200, {
       builtins: builtinsView(),
       custom: roles.rows.map((r) => customRoleView(r, grants.rows)),
+      memberships: memberships.rows.map((m) => ({
+        id: m.id,
+        clerk_user_id: m.clerk_user_id,
+        role: normalizeCompanyRole(m.role),
+        custom_role_id: m.custom_role_id,
+      })),
     })
     return true
   }
@@ -654,6 +931,97 @@ export async function handleCompanyRoleRoutes(
       )
       observeAudit('company_membership', 'assign_role')
       sendJson(200, { membership: result.membership })
+    } catch (err) {
+      if (err instanceof HttpError) {
+        sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+    return true
+  }
+
+  // ---- GET /api/companies/:id/memberships/:mId/capabilities -----------------
+  // The membership's effective COMPANY (field_request.*) capabilities: role
+  // floor ∪ the additive custom_role_grants opt-in. app_issue.* caps NEVER
+  // appear here — those live only on the platform boundary.
+  if (req.method === 'GET' && capabilitiesMatch) {
+    const companyId = capabilitiesMatch[1]!
+    const membershipId = capabilitiesMatch[2]!
+    if (await blockIfNotAdmin(ctx, companyId)) return true
+
+    try {
+      const view = await readMembershipCapabilitiesTx(pool, { companyId, membershipId })
+      sendJson(200, { capabilities: view })
+    } catch (err) {
+      if (err instanceof HttpError) {
+        sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+    return true
+  }
+
+  // ---- POST /api/companies/:id/memberships/:mId/capabilities ----------------
+  // Grant one field_request.* capability to the membership (idempotent).
+  if (req.method === 'POST' && capabilitiesMatch) {
+    const companyId = capabilitiesMatch[1]!
+    const membershipId = capabilitiesMatch[2]!
+    if (await blockIfNotAdmin(ctx, companyId)) return true
+
+    const parsed = parseJsonBody(GrantCapabilitySchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+
+    try {
+      const view = await withMutationTx(companyId, (client) =>
+        grantMembershipCapabilityTx(client, {
+          companyId,
+          membershipId,
+          capability: parsed.value.capability,
+          actorUserId: userId,
+        }),
+      )
+      observeAudit('company_membership', 'grant_capability')
+      sendJson(200, { capabilities: view })
+    } catch (err) {
+      if (err instanceof HttpError) {
+        sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+    return true
+  }
+
+  // ---- DELETE /api/companies/:id/memberships/:mId/capabilities/:capability --
+  // Revoke an additive field_request.* grant. A role-default cap can't be
+  // revoked (the floor is the system contract) — that's a 200 no-op.
+  if (req.method === 'DELETE' && capabilityByNameMatch) {
+    const companyId = capabilityByNameMatch[1]!
+    const membershipId = capabilityByNameMatch[2]!
+    const capabilityRaw = decodeURIComponent(capabilityByNameMatch[3]!)
+    if (await blockIfNotAdmin(ctx, companyId)) return true
+
+    if (!isFieldRequestCapability(capabilityRaw)) {
+      sendJson(400, { error: 'capability must be a field_request.* capability' })
+      return true
+    }
+
+    try {
+      const view = await withMutationTx(companyId, (client) =>
+        revokeMembershipCapabilityTx(client, {
+          companyId,
+          membershipId,
+          capability: capabilityRaw,
+          actorUserId: userId,
+        }),
+      )
+      observeAudit('company_membership', 'revoke_capability')
+      sendJson(200, { capabilities: view })
     } catch (err) {
       if (err instanceof HttpError) {
         sendJson(err.status, { error: err.message })

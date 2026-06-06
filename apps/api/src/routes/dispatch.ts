@@ -75,6 +75,7 @@ import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleAdminRoutes } from './admin.js'
 import { handleAdminJobsRoutes } from './admin-jobs.js'
+import { handlePlatformGrantRoutes } from './platform-grants.js'
 import { handleCompanyRoleRoutes } from './company-roles.js'
 import { makeScenarioApplyRunner } from '../admin-scenarios.js'
 import { seedCompanyDefaults } from '../onboarding.js'
@@ -243,6 +244,21 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         identity,
         sendJson,
+      }),
+
+    // Opt-in platform-admin capability grants (/api/admin/platform-grants) —
+    // the app_issue.* escape hatch (migration 009 platform_admin_grants).
+    // Gated IDENTICALLY to the other /api/admin/* routes (authorizePlatformAdmin
+    // on the raw identity). MUST be wired BEFORE handleAdminRoutes: that handler
+    // claims the whole /api/admin/* namespace and 404s unknown subpaths, so
+    // /api/admin/platform-grants must reach here first. The ONLY write path into
+    // platform_admin_grants; only ever accepts app_issue.* names.
+    () =>
+      handlePlatformGrantRoutes(req, url, {
+        pool,
+        identity,
+        sendJson,
+        readBody,
       }),
 
     // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin

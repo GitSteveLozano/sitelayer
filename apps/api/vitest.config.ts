@@ -15,4 +15,20 @@ export default defineConfig({
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
     },
   },
+  // Keep the @sitelayer/* workspace packages on the source-alias path above and
+  // OUT of Vite's dep pre-bundler. Without this, the optimizer can resolve a
+  // bare `@sitelayer/domain` to a STALE built `dist/index.js` (e.g. a sibling
+  // worktree's node_modules symlink) that predates a newly added source module
+  // — surfacing newer exports (capabilities.*) as `undefined` at module load.
+  optimizeDeps: {
+    exclude: [
+      '@sitelayer/config',
+      '@sitelayer/domain',
+      '@sitelayer/formula-evaluator',
+      '@sitelayer/logger',
+      '@sitelayer/queue',
+      '@sitelayer/scenario',
+      '@sitelayer/workflows',
+    ],
+  },
 })
