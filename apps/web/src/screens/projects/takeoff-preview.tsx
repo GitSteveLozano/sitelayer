@@ -5,11 +5,17 @@ import {
   useProjectBlueprints,
   useProjectMeasurements,
   useTakeoffDrafts,
+  useTakeoffDraftResult,
   type BlueprintDocument,
   type TakeoffDraft,
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import {
+  buildCapturedGeometryScene,
+  isCapturedPreviewId,
+  mergeCapturedSceneIntoBase,
+} from '@/lib/takeoff/captured-geometry-3d'
 import { buildTakeoffPreviewScene } from '@/lib/takeoff/geometry-3d'
 import { TakeoffThreeScene } from './takeoff-3d-scene'
 
@@ -41,14 +47,27 @@ export function TakeoffPreviewScreen() {
   const activeDraftId = activeDraft?.id ?? null
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
 
-  const scene = useMemo(
-    () =>
-      buildTakeoffPreviewScene(measurements.data?.measurements ?? [], {
-        activeBlueprintId: activeBlueprint?.id ?? null,
-        activePage,
-      }),
-    [activeBlueprint?.id, activePage, measurements.data?.measurements],
-  )
+  // Read-only preview of a capture pipeline's geometry (rooms/walls/areas) BEFORE
+  // it is promoted into committed measurements. Only capture-sourced drafts carry
+  // a stashed TakeoffResult; manual drafts have none and the hook stays disabled.
+  const isCaptureDraft = Boolean(activeDraft && activeDraft.source && activeDraft.source !== 'manual')
+  const draftResult = useTakeoffDraftResult(isCaptureDraft ? activeDraftId : null)
+  const [showCapturedGeometry, setShowCapturedGeometry] = useState(true)
+
+  const capturedScene = useMemo(() => {
+    if (!isCaptureDraft || !showCapturedGeometry) return null
+    return buildCapturedGeometryScene(draftResult.data?.takeoff_result.geometry, {
+      source: draftResult.data?.source ?? activeDraft?.source ?? null,
+    })
+  }, [isCaptureDraft, showCapturedGeometry, draftResult.data, activeDraft?.source])
+
+  const scene = useMemo(() => {
+    const base = buildTakeoffPreviewScene(measurements.data?.measurements ?? [], {
+      activeBlueprintId: activeBlueprint?.id ?? null,
+      activePage,
+    })
+    return mergeCapturedSceneIntoBase(base, capturedScene)
+  }, [activeBlueprint?.id, activePage, measurements.data?.measurements, capturedScene])
 
   const selected = scene.items.find((item) => item.id === selectedId) ?? null
 
@@ -142,6 +161,37 @@ export function TakeoffPreviewScreen() {
             <div>drawable measurements</div>
           </div>
         </div>
+
+        {isCaptureDraft ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/60">
+            <label className="inline-flex items-center gap-2" data-testid="takeoff-preview-captured-toggle">
+              <input
+                type="checkbox"
+                checked={showCapturedGeometry}
+                onChange={(event) => {
+                  setShowCapturedGeometry(event.target.checked)
+                  setSelectedId(null)
+                }}
+                className="h-3.5 w-3.5 accent-[#4f9f89]"
+              />
+              <span>
+                Show captured geometry
+                {activeDraft?.source ? <span className="text-white/40"> · {activeDraft.source}</span> : null}
+              </span>
+            </label>
+            <span className="text-white/40">
+              {draftResult.isLoading
+                ? 'loading capture…'
+                : draftResult.isError
+                  ? 'capture geometry unavailable'
+                  : capturedScene
+                    ? `${capturedScene.items.length} captured shape${capturedScene.items.length === 1 ? '' : 's'} (read-only)`
+                    : showCapturedGeometry
+                      ? 'no drawable captured geometry'
+                      : 'captured geometry hidden'}
+            </span>
+          </div>
+        ) : null}
       </header>
 
       <main className="relative flex-1 min-h-[560px] overflow-hidden">
@@ -195,12 +245,18 @@ export function TakeoffPreviewScreen() {
                 {selected.kind}
                 {selected.elevation ? ` · ${selected.elevation}` : ''}
               </div>
-              <Link
-                to={`/projects/${projectId}/takeoff/${selected.id}`}
-                className="mt-2 inline-flex rounded bg-white px-3 py-1.5 text-[12px] font-semibold text-[#0d1117]"
-              >
-                Open measurement
-              </Link>
+              {isCapturedPreviewId(selected.id) ? (
+                <div className="mt-2 text-[11px] text-white/45">
+                  Captured geometry — promote the draft to commit it as a measurement.
+                </div>
+              ) : (
+                <Link
+                  to={`/projects/${projectId}/takeoff/${selected.id}`}
+                  className="mt-2 inline-flex rounded bg-white px-3 py-1.5 text-[12px] font-semibold text-[#0d1117]"
+                >
+                  Open measurement
+                </Link>
+              )}
             </div>
           ) : null}
 

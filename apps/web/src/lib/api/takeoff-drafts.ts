@@ -256,6 +256,39 @@ export interface CapturedGeometryObject {
   bbox?: number[]
 }
 
+/** A captured room metric record. Mirrors `TakeoffGeometry.rooms[]` in
+ *  @sitelayer/capture-schema (web keeps a structural slice so the zod schema
+ *  never lands in the web bundle). Rooms carry metrics, not polygons — the
+ *  drawable footprint lives on `surfaces[]`. */
+export interface CapturedGeometryRoom {
+  id: string
+  label?: string
+  story?: number
+  floorAreaSqFt?: number
+  perimeterLf?: number
+}
+
+/** A captured surface record. Mirrors `TakeoffGeometry.surfaces[]` in
+ *  @sitelayer/capture-schema. `polygon` (when present) is the drawable boundary
+ *  in the source pipeline's own coordinate space (image pixels / lon-lat). */
+export interface CapturedGeometrySurface {
+  id: string
+  kind: 'wall' | 'floor' | 'ceiling' | 'roof' | 'facade' | 'opening'
+  parentRoomId?: string
+  areaSqFt?: number
+  polygon?: number[][]
+}
+
+/** The cross-pipeline geometry block of a captured `TakeoffResult`. A
+ *  structural slice of `TakeoffGeometry` (@sitelayer/capture-schema) covering
+ *  the fields the web renders: per-symbol count `objects[]` (M1) and the
+ *  drawable `surfaces[]` / `rooms[]` consumed by the 3D preview adapter. */
+export interface CapturedGeometry {
+  rooms?: CapturedGeometryRoom[]
+  surfaces?: CapturedGeometrySurface[]
+  objects?: CapturedGeometryObject[]
+}
+
 export interface CapturedTakeoffResult {
   schemaVersion: string
   takeoffId: string
@@ -265,8 +298,10 @@ export interface CapturedTakeoffResult {
   quantities: CapturedQuantity[]
   reviewRequired?: boolean
   /** Cross-pipeline geometry. For a per-symbol count, `objects[]` holds one
-   *  entry per detected instance (M1). Optional — absent for whole-draft results. */
-  geometry?: { objects?: CapturedGeometryObject[] }
+   *  entry per detected instance (M1); for a whole-draft capture, `surfaces[]`
+   *  / `rooms[]` carry the drawable footprint the 3D preview adapter renders.
+   *  Optional — absent for results that produced only rolled-up quantities. */
+  geometry?: CapturedGeometry
 }
 
 /** A per-symbol count marker for the review canvas: the (x, y) origin of an
