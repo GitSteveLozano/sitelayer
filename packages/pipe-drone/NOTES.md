@@ -1,25 +1,41 @@
 # pipe-drone — implementation notes
 
-## Three paths, only one is end-to-end demoable
+## Three paths
 
-| Path                   | What it does                                                                                             | Status in spike                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **A — NodeODM live**   | POST images, poll `/task/:uuid/info`, fetch `orthophoto.tif`, `dsm.tif`, `dtm.tif`, `point_cloud.laz`    | Client implemented + tested. Reconstruction extraction is **not implemented in TS** — see "Why Path A throws" below. |
-| **B — Sidecar JSON**   | Read a precomputed sidecar JSON describing roof planes, footprint, sitework, surfacing → `TakeoffResult` | **Demoable end-to-end.** This is what the `npm run demo` target hits.                                                |
-| **C — RANSAC fixture** | Run `segmentMultiplePlanes` on a hand-authored point cloud → synthetic `TakeoffResult`                   | Smoke test only. Proves the math at miniature scale.                                                                 |
+| Path                   | What it does                                                                                             | Status                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **A — NodeODM live**   | POST images, poll `/task/:uuid/info`, fetch rasters, then extract `odm_report/stats.json` → coverage     | **End-to-end.** Emits a real, review-required site-coverage `TakeoffResult`. Raster geometry is the live boundary. |
+| **B — Sidecar JSON**   | Read a precomputed sidecar JSON describing roof planes, footprint, sitework, surfacing → `TakeoffResult` | **Full-fidelity.** This is what the `npm run demo` target hits, and where the raster extractor's output flows in.  |
+| **C — RANSAC fixture** | Run `segmentMultiplePlanes` on a hand-authored point cloud → synthetic `TakeoffResult`                   | Smoke test only. Proves the math at miniature scale.                                                               |
 
-### Why Path A throws
+### Path A: report-JSON coverage extraction + the live-service boundary
 
-Real reconstruction extraction (DSM minus DTM threshold for footprint, LAZ point-cloud RANSAC for roof planes, DTM cut/fill against target grade, ortho HSV classification for surfacing) requires GDAL + Open3D / PDAL bindings. Those are Python-native; pulling them into Node would mean spawning a Python subprocess, which is out of scope for the spike.
-
-`buildDroneTakeoff` with `imagesDir + nodeOdmUrl` will:
+`buildDroneTakeoff` with `imagesDir + nodeOdmUrl` now runs end-to-end:
 
 1. Upload all images to NodeODM.
-2. Wait for the task to reach status code 40 (or fail).
+2. Wait for the task to reach status code 40 (or fail / time out).
 3. Download `orthophoto.tif`, `dsm.tif`, `dtm.tif`, `georeferenced_model.laz` to `<imagesDir>/.odm-out/`.
-4. Throw `Error("nodeOdm reconstruction completed; sidecar extraction not implemented in spike")`.
+4. Fetch the JSON-shaped report `odm_report/stats.json` (via `nodeOdmFetchJsonAsset`),
+   validate it (`OdmReportSchema`), and derive a real `TakeoffResult`
+   (`takeoffFromOdmReport`): a site-level **coverage area** quantity (UniFormat
+   `G1010`, sqft) at an **average-GSD-driven confidence** (`droneConfidenceFromGsd`),
+   always `reviewRequired = true`.
 
-Operator workflow when piloting Path A: let NodeODM run, hand the assets to a Python helper (out of repo), then re-run with `--sidecarPath` against the produced sidecar JSON. Promoting Path A to truly end-to-end is Phase 3 work and almost certainly means a Python sidecar service.
+**Why coverage-only, and what the live boundary is.** The full-fidelity geometry —
+per-roof-plane area (DSM−DTM footprint masks + LAZ point-cloud RANSAC), DTM
+cut/fill against a target grade, and ortho HSV surfacing classification — operates
+on the binary GeoTIFF/LAZ rasters and genuinely needs GDAL + Open3D / PDAL. Those
+are Python-native; running them in a pure-TS package would mean spawning an
+out-of-process Python subprocess. That raster extractor is the documented
+**live-service boundary** (`odm-report.ts → LIVE_SERVICE_BOUNDARY`). Its richer
+output is authored as a sidecar JSON and fed back through **Path B** (`--sidecarPath`).
+
+So pipe-drone extracts everything the JSON report honestly knows (coverage area,
+GSD confidence, reconstructed image/point counts) without fabricating roof planes
+or cut/fill the rasters haven't been processed to compute. The emitted result
+carries an `odm_report_coverage_only` warning naming exactly which quantities
+require the raster path. If NodeODM completes without producing the report,
+Path A throws a clear, actionable error rather than guessing.
 
 ## Convex-hull approximation for plane area
 

@@ -1,0 +1,56 @@
+{
+  "_meta": {
+    "description": "Synthetic NodeODM odm_report/stats.json fixture. Mirrors the real OpenSfM compute_statistics shape (reconstruction_statistics / features_statistics / processing_statistics / reprojection_errors / gps_errors) augmented by ODM's odm_report stage (odm_processing_statistics + point_cloud_statistics). Coverage area 1858.0606 m^2 (~20000 sqft), average GSD 2.4 cm. Native point-cloud bbox spans ~64.5m E-W by ~28.8m N-S as a fallback footprint check.",
+    "note": "Field names track OpenSfM stats.json + ODM odm_report.py. Values are plausible for a 124-image, ~80 m AGL residential-lot flight."
+  },
+  "reconstruction_statistics": {
+    "components": 1,
+    "initial_shots_count": 124,
+    "reconstructed_shots_count": 124,
+    "reconstructed_points_count": 412588,
+    "observations_count": 2841902,
+    "average_track_length": 6.89,
+    "average_track_length_over_two": 7.42
+  },
+  "features_statistics": {
+    "detected_features": { "min": 18422, "max": 41003, "mean": 28710, "median": 28066 },
+    "reconstructed_features": { "min": 6021, "max": 18992, "mean": 11873, "median": 11402 }
+  },
+  "reprojection_errors": {
+    "histogram": { "values": [0, 12, 4109, 18044, 9921], "bins": [0.0, 0.5, 1.0, 1.5, 2.0, 4.0] }
+  },
+  "gps_errors": {
+    "mean": { "x": 0.41, "y": 0.38, "z": 1.12 },
+    "std": { "x": 0.22, "y": 0.19, "z": 0.61 },
+    "error": { "x": 0.41, "y": 0.38, "z": 1.12 }
+  },
+  "processing_statistics": {
+    "steps_times": { "Feature Detection": 120.4, "Matching": 410.9, "Tracks Merging": 12.1, "Reconstruction": 880.3 },
+    "date": "05/07/2026 at 12:24:10",
+    "area": 1858.0606,
+    "average_gsd": 2.4
+  },
+  "odm_processing_statistics": {
+    "total_time": 1423,
+    "total_time_human": "00:23:43",
+    "average_gsd": 2.4
+  },
+  "point_cloud_statistics": {
+    "dense": true,
+    "stats": {
+      "statistic": [],
+      "bbox": {
+        "native": {
+          "bbox": {
+            "minx": 619112.5,
+            "miny": 4834201.0,
+            "minz": 100.2,
+            "maxx": 619177.0,
+            "maxy": 4834229.8,
+            "maxz": 124.6
+          }
+        }
+      }
+    }
+  }
+}
