@@ -7,12 +7,12 @@
 
 # Production node_modules only — cached by the manifest layer; reinstalls ONLY
 # when package*.json / a workspace package.json changes (not on source edits).
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 WORKDIR /app
 COPY --parents package*.json apps/*/package.json apps/*/operator-*.tgz packages/*/package.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 
 ARG GIT_SHA="unknown"

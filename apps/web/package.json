@@ -28,7 +28,7 @@
     "lucide-react": "^1.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.17.0",
     "rrweb": "^2.0.0-alpha.20",
     "serve": "^14.2.0",
     "tailwind-merge": "^3.5.0",
