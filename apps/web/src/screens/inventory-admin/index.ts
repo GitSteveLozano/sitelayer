@@ -1,8 +1,0 @@
-export { InventoryAdminHubScreen } from './hub'
-export { InventoryItemsAdminScreen } from './items'
-export { InventoryLocationsAdminScreen } from './locations'
-export { InventoryMovementsAdminScreen } from './movements'
-export { ProjectRentalContractScreen } from './rental-contract'
-export { BranchesAdminScreen } from './branches'
-export { DamageChargesAdminScreen } from './damage-charges'
-export { ScaffoldCatalogAdminScreen } from './scaffold-catalog'
