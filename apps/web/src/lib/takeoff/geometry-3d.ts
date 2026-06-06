@@ -46,14 +46,14 @@ export interface BuildTakeoffPreviewSceneOptions {
 }
 
 const DEFAULT_WORLD_PER_BOARD_UNIT = 1
-const DEFAULT_WALL_HEIGHT_FT = 9
-const POLYGON_VISUAL_THICKNESS_FT = 0.08
+export const DEFAULT_WALL_HEIGHT_FT = 9
+export const POLYGON_VISUAL_THICKNESS_FT = 0.08
 const PALETTE = ['#d9904a', '#4f9f89', '#6d7ed7', '#c75f75', '#8e735b', '#4b9ed6', '#9b7bd8', '#7d9253'] as const
 // Captured geometry (any pipeline that emits geometry.surfaces[].polygon —
 // drone today; lat/lon coords) arrives in source-specific coordinates with no
 // shared board-space scale, so we normalize the whole capture set to roughly
 // this many feet across.
-const CAPTURE_TARGET_SPAN_FT = 60
+export const CAPTURE_TARGET_SPAN_FT = 60
 
 export function buildTakeoffPreviewScene(
   measurements: TakeoffMeasurement[],
@@ -286,7 +286,7 @@ const FEET_PER_DEGREE_LAT = 364_000
  *   - relative: raw coords normalized so the largest span ≈ CAPTURE_TARGET_SPAN_FT.
  * Always centers at the origin.
  */
-function projectCaptureEntriesToWorld(
+export function projectCaptureEntriesToWorld(
   entries: Array<{ points: Array<[number, number]> }>,
   pixelsPerFoot: number | null,
   lonLat: boolean,
@@ -411,12 +411,12 @@ function finitePositive(value: unknown): number | null {
   return parsed != null && parsed > 0 ? parsed : null
 }
 
-function finiteNumber(value: unknown): number | null {
+export function finiteNumber(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function colorForKey(key: string): string {
+export function colorForKey(key: string): string {
   let hash = 0
   for (let i = 0; i < key.length; i += 1) {
     hash = (hash * 31 + key.charCodeAt(i)) >>> 0
@@ -424,7 +424,7 @@ function colorForKey(key: string): string {
   return PALETTE[hash % PALETTE.length] ?? PALETTE[0]
 }
 
-function computeBounds(items: TakeoffPreviewItem[]): TakeoffPreviewScene['bounds'] {
+export function computeBounds(items: TakeoffPreviewItem[]): TakeoffPreviewScene['bounds'] {
   const xs: number[] = []
   const zs: number[] = []
   for (const item of items) {
