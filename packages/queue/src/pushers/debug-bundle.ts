@@ -54,6 +54,11 @@ const MAX_TRACE_IDS = 8
 const MAX_REQUEST_IDS = 12
 const MAX_SENTRY_JSON_CHARS = 6000
 const MAX_AXIOM_LINES = 300
+// Bound the in-process server_context slice embedded into the bundle so a noisy
+// session can't bloat the artifact metadata.
+const MAX_ANCHORS = 12
+const MAX_TIMELINE = 60
+const MAX_SERVER_CONTEXT_REQUEST_IDS = 12
 
 export type AssembleDebugBundlePayload = {
   support_packet_id?: string | null
@@ -64,6 +69,31 @@ export type AssembleDebugBundlePayload = {
   event_ref?: string | null
   /** Escalation tier ('2' | '3'); absent for the at-finalize enrichment. */
   tier?: string | null
+}
+
+/**
+ * The in-process evidence the support packet ALREADY pinned at finalize, read
+ * off `support_debug_packets`. This is the LOCAL fallback so a collaborator
+ * with no Sentry/Axiom creds still gets a real, downloadable debug_bundle: the
+ * anchors (broken statechart transition + replay divergence), the in-window
+ * timeline, the pinned request/trace ids, and a synthesized agent_prompt. No
+ * external network is required to materialize this.
+ */
+export type SupportPacketContext = {
+  support_packet_id: string
+  problem: string | null
+  route: string | null
+  actor_user_id: string | null
+  build_sha: string | null
+  /** Bounded server_context slice: anchors + timeline + request/trace ids. */
+  server_context: ServerContextSlice
+}
+
+export type ServerContextSlice = {
+  anchors: unknown[]
+  timeline: unknown[]
+  request_ids: string[]
+  trace_ids: string[]
 }
 
 export type AssembleDebugBundleInput = {
@@ -224,19 +254,87 @@ export type DebugBundle = {
   tier: string | null
   trace_ids: string[]
   request_ids: string[]
+  /**
+   * The LOCAL, network-free evidence read off the support packet's pinned
+   * server_context (anchors / timeline / request_ids) plus a synthesized
+   * agent_prompt. Present whenever the support packet row resolves — so a
+   * collaborator with NO Sentry/Axiom creds still gets a real bundle. Null only
+   * when no support_packet_id was pinned or the packet row is gone.
+   */
+  server_context: ServerContextSlice | null
+  agent_prompt: string | null
   sentry: SentryEnrichment
   axiom: AxiomEnrichment
 }
 
+function boundedArray(value: unknown, limit: number): unknown[] {
+  return Array.isArray(value) ? value.slice(0, limit) : []
+}
+
 /**
- * Assemble the bundle blob from a payload (pure orchestration over the two
- * env-gated fetches). Exported so STEP6 escalate + tests can re-use the exact
- * same enrichment around an already-pinned trace/request set without
- * re-deriving anything.
+ * Distill the persisted (already woven + sanitized at finalize) server_context
+ * into the bounded slice carried in the bundle. Reads ONLY the keys the local
+ * fallback needs — anchors / timeline / request_ids / trace_ids — and caps each
+ * so a noisy session can't bloat the artifact.
+ */
+function sliceServerContext(serverContext: Record<string, unknown> | null | undefined): ServerContextSlice {
+  const sc = serverContext ?? {}
+  return {
+    anchors: boundedArray(sc.anchors, MAX_ANCHORS),
+    timeline: boundedArray(sc.timeline, MAX_TIMELINE),
+    request_ids: stringArray(sc.request_ids, MAX_SERVER_CONTEXT_REQUEST_IDS),
+    trace_ids: stringArray(sc.trace_ids, MAX_TRACE_IDS, true),
+  }
+}
+
+/**
+ * Synthesize a compact, deterministic agent_prompt from the in-process support
+ * packet context. Kept self-contained in the queue package (no apps/api import)
+ * — it's the same shape the API's support-packet agent_prompt surfaces, so a
+ * collaborator opening the local bundle gets a grounded starting point with no
+ * external service. Returns null when there is no packet context at all.
+ */
+function synthesizeAgentPrompt(
+  packet: SupportPacketContext | null,
+  traceIds: string[],
+  requestIds: string[],
+): string | null {
+  if (!packet) return null
+  const sc = packet.server_context
+  const mergedRequestIds = sc.request_ids.length ? sc.request_ids : requestIds
+  const mergedTraceIds = sc.trace_ids.length ? sc.trace_ids : traceIds
+  const lines = [
+    `Investigate Sitelayer support packet ${packet.support_packet_id}.`,
+    `User problem: ${packet.problem || 'not provided'}`,
+    `Route: ${packet.route || 'unknown'}`,
+    `Actor: ${packet.actor_user_id || 'unknown'}`,
+    `Build: ${packet.build_sha || 'unknown'}`,
+    `Request IDs: ${mergedRequestIds.join(', ') || 'none captured'}`,
+    `Trace IDs: ${mergedTraceIds.join(', ') || 'none captured'}`,
+    `Anchors: ${sc.anchors.length} statechart transition anchor(s) pinned.`,
+    `Timeline: ${sc.timeline.length} in-window event(s) leading up to the report.`,
+    '',
+    'Use the attached server_context (anchors + timeline + pinned ids) as the source of truth. When a statechart transition anchor reports a replay divergence, treat that transition as the prime suspect; otherwise the last error in the timeline before the report is the usual starting point. Sentry/Axiom enrichment is merged into this same bundle when those creds are configured.',
+  ]
+  return lines.join('\n')
+}
+
+/**
+ * Assemble the bundle blob from a payload (orchestration over the two env-gated
+ * fetches PLUS the network-free in-process server_context). Exported so STEP6
+ * escalate + tests can re-use the exact same enrichment around an
+ * already-pinned trace/request set without re-deriving anything.
+ *
+ * `packet` is the in-process evidence read off the support packet
+ * (`fetchSupportPacketContext`). When present, the bundle carries the
+ * anchors/timeline/request_ids/agent_prompt EVEN IF Sentry + Axiom are unset —
+ * that's the local-collaborator fallback. When the external creds ARE present,
+ * their enrichment is merged into the SAME bundle.
  */
 export async function assembleDebugBundle(
   payload: AssembleDebugBundlePayload,
   fetchImpl: typeof fetch = fetch,
+  packet: SupportPacketContext | null = null,
 ): Promise<DebugBundle> {
   const traceIds = stringArray(payload.trace_ids, MAX_TRACE_IDS, true)
   const requestIds = stringArray(payload.request_ids, MAX_REQUEST_IDS)
@@ -244,17 +342,60 @@ export async function assembleDebugBundle(
     fetchSentryEnrichment(traceIds, fetchImpl),
     fetchAxiomEnrichment(traceIds, requestIds, fetchImpl),
   ])
+  const serverContext = packet ? packet.server_context : null
   return {
     schema: 'sitelayer.debug_bundle.v1',
     assembled_at: new Date().toISOString(),
-    support_packet_id: typeof payload.support_packet_id === 'string' ? payload.support_packet_id : null,
+    support_packet_id:
+      typeof payload.support_packet_id === 'string' ? payload.support_packet_id : (packet?.support_packet_id ?? null),
     capture_session_id: typeof payload.capture_session_id === 'string' ? payload.capture_session_id : null,
     event_ref: typeof payload.event_ref === 'string' ? payload.event_ref : null,
     tier: typeof payload.tier === 'string' ? payload.tier : null,
     trace_ids: traceIds,
     request_ids: requestIds,
+    server_context: serverContext,
+    agent_prompt: synthesizeAgentPrompt(packet, traceIds, requestIds),
     sentry,
     axiom,
+  }
+}
+
+/**
+ * Read the in-process evidence the support packet pinned at finalize from
+ * `support_debug_packets`. Network-free, RLS-scoped by company. Returns null
+ * when no support_packet_id was pinned or the row is gone — in which case the
+ * bundle still materializes, just without the local server_context slice.
+ */
+export async function fetchSupportPacketContext(
+  client: QueueClient,
+  companyId: string,
+  supportPacketId: string | null | undefined,
+): Promise<SupportPacketContext | null> {
+  const id = typeof supportPacketId === 'string' ? supportPacketId.trim() : ''
+  if (!id) return null
+  const result = await client.query<{
+    id: string
+    problem: string | null
+    route: string | null
+    actor_user_id: string | null
+    build_sha: string | null
+    server_context: Record<string, unknown> | null
+  }>(
+    `select id::text as id, problem, route, actor_user_id, build_sha, server_context
+       from support_debug_packets
+      where company_id = $1 and id = $2::uuid
+      limit 1`,
+    [companyId, id],
+  )
+  const row = result.rows[0]
+  if (!row) return null
+  return {
+    support_packet_id: row.id,
+    problem: typeof row.problem === 'string' ? row.problem : null,
+    route: typeof row.route === 'string' ? row.route : null,
+    actor_user_id: typeof row.actor_user_id === 'string' ? row.actor_user_id : null,
+    build_sha: typeof row.build_sha === 'string' ? row.build_sha : null,
+    server_context: sliceServerContext(row.server_context),
   }
 }
 
@@ -371,7 +512,11 @@ export async function processAssembleDebugBundle(
         skipped += 1
         continue
       }
-      const bundle = await assembleDebugBundle(payload, fetchImpl)
+      // Read the in-process evidence the support packet pinned at finalize so
+      // the bundle carries anchors/timeline/request_ids/agent_prompt even when
+      // Sentry + Axiom are unconfigured (the local-collaborator fallback).
+      const packetContext = await fetchSupportPacketContext(client, companyId, payload.support_packet_id)
+      const bundle = await assembleDebugBundle(payload, fetchImpl, packetContext)
       const artifactId = await writeDebugBundleArtifact(client, companyId, captureSessionId, bundle)
       if (!artifactId) {
         // Capture session vanished (discarded/redacted GC). Idempotent skip.
