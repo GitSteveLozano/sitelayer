@@ -14,6 +14,8 @@ const PROVIDER = (process.argv[4] ?? 'api').toLowerCase()
 
 const PROMPT = [
   'You are a construction takeoff estimator. From this residential floor plan, list every distinct ROOM.',
+  'Count ONLY enclosed, habitable rooms. Do NOT split closets, hallways, or dimension/annotation zones into separate rooms.',
+  'Merge duplicates — the same room must appear at most once. If you are unsure whether something is a real room, OMIT it.',
   'Return ONLY minified JSON, no prose, no code fences:',
   '{"rooms":[{"name":string,"type":string}]}',
   'type must be one of: bedroom, bathroom, kitchen, living, dining, entry, hall, closet, utility, garage, outdoor, other.',

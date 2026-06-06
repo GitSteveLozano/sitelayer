@@ -248,7 +248,10 @@ async function geminiBlueprintTakeoff(
     'return 4 to 7 line items. Respond ONLY as JSON of the form ' +
     '{"quantities":[{"description":string,"value":number,"unit":"sqft"|"lft"|"ea","confidence":number between 0 and 1}]}. ' +
     'Cover exterior wall / insulation area, basecoat + mesh, finish coat, sealant / joint linear feet, and ' +
-    'window/door opening counts. Base values on the visible scale and dimensions; if uncertain, estimate and ' +
+    'window/door opening counts. When counting openings or any "ea" quantity, count ONLY real enclosed ' +
+    'habitable rooms and actual openings; do NOT split closets, hallways, or dimension/annotation zones into ' +
+    'separate rooms or counts, and merge duplicates so the same item is counted at most once — if unsure, omit it. ' +
+    'Base values on the visible scale and dimensions; if uncertain, estimate and ' +
     'lower the confidence. Use only the three units sqft, lft, or ea. Values must be positive.'
   const body = {
     contents: [
