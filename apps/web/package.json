@@ -34,7 +34,7 @@
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",
     "xstate": "^5.31.0",
-    "@operator/capture-overlay": "file:./operator-capture-overlay-0.1.0.tgz"
+    "@operator/capture-overlay": "file:./operator-capture-overlay-0.3.0.tgz"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
