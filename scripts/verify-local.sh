@@ -200,12 +200,50 @@ require_docker() {
 }
 
 # ============================================================================
-# Stage: static — shell syntax, migration immutability, dockerfile-import
-#        guard, prettier --check, eslint, typecheck (all workspaces).
+# Check: package-lock is in sync with every package.json (catch lockfile
+#        drift at PUSH, not at the Docker `npm ci` in the deploy build).
+#
+# `npm ci` is the install command the Dockerfile uses; it REFUSES to run
+# (exit 1, code EUSAGE) when package.json and package-lock.json disagree —
+# e.g. a dep bumped/added without `npm install --package-lock-only`, or a
+# vendored `file:./operator-*.tgz` whose version string changed. That
+# failure used to surface only mid-deploy (slow, post-build). `--dry-run`
+# resolves the tree WITHOUT writing node_modules, so this is a fast,
+# read-only, side-effect-free gate (~1s) that fails for the same reason
+# the real deploy install would. `--ignore-scripts`/`--no-audit`/`--no-fund`
+# keep it hermetic (no lifecycle scripts, no network for audit/fund).
+# ============================================================================
+check_lockfile_sync() {
+  if [ ! -f package-lock.json ]; then
+    warn "no package-lock.json at repo root — lockfile-sync check cannot run."
+    return 1
+  fi
+  local out rc=0
+  # Capture output so we can surface npm's own EUSAGE message on failure
+  # (the bare exit code alone isn't actionable).
+  out="$(npm ci --dry-run --ignore-scripts --no-audit --no-fund 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  package-lock.json is OUT OF SYNC with package.json — fix with:" >&2
+    echo "    npm install --package-lock-only   # then commit package-lock.json" >&2
+    echo "  (a vendored file:./operator-*.tgz dep also needs a VERSION bump on content change)" >&2
+    echo "  --- npm output ---" >&2
+    printf '%s\n' "$out" | sed -n '1,12p' >&2
+    return 1
+  fi
+  return 0
+}
+
+# ============================================================================
+# Stage: static — shell syntax, lockfile-sync, migration immutability,
+#        dockerfile-import guard, prettier --check, eslint, typecheck
+#        (all workspaces).
 # ============================================================================
 stage_static() {
   echo "  -> shell syntax (bash -n scripts/*.sh)"
   bash -n scripts/*.sh || return 1
+
+  echo "  -> package-lock sync (npm ci --dry-run)"
+  check_lockfile_sync || return 1
 
   if [ -f scripts/check-migrations-immutable.sh ]; then
     echo "  -> migration immutability"
