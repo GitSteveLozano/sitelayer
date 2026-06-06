@@ -9,7 +9,7 @@
 # when package*.json / a workspace package.json changes (not on source edits).
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY --parents package*.json apps/*/package.json apps/*/operator-projectkit-*.tgz packages/*/package.json ./
+COPY --parents package*.json apps/*/package.json apps/*/operator-*.tgz packages/*/package.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 FROM node:20-alpine AS runtime
