@@ -110,3 +110,33 @@ export function useAcceptInvite(token: string) {
       request<AcceptInviteResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, { method: 'POST' }),
   })
 }
+
+export interface MembershipFirstRun {
+  id: string
+  company_id: string
+  clerk_user_id: string
+  role: string
+  created_at: string
+  first_run_completed_at: string | null
+}
+
+export interface CompleteFirstRunResponse {
+  membership: MembershipFirstRun
+}
+
+/**
+ * Persist the per-membership first-run-complete flag after a freshly-accepted
+ * teammate walks their role-specific first-run priming
+ * (worker/foreman/estimator-first-run.tsx). Idempotent on the server: the first
+ * call latches `first_run_completed_at`; a replayed call coalesces to the
+ * existing timestamp. Owner-scoped — the API only updates the caller's own
+ * membership row. See POST /api/memberships/:id/first-run-complete.
+ */
+export function useCompleteFirstRun() {
+  return useMutation<CompleteFirstRunResponse, Error, { membershipId: string }>({
+    mutationFn: ({ membershipId }) =>
+      request<CompleteFirstRunResponse>(`/api/memberships/${encodeURIComponent(membershipId)}/first-run-complete`, {
+        method: 'POST',
+      }),
+  })
+}

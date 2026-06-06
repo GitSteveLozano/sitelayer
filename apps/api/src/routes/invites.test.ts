@@ -27,7 +27,13 @@ type InviteRow = {
   created_at: string
 }
 
-type MembershipRow = { company_id: string; clerk_user_id: string; role: string }
+type MembershipRow = {
+  id?: string
+  company_id: string
+  clerk_user_id: string
+  role: string
+  first_run_completed_at?: string | null
+}
 type CompanyRow = { id: string; slug: string; name: string }
 
 class UniqueViolation extends Error {
@@ -162,6 +168,28 @@ class FakePool {
     if (/^insert into audit_events/i.test(sql)) {
       this.audit.push({ entityType: params[3] as string, action: params[5] as string })
       return { rows: [], rowCount: 1 }
+    }
+
+    // POST /api/memberships/:id/first-run-complete — owner-scoped, idempotent.
+    if (/^update company_memberships\s+set first_run_completed_at/i.test(sql)) {
+      const [membershipId, userId] = params as [string, string]
+      const m = this.memberships.find((r) => r.id === membershipId && r.clerk_user_id === userId)
+      if (!m) return { rows: [], rowCount: 0 }
+      // coalesce: latch on first completion, keep the existing value after.
+      m.first_run_completed_at = m.first_run_completed_at ?? '2026-06-06T00:00:00.000Z'
+      return {
+        rows: [
+          {
+            id: m.id,
+            company_id: m.company_id,
+            clerk_user_id: m.clerk_user_id,
+            role: m.role,
+            created_at: '2026-06-06T00:00:00.000Z',
+            first_run_completed_at: m.first_run_completed_at,
+          },
+        ],
+        rowCount: 1,
+      }
     }
 
     throw new Error(`FakePool: unhandled SQL: ${sql.slice(0, 80)}`)
@@ -468,6 +496,57 @@ describe('POST /api/invites/:token/accept — route short-circuits', () => {
     })
     await handleInviteRoutes(req('POST'), new URL('http://x/api/invites/nope/accept'), ctx)
     expect(captured[0]?.status).toBe(404)
+  })
+})
+
+describe('POST /api/memberships/:id/first-run-complete', () => {
+  function poolWithMembership() {
+    const pool = ADMIN_POOL()
+    pool.memberships.push({ id: 'mem-1', company_id: 'co-1', clerk_user_id: 'e2e-member', role: 'member' })
+    return pool
+  }
+
+  it('anonymous default identity → 401, no write', async () => {
+    const pool = poolWithMembership()
+    const { ctx, captured } = makeCtx(pool, { userId: 'demo-user', identitySource: 'default' })
+    await handleInviteRoutes(req('POST'), new URL('http://x/api/memberships/mem-1/first-run-complete'), ctx)
+    expect(captured[0]?.status).toBe(401)
+    expect(pool.memberships.find((m) => m.id === 'mem-1')?.first_run_completed_at).toBeUndefined()
+  })
+
+  it("sets first_run_completed_at on the caller's own membership → 200", async () => {
+    const pool = poolWithMembership()
+    const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member', identitySource: 'header' })
+    await handleInviteRoutes(req('POST'), new URL('http://x/api/memberships/mem-1/first-run-complete'), ctx)
+    expect(captured[0]?.status).toBe(200)
+    const body = captured[0]?.body as { membership: { id: string; first_run_completed_at: string | null } }
+    expect(body.membership.id).toBe('mem-1')
+    expect(body.membership.first_run_completed_at).toBeTruthy()
+  })
+
+  it("another user's membership id → 404 (owner-scoped)", async () => {
+    const pool = poolWithMembership()
+    // Caller is admin, not the owner of mem-1 → the clerk_user_id guard misses.
+    const { ctx, captured } = makeCtx(pool, { userId: 'e2e-admin', identitySource: 'header' })
+    await handleInviteRoutes(req('POST'), new URL('http://x/api/memberships/mem-1/first-run-complete'), ctx)
+    expect(captured[0]?.status).toBe(404)
+    expect(pool.memberships.find((m) => m.id === 'mem-1')?.first_run_completed_at).toBeUndefined()
+  })
+
+  it('idempotent: re-complete keeps the original timestamp', async () => {
+    const pool = poolWithMembership()
+    const { ctx: ctx1, captured: cap1 } = makeCtx(pool, { userId: 'e2e-member', identitySource: 'header' })
+    await handleInviteRoutes(req('POST'), new URL('http://x/api/memberships/mem-1/first-run-complete'), ctx1)
+    const first = (cap1[0]?.body as { membership: { first_run_completed_at: string } }).membership
+      .first_run_completed_at
+
+    const { ctx: ctx2, captured: cap2 } = makeCtx(pool, { userId: 'e2e-member', identitySource: 'header' })
+    await handleInviteRoutes(req('POST'), new URL('http://x/api/memberships/mem-1/first-run-complete'), ctx2)
+    const second = (cap2[0]?.body as { membership: { first_run_completed_at: string } }).membership
+      .first_run_completed_at
+
+    expect(cap2[0]?.status).toBe(200)
+    expect(second).toBe(first)
   })
 })
 
