@@ -919,4 +919,63 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
     expect(responses[0]?.status).toBe(401)
     expect(pool.captureSessions).toHaveLength(0)
   })
+
+  it('429s a capture-session start when the per-token write limiter is exhausted (no DB write)', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    const start = makeCtx(pool)
+    start.reads.push({ capture_session_id: '00000000-0000-4000-8000-000000000123', mode: 'trace' })
+    // Inject a limiter that blocks the write class with a 429.
+    const ctx = {
+      ...start.ctx,
+      rateLimitPortalToken: (_token: string, kind: 'read' | 'write') =>
+        kind === 'write'
+          ? { allowed: false as const, retryAfterSeconds: 7, capacity: 1, scope: 'portal_write' as const, key: 'k' }
+          : null,
+    }
+    await handlePortalRentalRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/rentals/${token}/capture-sessions`),
+      ctx,
+    )
+    expect(start.responses[0]).toMatchObject({
+      status: 429,
+      body: { error: 'rate limit exceeded', scope: 'portal_write', retry_after_seconds: 7 },
+    })
+    // The limiter short-circuits BEFORE any token resolution / DB write.
+    expect(pool.captureSessions).toHaveLength(0)
+  })
+
+  it('429s a catalog read when the per-token read limiter is exhausted', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    const base = makeCtx(pool)
+    const ctx = {
+      ...base.ctx,
+      rateLimitPortalToken: (_token: string, kind: 'read' | 'write') =>
+        kind === 'read'
+          ? { allowed: false as const, retryAfterSeconds: 3, capacity: 1, scope: 'portal_read' as const, key: 'k' }
+          : null,
+    }
+    await handlePortalRentalRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/rentals/${token}/catalog`), ctx)
+    expect(base.responses[0]).toMatchObject({
+      status: 429,
+      body: { error: 'rate limit exceeded', scope: 'portal_read', retry_after_seconds: 3 },
+    })
+  })
+
+  it('lets the request through when the limiter returns null (legitimate single customer)', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    const start = makeCtx(pool)
+    start.reads.push({ capture_session_id: '00000000-0000-4000-8000-000000000123', mode: 'trace' })
+    const ctx = { ...start.ctx, rateLimitPortalToken: () => null }
+    await handlePortalRentalRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/rentals/${token}/capture-sessions`),
+      ctx,
+    )
+    expect(start.responses[0]?.status).toBe(200)
+    expect(pool.captureSessions).toHaveLength(1)
+  })
 })

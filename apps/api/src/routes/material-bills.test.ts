@@ -187,7 +187,7 @@ function seedProject(pool: FakePool, overrides: Partial<Row> = {}) {
 function makeCtx(
   pool: FakePool,
   body: Record<string, unknown> = {},
-  role: 'admin' | 'member' = 'admin',
+  role: 'admin' | 'member' | 'office' | 'foreman' = 'admin',
 ): {
   ctx: MaterialBillRouteCtx
   responses: Array<{ status: number; body: unknown }>
@@ -412,6 +412,81 @@ describe('handleMaterialBillRoutes — PATCH /api/material-bills/:id', () => {
     const { ctx, responses } = makeCtx(pool, { vendor: 'new', expected_version: 1 })
     await handleMaterialBillRoutes({ method: 'PATCH' } as never, buildUrl('/api/material-bills/bill-1'), ctx)
     expect(responses[0]?.status).toBe(409)
+  })
+
+  // LAYER 2: auth_materials overlay on the UPDATE path (mirrors the create
+  // path). A plain office/foreman passes requireRole(['admin','foreman','office'])
+  // but is denied here — the matrix gives auth_materials to owner only — so the
+  // office→estimator + foreman demotion is realized on edits, not just creates.
+  it('403s a plain office member editing a bill (passes requireRole, lacks auth_materials)', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    pool.bills.push({
+      id: 'bill-1',
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      vendor_name: 'Old',
+      amount: 100,
+      bill_type: 'material',
+      description: null,
+      occurred_on: '2026-05-01',
+      version: 1,
+      deleted_at: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    const { ctx, responses } = makeCtx(pool, { vendor: 'New', amount: 150 }, 'office')
+    await handleMaterialBillRoutes({ method: 'PATCH' } as never, buildUrl('/api/material-bills/bill-1'), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(responses[0]?.body).toMatchObject({ action: 'auth_materials' })
+    // The write never landed.
+    expect(pool.bills[0]?.vendor_name).toBe('Old')
+    expect(pool.bills[0]?.amount).toBe(100)
+  })
+
+  it('403s a plain foreman editing a bill (passes requireRole, lacks auth_materials)', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    pool.bills.push({
+      id: 'bill-1',
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      vendor_name: 'Old',
+      amount: 100,
+      bill_type: 'material',
+      description: null,
+      occurred_on: '2026-05-01',
+      version: 1,
+      deleted_at: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    const { ctx, responses } = makeCtx(pool, { amount: 999 }, 'foreman')
+    await handleMaterialBillRoutes({ method: 'PATCH' } as never, buildUrl('/api/material-bills/bill-1'), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(responses[0]?.body).toMatchObject({ action: 'auth_materials' })
+    expect(pool.bills[0]?.amount).toBe(100)
+  })
+
+  it('admin (owner) still edits a bill through the auth_materials overlay (no behaviour change)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { version: 2 })
+    pool.bills.push({
+      id: 'bill-1',
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      vendor_name: 'Old',
+      amount: 100,
+      bill_type: 'material',
+      description: null,
+      occurred_on: '2026-05-01',
+      version: 1,
+      deleted_at: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    const { ctx, responses } = makeCtx(pool, { vendor: 'New', amount: 150 }, 'admin')
+    await handleMaterialBillRoutes({ method: 'PATCH' } as never, buildUrl('/api/material-bills/bill-1'), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.bills[0]?.vendor_name).toBe('New')
+    expect(pool.bills[0]?.amount).toBe(150)
   })
 })
 

@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   applyRateLimit,
   createRateLimiter,
+  enforcePortalTokenRateLimit,
   enforceRateLimit,
   isRateLimitExempt,
   loadRateLimitConfig,
   resolveCompanyKey,
   resolveRequestIp,
+  DEFAULT_PORTAL_TOKEN_READ_PER_MIN,
+  DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN,
   DEFAULT_RATE_LIMIT_CONFIG,
 } from './rate-limit.js'
 import type http from 'node:http'
@@ -74,6 +77,28 @@ describe('loadRateLimitConfig', () => {
 
   it('has a high per-company default relative to per-user (a busy tenant is not throttled)', () => {
     expect(DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin).toBeGreaterThan(DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin)
+  })
+
+  it('honours the per-portal-token read/write env overrides', () => {
+    const cfg = loadRateLimitConfig({
+      RATE_LIMIT_PER_PORTAL_TOKEN_READ_PER_MIN: '120',
+      RATE_LIMIT_PER_PORTAL_TOKEN_WRITE_PER_MIN: '7',
+    } as unknown as NodeJS.ProcessEnv)
+    expect(cfg.perPortalTokenReadPerMin).toBe(120)
+    expect(cfg.perPortalTokenWritePerMin).toBe(7)
+  })
+
+  it('falls back to the portal-token defaults for non-numeric values', () => {
+    const cfg = loadRateLimitConfig({
+      RATE_LIMIT_PER_PORTAL_TOKEN_READ_PER_MIN: 'nope',
+      RATE_LIMIT_PER_PORTAL_TOKEN_WRITE_PER_MIN: '0',
+    } as unknown as NodeJS.ProcessEnv)
+    expect(cfg.perPortalTokenReadPerMin).toBe(DEFAULT_PORTAL_TOKEN_READ_PER_MIN)
+    expect(cfg.perPortalTokenWritePerMin).toBe(DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN)
+  })
+
+  it('writes are tighter than reads (single-customer use stays well under the read cap)', () => {
+    expect(DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN).toBeLessThan(DEFAULT_PORTAL_TOKEN_READ_PER_MIN)
   })
 })
 
@@ -331,5 +356,85 @@ describe('applyRateLimit', () => {
     const body = JSON.parse(responder.body())
     expect(body.scope).toBe('company')
     expect(body.retry_after_seconds).toBeGreaterThan(0)
+  })
+})
+
+describe('enforcePortalTokenRateLimit', () => {
+  it('allows the first writes up to the per-token cap, then 429s with scope portal_write', () => {
+    const limiter = createRateLimiter({
+      perUserPerMin: 100,
+      perIpPerMin: 100,
+      perCompanyPerMin: 1000,
+      perPortalTokenReadPerMin: 100,
+      perPortalTokenWritePerMin: 2,
+      windowMs: 60_000,
+    })
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).toBeNull()
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).toBeNull()
+    const blocked = enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')
+    expect(blocked).not.toBeNull()
+    if (!blocked || blocked.allowed) throw new Error('expected denial')
+    expect(blocked.scope).toBe('portal_write')
+    expect(blocked.key).toBe('tok-A')
+    expect(blocked.retryAfterSeconds).toBeGreaterThan(0)
+  })
+
+  it('keeps the read and write buckets independent on the same token', () => {
+    const limiter = createRateLimiter({
+      perUserPerMin: 100,
+      perIpPerMin: 100,
+      perCompanyPerMin: 1000,
+      perPortalTokenReadPerMin: 100,
+      perPortalTokenWritePerMin: 1,
+      windowMs: 60_000,
+    })
+    // Drain the write bucket.
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).toBeNull()
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).not.toBeNull()
+    // Reads on the same token are untouched — the customer can still load the page.
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'read')).toBeNull()
+  })
+
+  it('keeps different tokens independent (one flooded customer never throttles another)', () => {
+    const limiter = createRateLimiter({
+      perUserPerMin: 100,
+      perIpPerMin: 100,
+      perCompanyPerMin: 1000,
+      perPortalTokenReadPerMin: 100,
+      perPortalTokenWritePerMin: 1,
+      windowMs: 60_000,
+    })
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).toBeNull()
+    // tok-A is now drained, but tok-B (a different customer) is unaffected.
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-A', 'write')).not.toBeNull()
+    expect(enforcePortalTokenRateLimit(limiter, 'tok-B', 'write')).toBeNull()
+  })
+
+  it('lets a legitimate single customer accept/decline + a few captures without throttling', () => {
+    // Default config: 20 writes/token/min. A real customer does << that.
+    const limiter = createRateLimiter(loadRateLimitConfig({} as NodeJS.ProcessEnv))
+    // One accept + a 3-step capture finalize flow = 4 writes, well under the cap.
+    for (let i = 0; i < 4; i++) {
+      expect(enforcePortalTokenRateLimit(limiter, 'customer-token', 'write')).toBeNull()
+    }
+    // And many page reloads (reads) still pass.
+    for (let i = 0; i < 30; i++) {
+      expect(enforcePortalTokenRateLimit(limiter, 'customer-token', 'read')).toBeNull()
+    }
+  })
+
+  it('does not limit an empty token (the route validation 4xxs it; "" would pool every bad request)', () => {
+    const limiter = createRateLimiter({
+      perUserPerMin: 100,
+      perIpPerMin: 100,
+      perCompanyPerMin: 1000,
+      perPortalTokenReadPerMin: 100,
+      perPortalTokenWritePerMin: 1,
+      windowMs: 60_000,
+    })
+    expect(enforcePortalTokenRateLimit(limiter, '', 'write')).toBeNull()
+    expect(enforcePortalTokenRateLimit(limiter, '   ', 'write')).toBeNull()
+    // The blank calls never consumed the bucket, so a real token still has its full allowance.
+    expect(enforcePortalTokenRateLimit(limiter, 'real', 'write')).toBeNull()
   })
 })

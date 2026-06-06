@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import { getRequestContext } from '@sitelayer/logger'
 import { resolveShareSecret, verifyShareToken } from '../estimate-share-token.js'
+import type { PortalRateLimitKind, RateLimitRejection } from '../rate-limit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
@@ -39,6 +40,29 @@ export type PortalRentalsRouteCtx = {
   maxArtifactBytes?: number
   tier?: string
   buildSha?: string
+  /**
+   * Per-share-token rate limit (the `/api/portal/*` surface is exempt from the
+   * global per-user/per-IP buckets — see rate-limit.ts:isRateLimitExempt). The
+   * handler calls this with the share token BEFORE any DB work; a non-null
+   * return is the 429 metadata. Optional so route unit tests can omit it.
+   */
+  rateLimitPortalToken?: (token: string, kind: PortalRateLimitKind) => RateLimitRejection | null
+}
+
+/**
+ * Apply the per-token portal rate limit and emit the 429 when blocked. Returns
+ * true when the request was rejected (caller should bail). `read` = GET the
+ * catalog; `write` = reserve + the capture lifecycle POSTs.
+ */
+function rejectIfPortalTokenLimited(ctx: PortalRentalsRouteCtx, token: string, kind: PortalRateLimitKind): boolean {
+  const rejection = ctx.rateLimitPortalToken?.(token, kind)
+  if (!rejection) return false
+  ctx.sendJson(429, {
+    error: 'rate limit exceeded',
+    scope: rejection.scope,
+    retry_after_seconds: rejection.retryAfterSeconds,
+  })
+  return true
 }
 
 type ShareLinkRow = {
@@ -108,6 +132,7 @@ export async function handlePortalRentalRoutes(
   const catalogMatch = url.pathname.match(/^\/api\/portal\/rentals\/([^/]+)\/catalog$/)
   if (req.method === 'GET' && catalogMatch) {
     const shareToken = decodeURIComponent(catalogMatch[1]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'read')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -144,6 +169,7 @@ export async function handlePortalRentalRoutes(
   const reserveMatch = url.pathname.match(/^\/api\/portal\/rentals\/([^/]+)\/reserve$/)
   if (req.method === 'POST' && reserveMatch) {
     const shareToken = decodeURIComponent(reserveMatch[1]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -244,6 +270,7 @@ export async function handlePortalRentalRoutes(
   const captureStartMatch = url.pathname.match(/^\/api\/portal\/rentals\/([^/]+)\/capture-sessions$/)
   if (req.method === 'POST' && captureStartMatch) {
     const shareToken = decodeURIComponent(captureStartMatch[1]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -271,6 +298,7 @@ export async function handlePortalRentalRoutes(
   if (req.method === 'POST' && captureEventsMatch) {
     const shareToken = decodeURIComponent(captureEventsMatch[1]!)
     const captureSessionId = decodeURIComponent(captureEventsMatch[2]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -304,6 +332,7 @@ export async function handlePortalRentalRoutes(
   if (req.method === 'POST' && captureUploadMatch) {
     const shareToken = decodeURIComponent(captureUploadMatch[1]!)
     const captureSessionId = decodeURIComponent(captureUploadMatch[2]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -338,6 +367,7 @@ export async function handlePortalRentalRoutes(
   if (req.method === 'POST' && captureFinalizeMatch) {
     const shareToken = decodeURIComponent(captureFinalizeMatch[1]!)
     const captureSessionId = decodeURIComponent(captureFinalizeMatch[2]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })
@@ -371,6 +401,7 @@ export async function handlePortalRentalRoutes(
   if (req.method === 'POST' && captureDiscardMatch) {
     const shareToken = decodeURIComponent(captureDiscardMatch[1]!)
     const captureSessionId = decodeURIComponent(captureDiscardMatch[2]!)
+    if (rejectIfPortalTokenLimited(ctx, shareToken, 'write')) return true
     const resolution = await resolveShareLink(ctx.pool, shareToken)
     if (!resolution.ok) {
       ctx.sendJson(resolution.status, { error: resolution.error })

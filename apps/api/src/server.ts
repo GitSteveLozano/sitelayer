@@ -64,7 +64,13 @@ import {
 } from './auth.js'
 import { attachPool, observeRequest } from './metrics.js'
 import { loadEmailConfig } from './email.js'
-import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
+import {
+  applyRateLimit,
+  createRateLimiter,
+  enforcePortalTokenRateLimit,
+  isRateLimitExempt,
+  loadRateLimitConfig,
+} from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
 import { validateRequiredEnvVars } from './lib/env-validate.js'
 import { getBuildSha } from './lib/build-sha.js'
@@ -844,6 +850,10 @@ const server = http.createServer(async (req, res) => {
                   if (Array.isArray(xff) && xff.length > 0) return xff[0]!.split(',')[0]!.trim()
                   return req.socket.remoteAddress ?? null
                 },
+                // Per-share-token bucket for the rate-limit-exempt /api/portal/*
+                // surface — caps accept/decline/finalize spam against one token
+                // without locking out a NAT-shared single customer.
+                rateLimitPortalToken: (token, kind) => enforcePortalTokenRateLimit(rateLimiter, token, kind),
                 readBody: () => readBody(req),
                 sendJson: (status, body) => sendJson(res, status, body, req),
               })
@@ -857,6 +867,8 @@ const server = http.createServer(async (req, res) => {
                 maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
                 tier: appConfig.tier,
                 buildSha,
+                // Same per-share-token bucket as the estimate portal above.
+                rateLimitPortalToken: (token, kind) => enforcePortalTokenRateLimit(rateLimiter, token, kind),
               })
               if (portalRentalHandled) return
 

@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { z } from 'zod'
+import type { PortalRateLimitKind, RateLimitRejection } from '../rate-limit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import {
@@ -54,9 +55,36 @@ export type PublicEstimateShareCtx = {
   buildSha?: string
   /** Resolve the inbound IP for audit (X-Forwarded-For first hop). */
   resolveClientIp: () => string | null
+  /**
+   * Per-share-token rate limit (the `/api/portal/*` surface is exempt from the
+   * global per-user/per-IP buckets — see rate-limit.ts:isRateLimitExempt). The
+   * handler calls this with the decoded token BEFORE doing any DB work; a
+   * non-null return is the 429 metadata the handler surfaces. Optional so route
+   * unit tests can omit it (no limiter = always allowed).
+   */
+  rateLimitPortalToken?: (token: string, kind: PortalRateLimitKind) => RateLimitRejection | null
   /** Same JSON body parser used by authenticated routes. */
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
+}
+
+/**
+ * Apply the per-token portal rate limit and emit the 429 when blocked. Returns
+ * true when the request was rejected (caller should bail). `read` = GET the
+ * portal view; `write` = a state-changing POST (accept/decline/finalize +
+ * capture lifecycle). The `retry-after` is surfaced in the body (the public
+ * portal sendJson does not expose header control here, so the seconds ride the
+ * JSON like the global limiter's rejection shape).
+ */
+function rejectIfPortalTokenLimited(ctx: PublicEstimateShareCtx, token: string, kind: PortalRateLimitKind): boolean {
+  const rejection = ctx.rateLimitPortalToken?.(token, kind)
+  if (!rejection) return false
+  ctx.sendJson(429, {
+    error: 'rate limit exceeded',
+    scope: rejection.scope,
+    retry_after_seconds: rejection.retryAfterSeconds,
+  })
+  return true
 }
 
 /**
@@ -77,6 +105,7 @@ export async function handlePublicEstimateShareRoutes(
   const getMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)$/)
   if (req.method === 'GET' && getMatch) {
     const token = decodeURIComponent(getMatch[1] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'read')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -126,6 +155,7 @@ export async function handlePublicEstimateShareRoutes(
   const captureStartMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/capture-sessions$/)
   if (req.method === 'POST' && captureStartMatch) {
     const token = decodeURIComponent(captureStartMatch[1] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -155,6 +185,7 @@ export async function handlePublicEstimateShareRoutes(
   if (req.method === 'POST' && captureEventsMatch) {
     const token = decodeURIComponent(captureEventsMatch[1] ?? '')
     const captureSessionId = decodeURIComponent(captureEventsMatch[2] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -188,6 +219,7 @@ export async function handlePublicEstimateShareRoutes(
   if (req.method === 'POST' && captureUploadMatch) {
     const token = decodeURIComponent(captureUploadMatch[1] ?? '')
     const captureSessionId = decodeURIComponent(captureUploadMatch[2] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -222,6 +254,7 @@ export async function handlePublicEstimateShareRoutes(
   if (req.method === 'POST' && captureFinalizeMatch) {
     const token = decodeURIComponent(captureFinalizeMatch[1] ?? '')
     const captureSessionId = decodeURIComponent(captureFinalizeMatch[2] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -255,6 +288,7 @@ export async function handlePublicEstimateShareRoutes(
   if (req.method === 'POST' && captureDiscardMatch) {
     const token = decodeURIComponent(captureDiscardMatch[1] ?? '')
     const captureSessionId = decodeURIComponent(captureDiscardMatch[2] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
     if (!lookup.ok) {
       ctx.sendJson(lookup.status, { error: lookup.error })
@@ -285,6 +319,7 @@ export async function handlePublicEstimateShareRoutes(
   const acceptMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/accept$/)
   if (req.method === 'POST' && acceptMatch) {
     const token = decodeURIComponent(acceptMatch[1] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const parsedBody = parseJsonBody(PortalAcceptBodySchema, await ctx.readBody())
     if (!parsedBody.ok) {
       ctx.sendJson(400, { error: parsedBody.error })
@@ -397,6 +432,7 @@ export async function handlePublicEstimateShareRoutes(
   const declineMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/decline$/)
   if (req.method === 'POST' && declineMatch) {
     const token = decodeURIComponent(declineMatch[1] ?? '')
+    if (rejectIfPortalTokenLimited(ctx, token, 'write')) return true
     const parsedBody = parseJsonBody(PortalDeclineBodySchema, await ctx.readBody())
     if (!parsedBody.ok) {
       ctx.sendJson(400, { error: parsedBody.error })

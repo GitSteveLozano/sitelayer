@@ -33,9 +33,38 @@ export type RateLimitConfig = {
    * Sized HIGH relative to per-user so it only bites pathological tenants.
    */
   perCompanyPerMin: number
+  /**
+   * Token capacity (per minute) for READ hits on a single public-portal
+   * share token. The `/api/portal/*` surface is rate-limit-EXEMPT from the
+   * per-user/per-IP buckets above (a NAT-shared customer would otherwise
+   * collide with internal API callers — see isRateLimitExempt), so the only
+   * fairness lever left for that surface is a per-TOKEN bucket. Reads (GET
+   * the portal view) are sized generously so a legitimate customer
+   * refreshing the page is never throttled. Optional in the type so callers
+   * that only build the user/ip/company buckets stay valid; `capacityFor`
+   * falls back to the documented default when absent.
+   */
+  perPortalTokenReadPerMin?: number
+  /**
+   * Token capacity (per minute) for state-changing POSTs on a single
+   * public-portal share token (accept / decline / finalize + the capture
+   * lifecycle). Sized tight: a real customer accepts/declines once and
+   * finalizes a handful of capture sessions, so a low cap still leaves
+   * single-customer use working while bounding a flood of forged-body POSTs
+   * against one leaked token.
+   */
+  perPortalTokenWritePerMin?: number
   /** Window length in milliseconds. Refill rate = capacity / windowMs. */
   windowMs: number
 }
+
+// Per-token portal caps. Reads are generous (a customer reloading the estimate
+// view); writes are tight (accept/decline once, finalize a few capture
+// sessions). Both are per single share token, so they never bleed across
+// customers. Standalone consts so `capacityFor` / `loadRateLimitConfig` always
+// have a concrete `number` fallback even though the config fields are optional.
+export const DEFAULT_PORTAL_TOKEN_READ_PER_MIN = 60
+export const DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN = 20
 
 export const DEFAULT_RATE_LIMIT_CONFIG: RateLimitConfig = {
   perUserPerMin: 100,
@@ -43,29 +72,50 @@ export const DEFAULT_RATE_LIMIT_CONFIG: RateLimitConfig = {
   // ~10x the per-user cap: a busy 10-seat tenant stays well under it, but a
   // single tenant flooding the API gets bounded before it can starve others.
   perCompanyPerMin: 1000,
+  perPortalTokenReadPerMin: DEFAULT_PORTAL_TOKEN_READ_PER_MIN,
+  perPortalTokenWritePerMin: DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN,
   windowMs: 60_000,
 }
 
+function clampPositiveInt(raw: unknown, fallback: number): number {
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
 export function loadRateLimitConfig(env: NodeJS.ProcessEnv = process.env): RateLimitConfig {
-  const perUser = Number(env.RATE_LIMIT_PER_USER_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin)
-  const perIp = Number(env.RATE_LIMIT_PER_IP_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin)
-  const perCompany = Number(env.RATE_LIMIT_PER_COMPANY_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin)
   return {
-    perUserPerMin:
-      Number.isFinite(perUser) && perUser > 0 ? Math.floor(perUser) : DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin,
-    perIpPerMin: Number.isFinite(perIp) && perIp > 0 ? Math.floor(perIp) : DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin,
-    perCompanyPerMin:
-      Number.isFinite(perCompany) && perCompany > 0
-        ? Math.floor(perCompany)
-        : DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin,
+    perUserPerMin: clampPositiveInt(
+      env.RATE_LIMIT_PER_USER_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin,
+      DEFAULT_RATE_LIMIT_CONFIG.perUserPerMin,
+    ),
+    perIpPerMin: clampPositiveInt(
+      env.RATE_LIMIT_PER_IP_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin,
+      DEFAULT_RATE_LIMIT_CONFIG.perIpPerMin,
+    ),
+    perCompanyPerMin: clampPositiveInt(
+      env.RATE_LIMIT_PER_COMPANY_PER_MIN ?? DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin,
+      DEFAULT_RATE_LIMIT_CONFIG.perCompanyPerMin,
+    ),
+    perPortalTokenReadPerMin: clampPositiveInt(
+      env.RATE_LIMIT_PER_PORTAL_TOKEN_READ_PER_MIN ?? DEFAULT_PORTAL_TOKEN_READ_PER_MIN,
+      DEFAULT_PORTAL_TOKEN_READ_PER_MIN,
+    ),
+    perPortalTokenWritePerMin: clampPositiveInt(
+      env.RATE_LIMIT_PER_PORTAL_TOKEN_WRITE_PER_MIN ?? DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN,
+      DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN,
+    ),
     windowMs: DEFAULT_RATE_LIMIT_CONFIG.windowMs,
   }
 }
 
 type Bucket = { tokens: number; updatedAt: number }
 
-/** Which keyed bucket a decision came from. `company` is the per-tenant cap. */
-export type RateLimitScope = 'user' | 'ip' | 'company'
+/**
+ * Which keyed bucket a decision came from. `company` is the per-tenant cap;
+ * `portal_read` / `portal_write` are the per-share-token public-portal caps
+ * (the `/api/portal/*` surface is exempt from user/ip — see isRateLimitExempt).
+ */
+export type RateLimitScope = 'user' | 'ip' | 'company' | 'portal_read' | 'portal_write'
 
 export type RateLimitResult =
   | { allowed: true; remaining: number; capacity: number }
@@ -103,8 +153,20 @@ export function createRateLimiter(config: RateLimitConfig = DEFAULT_RATE_LIMIT_C
     }
   }
 
-  const capacityFor = (scope: RateLimitScope) =>
-    scope === 'user' ? config.perUserPerMin : scope === 'company' ? config.perCompanyPerMin : config.perIpPerMin
+  const capacityFor = (scope: RateLimitScope): number => {
+    switch (scope) {
+      case 'user':
+        return config.perUserPerMin
+      case 'company':
+        return config.perCompanyPerMin
+      case 'portal_read':
+        return config.perPortalTokenReadPerMin ?? DEFAULT_PORTAL_TOKEN_READ_PER_MIN
+      case 'portal_write':
+        return config.perPortalTokenWritePerMin ?? DEFAULT_PORTAL_TOKEN_WRITE_PER_MIN
+      case 'ip':
+        return config.perIpPerMin
+    }
+  }
 
   return {
     consume(scope, key, now = Date.now()) {
@@ -264,4 +326,39 @@ export function applyRateLimit(
     ),
   )
   return true
+}
+
+/**
+ * Which class of portal hit is being limited. READ = the customer fetching the
+ * portal view (generous cap); WRITE = a state-changing POST (accept/decline/
+ * finalize + capture lifecycle — tight cap). They are independent buckets, so a
+ * WRITE flood never throttles the customer's own reads.
+ */
+export type PortalRateLimitKind = 'read' | 'write'
+
+/**
+ * Per-share-token rate limit for the public `/api/portal/*` surface, which is
+ * EXEMPT from the per-user/per-IP buckets (a NAT-shared customer would collide
+ * with internal callers — see isRateLimitExempt). The auth boundary on that
+ * surface is the HMAC-signed token in the URL itself, so the token is the only
+ * stable per-recipient key we have; we bucket on it (never logged, in-memory
+ * only) so a single leaked/guessed token can't spam-flood accept/decline/
+ * finalize while a legitimate single customer stays well under the cap.
+ *
+ * Returns null when allowed; the 429 rejection metadata when blocked. The
+ * caller formats the response (kept pure so tests don't drag in an HTTP
+ * server). An empty token is NOT limited here — the route's own token
+ * validation already 4xx's it, and limiting "" would pool every malformed
+ * request into one shared bucket.
+ */
+export function enforcePortalTokenRateLimit(
+  limiter: RateLimiter,
+  token: string,
+  kind: PortalRateLimitKind,
+): RateLimitRejection | null {
+  const trimmed = token.trim()
+  if (!trimmed) return null
+  const scope: RateLimitScope = kind === 'write' ? 'portal_write' : 'portal_read'
+  const decision = limiter.consume(scope, trimmed)
+  return decision.allowed ? null : decision
 }
