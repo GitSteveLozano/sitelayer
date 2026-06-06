@@ -2,19 +2,16 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { AppTier } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
-// Importing the workflows index pulls in every reducer module's top-level
-// registerWorkflow() side effect, so getWorkflow(name) inside applyEventLog
-// resolves the registered definition even if no other route touched it first.
-import {
-  applyEventLog,
-  getWorkflow,
-  matchesWorkflowEventRef,
-  parseWorkflowEventRef,
-  type WorkflowEventLogEntry,
-} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { authorizeDebugTraceRequest } from '../debug-trace.js'
 import { withCompanyClient } from '../mutation-tx.js'
+import {
+  loadEntityBracket,
+  replayView,
+  resolveAnchor,
+  type ResolvedAnchor,
+  type ResolvedAnchorCapture,
+} from '../anchor-resolve.js'
 
 const logger = createLogger('api:anchors')
 
@@ -57,276 +54,7 @@ export type AnchorRouteCtx = {
   setHeader: (name: string, value: string) => void
 }
 
-const WORKFLOW_EVENT_LOG_BRACKET_LIMIT = 500
-const CAPTURE_ARTIFACT_LIMIT = 100
-
-type EventLogRow = {
-  id: string
-  workflow_name: string
-  schema_version: number
-  entity_type: string
-  entity_id: string
-  state_version: number
-  event_type: string
-  event_payload: { type: string; [k: string]: unknown }
-  snapshot_after: { state: string; state_version: number; [k: string]: unknown }
-  actor_user_id: string | null
-  applied_at: string
-  request_id: string | null
-  sentry_trace: string | null
-  sentry_baggage: string | null
-  capture_session_id: string | null
-}
-
-type CaptureSessionRow = {
-  id: string
-  mode: string
-  status: string
-  route_path: string | null
-  started_at: string
-  last_seen_at: string
-  stopped_at: string | null
-}
-
-type CaptureArtifactRow = {
-  id: string
-  kind: string
-  content_type: string | null
-  byte_size: string | null
-  duration_ms: number | null
-  pii_level: string | null
-  access_policy: string | null
-  created_at: string
-}
-
-type CaptureMarkRow = {
-  id: string
-  capture_session_id: string
-  event_type: string
-  occurred_at: string
-  route_path: string | null
-}
-
-/**
- * Resolve the workflow_event_log row a single anchor names. The digest is a
- * one-way hash over the entity_id, so we can't reverse it; instead we select
- * the candidate rows by (workflow_name, state_version) and confirm each one by
- * recomputing the anchor (matchesWorkflowEventRef). state_version on the row is
- * the PRE-transition version the event was dispatched against, which is exactly
- * the value the anchor encodes.
- */
-async function resolveAnchorRow(
-  companyId: string,
-  ref: string,
-  parsed: { workflow_name: string; state_version: number },
-): Promise<EventLogRow | null> {
-  const result = await withCompanyClient(companyId, (c) =>
-    c.query<EventLogRow>(
-      `select id, workflow_name, schema_version, entity_type, entity_id::text as entity_id,
-              state_version, event_type, event_payload, snapshot_after,
-              actor_user_id, applied_at, request_id, sentry_trace, sentry_baggage,
-              capture_session_id::text as capture_session_id
-         from workflow_event_log
-        where company_id = $1
-          and workflow_name = $2
-          and state_version = $3
-        order by applied_at asc`,
-      [companyId, parsed.workflow_name, parsed.state_version],
-    ),
-  )
-  return (
-    result.rows.find((row) =>
-      matchesWorkflowEventRef(ref, {
-        workflow_name: row.workflow_name,
-        entity_id: row.entity_id,
-        state_version: row.state_version,
-      }),
-    ) ?? null
-  )
-}
-
-/** The full ordered event bracket for an entity, used by the replay re-run. */
-async function loadEntityBracket(
-  companyId: string,
-  workflowName: string,
-  entityType: string,
-  entityId: string,
-): Promise<EventLogRow[]> {
-  const result = await withCompanyClient(companyId, (c) =>
-    c.query<EventLogRow>(
-      `select id, workflow_name, schema_version, entity_type, entity_id::text as entity_id,
-              state_version, event_type, event_payload, snapshot_after,
-              actor_user_id, applied_at, request_id, sentry_trace, sentry_baggage,
-              capture_session_id::text as capture_session_id
-         from workflow_event_log
-        where company_id = $1
-          and workflow_name = $2
-          and entity_type = $3
-          and entity_id = $4::uuid
-        order by state_version asc
-        limit $5`,
-      [companyId, workflowName, entityType, entityId, WORKFLOW_EVENT_LOG_BRACKET_LIMIT],
-    ),
-  )
-  return result.rows
-}
-
-/** Re-run the deterministic reducer over the entity bracket and report the
- * first divergence (replay.ts applyEventLog). Returns null when the workflow
- * isn't registered in this process (so callers can surface that distinctly). */
-function replayBracket(rows: EventLogRow[]): ReturnType<typeof applyEventLog> | { unregistered: true } {
-  if (rows.length === 0) {
-    return { ok: true, finalSnapshot: null, issues: [] }
-  }
-  const definition = getWorkflow(rows[0]!.workflow_name)
-  if (!definition) return { unregistered: true }
-  const initial = { state: definition.initialState, state_version: rows[0]!.state_version }
-  const log: WorkflowEventLogEntry[] = rows.map((row) => ({
-    workflow_name: row.workflow_name,
-    schema_version: row.schema_version,
-    entity_id: row.entity_id,
-    state_version: row.state_version,
-    event_payload: row.event_payload,
-    snapshot_after: row.snapshot_after,
-  }))
-  return applyEventLog(initial, log)
-}
-
-async function loadCaptureSession(companyId: string, captureSessionId: string): Promise<CaptureSessionRow | null> {
-  const result = await withCompanyClient(companyId, (c) =>
-    c.query<CaptureSessionRow>(
-      `select id::text as id, mode, status, route_path,
-              started_at, last_seen_at, stopped_at
-         from capture_sessions
-        where company_id = $1 and id = $2::uuid
-        limit 1`,
-      [companyId, captureSessionId],
-    ),
-  )
-  return result.rows[0] ?? null
-}
-
-async function loadCaptureArtifacts(companyId: string, captureSessionId: string): Promise<CaptureArtifactRow[]> {
-  const result = await withCompanyClient(companyId, (c) =>
-    c.query<CaptureArtifactRow>(
-      `select id::text as id, kind, content_type, byte_size::text as byte_size,
-              duration_ms, pii_level, access_policy, created_at
-         from capture_artifacts
-        where company_id = $1
-          and capture_session_id = $2::uuid
-          and deleted_at is null
-        order by created_at asc
-        limit $3`,
-      [companyId, captureSessionId, CAPTURE_ARTIFACT_LIMIT],
-    ),
-  )
-  return result.rows
-}
-
-/** The recorder timeline mark(s) the frontend stamped for this anchor (step 3),
- * matched by the event_ref carried in the capture_session_event payload. */
-async function loadAnchorMarks(companyId: string, ref: string): Promise<CaptureMarkRow[]> {
-  const result = await withCompanyClient(companyId, (c) =>
-    c.query<CaptureMarkRow>(
-      `select id::text as id, capture_session_id::text as capture_session_id,
-              event_type, occurred_at, route_path
-         from capture_session_events
-        where company_id = $1
-          and payload->>'event_ref' = $2
-        order by occurred_at asc`,
-      [companyId, ref],
-    ),
-  )
-  return result.rows
-}
-
-type ResolvedAnchor = {
-  event_ref: string
-  workflow_name: string
-  schema_version: number
-  entity_type: string
-  entity_id: string
-  state_version: number
-  event_type: string
-  from_state: string | null
-  to_state: string
-  to_state_version: number
-  actor_user_id: string | null
-  applied_at: string
-  request_id: string | null
-  sentry_trace: string | null
-  capture_session_id: string | null
-  marks: Array<{
-    id: string
-    capture_session_id: string
-    event_type: string
-    occurred_at: string
-    route_path: string | null
-  }>
-}
-
-async function resolveAnchor(
-  companyId: string,
-  ref: string,
-): Promise<
-  | { ok: false; status: number; error: string }
-  | {
-      ok: true
-      anchor: ResolvedAnchor
-      row: EventLogRow
-      capture: { session: CaptureSessionRow; artifacts: CaptureArtifactRow[]; session_id: string } | null
-    }
-> {
-  const parsed = parseWorkflowEventRef(ref)
-  if (!parsed) return { ok: false, status: 400, error: 'event_ref is not a workflow_event anchor' }
-
-  const row = await resolveAnchorRow(companyId, ref, parsed)
-  if (!row) return { ok: false, status: 404, error: 'no workflow_event_log row matches this anchor' }
-
-  const marks = await loadAnchorMarks(companyId, ref)
-
-  // Prefer the session the event-log row was stamped against; fall back to the
-  // session a recorder mark referenced (the frontend mark carries it).
-  const captureSessionId = row.capture_session_id ?? marks[0]?.capture_session_id ?? null
-  let capture: { session: CaptureSessionRow; artifacts: CaptureArtifactRow[]; session_id: string } | null = null
-  if (captureSessionId) {
-    const session = await loadCaptureSession(companyId, captureSessionId)
-    if (session) {
-      const artifacts = await loadCaptureArtifacts(companyId, captureSessionId)
-      capture = { session, artifacts, session_id: captureSessionId }
-    }
-  }
-
-  const anchor: ResolvedAnchor = {
-    event_ref: ref,
-    workflow_name: row.workflow_name,
-    schema_version: row.schema_version,
-    entity_type: row.entity_type,
-    entity_id: row.entity_id,
-    state_version: row.state_version,
-    event_type: row.event_type,
-    from_state: typeof row.event_payload?.from_state === 'string' ? row.event_payload.from_state : null,
-    to_state: String(row.snapshot_after?.state ?? ''),
-    to_state_version: Number(row.snapshot_after?.state_version ?? row.state_version + 1),
-    actor_user_id: row.actor_user_id,
-    applied_at: row.applied_at,
-    request_id: row.request_id,
-    sentry_trace: row.sentry_trace,
-    capture_session_id: captureSessionId,
-    marks: marks.map((m) => ({
-      id: m.id,
-      capture_session_id: m.capture_session_id,
-      event_type: m.event_type,
-      occurred_at: m.occurred_at,
-      route_path: m.route_path,
-    })),
-  }
-  return { ok: true, anchor, row, capture }
-}
-
-function captureSessionView(
-  capture: { session: CaptureSessionRow; artifacts: CaptureArtifactRow[]; session_id: string } | null,
-) {
+function captureSessionView(capture: ResolvedAnchorCapture | null) {
   if (!capture) return null
   return {
     id: capture.session.id,
@@ -348,20 +76,6 @@ function captureSessionView(
       // The authed file route the existing rrweb replay player + media panel use.
       file_url: `/api/capture-sessions/${capture.session_id}/artifacts/${row.id}/file`,
     })),
-  }
-}
-
-function replayView(rows: EventLogRow[]) {
-  const result = replayBracket(rows)
-  if ('unregistered' in result) {
-    return { available: false, reason: 'workflow_not_registered', ok: null, first_divergence: null }
-  }
-  return {
-    available: true,
-    ok: result.ok,
-    entries_replayed: rows.length,
-    first_divergence: result.issues[0] ?? null,
-    issues: result.issues,
   }
 }
 
@@ -448,18 +162,29 @@ export async function handleAnchorRoutes(ctx: AnchorRouteCtx): Promise<boolean> 
   logger.info({ scope: 'anchor_lookup', from: fromRef, to: toRef }, 'anchor lookup')
 
   try {
-    const fromResolved = await resolveAnchor(company.id, fromRef)
+    // Run the company-scoped reads inside one read-only tx (binds
+    // app.company_id for RLS), then project + replay outside it. The shared
+    // anchor-resolve helpers take the bound client so the same logic also runs
+    // in-process inside the capture-session finalize mutation tx.
+    const resolved = await withCompanyClient(company.id, async (c) => {
+      const fromResolved = await resolveAnchor(c, company.id, fromRef)
+      if (!fromResolved.ok) return { fromResolved, fromBracket: null, toResolved: null }
+      const fromBracket = await loadEntityBracket(
+        c,
+        company.id,
+        fromResolved.row.workflow_name,
+        fromResolved.row.entity_type,
+        fromResolved.row.entity_id,
+      )
+      const toResolved = toRef ? await resolveAnchor(c, company.id, toRef) : null
+      return { fromResolved, fromBracket, toResolved }
+    })
+
+    const { fromResolved, fromBracket } = resolved
     if (!fromResolved.ok) {
       sendJson(fromResolved.status, { error: fromResolved.error, request_id: requestId })
       return true
     }
-
-    const fromBracket = await loadEntityBracket(
-      company.id,
-      fromResolved.row.workflow_name,
-      fromResolved.row.entity_type,
-      fromResolved.row.entity_id,
-    )
 
     // Single-anchor lookup.
     if (!toRef) {
@@ -467,13 +192,13 @@ export async function handleAnchorRoutes(ctx: AnchorRouteCtx): Promise<boolean> 
         request_id: requestId,
         anchor: fromResolved.anchor,
         capture_session: captureSessionView(fromResolved.capture),
-        replay: replayView(fromBracket),
+        replay: replayView(fromBracket!),
       })
       return true
     }
 
     // From/to pair → resolve the second anchor and the clip/still range.
-    const toResolved = await resolveAnchor(company.id, toRef)
+    const toResolved = resolved.toResolved!
     if (!toResolved.ok) {
       sendJson(toResolved.status, { error: `to: ${toResolved.error}`, request_id: requestId })
       return true
@@ -500,7 +225,7 @@ export async function handleAnchorRoutes(ctx: AnchorRouteCtx): Promise<boolean> 
       from_capture_session: fromCaptureView,
       to_capture_session: toCaptureView,
       range: buildRange(fromResolved.anchor, toResolved.anchor, fromCaptureView, toCaptureView),
-      replay: replayView(fromBracket),
+      replay: replayView(fromBracket!),
     })
     return true
   } catch (err) {

@@ -686,6 +686,73 @@ export async function buildSupportServerContext({
   }
 }
 
+/** One persisted server_context.anchors entry — the deterministic statechart
+ * transition the finalize path pinned (see anchor-resolve.buildCaptureSessionAnchors). */
+type AgentPromptAnchor = {
+  event_ref?: unknown
+  workflow_name?: unknown
+  entity_type?: unknown
+  entity_id?: unknown
+  state_version?: unknown
+  event_type?: unknown
+  from_state?: unknown
+  to_state?: unknown
+  applied_at?: unknown
+  replay_ok?: unknown
+  replay_available?: unknown
+  first_divergence?: unknown
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/**
+ * Render the deterministic statechart anchors the finalize path wove into
+ * server_context. The broken/most-recent transition(s) plus the replay's first
+ * divergence give the LLM the EXACT transition that broke — so it doesn't have
+ * to re-derive it from the raw event log. Returns [] when no anchors were
+ * captured (e.g. a feedback packet with no workflow marks).
+ */
+function renderAnchorLines(serverContext: JsonRecord): string[] {
+  const rawAnchors = serverContext.anchors
+  if (!Array.isArray(rawAnchors) || rawAnchors.length === 0) return []
+  const anchors = rawAnchors.filter((entry): entry is AgentPromptAnchor => isRecord(entry)).slice(0, 5)
+  if (!anchors.length) return []
+  const lines: string[] = [
+    '',
+    'Statechart transition anchors (most recent first) — these pin the exact deterministic transition(s) captured for this session:',
+  ]
+  for (const anchor of anchors) {
+    const workflow = asString(anchor.workflow_name) || 'unknown_workflow'
+    const fromState = asString(anchor.from_state)
+    const toState = asString(anchor.to_state) || 'unknown'
+    const transition = fromState ? `${fromState} -> ${toState}` : `-> ${toState}`
+    const eventType = asString(anchor.event_type) || 'event'
+    const stateVersion = typeof anchor.state_version === 'number' ? anchor.state_version : '?'
+    const entity = `${asString(anchor.entity_type) || 'entity'} ${asString(anchor.entity_id) || '?'}`
+    const ref = asString(anchor.event_ref) || 'unknown'
+    let replay: string
+    if (anchor.replay_available === false) {
+      replay = 'replay unavailable (workflow not registered)'
+    } else if (anchor.replay_ok === true) {
+      replay = 'deterministic replay OK (no divergence)'
+    } else if (isRecord(anchor.first_divergence)) {
+      const d = anchor.first_divergence
+      const reason = asString(d.reason) || 'divergence'
+      const detail = asString(d.detail)
+      const atVersion = typeof d.state_version === 'number' ? ` at state_version ${d.state_version}` : ''
+      replay = `replay DIVERGED${atVersion}: ${reason}${detail ? ` (${detail})` : ''}`
+    } else {
+      replay = 'replay status unknown'
+    }
+    lines.push(
+      `- ${workflow} ${transition} via ${eventType} (state_version ${stateVersion}, ${entity}) [${ref}] — ${replay}`,
+    )
+  }
+  return lines
+}
+
 function buildAgentPrompt(row: SupportPacketRow): string {
   const requestIds = Array.isArray(row.server_context.request_ids)
     ? row.server_context.request_ids.filter((entry) => typeof entry === 'string').slice(0, 12)
@@ -702,7 +769,9 @@ function buildAgentPrompt(row: SupportPacketRow): string {
     `Capture session: ${row.capture_session_id || 'none captured'}`,
     `Request IDs: ${requestIds.join(', ') || 'none captured'}`,
     `Trace IDs: ${traceIds.join(', ') || 'none captured'}`,
-    'Use the attached support_packet JSON as the source of truth. Correlate the client timeline, API requests, audit events, queue rows, and domain snapshot before suggesting a cause.',
+    ...renderAnchorLines(row.server_context),
+    '',
+    'Use the attached support_packet JSON as the source of truth. Correlate the client timeline, API requests, audit events, queue rows, and domain snapshot before suggesting a cause. When a statechart transition anchor reports a replay divergence, treat that transition as the prime suspect.',
   ].join('\n')
 }
 

@@ -21,6 +21,7 @@ import {
 import type { Capability } from '@sitelayer/domain'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { notifyCaptureWorkItem, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { buildCaptureSessionAnchors } from '../anchor-resolve.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
   buildSupportServerContext,
@@ -1185,6 +1186,15 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   }
   try {
     result = await withMutationTx(ctx.company.id, async (c) => {
+      // Weave the deterministic statechart anchors in-process on the SAME tx
+      // client (already bound to app.company_id). Each recent workflow.transition
+      // mark on this capture session is resolved + replayed so the persisted
+      // server_context.anchors pins the exact broken/most-recent transition and
+      // its first replay divergence — what the agent_prompt reads to ground the
+      // LLM. Fully defensive: a resolve failure is skipped, never thrown, so
+      // finalize can't break on a bad anchor.
+      const anchors = await buildCaptureSessionAnchors(c, ctx.company.id, id).catch(() => [])
+      const serverContextWithAnchors: JsonRecord = { ...(serverContext as JsonRecord), anchors }
       const packet = await insertSupportPacket(c, {
         companyId: ctx.company.id,
         actorUserId: ctx.identity.userId,
@@ -1194,7 +1204,7 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
         buildSha: ctx.buildSha,
         problem: summary,
         client,
-        serverContext: serverContext as JsonRecord,
+        serverContext: serverContextWithAnchors,
         expiresAt,
         redactionVersion: 'support-packet-v1',
       })
