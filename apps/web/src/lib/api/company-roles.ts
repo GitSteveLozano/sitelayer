@@ -14,7 +14,7 @@
 // the live $-cap; approve_time → max_ot_hours_per_week, stored but INERT in v1).
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { BuiltinRole, PermissionAction } from '@sitelayer/domain'
+import type { BuiltinRole, CompanyRole, FieldRequestCapability, PermissionAction } from '@sitelayer/domain'
 import { request } from './client'
 
 /** A single grant on a custom role: an action plus optional integer caps. */
@@ -40,10 +40,24 @@ export interface BuiltinRoleView {
   actions: PermissionAction[]
 }
 
+/** One company membership row (surfaced by the admin roles GET). */
+export interface CompanyMembershipRow {
+  id: string
+  clerk_user_id: string
+  role: CompanyRole
+  custom_role_id: string | null
+}
+
 /** GET /api/companies/:id/roles response. */
 export interface CompanyRolesResponse {
   builtins: BuiltinRoleView[]
   custom: CustomRole[]
+  /**
+   * The company's memberships, for per-member role + capability assignment.
+   * Optional in the type so older fixtures/consumers that only read
+   * builtins/custom keep compiling; the live API always returns it.
+   */
+  memberships?: CompanyMembershipRow[]
 }
 
 export interface CreateCustomRoleRequest {
@@ -123,5 +137,72 @@ export function useAssignMembershipRole(companyId: string) {
         { method: 'POST', json: body },
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: companyRolesKey(companyId) }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Membership company-capability grants (the field_request.* opt-in surface)
+//
+// Wraps:
+//   GET    /api/companies/:id/memberships/:mId/capabilities
+//   POST   /api/companies/:id/memberships/:mId/capabilities             { capability }
+//   DELETE /api/companies/:id/memberships/:mId/capabilities/:capability
+//
+// The membership's effective COMPANY caps = its role floor ∪ the additive
+// custom_role_grants opt-in. app_issue.* caps NEVER appear here — those live
+// only on the platform boundary (see ./platform-grants.ts).
+// ---------------------------------------------------------------------------
+
+/** GET / POST / DELETE response shape (apps/api/src/routes/company-roles.ts). */
+export interface MembershipCapabilities {
+  membership_id: string
+  clerk_user_id: string
+  role: CompanyRole
+  /** The role-floor caps — always held, never revocable. */
+  role_default: FieldRequestCapability[]
+  /** The additive caps granted via custom_role_grants. */
+  granted: FieldRequestCapability[]
+  /** role_default ∪ granted. */
+  effective: FieldRequestCapability[]
+}
+
+const membershipCapsKey = (companyId: string, membershipId: string) =>
+  ['companies', companyId, 'memberships', membershipId, 'capabilities'] as const
+
+export function useMembershipCapabilities(
+  companyId: string | null | undefined,
+  membershipId: string | null | undefined,
+) {
+  return useQuery<{ capabilities: MembershipCapabilities }>({
+    queryKey: membershipCapsKey(companyId ?? '', membershipId ?? ''),
+    enabled: Boolean(companyId) && Boolean(membershipId),
+    queryFn: () =>
+      request<{ capabilities: MembershipCapabilities }>(
+        `/api/companies/${encodeURIComponent(companyId!)}/memberships/${encodeURIComponent(membershipId!)}/capabilities`,
+      ),
+  })
+}
+
+export function useGrantMembershipCapability(companyId: string, membershipId: string) {
+  const qc = useQueryClient()
+  return useMutation<{ capabilities: MembershipCapabilities }, Error, { capability: FieldRequestCapability }>({
+    mutationFn: ({ capability }) =>
+      request<{ capabilities: MembershipCapabilities }>(
+        `/api/companies/${encodeURIComponent(companyId)}/memberships/${encodeURIComponent(membershipId)}/capabilities`,
+        { method: 'POST', json: { capability } },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membershipCapsKey(companyId, membershipId) }),
+  })
+}
+
+export function useRevokeMembershipCapability(companyId: string, membershipId: string) {
+  const qc = useQueryClient()
+  return useMutation<{ capabilities: MembershipCapabilities }, Error, { capability: FieldRequestCapability }>({
+    mutationFn: ({ capability }) =>
+      request<{ capabilities: MembershipCapabilities }>(
+        `/api/companies/${encodeURIComponent(companyId)}/memberships/${encodeURIComponent(membershipId)}/capabilities/${encodeURIComponent(capability)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membershipCapsKey(companyId, membershipId) }),
   })
 }

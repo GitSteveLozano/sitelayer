@@ -119,12 +119,23 @@ class FakePool {
     // insert custom_role_grants
     if (/^insert into custom_role_grants/i.test(sql)) {
       const [roleId, companyId, action, constraints] = params as [string, string, string, string | null]
+      // Honour the (custom_role_id, action) unique key. The capability-grant
+      // path uses ON CONFLICT DO NOTHING; the role-CRUD path inserts fresh sets.
+      const existing = this.grants.find((g) => g.custom_role_id === roleId && g.action === action)
+      if (existing) {
+        if (/on conflict/i.test(sql)) return { rows: [], rowCount: 0 }
+        const err = new Error('duplicate key') as Error & { code?: string }
+        err.code = '23505'
+        throw err
+      }
+      // The capability-grant path inlines `null` constraints in the SQL (no $4
+      // param), so a missing/undefined value is also null.
       const row: GrantRow = {
         id: `grant-${(this.seq += 1)}`,
         custom_role_id: roleId,
         company_id: companyId,
         action,
-        constraints: constraints === null ? null : JSON.parse(constraints),
+        constraints: constraints === null || constraints === undefined ? null : JSON.parse(constraints),
       }
       this.grants.push(row)
       return { rows: [row], rowCount: 1 }
@@ -169,6 +180,16 @@ class FakePool {
       return { rows: [row], rowCount: 1 }
     }
 
+    // delete one custom_role_grants row by action (capability revoke)
+    if (/^delete from custom_role_grants/i.test(sql) && /action = \$3/i.test(sql)) {
+      const [roleId, companyId, action] = params as [string, string, string]
+      const before = this.grants.length
+      this.grants = this.grants.filter(
+        (g) => !(g.custom_role_id === roleId && g.company_id === companyId && g.action === action),
+      )
+      return { rows: [], rowCount: before - this.grants.length }
+    }
+
     // delete custom_role_grants (PATCH replace-the-set)
     if (/^delete from custom_role_grants/i.test(sql)) {
       const [roleId, companyId] = params as [string, string]
@@ -200,17 +221,42 @@ class FakePool {
       return { rows: [], rowCount: affected.length }
     }
 
-    // assign: lock membership for update
+    // company membership LIST (GET roles → memberships[]): where company_id = $1
     if (
       /^select id, clerk_user_id, role, custom_role_id from company_memberships/i.test(sql) &&
-      /for update/i.test(sql)
+      /where company_id = \$1 order by/i.test(sql)
     ) {
+      const [companyId] = params as [string]
+      const rows = this.memberships
+        .filter((r) => r.company_id === companyId)
+        .map((m) => ({ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }))
+      return { rows, rowCount: rows.length }
+    }
+
+    // membership lookup (assign lock + capability load); for-update optional
+    if (/^select id, clerk_user_id, role, custom_role_id from company_memberships/i.test(sql)) {
       const [membershipId, companyId] = params as [string, string]
       const m = this.memberships.find((r) => r.id === membershipId && r.company_id === companyId)
       return {
         rows: m ? [{ id: m.id, clerk_user_id: m.clerk_user_id, role: m.role, custom_role_id: m.custom_role_id }] : [],
         rowCount: m ? 1 : 0,
       }
+    }
+
+    // per-member role recovery lookup by name
+    if (/^select id from custom_roles where company_id = \$1 and name = \$2 and deleted_at is null/i.test(sql)) {
+      const [companyId, name] = params as [string, string]
+      const row = this.roles.find((r) => r.company_id === companyId && r.name === name && r.deleted_at === null)
+      return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
+    }
+
+    // link a per-member custom role onto the membership (capability grant)
+    if (/^update company_memberships set custom_role_id = \$1 where id = \$2 and company_id = \$3/i.test(sql)) {
+      const [customRoleId, membershipId, companyId] = params as [string, string, string]
+      const m = this.memberships.find((r) => r.id === membershipId && r.company_id === companyId)
+      if (!m) return { rows: [], rowCount: 0 }
+      m.custom_role_id = customRoleId
+      return { rows: [], rowCount: 1 }
     }
 
     // assign: update membership role + custom_role_id
@@ -722,6 +768,112 @@ describe('POST /api/companies/:id/memberships/:mId/role — assign', () => {
     })
     const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member', body: { custom_role_id: 'role-1' } })
     await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-2/role'), ctx)
+    expect(captured[0]?.status).toBe(403)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Membership capability grants (field_request.* opt-in)
+// ---------------------------------------------------------------------------
+
+describe('membership capabilities (field_request.*)', () => {
+  const seedMember = (pool: FakePool) => {
+    pool.memberships.push({
+      id: 'm-mem',
+      company_id: 'co-1',
+      clerk_user_id: 'e2e-member',
+      role: 'member',
+      custom_role_id: null,
+    })
+  }
+
+  it('GET → role floor for a member (create + view, no triage/resolve)', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const { ctx, captured } = makeCtx(pool)
+    const handled = await handleCompanyRoleRoutes(
+      req('GET'),
+      u('/api/companies/co-1/memberships/m-mem/capabilities'),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(captured[0]?.status).toBe(200)
+    const view = (
+      captured[0]?.body as { capabilities: { role_default: string[]; effective: string[]; granted: string[] } }
+    ).capabilities
+    expect(view.role_default).toEqual(['field_request.create', 'field_request.view'])
+    expect(view.granted).toEqual([])
+    expect(view.effective).toEqual(['field_request.create', 'field_request.view'])
+  })
+
+  it('POST grants field_request.triage to a member (auto-provisions a custom role)', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const { ctx, captured } = makeCtx(pool, { body: { capability: 'field_request.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx)
+    expect(captured[0]?.status).toBe(200)
+    const view = (captured[0]?.body as { capabilities: { granted: string[]; effective: string[] } }).capabilities
+    expect(view.granted).toEqual(['field_request.triage'])
+    expect(view.effective).toEqual(['field_request.create', 'field_request.view', 'field_request.triage'])
+    // A per-member custom role was minted + linked, and the grant row landed.
+    const member = pool.memberships.find((m) => m.id === 'm-mem')!
+    expect(member.custom_role_id).not.toBeNull()
+    expect(pool.grants.filter((g) => g.action === 'field_request.triage')).toHaveLength(1)
+  })
+
+  it('POST is idempotent — re-granting the same cap does not duplicate the row', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const ctx1 = makeCtx(pool, { body: { capability: 'field_request.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx1.ctx)
+    const ctx2 = makeCtx(pool, { body: { capability: 'field_request.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx2.ctx)
+    expect(ctx2.captured[0]?.status).toBe(200)
+    expect(pool.grants.filter((g) => g.action === 'field_request.triage')).toHaveLength(1)
+  })
+
+  it('POST a role-default cap is a no-op (no redundant grant row)', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const { ctx, captured } = makeCtx(pool, { body: { capability: 'field_request.create' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx)
+    expect(captured[0]?.status).toBe(200)
+    expect(pool.grants).toHaveLength(0)
+    const member = pool.memberships.find((m) => m.id === 'm-mem')!
+    expect(member.custom_role_id).toBeNull()
+  })
+
+  it('DELETE revokes an additive grant', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const grant = makeCtx(pool, { body: { capability: 'field_request.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), grant.ctx)
+    expect(pool.grants).toHaveLength(1)
+    const revoke = makeCtx(pool)
+    await handleCompanyRoleRoutes(
+      req('DELETE'),
+      u('/api/companies/co-1/memberships/m-mem/capabilities/field_request.triage'),
+      revoke.ctx,
+    )
+    expect(revoke.captured[0]?.status).toBe(200)
+    const view = (revoke.captured[0]?.body as { capabilities: { granted: string[] } }).capabilities
+    expect(view.granted).toEqual([])
+    expect(pool.grants).toHaveLength(0)
+  })
+
+  it('POST a non-field_request capability → 400 (app_issue.* cannot bleed in)', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const { ctx, captured } = makeCtx(pool, { body: { capability: 'app_issue.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx)
+    expect(captured[0]?.status).toBe(400)
+  })
+
+  it('non-admin → 403', async () => {
+    const pool = ADMIN_POOL()
+    seedMember(pool)
+    const { ctx, captured } = makeCtx(pool, { userId: 'e2e-member', body: { capability: 'field_request.triage' } })
+    await handleCompanyRoleRoutes(req('POST'), u('/api/companies/co-1/memberships/m-mem/capabilities'), ctx)
     expect(captured[0]?.status).toBe(403)
   })
 })

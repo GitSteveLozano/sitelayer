@@ -2,6 +2,8 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { useAdminIssueBoard, type AdminIssueBoardFilters, type AdminIssueBoardItem } from '@/lib/api/admin-issue-board'
 import { request } from '@/lib/api/client'
 import type { IssueBoardGroupBy, IssueBoardLane, IssueBoardStatus } from '@/lib/api/issue-board'
+import { usePlatformGrants, useGrantPlatformCapability, useRevokePlatformCapability } from '@/lib/api/platform-grants'
+import type { AppIssueCapability } from '@sitelayer/domain'
 
 /**
  * Site Admin console (P3) — a read-only, cross-tenant superadmin surface over
@@ -71,7 +73,7 @@ interface DemoLinkResult {
 
 const DEMO_ROLE_OPTIONS = ['owner', 'estimator', 'foreman', 'crew'] as const
 
-type TabKey = 'companies' | 'issues' | 'workflows' | 'scenarios' | 'demo'
+type TabKey = 'companies' | 'issues' | 'grants' | 'workflows' | 'scenarios' | 'demo'
 
 interface LoadState<T> {
   data: T | null
@@ -728,11 +730,152 @@ function DemoLinksTab() {
   )
 }
 
+// app_issue.* capability → short human description for the grants table.
+const APP_ISSUE_CAP_BLURB: Record<string, string> = {
+  'app_issue.capture': 'Open the capture dock + record an app issue.',
+  'app_issue.view': 'See the /issues board + capture artifacts, replays, support packets.',
+  'app_issue.triage': 'Route / resolve / dispatch app issues.',
+}
+
+/**
+ * Platform grants (app_issue.*) — the superadmin surface that opts a specific
+ * person into ONE platform capability without making them a full superadmin.
+ * app_issue.* caps are problems with the sitelayer SOFTWARE (internal,
+ * cross-tenant) and live ONLY on this platform boundary — they can never be
+ * reached from a company role. Superadmins implicitly hold them all; the rows
+ * here are the additive opt-in for non-superadmin teammates.
+ */
+function PlatformGrantsTab() {
+  const grantsQuery = usePlatformGrants()
+  const grant = useGrantPlatformCapability()
+  const revoke = useRevokePlatformCapability()
+  const [clerkUserId, setClerkUserId] = useState('')
+  const [capability, setCapability] = useState<AppIssueCapability | ''>('')
+  const [error, setError] = useState<string | null>(null)
+
+  const catalog = grantsQuery.data?.catalog ?? []
+  const grants = grantsQuery.data?.grants ?? []
+
+  async function add() {
+    setError(null)
+    const id = clerkUserId.trim()
+    if (!id || !capability) {
+      setError('Enter a Clerk user id and pick a capability.')
+      return
+    }
+    try {
+      await grant.mutateAsync({ clerk_user_id: id, capability })
+      setClerkUserId('')
+      setCapability('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  if (grantsQuery.isLoading || grantsQuery.error) {
+    return <Status loading={grantsQuery.isLoading} error={grantsQuery.error ? errorMessage(grantsQuery.error) : null} />
+  }
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <p style={styles.sub}>
+        Opt a teammate into a platform <span style={styles.code}>app_issue.*</span> capability (the sitelayer
+        software&apos;s own issues). Superadmins already hold all of these; these rows grant one capability to a
+        non-superadmin person.
+      </p>
+
+      <div style={styles.controls}>
+        <input
+          value={clerkUserId}
+          onChange={(e) => setClerkUserId(e.target.value)}
+          placeholder="Clerk user id (e.g. user_2ab…)"
+          style={{ ...styles.input, flex: '0 0 240px' }}
+        />
+        <select
+          value={capability}
+          onChange={(e) => setCapability(e.target.value as AppIssueCapability | '')}
+          style={styles.select}
+        >
+          <option value="">Pick a capability…</option>
+          {catalog.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={grant.isPending}
+          onClick={() => void add()}
+          style={{
+            background: grant.isPending ? '#9ca3af' : '#2563eb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: grant.isPending ? 'default' : 'pointer',
+          }}
+        >
+          {grant.isPending ? 'Granting…' : 'Grant'}
+        </button>
+      </div>
+      {capability ? <p style={styles.muted}>{APP_ISSUE_CAP_BLURB[capability] ?? ''}</p> : null}
+      {error ? <div style={styles.err}>{error}</div> : null}
+
+      <table style={{ ...styles.table, marginTop: 12 }}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Clerk user id</th>
+            <th style={styles.th}>Capability</th>
+            <th style={styles.th}>Granted</th>
+            <th style={styles.th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {grants.map((g) => (
+            <tr key={`${g.clerk_user_id}:${g.capability}`}>
+              <td style={styles.td}>
+                <span style={styles.code}>{g.clerk_user_id}</span>
+              </td>
+              <td style={styles.td}>
+                <span style={styles.code}>{g.capability}</span>
+              </td>
+              <td style={styles.td}>{g.created_at?.slice(0, 10)}</td>
+              <td style={styles.td}>
+                <button
+                  type="button"
+                  style={styles.link}
+                  disabled={revoke.isPending}
+                  onClick={() => void revoke.mutateAsync({ clerk_user_id: g.clerk_user_id, capability: g.capability })}
+                >
+                  Revoke
+                </button>
+              </td>
+            </tr>
+          ))}
+          {grants.length === 0 && (
+            <tr>
+              <td style={styles.td} colSpan={4}>
+                <span style={styles.muted}>
+                  No opt-in grants yet — superadmins still hold every app_issue.* capability.
+                </span>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function AdminRoute() {
   const [tab, setTab] = useState<TabKey>('companies')
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'companies', label: 'Companies' },
     { key: 'issues', label: 'Issues' },
+    { key: 'grants', label: 'Platform grants' },
     { key: 'workflows', label: 'Workflows' },
     { key: 'scenarios', label: 'Scenarios' },
     { key: 'demo', label: 'Demo links' },
@@ -755,6 +898,7 @@ export default function AdminRoute() {
       </div>
       {tab === 'companies' && <CompaniesTab />}
       {tab === 'issues' && <WorkRequestsTab />}
+      {tab === 'grants' && <PlatformGrantsTab />}
       {tab === 'workflows' && <WorkflowsTab />}
       {tab === 'scenarios' && <ScenariosTab />}
       {tab === 'demo' && <DemoLinksTab />}

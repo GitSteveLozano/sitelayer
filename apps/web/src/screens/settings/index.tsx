@@ -26,6 +26,7 @@ export {
   WorkingHoursScreen,
   RolesScreen,
   CustomRoleScreen,
+  MemberCapabilitiesScreen,
   ProfileScreen,
   HelpScreen,
 } from './owner-settings-mobile'
