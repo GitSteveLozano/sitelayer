@@ -143,6 +143,14 @@ export {
 } from './pushers/rental-billing-invoice.js'
 
 export {
+  processRentalInvoicePush,
+  type RentalInvoicePushInput,
+  type RentalInvoicePushResult,
+  type RentalInvoicePushFn,
+  type RentalInvoicePushSummary,
+} from './pushers/rental-cadence-invoice.js'
+
+export {
   processEstimatePush,
   type EstimatePushInput,
   type EstimatePushResult,
@@ -207,6 +215,13 @@ export type QueueProcessResult = {
 // drain doesn't race the dedicated worker.
 export const DEDICATED_HANDLER_MUTATION_TYPES = [
   'post_qbo_invoice',
+  // Rental cadence invoice push — drained by apps/worker/src/runners/
+  // rental-invoice-push.ts → processRentalInvoicePush (the queue handler lives
+  // in pushers/rental-cadence-invoice.ts). Marking it dedicated keeps the
+  // generic drain from claiming the row and marking it 'applied' WITHOUT
+  // pushing to QBO / dispatching the INVOICE_QUEUED/INVOICE_POSTED cadence
+  // transitions — the same silent-data-drop footgun this list guards.
+  'post_rental_invoice',
   'post_qbo_estimate',
   'lock_labor_entries',
   'post_qbo_time_activities',
