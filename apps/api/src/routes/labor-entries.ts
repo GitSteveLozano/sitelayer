@@ -28,6 +28,7 @@ const LaborEntryCreateBodySchema = z
     sqft_done: NumericInputSchema.nullish(),
     status: z.string().nullish(),
     division_code: z.union([z.string(), z.null()]).optional(),
+    cost_code: z.union([z.string(), z.null()]).optional(),
     expected_version: NumericInputSchema.nullish(),
     version: NumericInputSchema.nullish(),
   })
@@ -44,6 +45,7 @@ const LaborEntryPatchBodySchema = z
     sqft_done: NumericInputSchema.nullish(),
     status: z.string().nullish(),
     division_code: z.union([z.string(), z.null()]).optional(),
+    cost_code: z.union([z.string(), z.null()]).optional(),
   })
   .loose()
 
@@ -122,6 +124,12 @@ export async function handleLaborEntryRoutes(
       body.division_code === undefined || body.division_code === null || String(body.division_code).trim() === ''
         ? null
         : String(body.division_code).trim()
+    // Job-cost code (migration 006): free-form accounting axis, same trim/blank
+    // normalization as division_code above.
+    const costCodeInput =
+      body.cost_code === undefined || body.cost_code === null || String(body.cost_code).trim() === ''
+        ? null
+        : String(body.cost_code).trim()
     if (divisionCodeInput) {
       const allowed = await ctx.assertDivisionAllowedForServiceItem(ctx.company.id, serviceItemCode, divisionCodeInput)
       if (!allowed) {
@@ -136,9 +144,9 @@ export async function handleLaborEntryRoutes(
     const entry = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query(
         `
-        insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code)
-        values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8, $9)
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, created_at
+        insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, cost_code)
+        values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8, $9, $10)
+        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, cost_code, created_at
         `,
         [
           ctx.company.id,
@@ -150,6 +158,7 @@ export async function handleLaborEntryRoutes(
           body.status ?? 'draft',
           body.occurred_on,
           divisionCodeInput,
+          costCodeInput,
         ],
       )
       const row = result.rows[0]
@@ -181,7 +190,7 @@ export async function handleLaborEntryRoutes(
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
-      select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
+      select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, cost_code, version, deleted_at, created_at
       from labor_entries
       where company_id = $1 and ($2 = '' or project_id = $2::uuid)
       order by occurred_on desc, created_at desc
@@ -218,6 +227,14 @@ export async function handleLaborEntryRoutes(
         : body.division_code === null || String(body.division_code).trim() === ''
           ? null
           : String(body.division_code).trim()
+    // Job-cost code (migration 006): same partial-update semantics as
+    // division_code — only written when the key is present in the body.
+    const patchCostCode =
+      body.cost_code === undefined
+        ? null
+        : body.cost_code === null || String(body.cost_code).trim() === ''
+          ? null
+          : String(body.cost_code).trim()
     if (patchDivisionCode && (patchServiceItemCode || body.service_item_code !== undefined)) {
       const effectiveServiceItemCode =
         patchServiceItemCode ??
@@ -257,9 +274,10 @@ export async function handleLaborEntryRoutes(
           status = coalesce($7, status),
           occurred_on = coalesce($8, occurred_on),
           division_code = case when $10::boolean then $9 else division_code end,
+          cost_code = case when $12::boolean then $11 else cost_code end,
           version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
+        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, cost_code, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -272,6 +290,8 @@ export async function handleLaborEntryRoutes(
           body.occurred_on ?? null,
           patchDivisionCode,
           body.division_code !== undefined,
+          patchCostCode,
+          body.cost_code !== undefined,
         ],
       )
       const row = result.rows[0]
