@@ -14,6 +14,8 @@ import {
   resolveCompanyRoleAuthority,
   type CustomRoleAuthority,
 } from './permission-seam.js'
+import { requireCapability as requireCapabilityResolver, type CapabilityContext } from './capability.js'
+import { parseSuperadminEnvIds } from './admin-auth.js'
 import { handleCompanyRoutes, loadCompanyCreateGateConfig } from './routes/companies.js'
 import { handleInviteRoutes } from './routes/invites.js'
 import { handleFeedbackInviteRoutes } from './routes/feedback-invites.js'
@@ -184,6 +186,11 @@ if (appConfig.tier === 'prod' && !process.env.FEEDBACK_INVITE_SECRET?.trim()) {
 // CLERK_SECRET_KEY (the same Clerk TEST instance secret already used by the
 // worker's welcome-email runner). When the secret is missing the minter is a
 // no-op that returns null, surfacing as a clear "not configured" error.
+// Bootstrap superadmin allowlist for the app_issue.* (platform-scope)
+// capability boundary. Same source admin-work-requests.ts uses for its
+// platform-admin gate; resolved once so the requireCapability closure (and the
+// admin-auth isSuperadmin lookup behind it) doesn't reparse the env per request.
+const superadminEnvIds = parseSuperadminEnvIds(process.env.PLATFORM_SUPERADMIN_CLERK_IDS)
 const demoAccessCode = process.env.DEMO_ACCESS_CODE?.trim() || null
 const demoAppOrigin = process.env.DEMO_APP_ORIGIN?.trim() || portalBaseUrl
 const demoTicketTtlSeconds = resolveDemoSignInTokenTtlSeconds(process.env)
@@ -1130,6 +1137,23 @@ const server = http.createServer(async (req, res) => {
                 // phase can gate the 9 action routes. See requirePermission().
                 requirePermission: (action, opts) =>
                   requirePermission(res, resolvedCompany.effectiveBuiltin, resolvedCompany.grants, action, opts, req),
+                // Capability overlay for the two work-item domains (migration
+                // 009). field_request.* resolves on the company boundary (role
+                // defaults ∪ the custom_role_grants action names loaded into
+                // resolvedCompany.grants); app_issue.* resolves on the platform
+                // boundary using the RAW (pre-act-as) `identity` — so the
+                // platform domain is unreachable via the dev act-as / header
+                // fallback. Not yet called by any route. See capability.ts.
+                requireCapability: (capability) => {
+                  const capabilityCtx: CapabilityContext = {
+                    role: resolvedCompany.active.role,
+                    grantActions: resolvedCompany.grants.map((grant) => grant.action),
+                    identity,
+                    client: pool,
+                    superadminEnvIds,
+                  }
+                  return requireCapabilityResolver(capabilityCtx, capability, dispatchSendJson)
+                },
                 readBody: () => readBody(req),
                 sendJson: dispatchSendJson,
                 sendRedirect: (location) => sendRedirect(res, location),

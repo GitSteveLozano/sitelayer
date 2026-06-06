@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { AppTier } from '@sitelayer/config'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import type { PermissionAction } from '@sitelayer/domain'
+import type { Capability, PermissionAction } from '@sitelayer/domain'
 import type { Identity } from '../auth.js'
 import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
@@ -120,6 +120,18 @@ export type DispatchContext = {
    * cascade. Not yet called by any route — see server.ts:requirePermission.
    */
   requirePermission: (action: PermissionAction, opts?: { amountCents?: number; otHours?: number }) => boolean
+  /**
+   * Capability overlay for the two non-bleeding work-item domains (migration
+   * 009 `context_work_items.domain`): field_request.* gates on the company
+   * boundary (role defaults ∪ custom_role_grants), app_issue.* gates on the
+   * platform boundary (superadmin ∪ platform_admin_grants). Returns true when
+   * the capability is held; on false it has already sent the 403 and the
+   * handler should return true to stop the cascade. Async because the
+   * app_issue.* path may consult the DB (superadmin / platform_admin_grants).
+   * Not yet called by any route — wired here next to requireRole /
+   * requirePermission so the consumers can gate. See apps/api/src/capability.ts.
+   */
+  requireCapability: (capability: Capability) => Promise<boolean>
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   sendRedirect: (location: string) => void

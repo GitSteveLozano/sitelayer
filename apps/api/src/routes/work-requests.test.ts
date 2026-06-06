@@ -39,6 +39,7 @@ type WorkItem = {
   id: string
   company_id: string
   support_packet_id: string
+  domain: string
   title: string
   summary: string | null
   status: string
@@ -189,25 +190,28 @@ class FakePool {
     if (normalized.startsWith('insert into context_work_items')) {
       this.workItemCounter += 1
       const createdAt = '2026-05-21T12:00:01.000Z'
+      // params[2] = domain ($3) — added by migration 009; all indices below
+      // shift +1 from the pre-009 layout.
       const reversibilityWindowSeconds =
-        typeof params[14] === 'number' ? (params[14] as number) : params[14] != null ? Number(params[14]) : 86400
+        typeof params[15] === 'number' ? (params[15] as number) : params[15] != null ? Number(params[15]) : 86400
       const row: WorkItem = {
         id: uuid(200 + this.workItemCounter),
         company_id: params[0] as string,
         support_packet_id: params[1] as string,
-        title: params[2] as string,
-        summary: (params[3] as string | null) ?? null,
-        status: params[4] as string,
-        lane: params[5] as string,
-        severity: (params[6] as string | null) ?? null,
-        route: (params[7] as string | null) ?? null,
-        capture_session_id: (params[8] as string | null) ?? null,
-        // params[8] = capture_session_id ($9::uuid) — capture session spine (migration 120); indices shift +1 below.
-        entity_type: (params[9] as string | null) ?? null,
-        entity_id: (params[10] as string | null) ?? null,
-        assignee_user_id: (params[11] as string | null) ?? null,
-        created_by_user_id: (params[12] as string | null) ?? null,
-        metadata: JSON.parse(params[13] as string) as JsonRecord,
+        domain: params[2] as string,
+        title: params[3] as string,
+        summary: (params[4] as string | null) ?? null,
+        status: params[5] as string,
+        lane: params[6] as string,
+        severity: (params[7] as string | null) ?? null,
+        route: (params[8] as string | null) ?? null,
+        capture_session_id: (params[9] as string | null) ?? null,
+        // params[9] = capture_session_id ($10::uuid) — capture session spine (migration 120).
+        entity_type: (params[10] as string | null) ?? null,
+        entity_id: (params[11] as string | null) ?? null,
+        assignee_user_id: (params[12] as string | null) ?? null,
+        created_by_user_id: (params[13] as string | null) ?? null,
+        metadata: JSON.parse(params[14] as string) as JsonRecord,
         reversibility_window_seconds: reversibilityWindowSeconds,
         created_at: createdAt,
         updated_at: createdAt,

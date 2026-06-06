@@ -27,6 +27,14 @@ export type WorkItemLane = (typeof WORK_ITEM_LANES)[number]
 export const WORK_ITEM_SEVERITIES = ['low', 'normal', 'high', 'urgent'] as const
 export type WorkItemSeverity = (typeof WORK_ITEM_SEVERITIES)[number]
 
+// The two non-bleeding work-item domains (migration 009 context_work_items.domain).
+// app_issue = problems with the sitelayer SOFTWARE (capture-dock born, platform
+// scope); field_request = contractor job problems/requests (WorkRequestAction /
+// field_event born, company scope). The capture finalize writers stamp
+// 'app_issue'; the WorkRequestAction path defaults to / stamps 'field_request'.
+export const WORK_ITEM_DOMAINS = ['app_issue', 'field_request'] as const
+export type WorkItemDomain = (typeof WORK_ITEM_DOMAINS)[number]
+
 /**
  * Reversibility window (in seconds) for a newly created context_work_item,
  * keyed by severity. Higher-severity items have a tighter window because the
@@ -117,6 +125,7 @@ export type ContextWorkItemRow = {
   id: string
   company_id: string
   support_packet_id: string
+  domain: WorkItemDomain
   title: string
   summary: string | null
   status: WorkItemStatus
@@ -186,6 +195,7 @@ const WORK_ITEM_COLUMN_NAMES = [
   'id',
   'company_id',
   'support_packet_id',
+  'domain',
   'title',
   'summary',
   'status',
@@ -272,6 +282,12 @@ export async function createContextWorkItemTx(
   args: {
     companyId: string
     supportPacketId: string
+    /**
+     * Which non-bleeding domain this work item belongs to (migration 009).
+     * Defaults to 'field_request' so the WorkRequestAction / field_event path
+     * stays unchanged; the capture finalize writers pass 'app_issue' explicitly.
+     */
+    domain?: WorkItemDomain
     title: string
     summary?: string | null
     status?: WorkItemStatus
@@ -291,8 +307,13 @@ export async function createContextWorkItemTx(
   if (!title) throw new Error('title is required')
   const status = args.status ?? 'new'
   const lane = args.lane ?? 'triage'
+  // Default 'field_request' mirrors the column DEFAULT (migration 009): the
+  // WorkRequestAction / field_event path keeps working unchanged, the capture
+  // finalize writers pass 'app_issue' explicitly.
+  const domain = args.domain ?? 'field_request'
   assertIn(WORK_ITEM_STATUSES, status, 'status')
   assertIn(WORK_ITEM_LANES, lane, 'lane')
+  assertIn(WORK_ITEM_DOMAINS, domain, 'domain')
   if (args.severity) assertIn(WORK_ITEM_SEVERITIES, args.severity, 'severity')
 
   const reversibilityWindowSeconds =
@@ -302,14 +323,15 @@ export async function createContextWorkItemTx(
 
   const result = await executor.query<ContextWorkItemRow>(
     `insert into context_work_items (
-       company_id, support_packet_id, title, summary, status, lane, severity,
+       company_id, support_packet_id, domain, title, summary, status, lane, severity,
        route, capture_session_id, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata,
        reversibility_window_seconds
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid, $10, $11, $12, $13, $14::jsonb, $15)
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15::jsonb, $16)
      returning ${WORK_ITEM_COLUMNS}`,
     [
       args.companyId,
       args.supportPacketId,
+      domain,
       title,
       optionalText(args.summary),
       status,
