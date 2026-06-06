@@ -2,6 +2,13 @@
 
 Agent work for this repo lives in the Mesh orchestrated task queue.
 
+> **Collaborator note (no mesh/MCP access).** The Mesh task queue is
+> operator-internal — it needs the mesh MCP tooling and is not reachable from a
+> collaborator machine. If you are a collaborator agent (see
+> [`COLLABORATOR.md`](./COLLABORATOR.md)), **create a GitHub issue instead** of a
+> Mesh task. The operator promotes it to a Mesh task if it warrants autonomous
+> agent work. Everything below describes the operator-side Mesh workflow.
+
 ## Conventions
 
 - **Create an issue/task**: use mesh MCP `create_task`, or `POST /api/orchestrate/tasks`.
