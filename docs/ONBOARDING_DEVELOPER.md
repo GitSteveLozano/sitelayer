@@ -103,6 +103,22 @@ Variables you may want to set locally:
 
 **Never** put real secrets in a committed file or paste them into a shell that records history. `.env.example` documents names only; real production secrets live in `/app/sitelayer/.env` on the prod droplet (rendered from the `ops/env/production.env.json` manifest, operator-only) — there is no GitHub Actions secret store in the deploy path.
 
+### Never set these locally (operator-only)
+
+These point at the operator's private infrastructure (Tailnet-only or
+production). On a collaborator machine they will not work — they 503 / fail to
+connect, or worse, mislead the logs into chasing a backend that isn't there.
+Leave every one **empty**:
+
+```bash
+SENTRY_DSN=               # + VITE_SENTRY_DSN — operator Sentry org; rely on Pino console logs locally
+MESH_API_URL=             # operator's private mesh (Tailnet-only); empty = in-app AI chat cleanly OFF
+AXIOM_TOKEN=              # + AXIOM_DATASET — operator Axiom log warehouse
+DATABASE_URL_PROD_RO=     # read-only prod pool (the read-prod-ro flag); never request prod DB access
+QBO_*  (prod realm creds) # use QBO_ENVIRONMENT=sandbox only; never live Intuit creds
+DEPLOY_HOST=              # + DEPLOY_SSH_KEY — fleet/prod deploy (root-equivalent); collaborators don't deploy
+```
+
 ---
 
 ## 4. Run the stack

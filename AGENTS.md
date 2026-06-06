@@ -2,6 +2,8 @@
 
 This file is for AI agents (Claude, Codex, Gemini, anything) editing this repository. If you are a human, read [`CLAUDE.md`](./CLAUDE.md) first; it covers the same ground with more detail.
 
+> **Collaborator agent with none of the operator infra (mesh / MCP / browser-bridge / Tailnet / prod / Taylor's creds)? Read [`docs/agents/COLLABORATOR.md`](docs/agents/COLLABORATOR.md) FIRST** — it is the self-contained guide for running, testing, and contributing to Sitelayer from a clean GitHub clone.
+
 ## Collaborator Workstation Override
 
 If this repo is checked out under `~/projects/collaborator-system/`, assume the
@@ -14,7 +16,14 @@ machine is a collaborator Mac, not Taylor's operator workstation:
 - use the checked-in code, this file, and `docs/ONBOARDING_DEVELOPER.md` as the
   local source of truth;
 - report missing GitHub, Docker, browser-profile, Clerk, or production access
-  as blockers instead of trying to recreate Taylor's setup.
+  as blockers instead of trying to recreate Taylor's setup;
+- do **not** run `scripts/deploy.sh prod` (fleet-only — it needs the DO
+  registry, the prod droplet, and `DEPLOY_HOST`/`DEPLOY_SSH_KEY`); verify
+  locally with `npm run verify` and open a PR — Taylor deploys;
+- leave `MESH_API_URL`, `SENTRY_DSN`, `AXIOM_TOKEN`/`AXIOM_DATASET`, the QBO
+  prod realm creds, `DATABASE_URL_PROD_RO`, and `DEPLOY_HOST`/`DEPLOY_SSH_KEY`
+  **EMPTY** — their hosts are Tailnet-only or production, so setting them will
+  not work and will only confuse the logs.
 
 ## Read this before editing anything
 
