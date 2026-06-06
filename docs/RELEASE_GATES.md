@@ -66,20 +66,44 @@ was gated **at land time** (its dedicated checkout has no `node_modules` to
 re-run the gate, and re-gating is redundant). That premise is now **enforced**,
 not assumed:
 
-- **`.githooks/pre-push`** (repo-tracked, installed via `core.hooksPath` — NOT a
-  stray `.git/hooks` file) runs the **standard** gate (`npm run verify` =
-  `static + build + unit + docker-postgres integration`) and **blocks the push**
-  when you push to `dev` or `main`. Pushing any other branch (feature branches,
-  tags) is not gated — the gate runs at the integration point. **e2e is
-  deliberately out of the hook** (the standard level excludes it); the Playwright
-  e2e suite runs on the async runner / `npm run verify:full` on a quiet box.
+- **`.githooks/pre-push`** (repo-tracked) runs the **standard** gate
+  (`npm run verify` = `static + build + unit + docker-postgres integration`) and
+  **blocks the push** when you push to `dev` or `main`. Pushing any other branch
+  (feature branches, tags) is not gated — the gate runs at the integration
+  point. **e2e is deliberately out of the hook** (the standard level excludes
+  it); the Playwright e2e suite runs on the async runner / `npm run verify:full`
+  on a quiet box.
 - **Install it once per clone:** `scripts/install-git-hooks.sh` (or
-  `npm run hooks:install`) sets `git config core.hooksPath .githooks`
-  (idempotent). `--check` reports state; `--uninstall` reverts it.
+  `npm run hooks:install`), idempotent. `--check` reports state; `--uninstall`
+  reverts it.
+- **The gate fires via TWO paths so it is drift-proof** (the GATE-RELIABILITY
+  fix). `core.hooksPath` lives in the **shared** git config
+  (`$GIT_COMMON_DIR/config`, not per-worktree — `extensions.worktreeConfig` is
+  off), so a tool or `git worktree` flow that resets it to the default
+  (`$GIT_COMMON_DIR/hooks`) used to **silently** disable the gate for **every**
+  worktree at once — the default dir was empty, so pushes skipped `npm run
+verify` with no error and real failures only surfaced at slow, post-build
+  deploy time. The install now sets BOTH:
+  1. **primary** — `core.hooksPath = .githooks` (the versioned hook), and
+  2. **backstop** — a tiny delegating `pre-push` **shim** written into the
+     default shared hooks dir (`$GIT_COMMON_DIR/hooks/pre-push`). Git runs the
+     default dir whenever `core.hooksPath` is unset or has drifted back to it,
+     so the backstop catches exactly the drift state and re-execs
+     `.githooks/pre-push`. Git only ever runs ONE pre-push (from the resolved
+     dir), so the two paths never double-run. The shim lives in the shared
+     (common) hooks dir, which **survives `git worktree add/remove`**.
+- **Loud, never silent.** `scripts/install-git-hooks.sh --check` exits non-zero
+  with a banner if NEITHER path would fire (so a broken gate is caught, not
+  silently tolerated), and the backstop shim **refuses the push** (exit 1) if it
+  cannot find `.githooks/pre-push` rather than letting an ungated SHA through.
+  When the backstop fires it prints a notice telling you to re-assert the
+  primary with `scripts/install-git-hooks.sh`.
 - **Bypass (emergency only):** the standard `git push --no-verify`.
 
 The hook's ref-selection logic is unit-tested
-(`apps/api/src/prepush-hook.test.ts`).
+(`apps/api/src/prepush-hook.test.ts`); the installer's two-path / drift /
+linked-worktree behavior is covered by `scripts/install-git-hooks.test.mjs`
+(`npm run test:scripts`).
 
 ## Post-deploy smoke for dev/demo
 
