@@ -1,19 +1,43 @@
 #!/usr/bin/env bash
 #
-# Install the repo-tracked git hooks by pointing git at .githooks via
-# core.hooksPath. Idempotent: re-running just re-asserts the config and
-# re-marks the hooks executable.
+# Install the repo-tracked git hooks so the pre-push verification gate fires
+# RELIABLY — even when `core.hooksPath` drifts back to the default.
 #
-# Why core.hooksPath (not copying into .git/hooks): the hooks are VERSIONED in
-# .githooks/ so every clone gets the same pre-push gate, and a stray edit to a
-# .git/hooks file can't silently diverge from what's committed. The tradeoff is
-# that core.hooksPath is per-clone local config, so each developer runs this
-# once after cloning.
+# Why two install paths (the GATE-RELIABILITY fix):
+#   The gate used to rely on a SINGLE mechanism — `core.hooksPath = .githooks`.
+#   That setting lives in the SHARED git config ($GIT_COMMON_DIR/config), not
+#   per-worktree (this repo does not enable extensions.worktreeConfig), so any
+#   tool or `git worktree`-driven flow that rewrites it to the default
+#   ($GIT_COMMON_DIR/hooks) silently disables the gate for EVERY worktree at
+#   once. When that happened the default hooks dir was empty, so pushes to
+#   dev/main skipped `npm run verify` with NO error — real failures surfaced
+#   only at (slow, post-build) DEPLOY time instead of at PUSH time.
+#
+#   So we install BOTH:
+#     1. core.hooksPath = .githooks         — primary (versioned hook).
+#     2. a delegating pre-push SHIM in the   — drift-proof backstop. Git runs
+#        DEFAULT shared hooks dir              the default hooks dir whenever
+#        ($GIT_COMMON_DIR/hooks)               core.hooksPath is unset OR points
+#                                              at the default, i.e. the exact
+#                                              drift state. The shim re-execs the
+#                                              versioned .githooks/pre-push.
+#
+#   Git only ever runs ONE pre-push — from whichever dir core.hooksPath
+#   resolves to — so the two paths never double-run: either .githooks/pre-push
+#   runs directly, or the backstop shim runs and execs it. The shim is in the
+#   shared (common) hooks dir, which survives `git worktree add/remove`.
+#
+# A LOUD self-assert closes the silent-skip hole: --check exits non-zero (with a
+# banner) if NEITHER path would fire, and the shim itself fails the push loudly
+# if it cannot locate .githooks/pre-push (rather than silently allowing it).
+#
+# Idempotent: re-running just re-asserts the config, re-marks the hooks
+# executable, and re-writes the shim only if its content changed.
 #
 # Usage:
-#   scripts/install-git-hooks.sh          # set core.hooksPath = .githooks
+#   scripts/install-git-hooks.sh          # install primary + backstop shim
 #   scripts/install-git-hooks.sh --check  # report current state, change nothing
-#   scripts/install-git-hooks.sh --uninstall  # unset core.hooksPath
+#   scripts/install-git-hooks.sh --uninstall  # unset core.hooksPath + remove shim
 #
 set -euo pipefail
 
@@ -23,12 +47,16 @@ cd "$REPO_ROOT"
 HOOKS_DIR=".githooks"
 ACTION="install"
 
+# Marker line that identifies a shim WE wrote (so --uninstall / re-install never
+# clobbers a hand-written .git/hooks/pre-push that isn't ours).
+SHIM_MARKER="# sitelayer-githooks-backstop-shim v1"
+
 for arg in "$@"; do
   case "$arg" in
     --check) ACTION="check" ;;
     --uninstall) ACTION="uninstall" ;;
     -h | --help)
-      sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,49p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -39,37 +67,165 @@ for arg in "$@"; do
   esac
 done
 
+# Resolve the DEFAULT shared hooks dir (where git looks when core.hooksPath is
+# unset). This is always $GIT_COMMON_DIR/hooks, shared across all worktrees —
+# NOT a per-worktree path, and NOT affected by core.hooksPath. We avoid
+# `rev-parse --git-path hooks` here because that honors a set core.hooksPath
+# (and `-c core.hooksPath=` resolves to the repo root, not the default).
+default_hooks_dir() {
+  local common
+  common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  # --git-common-dir is relative (".git") from the main checkout but absolute
+  # from a linked worktree. Normalize to an absolute path so the shim lands in
+  # the same shared dir no matter which worktree we install from.
+  case "$common" in
+    /*) : ;;
+    *) common="$(cd "$common" && pwd)" ;;
+  esac
+  printf '%s/hooks\n' "$common"
+}
+
+# Is the file at $1 a backstop shim that WE wrote? (matches our marker)
+is_our_shim() {
+  [ -f "$1" ] && grep -qF "$SHIM_MARKER" "$1" 2>/dev/null
+}
+
+# Emit the shim script body to stdout. Kept tiny and dependency-free: it locates
+# the versioned hook relative to the worktree being pushed and re-execs it. It
+# FAILS LOUD (exit 1) if the versioned hook is missing, instead of letting an
+# ungated push through.
+shim_body() {
+  cat <<SHIM
+#!/usr/bin/env bash
+$SHIM_MARKER
+#
+# Auto-generated by scripts/install-git-hooks.sh — do not edit by hand.
+# Drift-proof backstop: git ran the DEFAULT hooks dir, which means
+# core.hooksPath is unset or pointed back at the default (drift). Re-exec the
+# versioned .githooks/pre-push so the verification gate still fires.
+set -euo pipefail
+
+echo "==> pre-push: core.hooksPath is at its DEFAULT (drift) — firing the versioned gate via the backstop shim." >&2
+echo "    (run 'scripts/install-git-hooks.sh' to re-assert core.hooksPath=.githooks and silence this notice)" >&2
+
+top="\$(git rev-parse --show-toplevel 2>/dev/null || true)"
+versioned="\$top/$HOOKS_DIR/pre-push"
+
+if [ -z "\$top" ] || [ ! -f "\$versioned" ]; then
+  echo "############################################################" >&2
+  echo "## ERROR: pre-push backstop shim could not find the versioned" >&2
+  echo "##        hook at '$HOOKS_DIR/pre-push'. Refusing to push an" >&2
+  echo "##        UNGATED SHA. Run scripts/install-git-hooks.sh, or" >&2
+  echo "##        'git push --no-verify' to override deliberately." >&2
+  echo "############################################################" >&2
+  exit 1
+fi
+
+exec bash "\$versioned" "\$@"
+SHIM
+}
+
+DEFAULT_HOOKS="$(default_hooks_dir)"
+SHIM_PATH="${DEFAULT_HOOKS}/pre-push"
 current="$(git config --local --get core.hooksPath 2>/dev/null || true)"
 
+# A push is gated if EITHER:
+#   (a) core.hooksPath = .githooks (primary fires the versioned hook), OR
+#   (b) core.hooksPath is unset/default AND our backstop shim is installed.
+hooks_path_primary=0
+[ "$current" = "$HOOKS_DIR" ] && hooks_path_primary=1
+
+backstop_installed=0
+is_our_shim "$SHIM_PATH" && backstop_installed=1
+
+# core.hooksPath is "at the default" when it is unset/empty, or resolves to the
+# default hooks dir ($GIT_COMMON_DIR/hooks). Resolve the configured value to an
+# absolute dir so a relative ".git/hooks", an absolute one, and unset all map to
+# the same answer — anything else (a genuinely custom dir) is NOT default.
+resolve_hooks_dir() {
+  # $1 = a core.hooksPath value (possibly relative to the worktree top)
+  local v="$1" abs
+  case "$v" in
+    /*) printf '%s\n' "$v" ;;
+    *)
+      # Relative values resolve against the worktree top, which for the default
+      # case is the worktree's link to $GIT_COMMON_DIR/hooks.
+      abs="$(cd "$REPO_ROOT" && cd "$v" 2>/dev/null && pwd || true)"
+      printf '%s\n' "${abs:-$v}"
+      ;;
+  esac
+}
+hooks_path_is_default=0
+if [ -z "$current" ]; then
+  hooks_path_is_default=1
+elif [ "$(resolve_hooks_dir "$current")" = "$DEFAULT_HOOKS" ]; then
+  hooks_path_is_default=1
+fi
+
 if [ "$ACTION" = "check" ]; then
-  if [ "$current" = "$HOOKS_DIR" ]; then
-    echo "git hooks: INSTALLED (core.hooksPath = $current)"
+  echo "git pre-push gate state:"
+  echo "  core.hooksPath        = '${current:-<unset>}' (expected: $HOOKS_DIR)"
+  echo "  default hooks dir     = $DEFAULT_HOOKS"
+  echo "  backstop shim present = $([ "$backstop_installed" = 1 ] && echo yes || echo no) ($SHIM_PATH)"
+
+  # The gate fires if the primary is set, OR if hooksPath is at the default and
+  # the backstop shim is in place to catch it.
+  if [ "$hooks_path_primary" = "1" ]; then
+    if [ "$backstop_installed" = "1" ]; then
+      echo "git pre-push gate: INSTALLED (primary core.hooksPath + drift backstop)."
+    else
+      echo "git pre-push gate: INSTALLED via core.hooksPath (NO drift backstop)."
+      echo "  run: scripts/install-git-hooks.sh   # to add the drift-proof backstop"
+    fi
     exit 0
   fi
-  echo "git hooks: NOT installed (core.hooksPath = '${current:-<unset>}', expected $HOOKS_DIR)"
-  echo "  run: scripts/install-git-hooks.sh"
+
+  if [ "$hooks_path_is_default" = "1" ] && [ "$backstop_installed" = "1" ]; then
+    echo "git pre-push gate: INSTALLED via drift backstop (core.hooksPath has drifted to default)."
+    echo "  the gate still fires; run scripts/install-git-hooks.sh to re-assert the primary."
+    exit 0
+  fi
+
+  echo "############################################################" >&2
+  echo "## git pre-push gate: NOT firing — pushes to dev/main would" >&2
+  echo "## SKIP the verification gate. Run: scripts/install-git-hooks.sh" >&2
+  echo "############################################################" >&2
   exit 1
 fi
 
 if [ "$ACTION" = "uninstall" ]; then
   if [ -n "$current" ]; then
     git config --local --unset core.hooksPath || true
-    echo "==> Unset core.hooksPath (was '$current'). Repo git hooks are now disabled."
+    echo "==> Unset core.hooksPath (was '$current')."
   else
-    echo "==> core.hooksPath was not set; nothing to do."
+    echo "==> core.hooksPath was not set; nothing to unset."
   fi
+  if is_our_shim "$SHIM_PATH"; then
+    rm -f "$SHIM_PATH"
+    echo "==> Removed drift backstop shim ($SHIM_PATH)."
+  elif [ -e "$SHIM_PATH" ]; then
+    echo "==> Left $SHIM_PATH in place (not our backstop shim; refusing to delete)."
+  fi
+  echo "Repo git pre-push gate is now disabled."
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
 # install
+# ---------------------------------------------------------------------------
 if [ ! -d "$HOOKS_DIR" ]; then
   echo "ERROR: $HOOKS_DIR/ not found at repo root ($REPO_ROOT)." >&2
   exit 1
 fi
+if [ ! -f "$HOOKS_DIR/pre-push" ]; then
+  echo "ERROR: $HOOKS_DIR/pre-push not found — nothing to install." >&2
+  exit 1
+fi
 
-# Make every tracked hook executable (idempotent).
+# 1. Make every tracked hook executable (idempotent).
 find "$HOOKS_DIR" -maxdepth 1 -type f -exec chmod +x {} +
 
+# 2. Primary: point core.hooksPath at the versioned dir.
 if [ "$current" = "$HOOKS_DIR" ]; then
   echo "==> core.hooksPath already = $HOOKS_DIR (idempotent no-op)."
 else
@@ -77,13 +233,37 @@ else
   echo "==> Set core.hooksPath = $HOOKS_DIR (was '${current:-<unset>}')."
 fi
 
+# 3. Drift-proof backstop: install / refresh the delegating shim in the DEFAULT
+#    shared hooks dir so the gate still fires if core.hooksPath ever resets.
+if [ -z "$DEFAULT_HOOKS" ]; then
+  echo "WARN: could not resolve the default hooks dir; skipping drift backstop." >&2
+else
+  mkdir -p "$DEFAULT_HOOKS"
+  if [ -e "$SHIM_PATH" ] && ! is_our_shim "$SHIM_PATH"; then
+    echo "WARN: $SHIM_PATH exists and is NOT our backstop shim — leaving it untouched." >&2
+    echo "      (core.hooksPath=$HOOKS_DIR is the active gate; remove that file to enable the backstop.)" >&2
+  else
+    desired="$(shim_body)"
+    if is_our_shim "$SHIM_PATH" && [ "$(cat "$SHIM_PATH")" = "$desired" ]; then
+      echo "==> drift backstop shim already current ($SHIM_PATH)."
+    else
+      printf '%s\n' "$desired" >"$SHIM_PATH"
+      chmod +x "$SHIM_PATH"
+      echo "==> Installed drift backstop shim ($SHIM_PATH)."
+    fi
+  fi
+fi
+
 echo
 echo "Installed git hooks (versioned in $HOOKS_DIR/):"
 find "$HOOKS_DIR" -maxdepth 1 -type f -printf '  %f\n' | sort
 echo
-cat <<'EOF'
-The pre-push hook now runs the STANDARD verification gate (npm run verify) when
-you push to 'dev' or 'main', and blocks the push on failure.
+cat <<EOF
+The pre-push hook runs the STANDARD verification gate (npm run verify) when you
+push to 'dev' or 'main', and blocks the push on failure. It now fires via TWO
+paths so a reset core.hooksPath can no longer silently disable it:
+  - primary:  core.hooksPath = $HOOKS_DIR
+  - backstop: $SHIM_PATH (fires if core.hooksPath drifts to default)
 
   Bypass (emergency only): git push --no-verify
   Check state:             scripts/install-git-hooks.sh --check
