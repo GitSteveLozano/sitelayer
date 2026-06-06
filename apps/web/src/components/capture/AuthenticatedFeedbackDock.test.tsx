@@ -27,6 +27,26 @@ const captureApi = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/capture-sessions', () => captureApi)
 
+// P0 — identity-driven visibility. The dock reads the caller's PLATFORM
+// app_issue.* capabilities off /api/session via this hook; the tests drive it
+// directly so we can assert capability-gated visibility without a live API.
+const appIssuesApi = vi.hoisted(() => ({
+  capabilities: [] as string[],
+  useAppIssueCapabilities: vi.fn(),
+}))
+
+vi.mock('@/lib/api/app-issues', () => ({
+  useAppIssueCapabilities: appIssuesApi.useAppIssueCapabilities,
+}))
+
+// P1 — sticky receipt "Copy agent bundle" fetches the support packet's agent
+// prompt; mocked so the action is exercised without a network call.
+const supportPacketsApi = vi.hoisted(() => ({
+  fetchSupportPacket: vi.fn(),
+}))
+
+vi.mock('@/lib/api/support-packets', () => supportPacketsApi)
+
 const rrweb = vi.hoisted(() => ({
   record: vi.fn(),
 }))
@@ -83,8 +103,18 @@ describe('AuthenticatedFeedbackDock', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
+    vi.unstubAllEnvs()
     __resetCaptureArtifactProvidersForTests()
     __resetCaptureStateProvidersForTests()
+    // Default: no platform app_issue capability. Tests that exercise visibility
+    // set `appIssuesApi.capabilities` before render. The hook is a thin query
+    // shim, so returning `{ data }` is enough for the dock's consumption.
+    appIssuesApi.capabilities = []
+    appIssuesApi.useAppIssueCapabilities.mockImplementation(() => ({ data: appIssuesApi.capabilities }))
+    supportPacketsApi.fetchSupportPacket.mockResolvedValue({
+      support_packet: { id: 'support-1' },
+      agent_prompt: 'AGENT PROMPT for support-1',
+    })
     window.history.pushState(null, '', '/projects/p1')
     window.sessionStorage.clear()
     window.localStorage.removeItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY)
@@ -174,6 +204,9 @@ describe('AuthenticatedFeedbackDock', () => {
   })
 
   it('records authenticated audio feedback and finalizes it into triage', async () => {
+    // Default level is now 'note' (P1); dial up to 'audio' so the Start action
+    // is offered (the level persists via localStorage, mirroring a user choice).
+    window.localStorage.setItem(CAPTURE_LEVEL_STORAGE_KEY, 'audio')
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
 
@@ -428,11 +461,14 @@ describe('AuthenticatedFeedbackDock', () => {
   })
 
   it('adds DOM replay only when authenticated replay is explicitly enabled', async () => {
+    // Dial up to 'audio' (P1 default is 'note') so Start is offered; audio rung
+    // includes the DOM replay below it.
+    window.localStorage.setItem(CAPTURE_LEVEL_STORAGE_KEY, 'audio')
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1&capture_replay=1')
     render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
 
     fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
-    fireEvent.click(screen.getByRole('button', { name: /start/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^start$/i }))
 
     await waitFor(() => expect(captureApi.createCaptureSession).toHaveBeenCalledTimes(1))
     const startPayload = captureApi.createCaptureSession.mock.calls[0]?.[0] as {
@@ -488,6 +524,9 @@ describe('AuthenticatedFeedbackDock', () => {
   })
 
   it('records optional screen video through the browser screen picker', async () => {
+    // Dial up to 'screen' (P1 default is 'note') so the Record screen action is
+    // offered. The level clamps to device caps, which include video here.
+    window.localStorage.setItem(CAPTURE_LEVEL_STORAGE_KEY, 'screen')
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1&capture_audio=0')
     FakeMediaRecorder.supported = new Set(['video/webm'])
     const getUserMedia = vi.fn()
@@ -694,6 +733,8 @@ describe('AuthenticatedFeedbackDock', () => {
   })
 
   it('uploads registered extra artifacts before finalizing', async () => {
+    // Dial up to 'audio' (P1 default is 'note') so the Start action is offered.
+    window.localStorage.setItem(CAPTURE_LEVEL_STORAGE_KEY, 'audio')
     window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
     const provider = vi.fn(async () => ({ artifact: { id: 'canvas-1', kind: 'canvas_geometry' } }))
     registerCaptureArtifactProvider('takeoff:test', provider)
@@ -755,5 +796,110 @@ describe('AuthenticatedFeedbackDock', () => {
     expect(provider.mock.invocationCallOrder[0]!).toBeLessThan(
       captureApi.finalizeCaptureSession.mock.invocationCallOrder[0]!,
     )
+  })
+
+  // P0 — IDENTITY-DRIVEN VISIBILITY. In prod the dock is shown iff the signed-in
+  // user holds `app_issue.capture`; the URL/env/localStorage flag is a non-prod
+  // dev override only. The predicate reads app_issue.capture, NEVER field_request.
+  describe('identity-driven visibility', () => {
+    it('PROD: hidden for a user WITHOUT app_issue.capture even with the legacy flag set', () => {
+      vi.stubEnv('MODE', 'production')
+      window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
+      window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
+      appIssuesApi.capabilities = ['app_issue.view'] // a non-capture cap must not show the dock
+      render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+      expect(screen.queryByRole('button', { name: /report issue|record feedback/i })).toBeNull()
+    })
+
+    it('PROD: shown for a user WHO HOLDS app_issue.capture (no flag needed)', () => {
+      vi.stubEnv('MODE', 'production')
+      appIssuesApi.capabilities = ['app_issue.capture']
+      render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+      expect(screen.getByRole('button', { name: /record feedback/i })).toBeTruthy()
+    })
+
+    it('does NOT key off any field_request capability', () => {
+      vi.stubEnv('MODE', 'production')
+      appIssuesApi.capabilities = ['field_request.create', 'field_request.view', 'field_request.triage']
+      render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+      expect(screen.queryByRole('button', { name: /report issue|record feedback/i })).toBeNull()
+    })
+
+    it('NON-PROD: still forced on by the legacy flag without any capability', () => {
+      // MODE defaults to 'test' under vitest → non-prod → the dev override applies.
+      window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
+      appIssuesApi.capabilities = []
+      render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+      expect(screen.getByRole('button', { name: /record feedback/i })).toBeTruthy()
+    })
+  })
+
+  // P1 — DEFAULT CAPTURE LEVEL = 'note'. The 2-tap text floor must not imply a
+  // recording/permission step, so the capture level defaults to 'note'.
+  it('defaults the capture level to "note" so the text floor has no permission step', () => {
+    window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    const select = screen.getByLabelText('Recording level') as HTMLSelectElement
+    expect(select.value).toBe('note')
+    // The audio "Start" / "Record screen" actions are not offered at the floor.
+    expect(screen.queryByRole('button', { name: /^start$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /record screen/i })).toBeNull()
+    // Text + repro (no-prompt) paths are always present.
+    expect(screen.getByRole('button', { name: /send issue/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /reproduce a bug/i })).toBeTruthy()
+  })
+
+  // P1 — PERSISTENT RECEIPT + actions. After sending, a sticky card keeps the
+  // ids, offers "View issue" + "Copy agent bundle", and does NOT auto-dismiss.
+  it('shows a sticky receipt with View issue + Copy agent bundle after a text issue', async () => {
+    window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, '1')
+    window.history.pushState(null, '', '/projects/p1?capture_feedback=1')
+    const clipboard = { writeText: vi.fn(async () => undefined) }
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard })
+    supportPacketsApi.fetchSupportPacket.mockResolvedValue({
+      support_packet: { id: 'support-9' },
+      agent_prompt: 'AGENT PROMPT for support-9',
+    })
+    captureApi.finalizeCaptureSession.mockResolvedValueOnce({
+      work_item: {
+        id: 'work-item-9',
+        title: 'In-app issue report',
+        summary: 'x',
+        status: 'new',
+        lane: 'triage',
+        severity: 'normal',
+        route: '/projects/p1',
+        capture_session_id: 'capture-session-9',
+      },
+      support_packet: { id: 'support-9', expires_at: null },
+      event: null,
+    })
+    render(<AuthenticatedFeedbackDock companySlug="la-operations" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /record feedback/i }))
+    fireEvent.change(screen.getByPlaceholderText('What happened?'), {
+      target: { value: 'The estimate total is wrong.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /send issue/i }))
+
+    await waitFor(() => expect(captureApi.finalizeCaptureSession).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText('Issue sent')).toBeTruthy())
+    expect(screen.getByText(/support packet support-9 · work item work-item-9/i)).toBeTruthy()
+
+    // "View issue" points at the internal /issues board entry for the work item.
+    const viewIssue = screen.getByRole('link', { name: /view issue/i }) as HTMLAnchorElement
+    expect(viewIssue.getAttribute('href')).toBe('/issues/work-item-9')
+
+    // "Copy agent bundle" fetches the support packet's agent_prompt + copies it.
+    fireEvent.click(screen.getByRole('button', { name: /copy agent bundle/i }))
+    await waitFor(() => expect(supportPacketsApi.fetchSupportPacket).toHaveBeenCalledWith('support-9'))
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith('AGENT PROMPT for support-9'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /copied/i })).toBeTruthy())
   })
 })

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bug, CheckCircle, Flag, Mic, ScreenShare, Square, Timer, X } from 'lucide-react'
+import { Bug, CheckCircle, ClipboardCopy, ExternalLink, Flag, Mic, ScreenShare, Square, Timer, X } from 'lucide-react'
 import { resolveCaptureCapabilities } from '@/lib/capture-capabilities'
+import { useAppIssueCapabilities } from '@/lib/api/app-issues'
+import { fetchSupportPacket } from '@/lib/api/support-packets'
 import {
   clearLocalCaptureSession,
   currentCaptureRoutePath,
@@ -77,6 +79,27 @@ type AuthenticatedFeedbackDockProps = {
 }
 
 const CONSENT_VERSION = 'authenticated-feedback-v1'
+
+/**
+ * The single PLATFORM capability that gates this dock. `app_issue.capture` ==
+ * "open the capture dock + record" (packages/domain/src/capabilities.ts). This
+ * is an app_issue.* (software-bug) capability — NOT a field_request.* one. The
+ * dock files software issues only; it never reads or routes field_request.
+ */
+const APP_ISSUE_CAPTURE_CAPABILITY = 'app_issue.capture'
+
+/**
+ * Non-prod build? Use the DIRECT `import.meta.env.MODE` form (not a cast) so
+ * Vite statically replaces it at build time and dead-code-eliminates the dev
+ * override from the production bundle — the same mechanism `App.tsx` uses to
+ * strip the dev RoleSwitcher (`import.meta.env.MODE !== 'production'`). This is
+ * what keeps the URL/env/localStorage feedback flags as a DEV-ONLY override: in
+ * prod the dock is shown iff the signed-in user holds `app_issue.capture`.
+ */
+function isNonProdBuild(): boolean {
+  return import.meta.env.MODE !== 'production'
+}
+
 function env(name: string): string {
   try {
     return String((import.meta as { env?: Record<string, string> }).env?.[name] || '').trim()
@@ -113,7 +136,15 @@ function isTruthyFlag(value: string | null | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
-function authenticatedFeedbackEnabled(): boolean {
+/**
+ * The legacy URL/env/localStorage flag, kept ONLY as a NON-PROD dev override so
+ * `/collab/steve` and local dev can still force the dock on. In prod this
+ * always returns false (the `isNonProdBuild()` guard means Vite strips the flag
+ * reads from the production bundle), so prod visibility is driven purely by the
+ * signed-in user's `app_issue.capture` capability.
+ */
+function devFeedbackOverrideEnabled(): boolean {
+  if (!isNonProdBuild()) return false
   const fromUrl = flagFromUrl('capture_feedback', 'captureFeedback', 'record_feedback')
   if (fromUrl !== null) return isTruthyFlag(fromUrl)
   if (isTruthyFlag(env('VITE_AUTH_CAPTURE_FEEDBACK')) || isTruthyFlag(env('VITE_CAPTURE_FEEDBACK'))) return true
@@ -202,7 +233,21 @@ function receiptFromFinalize(finalize: CaptureFinalizeResponse, marks?: ReproMar
 }
 
 export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedbackDockProps) {
-  const enabled = authenticatedFeedbackEnabled()
+  // P0 — IDENTITY-DRIVEN VISIBILITY. The dock is shown iff the signed-in user
+  // can actually file a software bug, i.e. holds the PLATFORM capability
+  // `app_issue.capture` (off /api/session's app_issue_capabilities). The legacy
+  // URL/env/localStorage flag survives ONLY as a non-prod dev override so
+  // /collab/steve + local dev still force it on. Net in prod: a designated
+  // reviewer (platform_admin_grants / non-prod relaxation) sees the pill; a
+  // normal crew user does not — and because the button only shows to users who
+  // can finalize, the old "button shows but submit 403s" cliff is gone.
+  //
+  // VISIBILITY PREDICATE: devFeedbackOverrideEnabled() || holds app_issue.capture
+  // (reads app_issue.capture, NEVER any field_request.* capability).
+  const devOverride = devFeedbackOverrideEnabled()
+  const appIssueCaps = useAppIssueCapabilities()
+  const hasAppIssueCapture = (appIssueCaps.data ?? []).includes(APP_ISSUE_CAPTURE_CAPABILITY)
+  const enabled = devOverride || hasAppIssueCapture
   const replayEnabled = captureReplayEnabled()
   const audioEnabled = captureAudioEnabled()
   const capabilities = resolveCaptureCapabilities()
@@ -223,17 +268,23 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   const [reproElapsedMs, setReproElapsedMs] = useState(0)
   const [reproMarkCount, setReproMarkCount] = useState(0)
   const [markLabel, setMarkLabel] = useState('')
-  // Progressive opt-in recording level. Seeded to the highest tier this device
-  // supports (so the dock offers everything it can today, no regression), then
-  // dialable up/down by the user and persisted. It gates the reproduction
-  // replay and the visibility of the audio/screen escalations.
-  const seedLevel: CaptureLevel = capabilities.video
-    ? 'screen'
-    : capabilities.audio
-      ? 'audio'
-      : capabilities.dom_replay
-        ? 'replay'
-        : 'note'
+  // P1 — TWO-FIELD REPRO NOTES: the START note the user typed before pressing
+  // "Reproduce a bug". The textarea is reused for the END-condition note while
+  // recording, so we keep the start note here to show it as read-only context
+  // above the end field (the user never loses what they typed).
+  const [reproStartNote, setReproStartNote] = useState('')
+  // P1 — STICKY RECEIPT: "Copy agent bundle" fetch/copy status. idle → copying →
+  // copied | error, so the receipt card can show progress without dismissing.
+  const [bundleCopyState, setBundleCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
+  // P2 — PRE-ARM PERMISSION COPY: a one-line hint shown right before the browser
+  // mic/screen prompt fires, plus a denial fallback offering text/repro instead.
+  const [permissionHint, setPermissionHint] = useState<string | null>(null)
+  const [permissionDenied, setPermissionDenied] = useState<'audio' | 'screen' | null>(null)
+  // P1 — DEFAULT CAPTURE LEVEL = 'note'. Seed the floor ('note': typed note +
+  // auto state snapshot, ZERO permission prompt) so the 2-tap path (pill → type
+  // → Send issue) never implies a recording/permission step. offerableLevels
+  // still exposes every rung this device supports, and the user can dial up.
+  const seedLevel: CaptureLevel = 'note'
   const [level, setLevelState] = useState<CaptureLevel>(() =>
     resolveCaptureLevel(capabilities, { fallback: seedLevel }),
   )
@@ -348,6 +399,29 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
 
   if (!enabled || !companySlug) return null
 
+  // P1 — STICKY RECEIPT actions.
+  // The receipt card persists (no auto-dismiss) until the user closes it.
+  function dismissReceipt() {
+    setReceipt(null)
+    setBundleCopyState('idle')
+    setState('idle')
+  }
+
+  // "Copy agent bundle": fetch the finalized support packet and copy its
+  // ready-to-paste `agent_prompt` to the clipboard. Reads from the app_issue
+  // support-packet surface only; never touches field_request.
+  async function copyAgentBundle(supportPacketId: string) {
+    if (!supportPacketId) return
+    setBundleCopyState('copying')
+    try {
+      const detail = await fetchSupportPacket(supportPacketId)
+      await navigator.clipboard.writeText(detail.agent_prompt)
+      setBundleCopyState('copied')
+    } catch {
+      setBundleCopyState('error')
+    }
+  }
+
   async function sendTextIssue() {
     const trimmedNote = note.trim()
     if (!trimmedNote) {
@@ -358,6 +432,8 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     setState('stopping')
     setError(null)
     setReceipt(null)
+    setPermissionHint(null)
+    setPermissionDenied(null)
     const active = getActiveCaptureSession()
     const local =
       active?.mode === 'feedback'
@@ -414,11 +490,13 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       clearLocalCaptureSession()
       if (prewarmedTextIssueSessionIdRef.current === local.id) prewarmedTextIssueSessionIdRef.current = null
       setReceipt(receiptFromFinalize(finalize))
+      setBundleCopyState('idle')
       setNote('')
       setRecordingKind(null)
       setOpen(false)
+      // P1 — STICKY RECEIPT: no auto-reset timer. The receipt card stays until
+      // the user closes it (View issue / Copy agent bundle / Done).
       setState('sent')
-      window.setTimeout(() => setState('idle'), 6000)
     } catch (err) {
       setState('error')
       setError(captureErrorMessage(err, 'Issue could not be sent.'))
@@ -428,11 +506,15 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startRecording() {
     setError(null)
     setReceipt(null)
+    setPermissionDenied(null)
     if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
       return
     }
+    // P2 — PRE-ARM PERMISSION COPY: warn before getUserMedia fires the prompt,
+    // but only when audio is actually requested (otherwise no prompt appears).
+    setPermissionHint(audioEnabled ? 'Your browser will now ask to share your microphone.' : null)
     const local = startLocalCaptureSession({
       mode: 'feedback',
       consent_version: CONSENT_VERSION,
@@ -471,11 +553,16 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         }),
       })
       await appendFeedbackEvent(local.id, 'authenticated.feedback.recording_started').catch(() => undefined)
+      setPermissionHint(null)
       setState('recording')
       setOpen(true)
     } catch (err) {
       clearLocalCaptureSession()
       setRecordingKind(null)
+      setPermissionHint(null)
+      // P2 — denial fallback: keep the error but offer the no-prompt paths
+      // (Send issue / Reproduce a bug) so a declined mic isn't a dead end.
+      if (audioEnabled) setPermissionDenied('audio')
       setState('error')
       setError(captureErrorMessage(err, 'Recording could not start.'))
     }
@@ -484,16 +571,23 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startScreenRecording() {
     setError(null)
     setReceipt(null)
+    setPermissionDenied(null)
     if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
       return
     }
 
+    // P2 — PRE-ARM PERMISSION COPY: warn before getDisplayMedia fires the
+    // screen-picker prompt.
+    setPermissionHint('Your browser will now ask to share your screen.')
     const recorder = new ScreenCaptureRecorder()
     try {
       await recorder.start()
+      setPermissionHint(null)
     } catch (err) {
+      setPermissionHint(null)
+      setPermissionDenied('screen')
       setState('error')
       setError(captureErrorMessage(err, 'Screen recording could not start.'))
       return
@@ -541,6 +635,10 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   async function startRepro() {
     setError(null)
     setReceipt(null)
+    // Reproduction records DOM replay only — no browser permission prompt — so
+    // clear any pre-arm/denial hint when the user takes this fallback path.
+    setPermissionHint(null)
+    setPermissionDenied(null)
     if (state === 'recording') {
       setState('error')
       setError('Recording is already active.')
@@ -573,6 +671,9 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         ...(startNote ? { startNote } : {}),
         ...(buildSha ? { appBuildSha: buildSha } : {}),
       })
+      // Preserve the start condition for the read-only context shown above the
+      // end-condition textarea, then clear the live note for the end field.
+      setReproStartNote(startNote)
       setNote('')
       setState('recording')
       setOpen(true)
@@ -608,12 +709,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
       const result = await controller.end({ ...(endNote ? { endNote } : {}) })
       reproRef.current = null
       setReceipt(receiptFromFinalize(result.finalize, result.marks))
+      setBundleCopyState('idle')
       clearLocalCaptureSession()
       setNote('')
+      setReproStartNote('')
       setRecordingKind(null)
       setOpen(false)
+      // P1 — STICKY RECEIPT: no auto-reset timer; user closes the card.
       setState('sent')
-      window.setTimeout(() => setState('idle'), 5000)
     } catch (err) {
       setState('error')
       setError(captureErrorMessage(err, 'Reproduction could not be sent.'))
@@ -630,6 +733,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     reproRef.current = null
     clearLocalCaptureSession()
     setNote('')
+    setReproStartNote('')
     setRecordingKind(null)
     setReproMarkCount(0)
     setReproElapsedMs(0)
@@ -686,13 +790,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         ],
       })
       setReceipt(receiptFromFinalize(result.finalize))
+      setBundleCopyState('idle')
       clearLocalCaptureSession()
       controllerRef.current = null
       setNote('')
       setRecordingKind(null)
       setOpen(false)
+      // P1 — STICKY RECEIPT: no auto-reset timer; user closes the card.
       setState('sent')
-      window.setTimeout(() => setState('idle'), 4000)
     } catch (err) {
       if (err instanceof FeedbackCaptureQueuedError) {
         clearLocalCaptureSession()
@@ -797,13 +902,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         category: 'record_feedback',
       })
       setReceipt(receiptFromFinalize(finalize))
+      setBundleCopyState('idle')
       clearLocalCaptureSession()
       screenRecorderRef.current = null
       setNote('')
       setRecordingKind(null)
       setOpen(false)
+      // P1 — STICKY RECEIPT: no auto-reset timer; user closes the card.
       setState('sent')
-      window.setTimeout(() => setState('idle'), 4000)
     } catch (err) {
       setState('error')
       setError(captureErrorMessage(err, 'Screen recording could not be sent.'))
@@ -863,15 +969,38 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
 
   if (state === 'sent') {
     const markCount = receipt?.marks?.length ?? 0
+    // P1 — PERSISTENT RECEIPT + actions. The card keeps the support packet +
+    // work item ids and does NOT auto-dismiss; the user closes it with "Done".
+    // "View issue" opens the internal /issues board entry (app_issue.view) for
+    // the minted work item; "Copy agent bundle" fetches the support packet and
+    // copies its ready-to-paste agent_prompt.
     return (
-      <div style={dockStackStyle}>
-        <div style={{ ...dockPositionStyle, ...pillStyle, color: 'var(--m-green)', cursor: 'default' }}>
-          <CheckCircle size={16} aria-hidden />
-          {receipt
-            ? `Sent · packet ${receipt.supportPacketId} · work ${receipt.workItemId}` +
-              (markCount ? ` · ${markCount} mark${markCount === 1 ? '' : 's'}` : '')
-            : 'Feedback sent'}
+      <div style={narrow ? mobilePanelStyle : panelStyle}>
+        <div style={panelHeaderStyle}>
+          <div
+            style={{
+              ...panelTitleStyle,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              color: 'var(--m-green)',
+            }}
+          >
+            <CheckCircle size={16} aria-hidden />
+            Issue sent
+          </div>
+          <button type="button" aria-label="Dismiss receipt" style={iconButtonStyle} onClick={dismissReceipt}>
+            <X size={15} aria-hidden />
+          </button>
         </div>
+        {receipt ? (
+          <div style={mutedStyle}>
+            Support packet {receipt.supportPacketId} · work item {receipt.workItemId}
+            {markCount ? ` · ${markCount} mark${markCount === 1 ? '' : 's'}` : ''}
+          </div>
+        ) : (
+          <div style={mutedStyle}>Feedback sent.</div>
+        )}
         {markCount ? (
           <div style={receiptMarksStyle}>
             {receipt!.marks!.map((mark, index) => (
@@ -880,6 +1009,35 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
                 <span style={receiptMarkLabelStyle}>{mark.label}</span>
               </div>
             ))}
+          </div>
+        ) : null}
+        {receipt ? (
+          <div style={actionsStyle}>
+            <a
+              href={`/issues/${encodeURIComponent(receipt.workItemId)}`}
+              style={{ ...secondaryButtonStyle, textDecoration: 'none' }}
+            >
+              <ExternalLink size={14} aria-hidden />
+              View issue
+            </a>
+            <button
+              type="button"
+              style={secondaryButtonStyle}
+              onClick={() => void copyAgentBundle(receipt.supportPacketId)}
+              disabled={bundleCopyState === 'copying'}
+            >
+              <ClipboardCopy size={14} aria-hidden />
+              {bundleCopyState === 'copying'
+                ? 'Copying…'
+                : bundleCopyState === 'copied'
+                  ? 'Copied'
+                  : bundleCopyState === 'error'
+                    ? 'Copy failed'
+                    : 'Copy agent bundle'}
+            </button>
+            <button type="button" style={primaryButtonStyle} onClick={dismissReceipt}>
+              Done
+            </button>
           </div>
         ) : null}
       </div>
@@ -934,6 +1092,14 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
             style={textareaStyle}
           />
           {error ? <div style={inlineErrorStyle}>{error}</div> : null}
+          {/* P2 — denial fallback: when a mic/screen grant was declined, point
+              the user at the no-prompt paths instead of leaving a dead end. */}
+          {permissionDenied ? (
+            <div style={mutedStyle}>
+              No {permissionDenied === 'audio' ? 'microphone' : 'screen'} access — you can still “Send issue” or
+              “Reproduce a bug” (no permission needed).
+            </div>
+          ) : null}
           <div style={actionsStyle}>
             <button type="button" style={secondaryButtonStyle} onClick={() => setOpen(false)}>
               Cancel
@@ -942,18 +1108,29 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
               Send issue
             </button>
             {levelStreams.audio ? (
-              <button type="button" style={secondaryButtonStyle} onClick={startRecording} disabled={!audioSupported}>
+              <button
+                type="button"
+                // P2 — when the chosen level opts into audio, highlight Start so
+                // the separate click + grant isn't misread as "already recording".
+                style={primaryButtonStyle}
+                onClick={startRecording}
+                disabled={!audioSupported}
+              >
                 <Mic size={14} aria-hidden />
                 {audioEnabled ? 'Start' : 'Record page'}
               </button>
             ) : null}
             {screenSupported && levelStreams.screen ? (
-              <button type="button" style={secondaryButtonStyle} onClick={startScreenRecording}>
+              <button type="button" style={primaryButtonStyle} onClick={startScreenRecording}>
                 <ScreenShare size={14} aria-hidden />
                 Record screen
               </button>
             ) : null}
-            <button type="button" style={primaryButtonStyle} onClick={startRepro}>
+            <button
+              type="button"
+              style={levelStreams.audio || levelStreams.screen ? secondaryButtonStyle : primaryButtonStyle}
+              onClick={startRepro}
+            >
               <Bug size={14} aria-hidden />
               Reproduce a bug
             </button>
@@ -981,7 +1158,19 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
               </label>
             ) : null}
           </div>
-          <div style={mutedStyle}>{CAPTURE_LEVEL_META[level].description}</div>
+          {/* P2 — DISAMBIGUATE LEVEL vs ACTION. Picking a level only OFFERS a
+              stream; it never starts a recording. Make the copy conditional so
+              audio/screen rungs read as "press Start/Record to begin", and the
+              floor ('note') just describes the auto-attached context. */}
+          <div style={mutedStyle}>
+            {levelStreams.screen
+              ? 'If you record, capture: screen video + your actions. Press “Record screen” to begin (your browser will ask first).'
+              : levelStreams.audio
+                ? 'If you record, capture: your voice + your actions. Press “Start” to begin (your browser will ask first).'
+                : CAPTURE_LEVEL_META[level].description}
+          </div>
+          {/* P2 — PRE-ARM PERMISSION COPY: shown while the browser prompt is up. */}
+          {permissionHint ? <div style={mutedStyle}>{permissionHint}</div> : null}
         </>
       ) : null}
 
@@ -996,12 +1185,23 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
               {levelStreams.domReplay ? ' · screen replay on' : ''}
             </span>
           </div>
+          {/* P1 — TWO-FIELD REPRO NOTES. The start note the user typed before
+              recording is shown read-only here, so the end-condition field below
+              is clearly a SECOND note (start + end) and the start text is never
+              lost when the same textarea is reused for the end condition. */}
+          {reproStartNote ? (
+            <div style={reproStartNoteStyle}>
+              <span style={reproStartNoteLabelStyle}>Start condition</span>
+              <span>{reproStartNote}</span>
+            </div>
+          ) : null}
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="What went wrong? (the end condition)"
+            placeholder={reproStartNote ? 'End condition — what went wrong?' : 'What went wrong? (the end condition)'}
             rows={2}
             style={textareaStyle}
+            aria-label="End condition"
           />
           <div style={markRowStyle}>
             <input
@@ -1231,6 +1431,27 @@ const reproStatusStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'space-between',
   gap: 8,
+}
+
+// P1 — read-only START-condition context shown above the end-condition field
+// during a reproduction, so both notes (start + end) stay visible.
+const reproStartNoteStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  padding: '6px 10px',
+  borderRadius: 8,
+  fontSize: 12,
+  color: 'var(--m-ink-2, #333)',
+  background: 'var(--m-card-soft, rgba(0,0,0,0.04))',
+  border: '1px solid var(--m-line, rgba(0,0,0,0.08))',
+}
+
+const reproStartNoteLabelStyle: React.CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.4,
+  color: 'var(--m-ink-3, #667085)',
 }
 
 const reproTimerStyle: React.CSSProperties = {
