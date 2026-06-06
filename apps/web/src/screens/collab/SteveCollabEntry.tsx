@@ -65,10 +65,13 @@ export function SteveCollabEntry() {
       window.localStorage.setItem(ACT_AS_STORAGE_KEY, roleToActAs(params.get('role')))
       window.localStorage.setItem(ACTIVE_COMPANY_STORAGE_KEY, params.get('company')?.trim() || DEFAULT_COMPANY_SLUG)
       window.localStorage.setItem(STEVE_COLLAB_MODE_STORAGE_KEY, STEVE_COLLAB_MODE_VALUE)
-      // Enable the authenticated capture dock for the collaborator out of the box.
-      // `authenticatedFeedbackEnabled()` reads this key via isTruthyFlag(), which
-      // accepts '1'/'true'/'yes'/'on' — we write 'true' to match the value the
-      // onboarding docs tell a collaborator to set by hand.
+      // P3 — DEMOTED SHIM. This is a NON-PROD testing convenience only (act-as +
+      // company fixtures). The capture dock no longer DEPENDS on this localStorage
+      // flag in prod: visibility is now identity-driven off `app_issue.capture`
+      // (see AuthenticatedFeedbackDock — `devFeedbackOverrideEnabled()` reads this
+      // key but is gated to non-prod, so in prod this write is inert). We still set
+      // it so local/dev/preview review sessions force the dock on without a
+      // platform grant; in prod a designated reviewer sees it via their capability.
       window.localStorage.setItem(AUTH_FEEDBACK_ENABLED_STORAGE_KEY, 'true')
       window.localStorage.setItem(AUTH_FEEDBACK_REPLAY_STORAGE_KEY, '1')
       window.localStorage.setItem(AUTH_FEEDBACK_AUDIO_STORAGE_KEY, audioFlag(params))
