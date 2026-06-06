@@ -3,14 +3,23 @@ import type { WorkflowNextEvent } from './index.js'
 import { registerWorkflow } from './registry.js'
 
 /**
- * Rental workflow — fourth deterministic workflow registration.
+ * Rental workflow — deterministic reducer for the rental lifecycle.
  *
- * Phase 1: register the reducer + types so the replay sweep timer
- * covers rentals. Routes (`apps/api/src/routes/rentals.ts`) are NOT
- * yet wired through this reducer — PATCH /api/rentals/:id continues
- * to set status directly, the worker's `processRentalInvoice` flow
- * continues to drive cadence-based transitions. Phase 2 (route
- * rewrite) lands in a follow-up PR.
+ * Phase 1 (LIVE): `apps/api/src/routes/rentals.ts` dispatches the human
+ * RETURN and CLOSE transitions through this reducer +
+ * `workflow_event_log` (via `applyRentalWorkflowTransition`). PATCH no
+ * longer sets `status` / `returned_on` directly — those are owned by the
+ * workflow surface (POST /return, /transfer).
+ *
+ * Phase 2 (LIVE): the worker cadence path. `apps/worker/src/runners/
+ * rental-invoice.ts` bills a due RETURNED rental and enqueues a
+ * `post_rental_invoice` mutation_outbox row; the dedicated pusher
+ * (`apps/worker/src/runners/rental-invoice-push.ts` →
+ * `processRentalInvoicePush`) runs the GATED QBO invoice push (real
+ * invoice when `QBO_LIVE_RENTAL_INVOICE=1` + the company flag, else a
+ * deterministic stub id) and dispatches the INVOICE_QUEUED →
+ * INVOICE_POSTED cadence transitions through THIS reducer. This mirrors
+ * rental_billing_run's POST_REQUESTED → worker-apply loop.
  *
  * States: active → returned → invoiced_pending → closed.
  *
@@ -26,13 +35,10 @@ import { registerWorkflow } from './registry.js'
  *     CLOSE            → closed
  *   closed            terminal
  *
- * Cadence-based transitions (RETURN by date, INVOICE_QUEUED by
- * worker tick) emit reducer events from the same code paths the
- * worker already runs. INVOICE_POSTED is emitted after the QBO
- * invoice idempotency key is committed.
- *
- * Phase 2 will introduce a CANCEL/VOID transition once the UI
- * surfaces it; for now CLOSE acts as the catch-all way out.
+ * INVOICE_QUEUED / INVOICE_POSTED are worker-only cadence events emitted
+ * from the dedicated pusher after the QBO invoice id is resolved (real or
+ * stub). A CANCEL/VOID transition may follow once the UI surfaces it; for
+ * now CLOSE acts as the catch-all way out.
  */
 
 export type RentalWorkflowState = 'active' | 'returned' | 'invoiced_pending' | 'closed'
@@ -141,9 +147,14 @@ export const rentalWorkflow = registerWorkflow<
   reduce: transitionRentalWorkflow,
   nextEvents: nextRentalEvents,
   isHumanEvent: isHumanRentalEvent,
-  // INVOICE_QUEUED / INVOICE_POSTED come from the worker's cadence
-  // tick; the existing material_bill creation already has its own
-  // idempotency key, no separate outbox row needed.
+  // The cadence INVOICE_QUEUED / INVOICE_POSTED transitions are emitted by the
+  // worker's dedicated rental-invoice pusher, NOT by a reducer-declared side
+  // effect: the worker tick (runners/rental-invoice.ts) enqueues its own
+  // `post_rental_invoice` outbox row directly (it is the producer of the
+  // billing event, not a consumer of a human-dispatched transition). So this
+  // workflow declares no reducer-owned sideEffectTypes — the registry's
+  // side-effect machinery is for human-event-driven outbox emission, which
+  // rentals don't have. See apps/worker/src/runners/rental-invoice-push.ts.
   sideEffectTypes: [] as const,
 })
 

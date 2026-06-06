@@ -3,12 +3,16 @@ import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import { createRentalInvoiceRunner } from './rental-invoice.js'
 
-// Unit test for the rental-invoice runner's worker-only cadence dispatch
-// (INVOICE_QUEUED / INVOICE_POSTED). The runner is a thin wrapper around
-// @sitelayer/queue's fetchDueRentals/processRentalInvoice; here we drive it
-// against a SQL-pattern-matching fake client and assert that an already-
-// RETURNED rental that gets billed emits the two cadence event-log rows and
-// advances state_version, while an ACTIVE rental emits none.
+// Unit test for the rental-invoice runner's Phase 2 cadence ENQUEUE.
+//
+// Phase 1 emitted the INVOICE_QUEUED/INVOICE_POSTED cadence transitions inline.
+// Phase 2 (this version) mirrors rental_billing_run: the runner bills a due
+// rental and, for an already-RETURNED rental that produced a bill, enqueues a
+// post_rental_invoice mutation_outbox row (idempotency-keyed on the rental's
+// pre-push state_version). The dedicated pusher (rental-invoice-push.ts) then
+// runs the gated QBO push and dispatches the cadence transitions. Here we
+// drive the runner against a SQL-pattern-matching fake client and assert the
+// enqueue happens for a RETURNED rental and NOT for an ACTIVE one.
 
 const testLogger = createLogger('rental-invoice-runner-test', { level: 'silent' })
 
@@ -95,43 +99,45 @@ function makeResponder(status: 'active' | 'returned', stateVersion = 1): Respond
         ],
       }
     }
-    if (s.startsWith('update rentals') || s.includes('update\n      rentals') || s.includes('update rentals')) {
-      // processRentalInvoice's clock-advance update and our state_version bump.
-      return { rows: [dueRow(status)] }
-    }
     if (s.includes('select state_version, status from rentals')) {
       return { rows: [{ state_version: stateVersion, status }] }
+    }
+    if (s.includes('update rentals')) {
+      // processRentalInvoice's clock-advance update.
+      return { rows: [dueRow(status)] }
     }
     // recordLedger inserts, sync_events, begin/commit/guc, etc.
     return { rows: [] }
   }
 }
 
-describe('rental-invoice runner — worker cadence dispatch', () => {
-  it('emits INVOICE_QUEUED + INVOICE_POSTED for a RETURNED rental that bills', async () => {
+describe('rental-invoice runner — Phase 2 cadence enqueue', () => {
+  it('enqueues a post_rental_invoice outbox row for a RETURNED rental that bills', async () => {
     const { pool, calls } = makePool(makeResponder('returned', 5))
     const runner = createRentalInvoiceRunner({ pool, logger: testLogger })
     const summary = await runner(COMPANY)
 
     expect(summary.billed).toBe(1)
+
+    // recordLedger writes the outbox row; mutation_type is the 6th param.
+    const outboxInserts = calls.filter((c) => c.sql.toLowerCase().includes('insert into mutation_outbox'))
+    const enqueue = outboxInserts.find((c) => c.params[5] === 'post_rental_invoice')
+    expect(enqueue).toBeDefined()
+    // idempotency_key (8th param) is versioned on the pre-push state_version (5).
+    expect(enqueue?.params[7]).toBe(`rental:invoice_push:${RENTAL_ID}:5`)
+
+    // The runner must NOT dispatch cadence transitions itself anymore — that's
+    // the pusher's job. No workflow_event_log writes here.
     const eventInserts = calls.filter((c) => c.sql.toLowerCase().includes('insert into workflow_event_log'))
-    const eventTypes = eventInserts.map((c) => c.params[6]) // event_type is the 7th column
-    expect(eventTypes).toContain('INVOICE_QUEUED')
-    expect(eventTypes).toContain('INVOICE_POSTED')
-    // INVOICE_QUEUED recorded at the row's state_version (5), POSTED at +1 (6).
-    const queued = eventInserts.find((c) => c.params[6] === 'INVOICE_QUEUED')
-    const posted = eventInserts.find((c) => c.params[6] === 'INVOICE_POSTED')
-    expect(queued?.params[5]).toBe(5)
-    expect(posted?.params[5]).toBe(6)
-    // The conflict guard must be the idempotent worker variant.
-    expect(queued?.sql.toLowerCase()).toContain('on conflict (entity_id, workflow_name, state_version) do nothing')
+    expect(eventInserts).toHaveLength(0)
   })
 
-  it('emits NO cadence events for an ACTIVE rental', async () => {
+  it('enqueues NO cadence push for an ACTIVE rental', async () => {
     const { pool, calls } = makePool(makeResponder('active', 3))
     const runner = createRentalInvoiceRunner({ pool, logger: testLogger })
     await runner(COMPANY)
-    const eventInserts = calls.filter((c) => c.sql.toLowerCase().includes('insert into workflow_event_log'))
-    expect(eventInserts).toHaveLength(0)
+    const outboxInserts = calls.filter((c) => c.sql.toLowerCase().includes('insert into mutation_outbox'))
+    const enqueue = outboxInserts.find((c) => c.params[5] === 'post_rental_invoice')
+    expect(enqueue).toBeUndefined()
   })
 })

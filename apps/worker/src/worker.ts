@@ -8,6 +8,7 @@ import { createLifecycle } from './lifecycle.js'
 import { createHeartbeatPrelude } from './runners/heartbeat-prelude.js'
 import { createQueueDrainRunner } from './runners/queue-drain.js'
 import { createRentalInvoiceRunner } from './runners/rental-invoice.js'
+import { createRentalInvoicePushRunner } from './runners/rental-invoice-push.js'
 import { createNotificationRunner } from './runners/notification.js'
 import { createRentalBillingPushRunner } from './runners/rental-billing-push.js'
 import { createEstimatePushRunner } from './runners/estimate-push.js'
@@ -100,6 +101,7 @@ const heartbeatPrelude = createHeartbeatPrelude({
 const processQueue = createQueueDrainRunner({ pool })
 const notificationRunner = createNotificationRunner({ pool, logger })
 const rentalInvoiceRunner = createRentalInvoiceRunner({ pool, logger })
+const rentalInvoicePushRunner = createRentalInvoicePushRunner({ pool, logger, qboCircuit })
 const rentalBillingPushRunner = createRentalBillingPushRunner({ pool, logger, qboCircuit })
 const estimatePushRunner = createEstimatePushRunner({ pool, logger, qboCircuit })
 const qboPullRunner = createQboPullRunner({ pool, logger, qboCircuit })
@@ -245,6 +247,28 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
           entity_type: 'rental_billing_run',
           company_id: companyId,
           workflow_name: 'rental_billing_run',
+        })
+        return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+      }),
+    { processed: 0, posted: 0, failed: 0, skipped: 0 },
+  )
+
+  const rentalInvoicePushSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'rental_invoice_push',
+    () =>
+      rentalInvoicePushRunner(companyId).catch((error) => {
+        if (error instanceof CircuitOpenError) {
+          logger.info({ key: error.key }, '[worker] rental invoice cadence push skipped — circuit open')
+          return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+        }
+        logger.error({ err: error }, '[worker] rental invoice cadence push drain failed')
+        captureWithEntityContext(error, {
+          scope: 'rental_invoice_cadence_push',
+          entity_type: 'rental',
+          company_id: companyId,
+          workflow_name: 'rental',
         })
         return { processed: 0, posted: 0, failed: 0, skipped: 0 }
       }),
@@ -660,6 +684,10 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     rental_billing_push_posted: rentalBillingPushSummary.posted,
     rental_billing_push_failed: rentalBillingPushSummary.failed,
     rental_billing_push_skipped: rentalBillingPushSummary.skipped,
+    rental_invoice_push_processed: rentalInvoicePushSummary.processed,
+    rental_invoice_push_posted: rentalInvoicePushSummary.posted,
+    rental_invoice_push_failed: rentalInvoicePushSummary.failed,
+    rental_invoice_push_skipped: rentalInvoicePushSummary.skipped,
     estimate_push_processed: estimatePushSummary.processed,
     estimate_push_posted: estimatePushSummary.posted,
     estimate_push_failed: estimatePushSummary.failed,
@@ -731,6 +759,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
   if (
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
+    rentalInvoicePushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
     qboPullSummary.processed > 0 ||
     lockLaborSummary.processed > 0 ||
