@@ -115,6 +115,18 @@ export {
 } from './work-requests'
 
 export {
+  fetchAppIssueBoard,
+  useAppIssueBoard,
+  useAppIssueCapabilities,
+  type AppIssue,
+  type AppIssueBoardColumn,
+  type AppIssueBoardGroupBy,
+  type AppIssueBoardParams,
+  type AppIssueBoardResponse,
+  type AppIssueDetailResponse,
+} from './app-issues'
+
+export {
   fetchIssueBoard,
   fetchIssueBoardItem,
   moveIssueBoardItem,

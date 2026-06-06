@@ -50,6 +50,7 @@ import { handleCostLibraryRoutes } from './cost-library.js'
 import { handleCaptureSessionRoutes } from './capture-sessions.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
+import { handleIssueRoutes } from './issues.js'
 import { handleObstructionsRoutes } from './obstructions.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
@@ -132,6 +133,13 @@ export type DispatchContext = {
    * requirePermission so the consumers can gate. See apps/api/src/capability.ts.
    */
   requireCapability: (capability: Capability) => Promise<boolean>
+  /**
+   * Resolve the caller's EFFECTIVE app_issue.* (platform) capabilities — for
+   * surfacing on /api/session so the SPA can decide whether to render the
+   * /issues board entry. Empty for a non-Clerk session. See
+   * apps/api/src/capability.ts:resolveAppIssueCapabilities.
+   */
+  resolveAppIssueCapabilities: () => Promise<string[]>
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   sendRedirect: (location: string) => void
@@ -270,6 +278,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         currentUserId,
         actorUserId: identity.actorUserId ?? null,
         authMode: identity.mode ?? 'self',
+        resolveAppIssueCapabilities: ctx.resolveAppIssueCapabilities,
         sendJson,
         setHeader: ctx.setHeader,
         send304: ctx.send304,
@@ -426,6 +435,9 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
         artifactDownloadPresigned: ctx.blueprintDownloadPresigned,
         requireRole,
+        // app_issue.capture gates finalize; app_issue.view gates the artifact
+        // download — both on the platform boundary. See capture-sessions.ts.
+        requireCapability: ctx.requireCapability,
         readBody,
         sendJson,
         sendFileContent: ctx.sendFileContent,
@@ -440,7 +452,9 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         identity,
         tier: ctx.tier,
         buildSha: getBuildSha(),
-        requireRole: requireRoleStr,
+        // app_issue.view gates the read paths (get/list/access-log); the POST
+        // producer path stays open. See support-packets.ts.
+        requireCapability: ctx.requireCapability,
         readBody,
         sendJson,
       }),
@@ -480,6 +494,20 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         // role the cap resolves against. See work-requests.ts + capability.ts.
         requireCapability: ctx.requireCapability,
         readBody,
+        sendJson,
+      }),
+
+    // Internal APP-ISSUE surface — read-only board/list/detail over the
+    // `app_issue` half of context_work_items (migration 009 `domain`). Every
+    // route gates on the PLATFORM capability `app_issue.view` (superadmin ∪
+    // platform_admin_grants over the RAW identity), so the captured internal
+    // data is unreachable via a company role / dev act-as / header fallback.
+    // Distinct /api/issues/* namespace; does not overlap /api/work-requests/*.
+    () =>
+      handleIssueRoutes(req, url, {
+        pool,
+        company,
+        requireCapability: ctx.requireCapability,
         sendJson,
       }),
 

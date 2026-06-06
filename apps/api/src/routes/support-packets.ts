@@ -5,6 +5,7 @@ import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import type { Identity } from '../auth.js'
+import type { Capability } from '@sitelayer/domain'
 import { parseJsonBody } from '../http-utils.js'
 import { parseTraceIdFromSentryTraceHeader } from '../debug-trace.js'
 import { observeSupportPacket } from '../metrics.js'
@@ -32,10 +33,21 @@ export type SupportPacketRouteCtx = {
   identity: Identity
   tier: string
   buildSha: string
-  requireRole: (allowed: readonly string[]) => boolean
+  /**
+   * PLATFORM capability gate (server.ts closure). Support packets are the
+   * captured internal app-issue data, so the READ paths (get/list/access-log)
+   * gate on `app_issue.view` — resolved on the platform boundary (superadmin ∪
+   * platform_admin_grants over the RAW identity), unreachable via a company
+   * role / dev act-as / header fallback. On denial it has already sent the 403
+   * and returns false; the handler must `return`. The POST producer path stays
+   * open (clients file packets) and does not consult this.
+   */
+  requireCapability: (capability: Capability) => Promise<boolean>
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
+
+const APP_ISSUE_VIEW: Capability = 'app_issue.view'
 
 export type SupportPacketRow = {
   id: string
@@ -771,7 +783,7 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
 }
 
 async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
-  if (!ctx.requireRole(['admin'])) return
+  if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return
   if (!UUID_RE.test(id)) {
     ctx.sendJson(400, { error: 'invalid support packet id' })
     return
@@ -799,7 +811,7 @@ async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
 }
 
 async function listSupportPacketAccessLog(ctx: SupportPacketRouteCtx, id: string, url: URL) {
-  if (!ctx.requireRole(['admin'])) return
+  if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return
   if (!UUID_RE.test(id)) {
     ctx.sendJson(400, { error: 'invalid support packet id' })
     return
@@ -825,7 +837,7 @@ async function listSupportPacketAccessLog(ctx: SupportPacketRouteCtx, id: string
 }
 
 async function listSupportPackets(ctx: SupportPacketRouteCtx, url: URL) {
-  if (!ctx.requireRole(['admin'])) return
+  if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return
   const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
   const result = await withCompanyClient(ctx.company.id, (c) =>
     c.query(

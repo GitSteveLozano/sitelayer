@@ -18,6 +18,7 @@ import {
   type WorkItemLane,
   type WorkItemSeverity,
 } from '../context-handoff.js'
+import type { Capability } from '@sitelayer/domain'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { notifyCaptureWorkItem, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
@@ -38,6 +39,15 @@ export type CaptureSessionRouteCtx = {
   maxArtifactBytes: number
   artifactDownloadPresigned: boolean
   requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /**
+   * PLATFORM capability gate (server.ts closure). The capture dock files
+   * app-issues, so finalize requires `app_issue.capture` and the artifact
+   * download requires `app_issue.view` — both resolve on the platform boundary
+   * (superadmin ∪ platform_admin_grants over the RAW identity), unreachable via
+   * a company role / dev act-as / header fallback. On denial it has already
+   * sent the 403 and returns false; the handler must `return`.
+   */
+  requireCapability: (capability: Capability) => Promise<boolean>
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
@@ -46,6 +56,9 @@ export type CaptureSessionRouteCtx = {
 
 const CREATE_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member', 'bookkeeper']
 const READ_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'bookkeeper']
+// app-issue capture lives on the platform boundary, not the company role.
+const APP_ISSUE_CAPTURE: Capability = 'app_issue.capture'
+const APP_ISSUE_VIEW: Capability = 'app_issue.view'
 const MODES = ['trace', 'feedback', 'desktop', 'native', 'manual_upload'] as const
 const STATUSES = ['open', 'stopped', 'discarded', 'failed', 'redacted'] as const
 const MAX_EVENTS = 100
@@ -1006,7 +1019,9 @@ async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSess
 }
 
 async function downloadCaptureArtifact(ctx: CaptureSessionRouteCtx, id: string, artifactId: string) {
-  if (!ctx.requireRole(READ_ROLES)) return
+  // The captured artifact is internal app-issue evidence — gate on the PLATFORM
+  // `app_issue.view`, not the company READ_ROLES.
+  if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return
   const result = await withCompanyClient(ctx.company.id, (c) =>
     c.query<CaptureArtifactFileRow>(
       `select id, kind, storage_key, uri, content_type, metadata
@@ -1079,7 +1094,9 @@ async function getCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
 }
 
 async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
-  if (!ctx.requireRole(CREATE_ROLES)) return
+  // Finalizing the capture dock mints an app_issue work item — gate on the
+  // PLATFORM capability, not the company role.
+  if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return
   const parsed = parseJsonBody(CaptureSessionFinalizeBodySchema, await ctx.readBody())
   if (!parsed.ok) {
     ctx.sendJson(400, { error: parsed.error })

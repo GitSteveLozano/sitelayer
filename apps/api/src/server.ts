@@ -14,7 +14,11 @@ import {
   resolveCompanyRoleAuthority,
   type CustomRoleAuthority,
 } from './permission-seam.js'
-import { requireCapability as requireCapabilityResolver, type CapabilityContext } from './capability.js'
+import {
+  requireCapability as requireCapabilityResolver,
+  resolveAppIssueCapabilities as resolveAppIssueCapabilitiesResolver,
+  type CapabilityContext,
+} from './capability.js'
 import { parseSuperadminEnvIds } from './admin-auth.js'
 import { handleCompanyRoutes, loadCompanyCreateGateConfig } from './routes/companies.js'
 import { handleInviteRoutes } from './routes/invites.js'
@@ -1154,6 +1158,16 @@ const server = http.createServer(async (req, res) => {
                   }
                   return requireCapabilityResolver(capabilityCtx, capability, dispatchSendJson)
                 },
+                // Caller's effective app_issue.* caps for /api/session — same
+                // platform-boundary resolution over the RAW identity.
+                resolveAppIssueCapabilities: () =>
+                  resolveAppIssueCapabilitiesResolver({
+                    role: resolvedCompany.active.role,
+                    grantActions: resolvedCompany.grants.map((grant) => grant.action),
+                    identity,
+                    client: pool,
+                    superadminEnvIds,
+                  }),
                 readBody: () => readBody(req),
                 sendJson: dispatchSendJson,
                 sendRedirect: (location) => sendRedirect(res, location),

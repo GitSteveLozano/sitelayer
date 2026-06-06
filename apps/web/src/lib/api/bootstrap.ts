@@ -196,6 +196,11 @@ export type SessionResponse = {
     // flow should run. Optional so an older API build still type-checks.
     first_run_completed_at?: string | null
   }>
+  // PLATFORM app_issue.* capabilities the caller effectively holds (superadmin ∪
+  // platform_admin_grants over a verified Clerk session). Drives the internal
+  // /issues board entry. Empty/absent for a non-platform-admin or non-Clerk
+  // session; optional so an older API build still type-checks.
+  app_issue_capabilities?: string[]
 }
 
 export type ProjectSummary = {
