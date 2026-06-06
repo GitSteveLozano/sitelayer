@@ -79,6 +79,13 @@ const RAW_QUERY_REVIEWED: Readonly<Record<string, string>> = {
   'admin-work-requests.ts':
     'platform-admin cross-tenant surface (authorizePlatformAdmin): cross-tenant context_work_items board',
 
+  // Platform app_issue.* capability grants (migration 009 platform_admin_grants).
+  // Gated by authorizePlatformAdmin on the RAW pre-act-as identity before any
+  // query; platform_admin_grants is a global table keyed by the globally-unique
+  // Clerk user id (no company_id), so it is intentionally not company-scoped.
+  'platform-grants.ts':
+    'platform-admin cross-tenant surface (authorizePlatformAdmin): platform_admin_grants is global, keyed by clerk_user_id (no company_id)',
+
   // Tenant ROOT registry. companies has no company_id column; the
   // company_memberships lookup IS the pre-GUC resolution path (you cannot bind
   // app.company_id until you have resolved which company the request is for).
