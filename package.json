@@ -68,7 +68,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
-    "@sentry/cli": "^3.4.1",
+    "@sentry/cli": "^3.5.0",
     "@types/node": "^25.6.0",
     "@types/pngjs": "^6.0.5",
     "@typescript/native-preview": "^7.0.0-dev.20260602.1",
