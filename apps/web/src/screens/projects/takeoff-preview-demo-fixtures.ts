@@ -1,4 +1,4 @@
-import type { BlueprintPage, TakeoffMeasurement } from '@/lib/api'
+import type { BlueprintPage, CapturedGeometry, TakeoffMeasurement } from '@/lib/api'
 
 export interface TakeoffDemoFixture {
   id: string
@@ -11,6 +11,16 @@ export interface TakeoffDemoFixture {
   blueprintId: string
   page: BlueprintPage
   measurements: TakeoffMeasurement[]
+  /**
+   * Optional captured-draft `TakeoffGeometry` (rooms / surfaces / objects) for
+   * the public harness. When present, the demo feeds it through the same
+   * `buildCapturedGeometryScene` adapter the in-app preview uses, so a captured
+   * draft renders in 3D here too — without any committed measurements. The
+   * `capturedSource` tags the pipeline so drone lon/lat footprints project at
+   * true scale; everything else bounds-normalizes (relative shape only).
+   */
+  capturedGeometry?: CapturedGeometry
+  capturedSource?: string
 }
 
 const CREATED_AT = '2026-05-20T00:00:00.000Z'
@@ -226,6 +236,78 @@ export const TAKEOFF_DEMO_FIXTURES: TakeoffDemoFixture[] = [
         ],
       ),
     ],
+  },
+  {
+    id: 'captured-room',
+    name: 'Captured RoomPlan draft',
+    label: 'Captured',
+    description:
+      'A captured-draft TakeoffGeometry (room floor, walls, a door opening, and a fixture) rendered straight from the capture pipeline — no committed measurements. Source-space coordinates bounds-normalize to a relative span.',
+    referenceTitle: 'Captured geometry (pre-promotion)',
+    referenceNotes: [
+      'Drawn entirely from the captured TakeoffGeometry block — there are zero committed measurements in this fixture.',
+      'Surfaces map floor→polygon, wall→lineal, opening→count marker; objects[] become fixture count markers.',
+      'Good for asking a model whether the captured shape, wall layout, and opening placement survive the 2.5D extrusion.',
+    ],
+    referenceImageUrl: blueprintSvgDataUrl([
+      '<rect x="20" y="20" width="60" height="50" class="room" />',
+      '<polyline points="20,20 80,20 80,70 20,70 20,20" class="shell" />',
+      '<polyline points="20,45 50,45" class="run" />',
+      '<rect x="44" y="68" width="12" height="4" class="door" />',
+      '<circle cx="32" cy="60" r="2.8" class="opening" />',
+    ]),
+    blueprintId: 'demo-blueprint-captured',
+    page: page('demo-page-captured', 'demo-blueprint-captured', '20', '70', '80', '70', '40'),
+    measurements: [],
+    capturedSource: 'ios.roomplan',
+    capturedGeometry: {
+      rooms: [{ id: 'cap-room-1', label: 'Studio', floorAreaSqFt: 300, perimeterLf: 70 }],
+      surfaces: [
+        // 600 x 500 source-space rectangle (largest span normalizes to ~60 ft).
+        {
+          id: 'cap-floor-1',
+          kind: 'floor',
+          parentRoomId: 'cap-room-1',
+          areaSqFt: 300,
+          polygon: [
+            [0, 0],
+            [600, 0],
+            [600, 500],
+            [0, 500],
+          ],
+        },
+        {
+          id: 'cap-wall-north',
+          kind: 'wall',
+          parentRoomId: 'cap-room-1',
+          polygon: [
+            [0, 0],
+            [600, 0],
+          ],
+        },
+        {
+          id: 'cap-wall-west',
+          kind: 'wall',
+          parentRoomId: 'cap-room-1',
+          polygon: [
+            [0, 0],
+            [0, 500],
+          ],
+        },
+        {
+          id: 'cap-door-1',
+          kind: 'opening',
+          parentRoomId: 'cap-room-1',
+          polygon: [
+            [260, 500],
+            [340, 500],
+            [340, 480],
+            [260, 480],
+          ],
+        },
+      ],
+      objects: [{ id: 'cap-fixture-1', category: 'sink', bbox: [120, 360, 40, 40] }],
+    },
   },
 ]
 

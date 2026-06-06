@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Check, Clipboard, Download } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
+import { buildCapturedGeometryScene, mergeCapturedSceneIntoBase } from '@/lib/takeoff/captured-geometry-3d'
 import { buildTakeoffPreviewScene } from '@/lib/takeoff/geometry-3d'
 import { TakeoffThreeScene } from './takeoff-3d-scene'
 import { TAKEOFF_DEMO_FIXTURES } from './takeoff-preview-demo-fixtures'
@@ -16,10 +17,17 @@ export function TakeoffPreviewDemo() {
   const fixtureId = searchParams.get('fixture') ?? DEFAULT_FIXTURE.id
   const fixture = TAKEOFF_DEMO_FIXTURES.find((candidate) => candidate.id === fixtureId) ?? DEFAULT_FIXTURE
   const scene = useMemo(() => {
-    return buildTakeoffPreviewScene(fixture.measurements, {
+    const base = buildTakeoffPreviewScene(fixture.measurements, {
       activeBlueprintId: fixture.blueprintId,
       activePage: fixture.page,
     })
+    // Feed any captured-draft TakeoffGeometry through the same adapter the
+    // in-app preview uses so a captured draft renders in 3D in the public
+    // harness too. Fixtures without captured geometry are unaffected.
+    const captured = buildCapturedGeometryScene(fixture.capturedGeometry, {
+      source: fixture.capturedSource ?? null,
+    })
+    return mergeCapturedSceneIntoBase(base, captured)
   }, [fixture])
   const selected = scene.items.find((item) => item.id === selectedId) ?? null
   const debugPayload = useMemo(
@@ -35,6 +43,8 @@ export function TakeoffPreviewDemo() {
       },
       page: fixture.page,
       measurements: fixture.measurements,
+      captured_geometry: fixture.capturedGeometry ?? null,
+      captured_source: fixture.capturedSource ?? null,
       scene,
     }),
     [fixture, scene],
