@@ -13,6 +13,7 @@ import { captureErrorMessage } from '@/lib/capture-error-copy'
 import { uploadRegisteredCaptureStateSnapshots } from '@/lib/capture-state-providers'
 import { createRrwebCaptureReplayRecorder } from '@/lib/capture-replay-recorder'
 import { buildVideoClipManifestBlob } from '@/lib/capture-video-manifest'
+import { getProjectSignal } from '@/lib/project-signal'
 import {
   FeedbackCaptureController,
   FeedbackCaptureQueuedError,
@@ -163,7 +164,29 @@ async function appendFeedbackEvent(
   ])
 }
 
+// Composable-overlay seam (step 1): ship the captured task through the
+// @operator/projectkit contract alongside the existing sitelayer work-item
+// (the kanban path). Fire-and-forget + inert-by-default (SIGNAL_SINK_URL unset →
+// /api/signal 204s), so ZERO UX change. This is what lets a non-mesh subscriber
+// (kanban / linear / agent dispatch) consume sitelayer captures — a config swap
+// of the relay's sink, no change here.
+function emitCaptureWorkRequest(finalize: CaptureFinalizeResponse): void {
+  const wi = finalize.work_item
+  void getProjectSignal()
+    .requestWork({
+      request_ref: wi.id,
+      intent: 'capture-followup',
+      title: wi.title,
+      summary: wi.summary,
+      ...(wi.route ? { route_path: wi.route } : {}),
+      source_event_ref: wi.capture_session_id ?? wi.id,
+      payload: { lane: wi.lane, severity: wi.severity, support_packet_id: finalize.support_packet.id },
+    })
+    .catch(() => undefined)
+}
+
 function receiptFromFinalize(finalize: CaptureFinalizeResponse): FeedbackReceipt {
+  emitCaptureWorkRequest(finalize)
   return {
     workItemId: finalize.work_item.id,
     supportPacketId: finalize.support_packet.id,
