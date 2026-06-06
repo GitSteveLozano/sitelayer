@@ -122,6 +122,7 @@ class FakeCapturePool {
   workItems: JsonRecord[] = []
   handoffEvents: JsonRecord[] = []
   notifications: JsonRecord[] = []
+  mutationOutbox: JsonRecord[] = []
   // Seeded company admins for the operator-notification fan-out. Includes the
   // default submitter ('user-1') so the authed path's submitter-exclusion is
   // actually exercised.
@@ -431,6 +432,18 @@ class FakeCapturePool {
     if (normalized.includes('from sync_events')) {
       return { rows: [], rowCount: 0 }
     }
+    // STEP3 — the async debug-bundle enrichment enqueue at finalize.
+    if (normalized.startsWith('insert into mutation_outbox')) {
+      this.mutationOutbox.push({
+        company_id: params[0] as string,
+        entity_type: params[3] as string,
+        entity_id: params[4] as string,
+        mutation_type: params[5] as string,
+        payload: JSON.parse(params[6] as string) as JsonRecord,
+        idempotency_key: params[7] as string,
+      })
+      return { rows: [], rowCount: 1 }
+    }
     if (normalized.startsWith('insert into support_debug_packets')) {
       this.supportCounter += 1
       const row = {
@@ -543,11 +556,14 @@ class FakeCapturePool {
     }
     if (normalized.includes('from context_work_items') && normalized.includes("metadata ->> 'source'")) {
       const [companyId, captureSessionId] = params as [string, string]
+      // STEP5 — the per-slice dedupe lookup also pins metadata->>'slice_key' = $3.
+      const sliceKey = normalized.includes("metadata ->> 'slice_key'") ? (params[2] as string) : null
       const row = this.workItems.find(
         (w) =>
           w.company_id === companyId &&
           w.capture_session_id === captureSessionId &&
-          (w.metadata as JsonRecord).source === 'capture_session_finalize',
+          (w.metadata as JsonRecord).source === 'capture_session_finalize' &&
+          (sliceKey === null || (w.metadata as JsonRecord).slice_key === sliceKey),
       )
       return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
@@ -1164,6 +1180,17 @@ describe('capture session routes', () => {
     expect(pool.supportPackets).toHaveLength(1)
     expect(pool.workItems).toHaveLength(1)
     expect(pool.handoffEvents).toHaveLength(1)
+    // STEP3 — finalize enqueues exactly one async debug-bundle enrichment row,
+    // keyed on the work_item id, carrying the support packet + capture session.
+    expect(pool.mutationOutbox).toHaveLength(1)
+    expect(pool.mutationOutbox[0]).toMatchObject({
+      entity_type: 'app_issue',
+      entity_id: pool.workItems[0]?.id,
+      mutation_type: 'assemble_debug_bundle',
+      idempotency_key: `debug_bundle:assemble:${pool.workItems[0]?.id}`,
+    })
+    expect((pool.mutationOutbox[0]?.payload as JsonRecord).support_packet_id).toBe(pool.supportPackets[0]?.id)
+    expect((pool.mutationOutbox[0]?.payload as JsonRecord).capture_session_id).toBe(SESSION_ID)
     expect(pool.workItems[0]?.metadata).toMatchObject({
       source: 'capture_session_finalize',
       capture_session_id: '[redacted]',
@@ -1241,6 +1268,71 @@ describe('capture session routes', () => {
     expect(pool.events.map((event) => event.event_type)).toEqual(['ui.click', 'session.stopped', 'session.finalized'])
     // The idempotent replay returns before the notify call, so no duplicate ping.
     expect(pool.notifications).toHaveLength(1)
+  })
+
+  it('STEP5 — finalize with repro-bracket marks emits ONE work_item per slice, each with its from->to anchors', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      route_path: '/desktop/takeoff',
+      consent_version: 'pilot-v1',
+    })
+    await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'stopped' })
+
+    const fromRef = 'workflow_event:rental:aaaaaaaaaaaaaaaa:1'
+    const toRef = 'workflow_event:rental:aaaaaaaaaaaaaaaa:2'
+    const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+      title: 'Repro brackets',
+      summary: 'Two reproduced slices.',
+      marks: [
+        { from_event_ref: fromRef, to_event_ref: toRef, label: 'scale fails' },
+        { from_event_ref: toRef, label: 'second still' },
+      ],
+    })
+
+    expect(finalized.responses[0]?.status).toBe(201)
+    const body = finalized.responses[0]?.body as {
+      work_items: Array<{
+        work_item: { id: string }
+        slice_key: string | null
+        from_event_ref: string | null
+        to_event_ref: string | null
+      }>
+      slices: number
+      created: number
+    }
+    // 1:N — two marks → two work items, two packets, two enqueued bundles.
+    expect(body.slices).toBe(2)
+    expect(body.created).toBe(2)
+    expect(pool.workItems).toHaveLength(2)
+    expect(pool.supportPackets).toHaveLength(2)
+    expect(pool.mutationOutbox).toHaveLength(2)
+    // Each slice carries its own from->to anchors + a distinct slice_key.
+    expect(body.work_items[0]?.from_event_ref).toBe(fromRef)
+    expect(body.work_items[0]?.to_event_ref).toBe(toRef)
+    expect(body.work_items[1]?.from_event_ref).toBe(toRef)
+    expect(body.work_items[1]?.to_event_ref).toBeNull()
+    const sliceKeys = body.work_items.map((w) => w.slice_key)
+    expect(new Set(sliceKeys).size).toBe(2)
+    // Each slice's work item metadata pins the repro bracket + slice_key.
+    expect(pool.workItems[0]?.metadata).toMatchObject({
+      source: 'capture_session_finalize',
+      slice_key: sliceKeys[0],
+      repro_bracket: { from_event_ref: fromRef, to_event_ref: toRef },
+    })
+    // The bundle enqueue for slice 1 rides the slice's pinned from anchor.
+    expect((pool.mutationOutbox[0]?.payload as JsonRecord).event_ref).toBe(fromRef)
+    // Per-slice idempotency: re-finalizing the SAME marks replays, mints nothing new.
+    const replay = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+      marks: [
+        { from_event_ref: fromRef, to_event_ref: toRef, label: 'scale fails' },
+        { from_event_ref: toRef, label: 'second still' },
+      ],
+    })
+    expect(replay.responses[0]?.status).toBe(200)
+    expect((replay.responses[0]?.body as { idempotent_replay?: boolean }).idempotent_replay).toBe(true)
+    expect(pool.workItems).toHaveLength(2)
   })
 
   it('can promote trusted authenticated feedback captures to agent routing behind an env flag', async () => {

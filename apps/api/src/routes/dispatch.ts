@@ -523,7 +523,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleIssueRoutes(req, url, {
         pool,
         company,
+        identity,
+        buildSha: getBuildSha(),
         requireCapability: ctx.requireCapability,
+        readBody,
         sendJson,
       }),
 

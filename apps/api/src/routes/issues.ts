@@ -1,17 +1,30 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
+import { getRequestContext } from '@sitelayer/logger'
+import { assembleDebugBundle, type DebugBundle } from '@sitelayer/queue'
 import type { ActiveCompany } from '../auth-types.js'
+import type { Identity } from '../auth.js'
 import type { Capability } from '@sitelayer/domain'
-import { buildPaginationMeta, isValidUuid, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
+import {
+  buildPaginationMeta,
+  isValidUuid,
+  parseJsonBody,
+  parsePagination,
+  PAGINATION_MAX_LIMIT,
+} from '../http-utils.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   WORK_ITEM_LANES,
   WORK_ITEM_STATUSES,
+  appendContextHandoffEventTx,
   getContextWorkItemWithEvents,
   listContextWorkItems,
   type ContextWorkItemRow,
   type WorkItemLane,
   type WorkItemStatus,
 } from '../context-handoff.js'
+import { sanitizeSupportJson } from './support-packets.js'
 
 /**
  * The internal APP-ISSUE surface — a READ-ONLY board/list/detail over the
@@ -36,6 +49,8 @@ import {
 export type IssueRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  identity: Identity
+  buildSha: string
   /**
    * Platform/company-domain capability gate (server.ts closure). app_issue.*
    * resolves on the platform boundary (superadmin ∪ platform_admin_grants) over
@@ -43,10 +58,26 @@ export type IssueRouteCtx = {
    * returns false; the handler must `return`.
    */
   requireCapability: (capability: Capability) => Promise<boolean>
+  readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
 
 const APP_ISSUE_VIEW: Capability = 'app_issue.view'
+// Triage/escalate of app-issues — the WRITE half of the platform surface.
+const APP_ISSUE_TRIAGE: Capability = 'app_issue.triage'
+
+// Escalation tiers. tier 2 = re-run the same Sentry+Axiom enrichment the
+// finalize bundle worker runs; tier 3 = the deeper pull (here, the same fetch
+// set — the value-add is the auditable per-pull access log, not a different
+// API). Kept narrow so a vague body can't request an unbounded fan-out.
+const ESCALATION_TIERS = ['2', '3'] as const
+type EscalationTier = (typeof ESCALATION_TIERS)[number]
+
+const IssueEscalateBodySchema = z
+  .object({
+    tier: z.union([z.string(), z.number()]).nullish(),
+  })
+  .loose()
 
 function issueResponse(row: ContextWorkItemRow) {
   return {
@@ -239,6 +270,195 @@ async function getIssue(ctx: IssueRouteCtx, id: string, url: URL) {
   })
 }
 
+function stringArrayField(serverContext: Record<string, unknown>, key: string, limit: number): string[] {
+  const raw = serverContext[key]
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'string') continue
+    const trimmed = entry.trim()
+    if (!trimmed || out.includes(trimmed)) continue
+    out.push(trimmed)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+/** The per-anchor event_refs the finalize path PINNED into server_context.anchors.
+ * Escalation enriches around these — it never re-derives a transition. */
+function pinnedEventRefs(serverContext: Record<string, unknown>, limit: number): string[] {
+  const raw = serverContext.anchors
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const ref = (entry as { event_ref?: unknown }).event_ref
+    if (typeof ref !== 'string') continue
+    const trimmed = ref.trim()
+    if (!trimmed || out.includes(trimmed)) continue
+    out.push(trimmed)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+type IssuePacketRow = {
+  support_packet_id: string
+  capture_session_id: string | null
+  server_context: Record<string, unknown>
+}
+
+/**
+ * STEP6 — POST /api/issues/:workItemId/escalate.
+ *
+ * "Go deeper" on a filed app-issue: re-run the tier-2/3 external enrichment
+ * (Sentry trace spans + Axiom log lines) around the trace_id / request_id /
+ * event_ref the support packet ALREADY PINNED at finalize. It NEVER re-derives
+ * the ids — it reads them straight off the packet's server_context — so an
+ * escalation is a bounded, auditable re-fetch, not a fresh correlation pass.
+ *
+ * Gated on the PLATFORM capability `app_issue.triage` (the WRITE half; view is
+ * insufficient). Each external pull is recorded as a `support_packet_access_log`
+ * row (access_type='escalate', migration 010 widens the CHECK) so the per-issue
+ * cost ledger can show exactly which evidence the operator paid to fetch. The
+ * assembled bundle is also stamped as an `agent.message_received` handoff event
+ * on the work item so the triage thread shows the deeper context inline.
+ */
+async function escalateIssue(ctx: IssueRouteCtx, id: string) {
+  if (!(await ctx.requireCapability(APP_ISSUE_TRIAGE))) return
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid issue id' })
+    return
+  }
+  const parsed = parseJsonBody(IssueEscalateBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const tierRaw = parsed.value.tier
+  const tier: EscalationTier =
+    tierRaw === undefined || tierRaw === null
+      ? '2'
+      : (ESCALATION_TIERS as readonly string[]).includes(String(tierRaw))
+        ? (String(tierRaw) as EscalationTier)
+        : ('invalid' as EscalationTier)
+  if ((tier as string) === 'invalid') {
+    ctx.sendJson(400, { error: `tier must be one of ${ESCALATION_TIERS.join(', ')}` })
+    return
+  }
+
+  // Load the issue (pinned to app_issue) + its support packet server_context.
+  // 404 the same way for a missing row AND a field_request row so a non-app_issue
+  // id never confirms its existence through this platform surface.
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 1 })
+  if (!detail || detail.work_item.domain !== 'app_issue') {
+    ctx.sendJson(404, { error: 'issue not found' })
+    return
+  }
+  const packetRow = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<IssuePacketRow>(
+      `select id as support_packet_id, capture_session_id::text as capture_session_id, server_context
+         from support_debug_packets
+        where company_id = $1 and id = $2 and (expires_at is null or expires_at > now())
+        limit 1`,
+      [ctx.company.id, detail.work_item.support_packet_id],
+    ),
+  )
+  const packet = packetRow.rows[0]
+  if (!packet) {
+    ctx.sendJson(409, { error: 'issue has no live support packet to escalate' })
+    return
+  }
+
+  // PINNED ids — read off server_context, never re-derived.
+  const serverContext = (packet.server_context ?? {}) as Record<string, unknown>
+  const traceIds = stringArrayField(serverContext, 'trace_ids', 8)
+  const requestIds = stringArrayField(serverContext, 'request_ids', 12)
+  const eventRefs = pinnedEventRefs(serverContext, 10)
+  const captureSessionId = packet.capture_session_id
+
+  // Run the SAME enrichment the bundle worker runs, around the pinned ids. One
+  // bundle per pinned event_ref (so a per-anchor escalation re-fetches around
+  // each transition); when no anchor was pinned, one bundle around the
+  // trace/request set. assembleDebugBundle owns the env-gated Sentry+Axiom
+  // fetches (8s timeout, silent no-op when unset).
+  const pulls = eventRefs.length > 0 ? eventRefs : [null]
+  const bundles: DebugBundle[] = []
+  for (const eventRef of pulls) {
+    const bundle = await assembleDebugBundle({
+      support_packet_id: packet.support_packet_id,
+      capture_session_id: captureSessionId,
+      trace_ids: traceIds,
+      request_ids: requestIds,
+      event_ref: eventRef,
+      tier,
+    })
+    bundles.push(bundle)
+  }
+
+  const requestContext = getRequestContext()
+  // Record one access-log row PER pull (the cost ledger), then stamp a single
+  // handoff event carrying the assembled bundles, all in one tx.
+  await withMutationTx(ctx.company.id, async (c) => {
+    for (const bundle of bundles) {
+      await c.query(
+        `insert into support_packet_access_log (
+           company_id, support_packet_id, actor_user_id, access_type,
+           route, request_id, metadata
+         ) values ($1, $2, $3, 'escalate', $4, $5, $6::jsonb)`,
+        [
+          ctx.company.id,
+          packet.support_packet_id,
+          ctx.identity.userId,
+          requestContext?.route ?? null,
+          requestContext?.requestId ?? null,
+          JSON.stringify(
+            sanitizeSupportJson({
+              tier,
+              work_item_id: id,
+              event_ref: bundle.event_ref,
+              trace_ids: bundle.trace_ids,
+              request_ids: bundle.request_ids,
+              sentry_status: bundle.sentry.status,
+              axiom_status: bundle.axiom.status,
+            }),
+          ),
+        ],
+      )
+    }
+    await appendContextHandoffEventTx(c, {
+      companyId: ctx.company.id,
+      workItemId: id,
+      eventType: 'agent.message_received',
+      actorKind: 'system',
+      actorUserId: ctx.identity.userId,
+      payload: sanitizeSupportJson({
+        escalation_tier: tier,
+        support_packet_id: packet.support_packet_id,
+        capture_session_id: captureSessionId,
+        bundle_count: bundles.length,
+        bundles,
+      }),
+      metadata: {
+        source: 'issue_escalate',
+        escalation_tier: tier,
+        pulls: bundles.length,
+      },
+      captureSessionId,
+      buildSha: ctx.buildSha,
+    })
+  })
+
+  ctx.sendJson(200, {
+    work_item_id: id,
+    tier,
+    support_packet_id: packet.support_packet_id,
+    capture_session_id: captureSessionId,
+    pulls: bundles.length,
+    bundles,
+  })
+}
+
 export async function handleIssueRoutes(req: http.IncomingMessage, url: URL, ctx: IssueRouteCtx): Promise<boolean> {
   if (url.pathname === '/api/issues' && req.method === 'GET') {
     await listIssues(ctx, url)
@@ -247,6 +467,12 @@ export async function handleIssueRoutes(req: http.IncomingMessage, url: URL, ctx
 
   if (url.pathname === '/api/issues/board' && req.method === 'GET') {
     await listIssueBoard(ctx, url)
+    return true
+  }
+
+  const escalateMatch = url.pathname.match(/^\/api\/issues\/([^/]+)\/escalate$/)
+  if (escalateMatch && req.method === 'POST') {
+    await escalateIssue(ctx, decodeURIComponent(escalateMatch[1]!))
     return true
   }
 
