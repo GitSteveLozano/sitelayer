@@ -2,12 +2,14 @@
 // (Now a thin facade; the real @sentry/react module is lazy-loaded on
 // `requestIdleCallback` after first paint, so this import is cheap.)
 import './instrument'
-import { lazy, StrictMode, Suspense, type ReactNode } from 'react'
+import { lazy, StrictMode, Suspense, useEffect, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { installDemoTierNoIndex } from './lib/demo/robots-noindex'
 import { startOfflineReplayLoop } from './lib/offline/replay'
 import { installChunkReloadHandler } from './lib/pwa/chunk-reload'
+import { registerServer5xxObserver } from './lib/api/client'
+import { installTraceCaptureHandlers, reportServer5xx, reportTraceCapture } from './lib/trace-capture'
 import { initVersionGuard } from './pwa/version-guard'
 import './styles/globals.css'
 // m.css is the design-token + component CSS for the mobile shell at /m/*
@@ -67,6 +69,18 @@ installChunkReloadHandler()
 // every client without a manual cache-clear. No-op in dev / unbuilt.
 initVersionGuard()
 
+// STEP4: headless trace-mode auto-filer. Hooks window.onunhandledrejection +
+// window error so a client crash the user never reports still lands in the
+// app-issue triage queue with the diagnostic anchors (workflow event_ref +
+// sentry trace + request id). PII-safe: trace mode captures no media and no
+// user text. Debounced + per-page capped so an error storm can't spam the
+// queue. The React root error boundary (RootError below) files separately.
+installTraceCaptureHandlers()
+// And register the 5xx observer with the API client so a server 5xx auto-files
+// too (kept as a registration to keep the client at the bottom of the import
+// graph — see registerServer5xxObserver).
+registerServer5xxObserver(reportServer5xx)
+
 function LazyErrorBoundary({
   children,
   fallback,
@@ -86,6 +100,17 @@ function LazyErrorBoundary({
 }
 
 function RootError({ eventId }: { eventId?: string | undefined }) {
+  // STEP4: when the app actually crashed into the root boundary, auto-file a
+  // headless trace-mode capture so the crash is triageable without the user
+  // having to report it. Fires once on mount (the boundary only renders after a
+  // throw); best-effort and self-debounced inside trace-capture.
+  useEffect(() => {
+    void reportTraceCapture({
+      origin: 'error_boundary',
+      ...(eventId ? { sentryEventId: eventId } : {}),
+      message: 'React render error caught by root boundary',
+    })
+  }, [eventId])
   // Give the user a copy-pasteable block to quote in a report. error id ->
   // Sentry; time + page -> the incident tool's vague lookup
   // (scripts/incident.ts --around <time> --route <page>). Without this, an

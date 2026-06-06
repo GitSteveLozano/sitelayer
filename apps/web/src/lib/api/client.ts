@@ -140,6 +140,35 @@ export function registerTokenProvider(fn: TokenProvider): void {
 }
 
 /**
+ * Server-5xx observer (STEP4). The headless trace-mode auto-filer registers
+ * itself here at boot so a 5xx response auto-files a triage capture. Kept as a
+ * registration hook (not a static import of `trace-capture`) so the client
+ * stays at the bottom of the import graph — `trace-capture` imports the client
+ * for `getBuildSha`/`nextRequestId`, and a reverse static edge would create a
+ * cycle. No-op until something registers; always best-effort.
+ */
+export type Server5xxObserver = (args: {
+  status: number
+  path: string
+  method: string
+  requestId: string | null
+}) => void
+let server5xxObserver: Server5xxObserver | null = null
+
+export function registerServer5xxObserver(fn: Server5xxObserver | null): void {
+  server5xxObserver = fn
+}
+
+function notifyServer5xx(args: { status: number; path: string; method: string; requestId: string | null }): void {
+  if (!server5xxObserver || args.status < 500) return
+  try {
+    server5xxObserver(args)
+  } catch {
+    /* observer must never break the request path */
+  }
+}
+
+/**
  * localStorage key the multi-company switcher writes to. When a user is
  * a member of more than one company they pick which is active via
  * `<CompanySwitcher />`; the selection is persisted here so a full
@@ -370,6 +399,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   if (!response.ok) {
+    // STEP4: a server 5xx auto-files a headless trace-mode capture session so
+    // the failure is triageable even if the user never reports it. Best-effort
+    // and self-guarded (the observer skips the capture endpoints), so this
+    // never recurses or blocks the error the caller is about to receive.
+    notifyServer5xx({ status: response.status, path, method, requestId: responseRequestId })
     throw new ApiError({
       status: response.status,
       path,

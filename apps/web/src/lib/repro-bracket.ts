@@ -31,6 +31,7 @@ import {
   type CaptureArtifactUploadInput,
   type CaptureArtifactUploadResponse,
   type CaptureFinalizeInput,
+  type CaptureFinalizeMark,
   type CaptureFinalizeResponse,
 } from './api/capture-sessions'
 import { buildReproBracketConsentScope } from './capture-policy'
@@ -305,6 +306,17 @@ export class ReproBracketController {
 
     const summaryText = this.buildWorkItemSummary({ endNote, durationMs })
     const routePath = this.routePath()
+    // Surface the N collected marks to the backend (STEP5). When there is at
+    // least one mark the finalize payload carries `marks[]`, which relaxes the
+    // server's 1:1 capture_session_finalize dedupe to per-slice: one work_item
+    // per mark/mark-pair, each anchored from->to. With zero marks we omit the
+    // field entirely so the single-work_item path is unchanged.
+    const finalizeMarks: CaptureFinalizeMark[] = this.marksList.map((mark, index) => ({
+      offset_ms: mark.offset_ms,
+      label: mark.label,
+      at: mark.at,
+      index: index + 1,
+    }))
     const finalize = await this.finalizeSession(captureSessionId, {
       title: args.title ?? 'Reproduction report',
       summary: summaryText,
@@ -312,6 +324,7 @@ export class ReproBracketController {
       lane: args.lane ?? 'triage',
       ...(routePath ? { route_path: routePath } : {}),
       category: 'reproduction',
+      ...(finalizeMarks.length ? { marks: finalizeMarks } : {}),
       ...(args.finalize ?? {}),
     })
 

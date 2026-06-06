@@ -115,15 +115,27 @@ export {
 } from './work-requests'
 
 export {
+  escalateAppIssue,
   fetchAppIssueBoard,
+  fetchAppIssueCostLedger,
+  fetchAppIssueDetail,
   useAppIssueBoard,
   useAppIssueCapabilities,
+  useAppIssueCostLedger,
+  useAppIssueDetail,
+  useEscalateAppIssue,
   type AppIssue,
   type AppIssueBoardColumn,
   type AppIssueBoardGroupBy,
   type AppIssueBoardParams,
   type AppIssueBoardResponse,
+  type AppIssueCostLedgerEntry,
+  type AppIssueCostLedgerResponse,
   type AppIssueDetailResponse,
+  type AppIssueEscalateInput,
+  type AppIssueEscalatePull,
+  type AppIssueEscalateResponse,
+  type AppIssueEscalateTier,
 } from './app-issues'
 
 export {

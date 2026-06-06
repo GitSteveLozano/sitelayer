@@ -97,7 +97,9 @@ export function MobileAppIssues() {
                   {column.work_items.length === 0 ? (
                     <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--m-ink-3)' }}>Empty</div>
                   ) : (
-                    column.work_items.map((item) => <AppIssueCard key={item.id} item={item} />)
+                    column.work_items.map((item) => (
+                      <AppIssueCard key={item.id} item={item} onOpen={() => navigate(`/issues/${item.id}`)} />
+                    ))
                   )}
                 </div>
               </section>
@@ -109,16 +111,26 @@ export function MobileAppIssues() {
   )
 }
 
-function AppIssueCard({ item }: { item: AppIssue }) {
+function AppIssueCard({ item, onOpen }: { item: AppIssue; onOpen: () => void }) {
   const meta = [item.route, relativeAge(item.created_at), item.capture_session_id ? 'CAPTURED' : null]
     .filter(Boolean)
     .join(' · ')
   return (
     <article
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
       style={{
         padding: '16px',
         borderBottom: '2px solid var(--m-ink)',
         background: item.severity === 'urgent' ? 'var(--m-card-soft)' : 'transparent',
+        cursor: 'pointer',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
