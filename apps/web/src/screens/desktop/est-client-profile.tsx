@@ -226,7 +226,11 @@ export function EstClientProfile() {
           <DataTable<ProjectListRow>
             title="Project history"
             action={
-              <MButton size="sm" variant="primary" onClick={() => navigate(`/projects/new?customer_id=${customer.id}`)}>
+              <MButton
+                size="sm"
+                variant="primary"
+                onClick={() => navigate(`/desktop/projects/new?customer_id=${customer.id}`)}
+              >
                 New project
               </MButton>
             }

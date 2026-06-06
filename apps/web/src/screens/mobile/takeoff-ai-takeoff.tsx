@@ -368,8 +368,18 @@ function TakeoffSetupFloat({ setup, onClose }: { setup: TakeoffSetupState; onClo
             </button>
           ))}
         </div>
+        {/*
+          Custom symbol→item targets aren't wired yet: the capture endpoint
+          reads every detected symbol and takes no per-target selection (the
+          GAP noted on `useTakeoffSetup`). Rather than a silent no-op button
+          that looks clickable, this is an honest disabled affordance until the
+          custom-target backend lands.
+        */}
         <button
           type="button"
+          disabled
+          aria-disabled="true"
+          title="Custom symbol targets are coming soon — the AI read currently uses the built-in target set."
           style={{
             width: '100%',
             marginTop: 8,
@@ -381,10 +391,11 @@ function TakeoffSetupFloat({ setup, onClose }: { setup: TakeoffSetupState; onClo
             fontWeight: 700,
             letterSpacing: '0.06em',
             color: 'var(--m-ink-3)',
-            cursor: 'pointer',
+            cursor: 'not-allowed',
+            opacity: 0.55,
           }}
         >
-          + ADD TARGET
+          + ADD TARGET · SOON
         </button>
 
         <div style={{ ...dLabel, marginTop: 16 }}>Sheet scope</div>
