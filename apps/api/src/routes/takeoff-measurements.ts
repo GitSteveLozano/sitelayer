@@ -118,7 +118,7 @@ export async function handleTakeoffMeasurementRoutes(
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
-      select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, props, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, cost_code, props, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}
       order by created_at desc

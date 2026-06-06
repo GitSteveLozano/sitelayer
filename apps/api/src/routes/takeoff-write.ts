@@ -54,6 +54,10 @@ type PreparedTakeoffMeasurementInput = {
   location: string | null
   zone: string | null
   folder: string | null
+  // Job-cost code (migration 006): free-form accounting axis tagged onto each
+  // measured quantity so spend rolls up by cost code, sibling to the org axes
+  // above. NULL = untagged; threaded the same way as phase/zone.
+  costCode: string | null
   // Extensible per-item property bag (PlanSwift's open-property-bag trick): AI
   // metadata, trade-pack fields, future attributes without a schema change.
   props: Record<string, unknown>
@@ -210,6 +214,17 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
   const zone = orgTag('zone')
   const folder = orgTag('folder')
 
+  // Job-cost code (migration 006): same free-form, trimmed, capped handling as
+  // the org axes above.
+  const costCode = ((): string | null => {
+    const v = (input as Record<string, unknown>).cost_code
+    if (v === undefined || v === null) return null
+    const s = String(v).trim()
+    if (!s) return null
+    if (s.length > 120) throw new HttpError(400, `${label}.cost_code exceeds the 120-character cap`)
+    return s
+  })()
+
   // Extensible per-item property bag.
   let props: Record<string, unknown> = {}
   const rawProps = input.props
@@ -240,6 +255,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     location,
     zone,
     folder,
+    costCode,
     props,
   }
 }
@@ -441,10 +457,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, props
+          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, cost_code, props
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, coalesce($20::jsonb, '{}'::jsonb))
-        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, props, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, coalesce($21::jsonb, '{}'::jsonb))
+        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, condition_id, phase, location, zone, folder, cost_code, props, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -466,6 +482,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.location,
           measurementInput.zone,
           measurementInput.folder,
+          measurementInput.costCode,
           JSON.stringify(measurementInput.props),
         ],
       )
@@ -611,10 +628,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, props
+            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, cost_code, props
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, coalesce($19::jsonb, '{}'::jsonb))
-          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, props, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, coalesce($20::jsonb, '{}'::jsonb))
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, phase, location, zone, folder, cost_code, props, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -635,6 +652,7 @@ export async function handleTakeoffWriteRoutes(
             measurement.location,
             measurement.zone,
             measurement.folder,
+            measurement.costCode,
             JSON.stringify(measurement.props),
           ],
         )
