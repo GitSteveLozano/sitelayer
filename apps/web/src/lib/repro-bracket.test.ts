@@ -179,6 +179,39 @@ describe('ReproBracketController', () => {
     const finalizeInput = deps.finalizeSession.mock.calls[0]![1]
     expect(finalizeInput.category).toBe('reproduction')
     expect(finalizeInput.summary).toContain('Problem: estimate total doubled')
+
+    // STEP5: the collected marks ride the finalize payload as `marks[]` so the
+    // backend can emit one work_item per mark/mark-pair. Result also surfaces
+    // the same marks for the UI receipt (STEP5-UI).
+    expect(finalizeInput.marks).toHaveLength(1)
+    expect(finalizeInput.marks[0]).toMatchObject({ label: 'here', offset_ms: 4_000, index: 1 })
+    expect(result.marks).toHaveLength(1)
+    expect(result.marks[0]!.label).toBe('here')
+  })
+
+  it('emits one mark per mark-pair and omits marks[] when none were dropped', async () => {
+    // Multi-mark: marks[] carries every mark in order with a 1-based index.
+    const multi = makeController({ replayRecorder: fakeReplay() })
+    await multi.controller.start(START_ARGS)
+    multi.clock.ms = 3_000
+    await multi.controller.mark('first')
+    multi.clock.ms = 6_000
+    await multi.controller.mark('second')
+    multi.clock.ms = 9_000
+    const multiResult = await multi.controller.end({ endNote: 'two slices' })
+    const multiFinalize = multi.deps.finalizeSession.mock.calls[0]![1]
+    expect(multiFinalize.marks).toHaveLength(2)
+    expect(multiFinalize.marks.map((m: { index: number }) => m.index)).toEqual([1, 2])
+    expect(multiResult.marks).toHaveLength(2)
+
+    // Zero-mark: marks[] is omitted entirely so the single-work_item 1:1 path
+    // on the backend is untouched.
+    const none = makeController({ replayRecorder: fakeReplay() })
+    await none.controller.start(START_ARGS)
+    none.clock.ms = 4_000
+    await none.controller.end({ endNote: 'no marks' })
+    const noneFinalize = none.deps.finalizeSession.mock.calls[0]![1]
+    expect(noneFinalize.marks).toBeUndefined()
   })
 
   it('runs without a DOM replay recorder (note-only reproduction)', async () => {

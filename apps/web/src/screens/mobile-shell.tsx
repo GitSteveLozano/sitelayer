@@ -148,6 +148,9 @@ const MobileWorkRequests = lazy(() =>
 )
 const MobileIssueBoard = lazy(() => import('./mobile/issue-board.js').then((m) => ({ default: m.MobileIssueBoard })))
 const MobileAppIssues = lazy(() => import('./mobile/app-issues.js').then((m) => ({ default: m.MobileAppIssuesGate })))
+const MobileAppIssueDetail = lazy(() =>
+  import('./mobile/app-issue-detail.js').then((m) => ({ default: m.MobileAppIssueDetailGate })),
+)
 const MobileWorkRequestDetail = lazy(() =>
   import('./mobile/work-request-detail.js').then((m) => ({ default: m.MobileWorkRequestDetail })),
 )
@@ -447,10 +450,13 @@ export function MobileShell({
             />
             <Route path="work/board" element={<MobileIssueBoard companyRole={companyRole} />} />
             <Route path="work/:workItemId" element={<MobileWorkRequestDetail companyRole={companyRole} />} />
-            {/* Internal APP-ISSUE board — capability-gated to app_issue.view
-                (MobileAppIssuesGate redirects non-platform-admins); the API
-                403s regardless. Must precede no catchall here. */}
+            {/* Internal APP-ISSUE board + detail — capability-gated to
+                app_issue.view (the gate components redirect non-platform-admins);
+                the API 403s regardless. The :issueId detail mounts the "go
+                deeper" escalation + per-issue cost ledger (STEP6-UI). The
+                catchall keeps any other /issues/* path on the board. */}
             <Route path="issues" element={<MobileAppIssues />} />
+            <Route path="issues/:issueId" element={<MobileAppIssueDetail />} />
             <Route path="issues/*" element={<MobileAppIssues />} />
             <Route path="more/*" element={<MoreRoute />} />
             <Route

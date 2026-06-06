@@ -34,7 +34,7 @@ import {
   buildAuthenticatedScreenRecordingConsentScope,
 } from '@/lib/capture-policy'
 import { ScreenCaptureRecorder } from '@/lib/capture-recorder'
-import { ReproBracketController } from '@/lib/repro-bracket'
+import { ReproBracketController, type ReproMark } from '@/lib/repro-bracket'
 import {
   CAPTURE_LEVEL_META,
   availableCaptureLevels,
@@ -63,6 +63,13 @@ type RecordingKind = 'feedback' | 'screen' | 'repro'
 type FeedbackReceipt = {
   workItemId: string
   supportPacketId: string
+  /**
+   * The repro-bracket marks surfaced from `ReproBracketController.end()`
+   * (STEP5-UI). One entry per "the bug is here" mark the reviewer dropped; the
+   * backend emits one work_item per mark/mark-pair, so the receipt shows the
+   * reviewer exactly which moments were filed.
+   */
+  marks?: ReproMark[]
 }
 
 type AuthenticatedFeedbackDockProps = {
@@ -185,11 +192,12 @@ function emitCaptureWorkRequest(finalize: CaptureFinalizeResponse): void {
     .catch(() => undefined)
 }
 
-function receiptFromFinalize(finalize: CaptureFinalizeResponse): FeedbackReceipt {
+function receiptFromFinalize(finalize: CaptureFinalizeResponse, marks?: ReproMark[]): FeedbackReceipt {
   emitCaptureWorkRequest(finalize)
   return {
     workItemId: finalize.work_item.id,
     supportPacketId: finalize.support_packet.id,
+    ...(marks && marks.length ? { marks } : {}),
   }
 }
 
@@ -599,7 +607,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
     try {
       const result = await controller.end({ ...(endNote ? { endNote } : {}) })
       reproRef.current = null
-      setReceipt(receiptFromFinalize(result.finalize))
+      setReceipt(receiptFromFinalize(result.finalize, result.marks))
       clearLocalCaptureSession()
       setNote('')
       setRecordingKind(null)
@@ -854,10 +862,26 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
   }
 
   if (state === 'sent') {
+    const markCount = receipt?.marks?.length ?? 0
     return (
-      <div style={{ ...dockPositionStyle, ...pillStyle, color: 'var(--m-green)', cursor: 'default' }}>
-        <CheckCircle size={16} aria-hidden />
-        {receipt ? `Sent · packet ${receipt.supportPacketId} · work ${receipt.workItemId}` : 'Feedback sent'}
+      <div style={dockStackStyle}>
+        <div style={{ ...dockPositionStyle, ...pillStyle, color: 'var(--m-green)', cursor: 'default' }}>
+          <CheckCircle size={16} aria-hidden />
+          {receipt
+            ? `Sent · packet ${receipt.supportPacketId} · work ${receipt.workItemId}` +
+              (markCount ? ` · ${markCount} mark${markCount === 1 ? '' : 's'}` : '')
+            : 'Feedback sent'}
+        </div>
+        {markCount ? (
+          <div style={receiptMarksStyle}>
+            {receipt!.marks!.map((mark, index) => (
+              <div key={`${mark.at}:${index}`} style={receiptMarkRowStyle}>
+                <span style={receiptMarkOffsetStyle}>{formatElapsed(mark.offset_ms)}</span>
+                <span style={receiptMarkLabelStyle}>{mark.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -1237,6 +1261,39 @@ const markInputStyle: React.CSSProperties = {
 const markButtonStyle: React.CSSProperties = {
   ...secondaryButtonStyle,
   justifyContent: 'center',
+  whiteSpace: 'nowrap',
+}
+
+// STEP5-UI: the per-mark receipt list shown after a multi-mark reproduction
+// is filed, so the reviewer sees exactly which moments were surfaced.
+const receiptMarksStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  maxWidth: 320,
+  padding: '8px 12px',
+  borderRadius: 10,
+  background: 'var(--m-card-soft, rgba(0,0,0,0.04))',
+  border: '1px solid var(--m-line, rgba(0,0,0,0.08))',
+}
+
+const receiptMarkRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  alignItems: 'baseline',
+  fontSize: 12,
+}
+
+const receiptMarkOffsetStyle: React.CSSProperties = {
+  fontVariantNumeric: 'tabular-nums',
+  fontWeight: 700,
+  color: 'var(--m-ink-3, #6b6b6b)',
+  flexShrink: 0,
+}
+
+const receiptMarkLabelStyle: React.CSSProperties = {
+  color: 'var(--m-ink-2, #333)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 }
 

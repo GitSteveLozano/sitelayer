@@ -5,6 +5,7 @@ import { workflowEventRef } from '@sitelayer/workflows'
 import { compactTraceEventType, compactWorkflowSnapshot, emitControlPlaneTrace } from '@/lib/control-plane-trace'
 import { getActiveCaptureSession } from '@/lib/capture-session'
 import { markWorkflowTransition } from '@/lib/api/capture-sessions'
+import { recordLiveWorkflowAnchor } from '@/lib/live-workflow-anchor'
 
 /**
  * Generic factory for the headless workflow UI machines that wrap
@@ -119,6 +120,9 @@ function emitTransitionMark(args: {
     entity_id: args.entityId,
     state_version: args.stateVersion,
   })
+  // Latch the anchor so the trace-mode auto-filer (STEP4) can stamp the
+  // workflow the user was last touching when a client error fires.
+  recordLiveWorkflowAnchor({ eventRef, workflowName: args.workflowName, entityId: args.entityId })
   void markWorkflowTransition(session.id, {
     eventRef,
     workflowName: args.workflowName,

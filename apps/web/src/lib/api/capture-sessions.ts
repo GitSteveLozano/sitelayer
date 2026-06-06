@@ -86,6 +86,24 @@ export type CaptureArtifactUploadResponse = {
   }
 }
 
+/**
+ * One repro-bracket mark serialized for the finalize payload. The backend
+ * (STEP5) reads `marks[]` and, when present, emits ONE work_item per
+ * mark/mark-pair, each carrying its from->to anchor event_refs derived from
+ * the recorder timeline. Shape matches `ReproMark` in `@/lib/repro-bracket`
+ * plus an optional `index` for stable per-slice ordering.
+ */
+export type CaptureFinalizeMark = {
+  /** Milliseconds since the bracket started. */
+  offset_ms: number
+  /** Short human label, e.g. "the total is wrong now". */
+  label: string
+  /** ISO wall-clock time the mark was taken. */
+  at: string
+  /** 1-based index in the mark sequence (optional). */
+  index?: number
+}
+
 export type CaptureFinalizeInput = {
   title?: string
   summary?: string
@@ -96,6 +114,12 @@ export type CaptureFinalizeInput = {
   route?: string
   category?: string
   client_request_id?: string
+  /**
+   * Repro-bracket marks. When present the backend relaxes the
+   * source="capture_session_finalize" 1:1 dedupe to per-slice and emits one
+   * work_item per mark/mark-pair. Omit (or empty) for a single 1:1 work_item.
+   */
+  marks?: CaptureFinalizeMark[]
 }
 
 export type CaptureFinalizeResponse = {
