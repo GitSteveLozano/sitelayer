@@ -1167,6 +1167,11 @@ const server = http.createServer(async (req, res) => {
                     identity,
                     client: pool,
                     superadminEnvIds,
+                    // Tier gates the LOCAL DEV app_issue.* relaxation in
+                    // capability.ts (non-prod → dev/local identity = platform
+                    // admin). In prod this is 'prod' so the boundary is
+                    // unchanged (Clerk + superadmin only).
+                    tier: appConfig.tier,
                   }
                   return requireCapabilityResolver(capabilityCtx, capability, dispatchSendJson)
                 },
@@ -1179,6 +1184,7 @@ const server = http.createServer(async (req, res) => {
                     identity,
                     client: pool,
                     superadminEnvIds,
+                    tier: appConfig.tier,
                   }),
                 readBody: () => readBody(req),
                 sendJson: dispatchSendJson,

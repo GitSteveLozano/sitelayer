@@ -8,7 +8,13 @@ import {
 } from '@sitelayer/domain'
 import type { CompanyRole } from './auth-types.js'
 import type { Identity } from './auth.js'
-import { companyCapabilityGranted, requireCapability, resolveCapability, type CapabilityContext } from './capability.js'
+import {
+  companyCapabilityGranted,
+  requireCapability,
+  resolveAppIssueCapabilities,
+  resolveCapability,
+  type CapabilityContext,
+} from './capability.js'
 import { type AdminQueryExecutor } from './admin-auth.js'
 
 const clerk = (userId: string): Identity => ({ userId, source: 'clerk' })
@@ -193,6 +199,82 @@ describe('resolveCapability — domain dispatch', () => {
       if (verdict.outcome === 'denied') expect(verdict.domain).toBe('app_issue')
       expect(client.queries).toHaveLength(0)
     }
+  })
+})
+
+describe('resolveCapability — tier-gated local-dev app_issue.* relaxation (the prod-boundary safety proof)', () => {
+  const APP_ISSUE_TRIPLE = ['app_issue.capture', 'app_issue.view', 'app_issue.triage'] as const
+
+  // (a) THE PROD BOUNDARY: in prod, a non-Clerk (header / act-as) identity is
+  // HARD-DENIED on every app_issue.* cap — capture AND view AND triage — even
+  // though the SAME identity would be granted in dev. This is the test that
+  // proves the relaxation cannot weaken prod.
+  it('PROD: a non-clerk/header identity is DENIED app_issue.capture AND view AND triage', async () => {
+    for (const identity of [
+      headerIdentity('dev'),
+      defaultIdentity('demo-user'),
+      { userId: 's', source: 'internal' as const },
+    ]) {
+      // Superadmin + grant rows are seeded for this sub to prove the DENY is the
+      // source/tier gate, NOT a missing grant — and that the DB is never hit.
+      const client = new FakePlatformClient(
+        new Set([identity.userId]),
+        new Map([[identity.userId, [...APP_ISSUE_TRIPLE]]]),
+      )
+      for (const cap of APP_ISSUE_TRIPLE) {
+        const verdict = await resolveCapability(ctx({ role: 'admin', identity, client, tier: 'prod' }), cap)
+        expect(verdict.outcome).toBe('denied')
+        if (verdict.outcome === 'denied') expect(verdict.domain).toBe('app_issue')
+      }
+      expect(client.queries).toHaveLength(0)
+    }
+  })
+
+  it('PROD: an ABSENT tier (fail-closed default) also DENIES a header identity on all three', async () => {
+    const client = new FakePlatformClient(new Set(['dev']), new Map([['dev', [...APP_ISSUE_TRIPLE]]]))
+    for (const cap of APP_ISSUE_TRIPLE) {
+      // No `tier` threaded → treated as 'prod' (fail-closed).
+      const verdict = await resolveCapability(ctx({ role: 'admin', identity: headerIdentity('dev'), client }), cap)
+      expect(verdict.outcome).toBe('denied')
+    }
+  })
+
+  // (b) LOCAL DEV: with a non-prod tier, the header / default / act-as identity
+  // is granted ALL THREE app_issue caps so a collaborator can finalize + read.
+  it('LOCAL/DEV: a header/act-as/default identity is ALLOWED app_issue.capture AND view AND triage', async () => {
+    for (const tier of ['local', 'dev', 'preview', 'demo']) {
+      for (const identity of [headerIdentity('e2e-admin'), defaultIdentity('demo-user')]) {
+        const client = new FakePlatformClient() // no superadmin / grants — bypass is tier-only
+        for (const cap of APP_ISSUE_TRIPLE) {
+          const verdict = await resolveCapability(ctx({ role: 'member', identity, client, tier }), cap)
+          expect(verdict.outcome).toBe('allowed')
+        }
+        // The bypass short-circuits before any platform-grant DB lookup.
+        expect(client.queries).toHaveLength(0)
+      }
+    }
+  })
+
+  // (c) UNCHANGED: a Clerk superadmin is still allowed in prod (the existing
+  // Taylor-only path is not regressed by the relaxation).
+  it('PROD: a Clerk superadmin is still ALLOWED app_issue.capture AND view AND triage (unchanged)', async () => {
+    const client = new FakePlatformClient(new Set(['boss']))
+    for (const cap of APP_ISSUE_TRIPLE) {
+      const verdict = await resolveCapability(
+        ctx({ identity: clerk('boss'), client, superadminEnvIds: new Set(['boss']), tier: 'prod' }),
+        cap,
+      )
+      expect(verdict.outcome).toBe('allowed')
+    }
+  })
+
+  // The /api/session surfacing mirrors the same gate: dev surfaces all caps,
+  // prod surfaces none for a non-Clerk identity.
+  it('resolveAppIssueCapabilities: DEV surfaces all caps to a header identity, PROD surfaces none', async () => {
+    const devCaps = await resolveAppIssueCapabilities(ctx({ identity: headerIdentity('dev'), tier: 'local' }))
+    for (const cap of APP_ISSUE_CAPABILITIES) expect(devCaps).toContain(cap)
+    const prodCaps = await resolveAppIssueCapabilities(ctx({ identity: headerIdentity('dev'), tier: 'prod' }))
+    expect(prodCaps).toEqual([])
   })
 })
 

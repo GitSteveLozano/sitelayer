@@ -82,6 +82,27 @@ export type CapabilityContext = {
   client: AdminQueryExecutor
   /** The PLATFORM_SUPERADMIN_CLERK_IDS allowlist (bootstrap superadmins). */
   superadminEnvIds: ReadonlySet<string>
+  /**
+   * The running tier (`appConfig.tier`). Used ONLY to relax the app_issue.*
+   * platform boundary for LOCAL DEV: when the tier is not `prod`, the dev/local
+   * identity (the RoleSwitcher act-as / header / default fallback) is treated as
+   * platform-admin so a collaborator with no Clerk/superadmin can finalize and
+   * read issues locally. In `prod` this is `'prod'` and the boundary is
+   * UNCHANGED (Clerk + superadmin only). Mirrors the tier-gate in
+   * `auth.ts:resolveActAsOverride`. Defaults to `'prod'` (fail-closed) when an
+   * older caller doesn't thread it.
+   */
+  tier?: string
+}
+
+/**
+ * Local-dev relaxation predicate: is this a non-prod tier where the dev/local
+ * identity should be treated as platform-admin for app_issue.* caps? Mirrors
+ * the `tier !== 'prod'` gate in `auth.ts:resolveActAsOverride`. Fail-closed: an
+ * absent tier is treated as `'prod'` so the boundary stays Clerk-only.
+ */
+function isLocalDevPlatformBypass(tier: string | undefined): boolean {
+  return (tier ?? 'prod') !== 'prod'
 }
 
 /**
@@ -98,8 +119,15 @@ export async function resolveCapability(ctx: CapabilityContext, capability: Capa
   }
 
   // app_issue.* — platform boundary only. A non-Clerk identity (header /
-  // default / internal / dev act-as) can never hold an app_issue cap.
+  // default / internal / dev act-as) can never hold an app_issue cap IN PROD.
+  // LOCAL DEV relaxation: when the tier is not `prod`, the dev/local identity
+  // (RoleSwitcher act-as / header / default fallback) is treated as
+  // platform-admin so a collaborator with no Clerk org / superadmin can
+  // finalize + read issues end-to-end. In prod this branch is never taken
+  // (tier === 'prod') and the boundary stays Clerk + superadmin only — the same
+  // tier-gate `auth.ts:resolveActAsOverride` uses for the act-as override.
   if (ctx.identity.source !== 'clerk') {
+    if (isLocalDevPlatformBypass(ctx.tier)) return { outcome: 'allowed' }
     return { outcome: 'denied', domain: 'app_issue', reason: 'platform capability requires a verified Clerk session' }
   }
   const superadmin = await isSuperadmin(ctx.client, ctx.identity.userId, ctx.superadminEnvIds)
@@ -118,7 +146,14 @@ export async function resolveCapability(ctx: CapabilityContext, capability: Capa
  * a field_request.* cap.
  */
 export async function resolveAppIssueCapabilities(ctx: CapabilityContext): Promise<AppIssueCapability[]> {
-  if (ctx.identity.source !== 'clerk') return []
+  if (ctx.identity.source !== 'clerk') {
+    // LOCAL DEV relaxation (see resolveCapability): a non-prod tier surfaces ALL
+    // app_issue.* caps to the dev/local identity so the SPA renders the /issues
+    // board entry for a collaborator. In prod (tier === 'prod') this is never
+    // taken and a non-Clerk session reports zero caps without a DB hit.
+    if (isLocalDevPlatformBypass(ctx.tier)) return [...APP_ISSUE_CAPABILITIES]
+    return []
+  }
   const superadmin = await isSuperadmin(ctx.client, ctx.identity.userId, ctx.superadminEnvIds)
   const platformGrants = superadmin ? [] : await loadPlatformGrants(ctx.client, ctx.identity.userId)
   const caps = resolvePlatformCapabilities(superadmin, platformGrants)
