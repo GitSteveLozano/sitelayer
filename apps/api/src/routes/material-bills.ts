@@ -200,6 +200,21 @@ export async function handleMaterialBillRoutes(
       return true
     }
     const body = parsedPatch.value
+    // LAYER 2: auth_materials — same overlay as the POST (create) path. Editing
+    // a material bill is a materials-authorization action, so the office→estimator
+    // + foreman demotion is realized here too: a plain foreman/office member
+    // passes the requireRole above but is denied here. When the patch changes the
+    // amount, parse it to integer cents and pass it so a custom role's $-cap is
+    // enforced on the NEW amount; an amount-less patch still gates on the
+    // action-level grant.
+    const patchAmountCents = body.amount !== undefined && body.amount !== null ? parseAmountToCents(body.amount) : null
+    if (
+      !ctx.requirePermission(
+        'auth_materials',
+        patchAmountCents !== null ? { amountCents: patchAmountCents } : undefined,
+      )
+    )
+      return true
     return patchVersionedEntity({
       ctx,
       body,
