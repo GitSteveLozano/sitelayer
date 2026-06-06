@@ -2,6 +2,7 @@ import type http from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { Capability } from '@sitelayer/domain'
 import type { Identity } from '../auth.js'
 import { buildPaginationMeta, isValidUuid, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
 import { getRequestContext } from '@sitelayer/logger'
@@ -25,6 +26,7 @@ import {
   type ContextWorkItemDetail,
   type ContextWorkItemRow,
   type HandoffEventType,
+  type WorkItemDomain,
   type WorkItemLane,
   type WorkItemSeverity,
   type WorkItemStatus,
@@ -44,14 +46,26 @@ export type WorkRequestRouteCtx = {
   identity: Identity
   tier: string
   buildSha: string
-  requireRole: (allowed: readonly CompanyRole[]) => boolean
+  /**
+   * Capability gate for the field_request.* domain (migration 009). This board
+   * is the COMPANY-scope field-request feature, so every gate here is a
+   * field_request.* capability resolved on the company boundary (role defaults
+   * ∪ custom_role_grants). Replaces the old CREATE_ROLES / LIST_ROLES /
+   * TRIAGE_ROLES allowlists — the foundation's DEFAULT_COMPANY_CAPABILITIES map
+   * reproduces them exactly (create/view → all 5 roles, triage/resolve →
+   * admin/foreman/office/bookkeeper), so behavior is preserved. Returns true
+   * when held; on false it has already sent the 403 and the handler should
+   * return. See apps/api/src/capability.ts.
+   */
+  requireCapability: (capability: Capability) => Promise<boolean>
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
 
-const CREATE_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member', 'bookkeeper']
-const TRIAGE_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'bookkeeper']
-const LIST_ROLES: readonly CompanyRole[] = CREATE_ROLES
+// This board is the field_request domain only — app-issues (capture-born,
+// platform scope) live on the separate /issues surface gated by app_issue.*.
+// Pin the row filter once so the list/board/detail reads can't drift.
+const FIELD_REQUEST_DOMAIN: WorkItemDomain = 'field_request'
 const MAX_TITLE_LENGTH = 240
 const MAX_SUMMARY_LENGTH = 4000
 const MAX_STALE_SWEEP_LIMIT = 50
@@ -322,6 +336,16 @@ function firstEntityRef(client: JsonRecord): { entityType: string | null; entity
     entityType: ref?.entity_type ?? null,
     entityId: ref?.entity_id ?? null,
   }
+}
+
+/**
+ * This surface is the field_request domain ONLY. A null detail OR an app_issue
+ * row (capture-born, platform scope, lives on the /issues surface) both read as
+ * "not found" here, so an app-issue id is never observable on the field-request
+ * board — the two domains cannot bleed across this boundary.
+ */
+function isFieldRequestDetail(detail: ContextWorkItemDetail | null): detail is ContextWorkItemDetail {
+  return detail !== null && detail.work_item.domain === FIELD_REQUEST_DOMAIN
 }
 
 function canReadWorkItem(role: CompanyRole, userId: string, row: ContextWorkItemRow): boolean {
@@ -995,7 +1019,7 @@ function buildDispatchPayload(
 }
 
 async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteCtx) {
-  if (!ctx.requireRole(CREATE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.create'))) return
   let body: Record<string, unknown>
   try {
     body = await ctx.readBody()
@@ -1176,7 +1200,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
 }
 
 async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
-  if (!ctx.requireRole(LIST_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.view'))) return
   const pagination = parsePagination(url.searchParams, { defaultLimit: 50, maxLimit: PAGINATION_MAX_LIMIT })
   if (!pagination.ok) {
     ctx.sendJson(400, { error: pagination.error })
@@ -1184,6 +1208,7 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
   }
   const memberVisibleUserId = ctx.company.role === 'member' ? ctx.identity.userId : null
   const rows = await listContextWorkItems(ctx.company.id, {
+    domain: FIELD_REQUEST_DOMAIN,
     status: url.searchParams.get('status'),
     lane: url.searchParams.get('lane'),
     entityType: url.searchParams.get('entity_type'),
@@ -1204,7 +1229,7 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
 }
 
 async function listWorkRequestBoard(ctx: WorkRequestRouteCtx, url: URL) {
-  if (!ctx.requireRole(LIST_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.view'))) return
   const pagination = parsePagination(url.searchParams, { defaultLimit: 200, maxLimit: PAGINATION_MAX_LIMIT })
   if (!pagination.ok) {
     ctx.sendJson(400, { error: pagination.error })
@@ -1231,6 +1256,7 @@ async function listWorkRequestBoard(ctx: WorkRequestRouteCtx, url: URL) {
   }
   const memberVisibleUserId = ctx.company.role === 'member' ? ctx.identity.userId : null
   const rows = await listContextWorkItems(ctx.company.id, {
+    domain: FIELD_REQUEST_DOMAIN,
     status,
     lane,
     entityType: url.searchParams.get('entity_type'),
@@ -1254,15 +1280,16 @@ async function listWorkRequestBoard(ctx: WorkRequestRouteCtx, url: URL) {
 }
 
 async function getWorkRequestQueueHealth(ctx: WorkRequestRouteCtx) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   const health = await withCompanyClient(ctx.company.id, async (c) => {
     const workStatuses = await c.query<{ status: string; count: number }>(
       `select status, count(*)::int as count
          from context_work_items
         where company_id = $1
+          and domain = $3
           and status = any($2::text[])
         group by status`,
-      [ctx.company.id, [...HEALTH_WORK_STATUSES]],
+      [ctx.company.id, [...HEALTH_WORK_STATUSES], FIELD_REQUEST_DOMAIN],
     )
     const dispatchStatuses = await c.query<{ status: string; count: number }>(
       `select status, count(*)::int as count
@@ -1314,10 +1341,11 @@ async function getWorkRequest(ctx: WorkRequestRouteCtx, id: string, url: URL) {
     eventsLimit: eventsPagination.value.limit,
     eventsOffset: eventsPagination.value.offset,
   })
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
+  if (!(await ctx.requireCapability('field_request.view'))) return
   if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
     ctx.sendJson(403, { error: 'forbidden' })
     return
@@ -1349,10 +1377,11 @@ async function getWorkRequestBrief(ctx: WorkRequestRouteCtx, id: string, url: UR
     ? Math.max(12, Math.min(500, Math.floor(requestedEventsLimit)))
     : 200
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit })
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
+  if (!(await ctx.requireCapability('field_request.view'))) return
   if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
     ctx.sendJson(403, { error: 'forbidden' })
     return
@@ -1365,7 +1394,7 @@ async function getWorkRequestBrief(ctx: WorkRequestRouteCtx, id: string, url: UR
 }
 
 async function getWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string, url: URL) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -1380,7 +1409,7 @@ async function getWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string,
     return
   }
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 200 })
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1439,7 +1468,7 @@ async function recordHandoffPacketExportAccess(
 }
 
 async function exportWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -1457,7 +1486,7 @@ async function exportWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: stri
     return
   }
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 200 })
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1525,13 +1554,13 @@ function countsFor<const T extends readonly string[]>(
 }
 
 async function getGithubExport(ctx: WorkRequestRouteCtx, id: string, opts: { recordEvent?: boolean } = {}) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1610,7 +1639,7 @@ async function getGithubExport(ctx: WorkRequestRouteCtx, id: string, opts: { rec
 }
 
 async function moveWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -1659,7 +1688,7 @@ async function moveWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteC
     return
   }
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 1 })
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1759,11 +1788,14 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
     ctx.sendJson(400, { error: 'use the reverse endpoint for work_item.reversed' })
     return
   }
-  if (eventType !== 'message.added' && eventType !== 'resolution.reopened' && !ctx.requireRole(TRIAGE_ROLES)) {
-    return
-  }
+  // message.added / resolution.reopened stay open to every role that can see
+  // the item (field_request.view is the floor all 5 roles hold — unchanged from
+  // the old "any reader" behavior); all other event types are triage-class.
+  const eventCapability: Capability =
+    eventType === 'message.added' || eventType === 'resolution.reopened' ? 'field_request.view' : 'field_request.triage'
+  if (!(await ctx.requireCapability(eventCapability))) return
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1824,14 +1856,14 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
 }
 
 async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
   if (!requireMeshDispatchConfigured(ctx)) return
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -1925,7 +1957,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
 }
 
 async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -1939,7 +1971,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
     return
   }
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -2066,7 +2098,7 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
   }
   const callbackBody = parsed.data
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -2157,10 +2189,12 @@ async function callMeshCancelTask(meshTaskId: string): Promise<{ ok: boolean; st
 }
 
 async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
-  // Same role gate as markResolved / other state mutations: TRIAGE_ROLES.
-  // Member-level callers cannot reverse arbitrary items (they can still
-  // reopen their own through resolution.reopened, which is unchanged).
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  // Reversing a resolution is a resolve-class state mutation → field_request.resolve.
+  // The catalog default for resolve is admin/foreman/office/bookkeeper (member
+  // excluded), preserving the old TRIAGE_ROLES gate exactly. Member-level
+  // callers still cannot reverse arbitrary items (they can reopen their own
+  // through resolution.reopened, which stays on field_request.view).
+  if (!(await ctx.requireCapability('field_request.resolve'))) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -2179,7 +2213,7 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
   }
 
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
-  if (!detail) {
+  if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
@@ -2349,7 +2383,7 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
 }
 
 async function sweepStaleWorkRequests(ctx: WorkRequestRouteCtx) {
-  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!(await ctx.requireCapability('field_request.triage'))) return
   let body: Record<string, unknown>
   try {
     body = await ctx.readBody()
@@ -2368,12 +2402,13 @@ async function sweepStaleWorkRequests(ctx: WorkRequestRouteCtx) {
       `select id, status, lane
          from context_work_items
         where company_id = $1
+          and domain = $4
           and status in ('agent_running', 'review_ready')
           and updated_at < now() - make_interval(hours => $2::int)
         order by updated_at asc
         limit $3
         for update skip locked`,
-      [ctx.company.id, Math.floor(thresholdHours), limit],
+      [ctx.company.id, Math.floor(thresholdHours), limit, FIELD_REQUEST_DOMAIN],
     )
     const updated = []
     for (const row of stale.rows) {

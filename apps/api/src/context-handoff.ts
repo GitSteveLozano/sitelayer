@@ -509,6 +509,13 @@ export async function updateContextWorkItemWithEventTx(
 export async function listContextWorkItems(
   companyId: string,
   filters: {
+    /**
+     * Restrict to one of the two non-bleeding work-item domains (migration
+     * 009). The work-requests.ts board/list/detail surface is the
+     * field_request feature, so it always passes domain: 'field_request'; the
+     * /issues surface passes 'app_issue'. Omitted = no domain filter.
+     */
+    domain?: WorkItemDomain | null
     status?: string | null
     lane?: string | null
     entityType?: string | null
@@ -522,6 +529,10 @@ export async function listContextWorkItems(
 ): Promise<{ rows: ContextWorkItemRow[]; rowCount: number }> {
   const clauses = ['company_id = $1']
   const values: unknown[] = [companyId]
+  if (filters.domain) {
+    values.push(filters.domain)
+    clauses.push(`domain = $${values.length}`)
+  }
   if (filters.status) {
     values.push(filters.status)
     clauses.push(`status = $${values.length}`)

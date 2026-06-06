@@ -6,6 +6,7 @@ import { runWithRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { attachMutationTx } from '../mutation-tx.js'
+import { companyCapabilityGranted } from '../capability.js'
 import { handleWorkRequestRoutes, type WorkRequestRouteCtx } from './work-requests.js'
 
 type JsonRecord = Record<string, unknown>
@@ -562,13 +563,20 @@ class FakePool {
     if (normalized.includes('from context_work_items')) {
       const companyId = params[0] as string
       let rows = this.workItems.filter((item) => item.company_id === companyId)
+      // The field-request board always filters domain = $2 (migration 009), so
+      // the visible-to / created-by user-id filter lands at $3 (one past domain).
+      if (normalized.includes('domain =')) {
+        const domain = params[1] as string | undefined
+        if (domain) rows = rows.filter((item) => item.domain === domain)
+      }
+      const userFilterIndex = normalized.includes('domain =') ? 2 : 1
       if (normalized.includes('created_by_user_id =') && normalized.includes('or assignee_user_id =')) {
-        const visibleTo = params[1] as string | undefined
+        const visibleTo = params[userFilterIndex] as string | undefined
         if (visibleTo) {
           rows = rows.filter((item) => item.created_by_user_id === visibleTo || item.assignee_user_id === visibleTo)
         }
       } else if (normalized.includes('created_by_user_id =')) {
-        const createdBy = params[1] as string | undefined
+        const createdBy = params[userFilterIndex] as string | undefined
         if (createdBy) rows = rows.filter((item) => item.created_by_user_id === createdBy)
       }
       const enriched = rows.map((row) => ({ ...row, expires_at: expiresAtFor(row) }))
@@ -633,9 +641,17 @@ function makeCtx(
       identity,
       tier: 'local',
       buildSha: 'test-build',
-      requireRole: (allowed) => {
-        const ok = allowed.includes(role)
-        if (!ok) responses.push({ status: 403, body: { error: 'forbidden' } })
+      // Mirror the real field_request.* company-boundary resolver: the caller's
+      // role default caps (no custom_role_grants in the fake) decide the verdict.
+      // This board only ever passes field_request.* caps.
+      requireCapability: async (capability) => {
+        const ok = companyCapabilityGranted(role, [], capability)
+        if (!ok) {
+          responses.push({
+            status: 403,
+            body: { error: 'forbidden: capability not granted', capability, domain: 'field_request' },
+          })
+        }
         return ok
       },
       readBody: async () => body as Record<string, unknown>,
@@ -1583,13 +1599,18 @@ describe('handleWorkRequestRoutes', () => {
     }
   })
 
-  it('keeps member users out of company-wide work queue health', async () => {
+  it('keeps member users out of company-wide work queue health (field_request.triage)', async () => {
     const pool = new FakePool()
     const health = makeCtx(pool, {}, 'member')
 
     await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests/queue-health'), health.ctx)
 
-    expect(health.responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+    // member holds field_request.view but NOT triage — same exclusion as the
+    // old TRIAGE_ROLES gate, now surfaced as the capability 403 shape.
+    expect(health.responses[0]).toEqual({
+      status: 403,
+      body: { error: 'forbidden: capability not granted', capability: 'field_request.triage', domain: 'field_request' },
+    })
   })
 
   it('accepts agent callbacks and moves proposals to review', async () => {
