@@ -27,11 +27,26 @@ echo "STUB_VERSIONED_HOOK_RAN target=\${PREPUSH_GATED_BRANCHES:-dev main}"
 exit "\${STUB_EXIT:-0}"
 `
 
+// CRITICAL: strip inherited git-location env (GIT_DIR / GIT_WORK_TREE /
+// GIT_INDEX_FILE / GIT_COMMON_DIR / GIT_PREFIX). When this test runs INSIDE the
+// pre-push hook (the verify gate), git exports those pointing at the REAL repo;
+// left in place they hijack EVERY child here — the temp-repo git commands, the
+// install script (which runs git internally), and the resolved hook — because
+// cwd is ignored once GIT_DIR is set. That made these tests fail ONLY from the
+// gate, not standalone. Every spawn must select its temp repo by `cwd` alone.
+function childEnv(extra = {}) {
+  const e = { ...process.env, ...extra }
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX']) {
+    delete e[k]
+  }
+  return e
+}
+
 function git(cwd, args, env = {}) {
   const res = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: childEnv(env),
   })
   if (res.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed (${res.status}): ${res.stderr}`)
@@ -66,7 +81,7 @@ function runInstall(dir, args = [], env = {}) {
   return spawnSync('bash', ['scripts/install-git-hooks.sh', ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: childEnv(env),
   })
 }
 
@@ -80,7 +95,7 @@ function runResolvedPrePush(dir, stdin, env = {}) {
     cwd: dir,
     input: stdin,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: childEnv(env),
   })
 }
 
@@ -216,7 +231,7 @@ test('the gate is reliable across LINKED WORKTREES (shared hooks dir)', () => {
     assert.equal(hook.status, 0, hook.stderr)
     assert.match(hook.stdout, /STUB_VERSIONED_HOOK_RAN/)
   } finally {
-    spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: dir })
+    spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: dir, env: childEnv() })
     rmSync(wtParent, { recursive: true, force: true })
     rmSync(dir, { recursive: true, force: true })
   }
@@ -234,6 +249,7 @@ test('--uninstall removes the primary config and our backstop shim', () => {
     const after = spawnSync('git', ['config', '--local', '--get', 'core.hooksPath'], {
       cwd: dir,
       encoding: 'utf8',
+      env: childEnv(),
     })
     assert.notEqual(after.status, 0, 'core.hooksPath should be unset after uninstall')
     assert.ok(!existsSync(shim), 'backstop shim should be removed on uninstall')
