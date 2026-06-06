@@ -518,13 +518,6 @@ export async function listContextWorkItems(
     domain?: WorkItemDomain | null
     status?: string | null
     lane?: string | null
-    /**
-     * Restrict to one non-bleeding work-item domain (migration 009). The
-     * field_request consumers (work-requests.ts) omit this so their reads are
-     * unchanged; the app_issue consumers (routes/issues.ts) pin it so the
-     * /issues board never surfaces field-request rows.
-     */
-    domain?: WorkItemDomain | null
     entityType?: string | null
     entityId?: string | null
     createdByUserId?: string | null
@@ -543,10 +536,6 @@ export async function listContextWorkItems(
   if (filters.status) {
     values.push(filters.status)
     clauses.push(`status = $${values.length}`)
-  }
-  if (filters.domain) {
-    values.push(filters.domain)
-    clauses.push(`domain = $${values.length}`)
   }
   if (filters.lane) {
     values.push(filters.lane)
