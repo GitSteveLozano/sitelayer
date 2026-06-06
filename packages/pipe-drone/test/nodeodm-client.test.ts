@@ -4,6 +4,7 @@ import {
   nodeOdmCreateTask,
   nodeOdmGetInfo,
   nodeOdmCommitTask,
+  nodeOdmFetchJsonAsset,
   nodeOdmWaitForCompletion,
   NODEODM_STATUS,
 } from '../src/nodeodm-client.js'
@@ -105,6 +106,45 @@ describe('nodeOdmCommitTask', () => {
     expect(fetch).toHaveBeenCalledWith(
       `${NODE_ODM_URL}/task/new/commit/abc`,
       expect.objectContaining({ method: 'POST' }),
+    )
+  })
+})
+
+describe('nodeOdmFetchJsonAsset', () => {
+  it('fetches and parses a JSON asset from the download tree', async () => {
+    mockFetchSequence([{ body: JSON.stringify({ processing_statistics: { area: 100 } }), status: 200 }])
+    const json = (await nodeOdmFetchJsonAsset({
+      nodeOdmUrl: NODE_ODM_URL,
+      uuid: 'abc',
+      relPath: 'odm_report/stats.json',
+    })) as { processing_statistics: { area: number } }
+    expect(json.processing_statistics.area).toBe(100)
+    expect(fetch).toHaveBeenCalledWith(`${NODE_ODM_URL}/task/abc/download/odm_report/stats.json`)
+  })
+
+  it('strips a leading slash from relPath', async () => {
+    mockFetchSequence([{ body: '{}', status: 200 }])
+    await nodeOdmFetchJsonAsset({ nodeOdmUrl: NODE_ODM_URL, uuid: 'abc', relPath: '/odm_report/stats.json' })
+    expect(fetch).toHaveBeenCalledWith(`${NODE_ODM_URL}/task/abc/download/odm_report/stats.json`)
+  })
+
+  it('returns null on 404 (asset not produced)', async () => {
+    mockFetchSequence([{ body: 'nope', status: 404, statusText: 'Not Found' }])
+    const json = await nodeOdmFetchJsonAsset({ nodeOdmUrl: NODE_ODM_URL, uuid: 'abc', relPath: 'x.json' })
+    expect(json).toBeNull()
+  })
+
+  it('throws on other non-2xx', async () => {
+    mockFetchSequence([{ body: 'boom', status: 500, statusText: 'Server Error' }])
+    await expect(nodeOdmFetchJsonAsset({ nodeOdmUrl: NODE_ODM_URL, uuid: 'abc', relPath: 'x.json' })).rejects.toThrow(
+      /500/,
+    )
+  })
+
+  it('throws when the body is not valid JSON', async () => {
+    mockFetchSequence([{ body: 'not json', status: 200 }])
+    await expect(nodeOdmFetchJsonAsset({ nodeOdmUrl: NODE_ODM_URL, uuid: 'abc', relPath: 'x.json' })).rejects.toThrow(
+      /not valid JSON/,
     )
   })
 })

@@ -171,6 +171,40 @@ export async function nodeOdmDownloadAsset(opts: NodeOdmDownloadAssetOptions): P
   await pipeline(nodeStream, sink)
 }
 
+export interface NodeOdmFetchJsonOptions {
+  nodeOdmUrl: string
+  uuid: string
+  /** Asset-relative path under the task download tree, e.g. `odm_report/stats.json`. */
+  relPath: string
+}
+
+/**
+ * GET /task/:uuid/download/:relPath and parse the body as JSON.
+ *
+ * NodeODM serves individual files from a completed task's output tree under the
+ * download route, so the JSON-shaped report assets (`odm_report/stats.json`,
+ * `cameras.json`, ...) are fetchable directly without pulling the whole
+ * `all.zip`. Returns `null` on 404 (asset not produced for this dataset) so
+ * callers can degrade gracefully; throws on other non-2xx or invalid JSON.
+ */
+export async function nodeOdmFetchJsonAsset(opts: NodeOdmFetchJsonOptions): Promise<unknown | null> {
+  const rel = opts.relPath.replace(/^\/+/, '')
+  const url = `${trimUrl(opts.nodeOdmUrl)}/task/${opts.uuid}/download/${rel}`
+  const res = await fetch(url)
+  if (res.status === 404) return null
+  if (!res.ok) {
+    throw new Error(`nodeOdmFetchJsonAsset(${rel}) failed: ${res.status} ${res.statusText}`)
+  }
+  const text = await res.text()
+  try {
+    return JSON.parse(text) as unknown
+  } catch (err) {
+    throw new Error(`nodeOdmFetchJsonAsset(${rel}): response was not valid JSON: ${(err as Error).message}`, {
+      cause: err,
+    })
+  }
+}
+
 /** Poll until terminal status or timeout. Default poll 10s, timeout 4 hours. */
 export async function nodeOdmWaitForCompletion(opts: NodeOdmWaitOptions): Promise<NodeOdmWaitResult> {
   const pollIntervalMs = opts.pollIntervalMs ?? 10_000

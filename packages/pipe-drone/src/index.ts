@@ -1,10 +1,16 @@
 // pipe-drone: drone imagery → TakeoffResult.
 //
 // Three paths:
-//   A) NodeODM client (live reconstruction). Gated on NODEODM_URL; the spike
-//      can run uploads + polling but cannot parse GeoTIFFs in pure TS.
+//   A) NodeODM client (live reconstruction). Gated on NODEODM_URL. Uploads
+//      images, polls to completion, downloads the headline assets, then
+//      extracts the JSON-parseable `odm_report/stats.json` into a real,
+//      review-required site-coverage TakeoffResult (`takeoffFromOdmReport`).
+//      The richer raster-derived geometry (per-roof-plane RANSAC, DSM/DTM
+//      footprint, cut/fill, surfacing) needs GDAL/PDAL and runs in the
+//      out-of-process Python sidecar — that is the documented live-service
+//      boundary (odm-report.ts → LIVE_SERVICE_BOUNDARY), consumed via Path B.
 //   B) Sidecar JSON (precomputed reconstruction metadata) → TakeoffResult.
-//      This is the demoable end-to-end path.
+//      The full-fidelity path: roof planes, footprint, sitework, surfacing.
 //   C) RANSAC-on-fixture (research smoke test): hand-authored point cloud
 //      → segmented planes → synthetic TakeoffResult. Proves the math.
 
@@ -27,9 +33,19 @@ import {
 import { DroneSidecarSchema, type DroneSidecar } from './sidecar-types.js'
 import { segmentMultiplePlanes, planeAreaFromInliers, type Vec3 } from './ransac.js'
 import {
+  coverageAreaSqm,
+  coverageConfidence,
+  droneSidecarFromOdmReport,
+  parseOdmReport,
+  ODM_REPORT_RELPATH,
+  type OdmReport,
+  type OdmSidecarContext,
+} from './odm-report.js'
+import {
   nodeOdmCommitTask,
   nodeOdmCreateTask,
   nodeOdmDownloadAsset,
+  nodeOdmFetchJsonAsset,
   nodeOdmUploadImage,
   nodeOdmWaitForCompletion,
 } from './nodeodm-client.js'
@@ -257,6 +273,112 @@ export function takeoffFromSidecar(sidecar: DroneSidecar, opts: BuildDroneTakeof
   return validateTakeoffResult(applyReviewFloor(result))
 }
 
+// ─── Path A emit: ODM report JSON → TakeoffResult ─────────────────────────
+//
+// Turns the *JSON-parseable* portion of a live NodeODM reconstruction (the
+// `odm_report/stats.json` rollup) into a real, review-required TakeoffResult.
+// This is the deterministic floor of Path A: site-level coverage area +
+// average-GSD confidence, emitted without inventing roof planes / cut-fill
+// (those need the raster sidecar — see odm-report.ts → LIVE_SERVICE_BOUNDARY).
+
+const SQM_TO_SQFT = 10.7639104167
+
+/**
+ * Pure: build a TakeoffResult from a parsed ODM report + context. Emits a
+ * single site-coverage quantity (UniFormat G1010 — Site Preparation) plus a
+ * warning that documents the raster-extraction boundary.
+ */
+export function takeoffFromOdmReport(
+  report: OdmReport,
+  ctx: OdmSidecarContext,
+  opts: BuildDroneTakeoffOptions,
+): TakeoffResult {
+  const sidecar = droneSidecarFromOdmReport(report, ctx)
+  const orthomosaicId = hashShort(sidecar.artifacts.orthoUrl)
+  const areaSqm = coverageAreaSqm(report)
+  const areaSqft = areaSqm != null ? areaSqm * SQM_TO_SQFT : 0
+  const confidence = clamp01(coverageConfidence(report, ctx))
+
+  if (areaSqft <= 0) {
+    throw new Error(
+      'ODM report carries no positive coverage area; cannot emit a quantity. ' +
+        'Run NodeODM with the point-cloud / report stages enabled, or use Path B (--sidecarPath).',
+    )
+  }
+
+  const provenance: TakeoffProvenance = {
+    kind: 'drone',
+    orthomosaicId,
+    polygonId: 'site-coverage',
+    ...(opts.altitudeM != null ? { altitudeM: opts.altitudeM } : {}),
+  }
+
+  const quantities: TakeoffQuantity[] = [
+    {
+      id: 'q-site-coverage',
+      description: `Reconstructed site coverage area (${sidecar.reconstruction.imageCount} images, GSD ${sidecar.reconstruction.gsdCm} cm)`,
+      uniformatCode: 'G1010',
+      unit: 'sqft' as Unit,
+      value: areaSqft,
+      confidence,
+      provenance,
+      geometryRefs: ['site-coverage-footprint'],
+    },
+  ]
+
+  const surfaces: NonNullable<TakeoffGeometry['surfaces']> = [
+    {
+      id: 'site-coverage-footprint',
+      kind: 'facade',
+      areaSqFt: areaSqft,
+      polygon: sidecar.buildings[0]!.footprint.coordinates[0],
+    },
+  ]
+
+  const warnings: TakeoffWarning[] = [
+    {
+      code: 'odm_report_coverage_only',
+      severity: 'warn',
+      message:
+        'Built from NodeODM odm_report/stats.json (Path A coverage floor). Only site-level ' +
+        'coverage area is emitted; per-roof-plane, sitework cut/fill, and surfacing quantities ' +
+        'require the raster extractor (GDAL/PDAL) and arrive via --sidecarPath (Path B).',
+    },
+  ]
+
+  const result: TakeoffResult = {
+    schemaVersion: '1.0.0',
+    takeoffId: opts.takeoffIdOverride ?? randomUUID(),
+    projectId: opts.projectId,
+    capturedAt: opts.capturedAt ?? new Date().toISOString(),
+    producedAt: opts.producedAtOverride ?? new Date().toISOString(),
+    source: 'drone.photogrammetry',
+    pipelineVersion: PIPELINE_VERSION,
+    units: 'imperial',
+    quantities,
+    geometry: {
+      surfaces,
+      rasterRefs: [
+        {
+          id: orthomosaicId,
+          uri: sidecar.artifacts.orthoUrl,
+          mime: 'image/tiff',
+        },
+      ],
+    },
+    sourceArtifact: {
+      kind: 'drone' as const,
+      drone: sidecar as DroneArtifact,
+    },
+    warnings,
+    // Coverage-only is an explicitly partial extraction (raster geometry not
+    // run): always require human review, regardless of the GSD confidence.
+    reviewRequired: true,
+  }
+
+  return validateTakeoffResult(applyReviewFloor(result))
+}
+
 // ─── Path C: hand-authored point cloud → TakeoffResult ────────────────────
 
 async function buildFromPointCloud(opts: BuildDroneTakeoffOptions): Promise<TakeoffResult> {
@@ -386,10 +508,33 @@ async function runNodeOdmPath(opts: BuildDroneTakeoffOptions): Promise<TakeoffRe
       console.warn(`asset download failed (${asset}):`, (err as Error).message)
     }
   }
-  throw new Error(
-    'NodeODM reconstruction completed; sidecar extraction not implemented in spike. ' +
-      'Author a sidecar JSON describing the extracted geometry and re-run with --sidecarPath.',
-  )
+
+  // Sidecar extraction. The raster assets above (GeoTIFF/LAZ) need GDAL/PDAL to
+  // become per-roof-plane geometry — that is the live-service boundary handled
+  // by the out-of-process Python sidecar and consumed via Path B (--sidecarPath).
+  // But NodeODM also emits a JSON report (`odm_report/stats.json`) we CAN parse
+  // in pure TS, so we extract the site-level coverage quantity from it. This is
+  // the always-available floor of Path A: a real, review-required TakeoffResult.
+  const rawReport = await nodeOdmFetchJsonAsset({
+    nodeOdmUrl: opts.nodeOdmUrl,
+    uuid,
+    relPath: ODM_REPORT_RELPATH,
+  })
+  if (rawReport == null) {
+    throw new Error(
+      `NodeODM task ${uuid} completed but did not produce ${ODM_REPORT_RELPATH}; ` +
+        'cannot extract coverage. Run the report/point-cloud stages, or run the raster ' +
+        'sidecar extractor and re-run with --sidecarPath (Path B).',
+    )
+  }
+  const report: OdmReport = parseOdmReport(rawReport)
+  const ctx: OdmSidecarContext = {
+    orthoUrl: `file://${outDir}/orthophoto.tif`,
+    dsmUrl: `file://${outDir}/dsm.tif`,
+    dtmUrl: `file://${outDir}/dtm.tif`,
+    pointCloudUrl: `file://${outDir}/georeferenced_model.laz`,
+  }
+  return takeoffFromOdmReport(report, ctx, opts)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -446,11 +591,26 @@ function surfacingMaterialToMasterformat(
 export { DroneSidecarSchema, type DroneSidecar } from './sidecar-types.js'
 export { segmentPlane, segmentMultiplePlanes, planeAreaFromInliers, type Plane, type Vec3 } from './ransac.js'
 export {
+  OdmReportSchema,
+  OdmReportValidationError,
+  parseOdmReport,
+  droneSidecarFromOdmReport,
+  coverageAreaSqm,
+  coverageConfidence,
+  averageGsdCm,
+  LIVE_SERVICE_BOUNDARY,
+  ODM_REPORT_RELPATH,
+  DEFAULT_RECONSTRUCTOR_CONFIDENCE,
+  type OdmReport,
+  type OdmSidecarContext,
+} from './odm-report.js'
+export {
   nodeOdmCreateTask,
   nodeOdmUploadImage,
   nodeOdmCommitTask,
   nodeOdmGetInfo,
   nodeOdmDownloadAsset,
+  nodeOdmFetchJsonAsset,
   nodeOdmWaitForCompletion,
   NODEODM_STATUS,
 } from './nodeodm-client.js'
