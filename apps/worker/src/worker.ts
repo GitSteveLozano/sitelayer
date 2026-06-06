@@ -25,6 +25,7 @@ import { createWelcomeEmailRunner } from './runners/welcome-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
+import { createDebugBundleRunner } from './runners/debug-bundle.js'
 import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
@@ -114,6 +115,7 @@ const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
 const welcomeEmailRunner = createWelcomeEmailRunner({ pool, logger })
+const debugBundleRunner = createDebugBundleRunner({ pool, logger })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
 // Observability spectrum (T3, records-nothing): isolated, env-gated forwarder of
 // workflow_event_log → mesh product-trace ingest. No-op unless MESH_TRACE_* env is
@@ -568,6 +570,28 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { ran: false, analyzed: 0, skipped: 0, failed: 0 },
   )
 
+  // Async debug-bundle enrichment (issue-context tier 2): drains
+  // assemble_debug_bundle outbox rows enqueued at app-issue capture finalize,
+  // runs the env-gated Sentry + Axiom pulls around the already-pinned
+  // trace/request ids, and upserts a debug_bundle capture_artifact. Read-only
+  // external calls, so no QBO circuit; a drain failure is isolated here.
+  const debugBundleSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'debug_bundle',
+    () =>
+      debugBundleRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] debug_bundle drain failed')
+        captureWithEntityContext(error, {
+          scope: 'debug_bundle',
+          entity_type: 'app_issue',
+          company_id: companyId,
+        })
+        return { processed: 0, assembled: 0, failed: 0, skipped: 0 }
+      }),
+    { processed: 0, assembled: 0, failed: 0, skipped: 0 },
+  )
+
   const contextWorkDispatchSummary = await runIfLaneActive(
     pool,
     logger,
@@ -722,6 +746,10 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     capture_artifact_analysis_analyzed: captureArtifactAnalysisSummary.analyzed,
     capture_artifact_analysis_skipped: captureArtifactAnalysisSummary.skipped,
     capture_artifact_analysis_failed: captureArtifactAnalysisSummary.failed,
+    debug_bundle_processed: debugBundleSummary.processed,
+    debug_bundle_assembled: debugBundleSummary.assembled,
+    debug_bundle_failed: debugBundleSummary.failed,
+    debug_bundle_skipped: debugBundleSummary.skipped,
     context_work_dispatch_processed: contextWorkDispatchSummary.processed,
     context_work_dispatch_failed: contextWorkDispatchSummary.failed,
     work_dispatch_reconcile_ran: workDispatchReconcileSummary.ran,
@@ -771,6 +799,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     blueprintStorageGcSummary.processed > 0 ||
     captureArtifactRetentionGcSummary.deleted > 0 ||
     captureArtifactAnalysisSummary.analyzed > 0 ||
+    debugBundleSummary.processed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
     workDispatchReconcileSummary.ran ||
     workRequestStaleSummary.ran ||

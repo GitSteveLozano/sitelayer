@@ -20,7 +20,7 @@ import {
 } from '../context-handoff.js'
 import type { Capability } from '@sitelayer/domain'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
-import { notifyCaptureWorkItem, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { notifyCaptureWorkItem, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureSessionAnchors } from '../anchor-resolve.js'
 import { buildIncidentTimeline } from '../incident-timeline.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
@@ -166,6 +166,25 @@ function parsedEnumValue<T extends readonly string[]>(value: unknown, allowed: T
 
 function jsonRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
+}
+
+/**
+ * Pull a bounded string[] off a built server_context field (trace_ids /
+ * request_ids). The debug-bundle enrichment enqueues the ALREADY-PINNED ids so
+ * the worker never re-derives them — this just defensively reads + bounds them.
+ */
+function stringArrayFromServerContext(serverContext: Record<string, unknown>, key: string, limit = 25): string[] {
+  const raw = serverContext[key]
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'string') continue
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    if (!out.includes(trimmed)) out.push(trimmed)
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 function parseOptionalAllowed<T extends readonly string[]>(value: unknown, allowed: T): T[number] | null {
@@ -517,8 +536,15 @@ const CaptureSessionFinalizeBodySchema = z
     route: z.unknown().nullish(),
     client_request_id: z.unknown().nullish(),
     category: z.unknown().nullish(),
+    // STEP5 — optional repro-bracket marks. When present, finalize emits ONE
+    // work_item PER mark / mark-pair (a 1:N slice) instead of the single
+    // session-level item. Each entry is a loose object the handler coerces
+    // defensively (from_event_ref / to_event_ref / label).
+    marks: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .loose()
+
+const MAX_FINALIZE_MARKS = 25
 
 async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
   if (!ctx.requireRole(CREATE_ROLES)) return
@@ -1111,6 +1137,65 @@ async function getCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   })
 }
 
+/**
+ * A normalized repro-bracket slice parsed from one finalize `marks[]` entry.
+ * `fromEventRef` is the bracket start anchor; `toEventRef` is the bracket end
+ * (null for a single-mark slice / still). `sliceKey` is the per-slice
+ * idempotency key (stamped into metadata.slice_key) the relaxed dedupe matches.
+ */
+type ReproBracketSlice = {
+  index: number
+  fromEventRef: string | null
+  toEventRef: string | null
+  label: string | null
+  sliceKey: string
+}
+
+/**
+ * Parse the optional `marks[]` into normalized per-slice repro brackets. Each
+ * mark carries a `from_event_ref` (the bracket start anchor) and an optional
+ * `to_event_ref` (the bracket end → a from->to slice; absent → a single-mark
+ * slice). A defensive `slice_key` is derived per entry so the relaxed finalize
+ * dedupe (per-slice, not the old session-wide 1:1) is deterministic across a
+ * client replay. Marks without any usable anchor are dropped.
+ */
+function parseReproBracketSlices(rawMarks: unknown, captureSessionId: string): ReproBracketSlice[] {
+  if (!Array.isArray(rawMarks)) return []
+  const slices: ReproBracketSlice[] = []
+  for (const [index, raw] of rawMarks.slice(0, MAX_FINALIZE_MARKS).entries()) {
+    if (!isRecord(raw)) continue
+    const fromEventRef = optionalText(raw.from_event_ref ?? raw.event_ref ?? raw.from, 400)
+    const toEventRef = optionalText(raw.to_event_ref ?? raw.to, 400)
+    // A slice must pin at least one anchor end, else it can't carry a range.
+    if (!fromEventRef && !toEventRef) continue
+    const label = optionalText(raw.label, 240)
+    const explicitKey = optionalText(raw.slice_key ?? raw.client_request_id, 200)
+    const sliceKey = explicitKey ?? `${captureSessionId}:${fromEventRef ?? 'none'}:${toEventRef ?? 'none'}`
+    slices.push({ index, fromEventRef, toEventRef, label, sliceKey })
+  }
+  return slices
+}
+
+/** Look up a per-slice finalize work item (relaxed dedupe — matches on the
+ * stamped metadata.slice_key, not the session-wide source). */
+async function getFinalizedCaptureWorkItemForSlice(companyId: string, captureSessionId: string, sliceKey: string) {
+  const result = await withCompanyClient(companyId, (c) =>
+    c.query<{ id: string }>(
+      `select id
+         from context_work_items
+        where company_id = $1
+          and capture_session_id = $2::uuid
+          and metadata ->> 'source' = 'capture_session_finalize'
+          and metadata ->> 'slice_key' = $3
+        order by created_at asc
+        limit 1`,
+      [companyId, captureSessionId, sliceKey],
+    ),
+  )
+  const workItemId = result.rows[0]?.id
+  return workItemId ? getContextWorkItemWithEvents(companyId, workItemId) : null
+}
+
 async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   // Finalizing the capture dock mints an app_issue work item — gate on the
   // PLATFORM capability, not the company role.
@@ -1121,10 +1206,17 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
     return
   }
   const body = parsed.value
-  const existing = await getFinalizedCaptureWorkItem(ctx.company.id, id)
-  if (existing) {
-    ctx.sendJson(200, finalizedWorkItemResponse(existing, true))
-    return
+  const slices = parseReproBracketSlices(body.marks, id)
+  // STEP5 — when no repro-bracket marks are supplied this stays the original
+  // session-level 1:1 finalize (dedupe on the session-wide source). With marks
+  // it becomes a 1:N slice finalize: the dedupe relaxes to PER SLICE so each
+  // bracket mints its own work_item carrying its from->to anchor event_refs.
+  if (slices.length === 0) {
+    const existing = await getFinalizedCaptureWorkItem(ctx.company.id, id)
+    if (existing) {
+      ctx.sendJson(200, finalizedWorkItemResponse(existing, true))
+      return
+    }
   }
 
   const snapshot = await fetchCaptureFinalizeSnapshot(ctx.company.id, id)
@@ -1196,13 +1288,37 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
 
-  let result: {
+  // Per-slice replay: with marks, any slice already finalized short-circuits to
+  // a replay response for that slice (and we drop it from the create list). If
+  // ALL slices already exist, this is a pure replay.
+  const sliceReplays: ContextWorkItemDetail[] = []
+  const pendingSlices: ReproBracketSlice[] = []
+  if (slices.length > 0) {
+    for (const slice of slices) {
+      const existingSlice = await getFinalizedCaptureWorkItemForSlice(ctx.company.id, id, slice.sliceKey)
+      if (existingSlice) sliceReplays.push(existingSlice)
+      else pendingSlices.push(slice)
+    }
+    if (pendingSlices.length === 0) {
+      ctx.sendJson(200, {
+        work_items: sliceReplays.map((detail) => finalizedWorkItemResponse(detail, true).work_item),
+        slices: sliceReplays.length,
+        idempotent_replay: true,
+      })
+      return
+    }
+  }
+
+  type FinalizedItem = {
     packet: { id: string; expires_at: string | null }
     item: ContextWorkItemRow
     event: ContextHandoffEventRow
+    slice: ReproBracketSlice | null
   }
+
+  let results: FinalizedItem[]
   try {
-    result = await withMutationTx(ctx.company.id, async (c) => {
+    results = await withMutationTx(ctx.company.id, async (c) => {
       // Weave the deterministic statechart anchors in-process on the SAME tx
       // client (already bound to app.company_id). Each recent workflow.transition
       // mark on this capture session is resolved + replayed so the persisted
@@ -1227,84 +1343,156 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
         ),
         limit: CAPTURE_TIMELINE_LIMIT,
       }).catch(() => null)
-      const serverContextWithAnchors: JsonRecord = {
-        ...(serverContext as JsonRecord),
-        anchors,
-        ...(timeline ? { timeline: sanitizeSupportJson(timeline) as JsonRecord } : {}),
+      const traceIds = stringArrayFromServerContext(serverContext as JsonRecord, 'trace_ids')
+      const requestIds = stringArrayFromServerContext(serverContext as JsonRecord, 'request_ids')
+
+      // Build ONE finalize item (packet + work_item + created event + the
+      // debug-bundle outbox enqueue) for a single slice (or the whole-session
+      // 1:1 case when `slice` is null). Shared by both branches so the anchors /
+      // timeline / server_context weave + the STEP3 enqueue are identical.
+      const createOneFinalizeItem = async (slice: ReproBracketSlice | null): Promise<FinalizedItem> => {
+        const reproBracket = slice
+          ? {
+              slice_index: slice.index,
+              from_event_ref: slice.fromEventRef,
+              to_event_ref: slice.toEventRef,
+              label: slice.label,
+            }
+          : null
+        const serverContextWithAnchors: JsonRecord = {
+          ...(serverContext as JsonRecord),
+          anchors,
+          ...(timeline ? { timeline: sanitizeSupportJson(timeline) as JsonRecord } : {}),
+          ...(reproBracket ? { repro_bracket: reproBracket } : {}),
+        }
+        const sliceTitle = slice?.label ? `${title} — ${slice.label}` : title
+        const sliceSuffix = slice ? `:slice:${slice.sliceKey}` : ''
+        const packet = await insertSupportPacket(c, {
+          companyId: ctx.company.id,
+          actorUserId: ctx.identity.userId,
+          requestId,
+          route,
+          captureSessionId: id,
+          buildSha: ctx.buildSha,
+          problem: summary,
+          client,
+          serverContext: serverContextWithAnchors,
+          expiresAt,
+          redactionVersion: 'support-packet-v1',
+        })
+        const item = await createContextWorkItemTx(c, {
+          companyId: ctx.company.id,
+          supportPacketId: packet.id,
+          // Capture-dock finalize → an app-issue (problem with the software).
+          domain: 'app_issue',
+          title: sliceTitle,
+          summary,
+          status: 'new',
+          lane,
+          severity,
+          route,
+          captureSessionId: id,
+          createdByUserId: ctx.identity.userId,
+          metadata: {
+            category,
+            source: 'capture_session_finalize',
+            capture_session_id: id,
+            client_request_id: slice ? slice.sliceKey : clientRequestId,
+            support_packet_expires_at: packet.expires_at ?? expiresAt,
+            event_count: snapshot.event_count,
+            artifact_count: snapshot.artifact_count,
+            private_artifact_count: snapshot.private_artifact_count,
+            capture_auto_dispatch: autoDispatch,
+            capture_routing_policy: routingDecision.policyId,
+            capture_policy: routingMetadata,
+            requested_lane: requestedLane,
+            // STEP5 — the per-slice repro bracket + its dedupe key. Present only
+            // on a 1:N marks finalize; absent on the legacy 1:1 path.
+            ...(slice
+              ? {
+                  slice_key: slice.sliceKey,
+                  repro_bracket: reproBracket,
+                }
+              : {}),
+          },
+        })
+        const event = await appendContextHandoffEventTx(c, {
+          companyId: ctx.company.id,
+          workItemId: item.id,
+          eventType: 'work_item.created',
+          actorKind: 'user',
+          actorUserId: ctx.identity.userId,
+          payload: {
+            title: item.title,
+            summary: item.summary,
+            status: item.status,
+            lane: item.lane,
+            severity: item.severity,
+            route: item.route,
+            capture_session_id: id,
+            support_packet_id: packet.id,
+            event_count: snapshot.event_count,
+            artifact_count: snapshot.artifact_count,
+            capture_auto_dispatch: autoDispatch,
+            ...(reproBracket ? { repro_bracket: reproBracket } : {}),
+          },
+          metadata: {
+            category,
+            source: 'capture_session_finalize',
+            capture_session_id: id,
+            capture_auto_dispatch: autoDispatch,
+            capture_routing_policy: routingDecision.policyId,
+            capture_policy: routingMetadata,
+            evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
+            ...(slice ? { slice_key: slice.sliceKey } : {}),
+          },
+          idempotencyKey: `capture_session:finalize:${id}${sliceSuffix}:work_item_created`,
+          captureSessionId: id,
+          buildSha: ctx.buildSha,
+        })
+        // STEP3 — enqueue the async debug-bundle enrichment on the SAME tx so the
+        // outbox row commits atomically with the work item. The worker
+        // (runners/debug-bundle.ts → processAssembleDebugBundle) runs the env-gated
+        // Sentry + Axiom pulls around the trace_ids / request_ids the support
+        // packet ALREADY PINNED (read off server_context, never re-derived) and
+        // upserts a debug_bundle capture_artifact. Idempotent on the work_item id
+        // so a finalize replay reuses the same row. entity_type='app_issue' (the
+        // work-item domain) — that's the value the pusher's claim SQL filters on
+        // and the DEDICATED_HANDLER_MUTATION_TYPES exclusion guards.
+        await recordMutationOutbox(
+          ctx.company.id,
+          'app_issue',
+          item.id,
+          'assemble_debug_bundle',
+          {
+            support_packet_id: packet.id,
+            capture_session_id: id,
+            trace_ids: traceIds,
+            request_ids: requestIds,
+            // STEP5 — the slice's pinned from->to anchors ride into the bundle so
+            // the enrichment + escalation re-run around the EXACT bracket range.
+            ...(slice ? { event_ref: slice.fromEventRef ?? slice.toEventRef } : {}),
+          },
+          `debug_bundle:assemble:${item.id}`,
+          'server',
+          ctx.identity.userId,
+          c,
+        )
+        return { packet, item, event, slice }
       }
-      const packet = await insertSupportPacket(c, {
-        companyId: ctx.company.id,
-        actorUserId: ctx.identity.userId,
-        requestId,
-        route,
-        captureSessionId: id,
-        buildSha: ctx.buildSha,
-        problem: summary,
-        client,
-        serverContext: serverContextWithAnchors,
-        expiresAt,
-        redactionVersion: 'support-packet-v1',
-      })
-      const item = await createContextWorkItemTx(c, {
-        companyId: ctx.company.id,
-        supportPacketId: packet.id,
-        // Capture-dock finalize → an app-issue (problem with the software).
-        domain: 'app_issue',
-        title,
-        summary,
-        status: 'new',
-        lane,
-        severity,
-        route,
-        captureSessionId: id,
-        createdByUserId: ctx.identity.userId,
-        metadata: {
-          category,
-          source: 'capture_session_finalize',
-          capture_session_id: id,
-          client_request_id: clientRequestId,
-          support_packet_expires_at: packet.expires_at ?? expiresAt,
-          event_count: snapshot.event_count,
-          artifact_count: snapshot.artifact_count,
-          private_artifact_count: snapshot.private_artifact_count,
-          capture_auto_dispatch: autoDispatch,
-          capture_routing_policy: routingDecision.policyId,
-          capture_policy: routingMetadata,
-          requested_lane: requestedLane,
-        },
-      })
-      const event = await appendContextHandoffEventTx(c, {
-        companyId: ctx.company.id,
-        workItemId: item.id,
-        eventType: 'work_item.created',
-        actorKind: 'user',
-        actorUserId: ctx.identity.userId,
-        payload: {
-          title: item.title,
-          summary: item.summary,
-          status: item.status,
-          lane: item.lane,
-          severity: item.severity,
-          route: item.route,
-          capture_session_id: id,
-          support_packet_id: packet.id,
-          event_count: snapshot.event_count,
-          artifact_count: snapshot.artifact_count,
-          capture_auto_dispatch: autoDispatch,
-        },
-        metadata: {
-          category,
-          source: 'capture_session_finalize',
-          capture_session_id: id,
-          capture_auto_dispatch: autoDispatch,
-          capture_routing_policy: routingDecision.policyId,
-          capture_policy: routingMetadata,
-          evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
-        },
-        idempotencyKey: `capture_session:finalize:${id}:work_item_created`,
-        captureSessionId: id,
-        buildSha: ctx.buildSha,
-      })
+
+      const created: FinalizedItem[] =
+        pendingSlices.length > 0
+          ? await pendingSlices.reduce<Promise<FinalizedItem[]>>(async (accP, slice) => {
+              const acc = await accP
+              acc.push(await createOneFinalizeItem(slice))
+              return acc
+            }, Promise.resolve([]))
+          : [await createOneFinalizeItem(null)]
+
+      // The session stop + the finalize lifecycle mark happen ONCE per finalize
+      // call regardless of slice count. Point them at the first created item.
+      const primary = created[0]!
       await c.query(
         `update capture_sessions
             set status = case when status = 'open' then 'stopped' else status end,
@@ -1317,8 +1505,9 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           ctx.company.id,
           JSON.stringify({
             finalized_at: new Date().toISOString(),
-            finalized_support_packet_id: packet.id,
-            finalized_work_item_id: item.id,
+            finalized_support_packet_id: primary.packet.id,
+            finalized_work_item_id: primary.item.id,
+            ...(created.length > 1 ? { finalized_slice_count: created.length } : {}),
           }),
         ],
       )
@@ -1328,23 +1517,41 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
         requestId,
         payload: {
           status: 'finalized',
-          work_item_id: item.id,
-          support_packet_id: packet.id,
-          lane: item.lane,
-          severity: item.severity,
+          work_item_id: primary.item.id,
+          support_packet_id: primary.packet.id,
+          lane: primary.item.lane,
+          severity: primary.item.severity,
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
           capture_auto_dispatch: autoDispatch,
+          ...(created.length > 1 ? { slice_count: created.length } : {}),
         },
       })
-      return { packet, item, event }
+      return created
     })
   } catch (error) {
     if (isUniqueViolation(error)) {
-      const replay = await getFinalizedCaptureWorkItem(ctx.company.id, id)
-      if (replay) {
-        ctx.sendJson(200, finalizedWorkItemResponse(replay, true))
-        return
+      // A concurrent finalize raced us. Re-read whichever dedupe key applies.
+      if (slices.length > 0) {
+        const replays: ContextWorkItemDetail[] = []
+        for (const slice of slices) {
+          const detail = await getFinalizedCaptureWorkItemForSlice(ctx.company.id, id, slice.sliceKey)
+          if (detail) replays.push(detail)
+        }
+        if (replays.length > 0) {
+          ctx.sendJson(200, {
+            work_items: replays.map((detail) => finalizedWorkItemResponse(detail, true).work_item),
+            slices: replays.length,
+            idempotent_replay: true,
+          })
+          return
+        }
+      } else {
+        const replay = await getFinalizedCaptureWorkItem(ctx.company.id, id)
+        if (replay) {
+          ctx.sendJson(200, finalizedWorkItemResponse(replay, true))
+          return
+        }
       }
     }
     throw error
@@ -1354,28 +1561,67 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   // tx commits on a separate connection (notifyCaptureWorkItem -> requirePool),
   // so a notify failure can never roll back the just-created work item. Exclude
   // the submitter so an operator filing their own feedback doesn't self-notify.
-  await notifyCaptureWorkItem({
-    companyId: ctx.company.id,
-    excludeUserId: ctx.identity.userId,
-    subject: `New feedback: ${result.item.title}`,
-    text: `${result.item.summary} (${route ?? ''})`,
-    payload: {
-      work_item_id: result.item.id,
-      support_packet_id: result.packet.id,
-      capture_session_id: id,
-      route,
-      lane: result.item.lane,
-      severity: result.item.severity,
-    },
-  })
+  // One ping per created item so a multi-slice finalize surfaces each bracket.
+  for (const created of results) {
+    await notifyCaptureWorkItem({
+      companyId: ctx.company.id,
+      excludeUserId: ctx.identity.userId,
+      subject: `New feedback: ${created.item.title}`,
+      text: `${created.item.summary} (${route ?? ''})`,
+      payload: {
+        work_item_id: created.item.id,
+        support_packet_id: created.packet.id,
+        capture_session_id: id,
+        route,
+        lane: created.item.lane,
+        severity: created.item.severity,
+      },
+    })
+  }
 
+  // 1:1 (no marks) → the original single-item response shape (unchanged so the
+  // existing frontend + tests are untouched). 1:N (marks) → the work_items[]
+  // shape carrying every newly created slice plus any replayed ones.
+  if (slices.length === 0) {
+    const only = results[0]!
+    ctx.sendJson(201, {
+      work_item: only.item,
+      support_packet: {
+        id: only.packet.id,
+        expires_at: only.packet.expires_at ?? expiresAt,
+      },
+      event: only.event,
+    })
+    return
+  }
   ctx.sendJson(201, {
-    work_item: result.item,
-    support_packet: {
-      id: result.packet.id,
-      expires_at: result.packet.expires_at ?? expiresAt,
-    },
-    event: result.event,
+    work_items: [
+      ...results.map((created) => ({
+        work_item: created.item,
+        support_packet: {
+          id: created.packet.id,
+          expires_at: created.packet.expires_at ?? expiresAt,
+        },
+        event: created.event,
+        slice_key: created.slice?.sliceKey ?? null,
+        from_event_ref: created.slice?.fromEventRef ?? null,
+        to_event_ref: created.slice?.toEventRef ?? null,
+      })),
+      ...sliceReplays.map((detail) => {
+        const response = finalizedWorkItemResponse(detail, true)
+        return {
+          work_item: response.work_item,
+          support_packet: response.support_packet,
+          event: response.event,
+          slice_key:
+            typeof response.work_item.metadata?.slice_key === 'string' ? response.work_item.metadata.slice_key : null,
+          idempotent_replay: true as const,
+        }
+      }),
+    ],
+    slices: results.length + sliceReplays.length,
+    created: results.length,
+    replayed: sliceReplays.length,
   })
 }
 

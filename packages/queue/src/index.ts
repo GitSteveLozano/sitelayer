@@ -252,6 +252,12 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // mark it 'applied' WITHOUT performing the pull — a silent data-drop, the
   // exact footgun this exclusion list warns about.
   'pull_qbo_reference',
+  // Async debug-bundle enrichment — drained by apps/worker/src/runners/
+  // debug-bundle.ts (processAssembleDebugBundle). Enqueued at app-issue capture
+  // finalize. Without this entry the generic drain would claim the row and mark
+  // it 'applied' WITHOUT running the Sentry/Axiom pulls or writing the
+  // debug_bundle capture_artifact — a silent enrichment-drop, the same footgun.
+  'assemble_debug_bundle',
 ] as const
 
 /**
@@ -502,3 +508,16 @@ export async function markOutboxRowFailedFresh(
     throw markErr
   }
 }
+
+export {
+  processAssembleDebugBundle,
+  assembleDebugBundle,
+  fetchSentryEnrichment,
+  fetchAxiomEnrichment,
+  type AssembleDebugBundlePayload,
+  type AssembleDebugBundleInput,
+  type DebugBundle,
+  type DebugBundleSummary,
+  type SentryEnrichment,
+  type AxiomEnrichment,
+} from './pushers/debug-bundle.js'

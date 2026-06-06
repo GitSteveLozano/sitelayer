@@ -3,6 +3,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
 import type { ActiveCompany } from '../auth-types.js'
+import type { Identity } from '../auth.js'
 import type { Capability } from '@sitelayer/domain'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleIssueRoutes, type IssueRouteCtx } from './issues.js'
@@ -40,10 +41,21 @@ function workItem(id: string, domain: 'app_issue' | 'field_request'): Row {
   }
 }
 
+const SUPPORT_PACKET_SERVER_CONTEXT = {
+  trace_ids: ['abc123'],
+  request_ids: ['11111111-2222-4333-8444-555555555555'],
+  anchors: [{ event_ref: 'workflow_event:rental:deadbeefdeadbeef:3' }],
+}
+
 // Two rows: one app_issue, one field_request. The list/detail SQL must only
 // ever surface the app_issue row through this platform surface.
 class FakeIssuePool {
   rows: Row[] = [workItem(APP_ISSUE_ID, 'app_issue'), workItem(FIELD_REQUEST_ID, 'field_request')]
+  // Captured side effects so escalate tests can assert the cost-ledger writes.
+  accessLogInserts: Array<{ accessType: unknown; metadata: unknown }> = []
+  handoffEventInserts = 0
+  // Toggle to simulate a packet that has expired / vanished.
+  packetExists = true
 
   attach() {
     attachMutationTx({
@@ -89,6 +101,33 @@ class FakeIssuePool {
     if (normalized.includes('from context_handoff_events') && normalized.includes('count(*)')) {
       return { rows: [{ count: '0' }], rowCount: 1 }
     }
+    // escalate: load the issue's support packet server_context.
+    if (normalized.includes('from support_debug_packets') && normalized.includes('as support_packet_id')) {
+      if (!this.packetExists) return { rows: [], rowCount: 0 }
+      return {
+        rows: [
+          {
+            support_packet_id: 'sp-1',
+            capture_session_id: '44444444-4444-4444-8444-444444444444',
+            server_context: SUPPORT_PACKET_SERVER_CONTEXT,
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+    // escalate: cost-ledger access-log write (one per pull). access_type is a
+    // SQL literal ('escalate'), not a bind param — capture it from the text so
+    // the test asserts the real stamped value; metadata is the last param.
+    if (normalized.includes('insert into support_packet_access_log')) {
+      const accessType = /'escalate'/.test(normalized) ? 'escalate' : null
+      this.accessLogInserts.push({ accessType, metadata: params[params.length - 1] })
+      return { rows: [], rowCount: 1 }
+    }
+    // escalate: handoff event stamp (appendContextHandoffEventTx).
+    if (normalized.includes('insert into context_handoff_events')) {
+      this.handoffEventInserts += 1
+      return { rows: [{ id: 'evt-1', work_item_id: APP_ISSUE_ID }], rowCount: 1 }
+    }
     if (normalized.includes('from context_handoff_events')) {
       return { rows: [], rowCount: 0 }
     }
@@ -107,6 +146,7 @@ function buildUrl(path: string): URL {
 function makeCtx(
   pool: FakeIssuePool,
   allow: boolean,
+  body: Record<string, unknown> = {},
 ): { ctx: IssueRouteCtx; responses: Array<{ status: number; body: unknown }>; capabilityChecks: Capability[] } {
   pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
@@ -118,12 +158,15 @@ function makeCtx(
     ctx: {
       pool: pool as unknown as Pool,
       company,
+      identity: { userId: 'u-1', source: 'header' } as Identity,
+      buildSha: 'test-sha',
       requireCapability: async (capability) => {
         capabilityChecks.push(capability)
         if (!allow) responses.push({ status: 403, body: { error: 'forbidden', capability } })
         return allow
       },
-      sendJson: (status, body) => responses.push({ status, body }),
+      readBody: async () => body,
+      sendJson: (status, responseBody) => responses.push({ status, body: responseBody }),
     },
   }
 }
@@ -182,5 +225,61 @@ describe('internal app-issue surface (/api/issues)', () => {
     const { ctx, responses } = makeCtx(pool, true)
     await handleIssueRoutes(buildReq('GET'), buildUrl(`/api/issues/${FIELD_REQUEST_ID}`), ctx)
     expect(responses[0]).toEqual({ status: 404, body: { error: 'issue not found' } })
+  })
+
+  describe('POST /api/issues/:id/escalate (STEP6)', () => {
+    it('gates on app_issue.triage (403 when denied)', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses, capabilityChecks } = makeCtx(pool, false, { tier: '2' })
+      const handled = await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/escalate`), ctx)
+      expect(handled).toBe(true)
+      expect(capabilityChecks).toEqual(['app_issue.triage'])
+      expect(responses[0]?.status).toBe(403)
+    })
+
+    it('re-runs enrichment around the PINNED ids, records one access-log row per pull', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { tier: '2' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/escalate`), ctx)
+      expect(responses[0]?.status).toBe(200)
+      const body = responses[0]?.body as {
+        tier: string
+        pulls: number
+        bundles: Array<{ trace_ids: string[]; request_ids: string[]; event_ref: string | null }>
+      }
+      expect(body.tier).toBe('2')
+      // One pinned anchor → one pull → one bundle, enriched around its event_ref.
+      expect(body.pulls).toBe(1)
+      expect(body.bundles[0]?.event_ref).toBe('workflow_event:rental:deadbeefdeadbeef:3')
+      // The PINNED ids are carried through verbatim (never re-derived).
+      expect(body.bundles[0]?.trace_ids).toEqual(['abc123'])
+      expect(body.bundles[0]?.request_ids).toEqual(['11111111-2222-4333-8444-555555555555'])
+      // One cost-ledger row per pull, stamped access_type='escalate'.
+      expect(pool.accessLogInserts).toHaveLength(1)
+      expect(pool.accessLogInserts[0]?.accessType).toBe('escalate')
+      expect(pool.handoffEventInserts).toBe(1)
+    })
+
+    it('rejects an invalid tier', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { tier: '9' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/escalate`), ctx)
+      expect(responses[0]?.status).toBe(400)
+    })
+
+    it('404s a field_request id (domains cannot bleed)', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { tier: '2' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${FIELD_REQUEST_ID}/escalate`), ctx)
+      expect(responses[0]).toEqual({ status: 404, body: { error: 'issue not found' } })
+    })
+
+    it('409s when the support packet has expired/vanished', async () => {
+      const pool = new FakeIssuePool()
+      pool.packetExists = false
+      const { ctx, responses } = makeCtx(pool, true, { tier: '2' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/escalate`), ctx)
+      expect(responses[0]?.status).toBe(409)
+    })
   })
 })
