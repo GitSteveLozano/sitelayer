@@ -13,7 +13,7 @@
     "lint": "npm run typecheck"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
+    "@anthropic-ai/sdk": "^0.102.0",
     "@sitelayer/capture-schema": "*",
     "commander": "^12.1.0"
   },
