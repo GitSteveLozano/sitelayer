@@ -143,6 +143,15 @@ export async function dispatchChatResponseToMesh(input: DispatchInput): Promise<
     },
   }
 
+  return postMeshTask(meshApi, body)
+}
+
+/**
+ * POST a task body to mesh `/api/tasks`, returning the task id. Shared by the
+ * operator-chat and voice-intent dispatchers so the abort-timeout + error
+ * shaping live in one place.
+ */
+async function postMeshTask(meshApi: string, body: unknown): Promise<MeshDispatchResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
   try {
@@ -169,4 +178,103 @@ export async function dispatchChatResponseToMesh(input: DispatchInput): Promise<
   } finally {
     clearTimeout(timer)
   }
+}
+
+interface VoiceIntentDispatchInput {
+  /** The voice_project_intent audit_events row id the runner reports back against. */
+  intentId: string
+  /** The (untrusted) speech transcript to parse. Already length-capped by the route. */
+  transcript: string
+  /** Wrapped, injection-defended transcript block (from wrapUntrusted). */
+  untrustedBlock: string
+  /** Existing company customer roster names, so the model can match instead of always proposing-new. */
+  customerNames: string[]
+  /** Valid division codes on this company's projects (e.g. D1..D5). */
+  divisionCodes: string[]
+}
+
+/**
+ * Build the parse prompt for the mesh CLI runner. The (untrusted) transcript is
+ * embedded as a clearly-delimited DATA block via wrapUntrusted at the call site;
+ * the JSON contract below is mirrored by the server-side parser
+ * (routes/voice-intent.ts parseProposedFields) so the wire shape has one source
+ * of truth.
+ */
+function buildVoiceIntentPrompt(input: VoiceIntentDispatchInput, webhookUrl: string): string {
+  const roster = input.customerNames.length
+    ? input.customerNames.map((n) => `- ${n}`).join('\n')
+    : '(no existing customers on file)'
+  const divisions = input.divisionCodes.length ? input.divisionCodes.join(', ') : 'D1, D2, D3, D4, D5'
+  return [
+    `You are parsing a spoken instruction to PRE-FILL (never create) a new construction project in sitelayer.`,
+    `Extract structured fields from the operator's speech. A human will review and edit every field before`,
+    `anything is created — your job is a best-effort proposal, not a commitment.`,
+    ``,
+    `Existing customers on file (match against these by name when the speech clearly refers to one;`,
+    `otherwise propose a NEW customer — never invent a match):`,
+    roster,
+    ``,
+    `Valid division codes: ${divisions}.`,
+    ``,
+    input.untrustedBlock,
+    ``,
+    `Return ONLY a single JSON object (no prose, no markdown fence) with this exact shape:`,
+    `{`,
+    `  "name": string | null,                // proposed project name, or null if not stated`,
+    `  "customer": {`,
+    `    "match": "existing" | "new",        // "existing" only if it clearly matches a name above`,
+    `    "name": string | null               // the matched existing name, or the proposed new customer name`,
+    `  },`,
+    `  "divisions": string[]                  // free-text division/trade names heard (e.g. ["scaffold","concrete"])`,
+    `}`,
+    `Use null / [] for anything not stated. Do not include any field not listed above.`,
+    ``,
+    `When done, POST the JSON to ${webhookUrl} with header`,
+    `Authorization: Bearer $SITELAYER_VOICE_INTENT_WEBHOOK_TOKEN (provided by mesh)`,
+    `Body: {"fields": <the JSON object above>, "model": "<model id you used>"}`,
+    `On 200 / 201 / 202: complete the task. On 4xx: fail_task with the response body.`,
+  ].join('\n')
+}
+
+/**
+ * Enqueue a mesh task to parse a voice transcript into proposed project fields
+ * via the subscription-CLI path. Mirrors dispatchChatResponseToMesh: best-effort,
+ * does NOT wait for the parse — the web polls the GET endpoint separately, and
+ * the runner posts its JSON back to the voice-intent respond webhook.
+ *
+ * Same env contract as the chat path: MESH_API_URL (mesh task target) +
+ * SITELAYER_PUBLIC_BASE (the public hostname the off-host runner posts back to).
+ */
+export async function dispatchVoiceIntentToMesh(input: VoiceIntentDispatchInput): Promise<MeshDispatchResult> {
+  const meshApi = process.env.MESH_API_URL?.trim() || ''
+  if (!meshApi) {
+    return { ok: false, error: 'MESH_API_URL not configured' }
+  }
+  const publicBase = process.env.SITELAYER_PUBLIC_BASE?.trim() || ''
+  if (!publicBase) {
+    return { ok: false, error: 'SITELAYER_PUBLIC_BASE not configured' }
+  }
+
+  const webhookUrl = `${publicBase.replace(/\/+$/, '')}/api/projects/voice-intent/${input.intentId}/respond`
+  const prompt = buildVoiceIntentPrompt(input, webhookUrl)
+
+  const body = {
+    subject: `Voice → project-setup parse (sitelayer)`,
+    description: prompt,
+    project_name: 'sitelayer',
+    priority: 'A',
+    requested_model: 'claude',
+    auto_dispatch: true,
+    tags: 'auto:voice-project-intent:sitelayer',
+    created_by: `sitelayer:voice-intent:${input.intentId}`,
+    execution_context: {
+      project_hint: 'sitelayer',
+      voice_project_intent: {
+        intent_id: input.intentId,
+        webhook_url: webhookUrl,
+      },
+    },
+  }
+
+  return postMeshTask(meshApi, body)
 }

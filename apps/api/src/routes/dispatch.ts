@@ -29,6 +29,7 @@ import { handlePricingProfileRoutes } from './pricing-profiles.js'
 import { handlePricingOverrideRoutes } from './pricing-overrides.js'
 import { handleProjectAssignmentRoutes } from './project-assignments.js'
 import { handleProjectRoutes } from './projects.js'
+import { handleVoiceIntentRoutes } from './voice-intent.js'
 import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
 import { handleQboMappingRoutes } from './qbo-mappings.js'
 import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
@@ -593,6 +594,22 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Voice-driven project setup (v1) — voice PROPOSES proposed fields, the
+    // human CONFIRMS via the regular POST /api/projects. Must precede the
+    // project handler so the /api/projects/voice-intent* paths win over the
+    // project handler's GET /^\/api\/projects\/[^/]+$/ matcher. Gated by
+    // isAiChatEnabled() — no-ops clean (200 disabled) on a non-AI instance.
+    () =>
+      handleVoiceIntentRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        requirePermission: ctx.requirePermission,
         readBody,
         sendJson,
       }),

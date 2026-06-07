@@ -45,6 +45,8 @@ import {
 } from '../../components/m/index.js'
 import { useIsDesktop } from '../../lib/use-is-desktop.js'
 import { CustomerDedupPicker, type CustomerMatch } from './customer-dedup-picker.js'
+import { VoiceProjectSetupControl } from './voice-project-setup-control.js'
+import type { ProposedProjectFields } from '@/lib/api/voice-project-intent'
 
 const DIVISIONS = ['D1', 'D2', 'D3', 'D4', 'D5'] as const
 
@@ -201,6 +203,23 @@ function MobileProjectNewMobile({ companySlug }: { companySlug: string }) {
     }
   }
 
+  // Voice PROPOSES → pre-fill the (editable) form. The human reviews + taps
+  // Create; this only fills fields. Customer: drop any prior link and set the
+  // name — the CustomerDedupPicker below then surfaces an 'existing' match for
+  // one-tap linking, identical to typing the name by hand. Division: apply only
+  // the heuristic Dn suggestion (the form's own default stands otherwise).
+  const applyVoiceProposal = (fields: ProposedProjectFields) => {
+    if (fields.name) setName(fields.name)
+    if (fields.customer.name) {
+      setLinkedCustomer(null)
+      setDismissedFor(null)
+      setCustomerName(fields.customer.name)
+    }
+    if (fields.division_code && (DIVISIONS as readonly string[]).includes(fields.division_code)) {
+      setDivisionCode(fields.division_code as (typeof DIVISIONS)[number])
+    }
+  }
+
   // Adopt an existing customer from the dedup picker: snap the name to the
   // canonical (QBO label when present, else roster name) and record the link.
   const handleLinkCustomer = (match: CustomerMatch) => {
@@ -307,6 +326,9 @@ function MobileProjectNewMobile({ companySlug }: { companySlug: string }) {
       <MTopBar back title="New project" onBack={() => setStep(1)} />
       <MBody>
         <MLargeHead eyebrow="STEP 2 / 2 · DETAILS" title="Project details." />
+        <div style={{ paddingBottom: 8 }}>
+          <VoiceProjectSetupControl onProposed={applyVoiceProposal} />
+        </div>
         <MSectionH>Identification</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Field label="Project name *" htmlFor={nameId} error={nameError}>
