@@ -5,6 +5,7 @@ import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { getActiveCompanySlug } from '@/lib/api'
 import { isSteveCollabMode } from '@/lib/steve-collab'
+import { useSitelayerWebMcpTools } from '@/lib/webmcp/use-webmcp-tools'
 // Lazy: the feedback-capture dock pulls in the rrweb recorder (vendor-rrweb),
 // so a static import would drag that heavy machinery onto the eager critical
 // path. It mounts only on the capture surfaces below, after first paint.
@@ -328,6 +329,12 @@ export default function App() {
 }
 
 function AuthenticatedAppRoutes() {
+  // Register sitelayer as an in-tab WebMCP tool provider for the lifetime of
+  // the signed-in session (no-op when the browser has no WebMCP surface). This
+  // is the in-browser complement to GET /api/agent-tools — see docs/WEBMCP.md.
+  // Mounted here, alongside the capture dock, so it shares the same signed-in
+  // capability posture as the rest of the authenticated shell.
+  useSitelayerWebMcpTools()
   return (
     <>
       <AppShellRoutes />
