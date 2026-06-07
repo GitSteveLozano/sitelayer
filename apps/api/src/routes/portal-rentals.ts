@@ -71,6 +71,7 @@ type ShareLinkRow = {
   customer_id: string | null
   share_token: string
   expires_at: string | null
+  revoked_at: string | null
 }
 
 async function resolveShareLink(
@@ -89,7 +90,7 @@ async function resolveShareLink(
     return { ok: false, status: 401, error: 'share token failed verification' }
   }
   const result = await pool.query<ShareLinkRow>(
-    `select id, company_id, customer_id, share_token, expires_at
+    `select id, company_id, customer_id, share_token, expires_at, revoked_at
      from rental_share_links where share_token = $1 limit 1`,
     [shareToken],
   )
@@ -97,10 +98,40 @@ async function resolveShareLink(
   if (!link) {
     return { ok: false, status: 404, error: 'share link not found' }
   }
+  // Revocation gate (migration 011): a revoked rental share link is dead — the
+  // public catalog read + reserve + capture lifecycle must all reject BEFORE
+  // exposing the company's inventory or accepting a reservation. Checked before
+  // expiry so a revoked link returns the explicit revoke message.
+  if (link.revoked_at) {
+    return { ok: false, status: 410, error: 'share link has been revoked' }
+  }
   if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) {
     return { ok: false, status: 410, error: 'share link expired' }
   }
   return { ok: true, link }
+}
+
+/**
+ * Bump the public-surface access audit on a rental share link. Best-effort +
+ * non-blocking — a cheap GUC-bound UPDATE in its own tx that swallows its own
+ * errors so the customer's catalog load / reservation never fails on the audit
+ * write. access_count + last_accessed_at give the owner a usage trail to spot a
+ * forwarded/leaked link.
+ */
+async function recordRentalShareAccess(link: ShareLinkRow): Promise<void> {
+  try {
+    await withMutationTx(link.company_id, (c) =>
+      c.query(
+        `update rental_share_links
+           set access_count = access_count + 1,
+               last_accessed_at = now()
+         where company_id = $1 and id = $2`,
+        [link.company_id, link.id],
+      ),
+    )
+  } catch {
+    // Audit must never block the read; the link resolution already succeeded.
+  }
 }
 
 // POST /api/portal/rentals/:share_token/reserve wire-format. `items` is a
@@ -138,6 +169,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     const items = await withCompanyClient(resolution.link.company_id, (c) =>
       c.query<{
         id: string
@@ -175,6 +207,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     const parsed = parseJsonBody(PortalRentalReserveBodySchema, await ctx.readBody())
     if (!parsed.ok) {
       ctx.sendJson(400, { error: parsed.error })
@@ -276,6 +309,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     await startPortalCaptureSession(ctx, {
       companyId: resolution.link.company_id,
       actorRef: resolution.link.id,
@@ -304,6 +338,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     await appendPortalCaptureEvents(
       ctx,
       {
@@ -338,6 +373,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     await uploadPortalCaptureArtifact(
       req,
       ctx,
@@ -373,6 +409,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     await finalizePortalCaptureSession(
       ctx,
       {
@@ -407,6 +444,7 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
+    await recordRentalShareAccess(resolution.link)
     await discardPortalCaptureSession(
       ctx,
       {

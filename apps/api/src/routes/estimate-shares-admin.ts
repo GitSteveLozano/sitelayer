@@ -308,6 +308,11 @@ export async function handleEstimateShareRoutes(
         decline_reason: row.decline_reason,
         viewed_at: row.viewed_at,
         view_count: row.view_count,
+        // Public-surface access audit (migration 011) — usage the owner can
+        // review to spot a forwarded/leaked link.
+        last_accessed_at: row.last_accessed_at,
+        access_count: row.access_count,
+        revoked_at: row.revoked_at,
         status: shareStatus(row),
         // Don't leak the token in list responses; the caller already has it.
         share_url_path: `${PORTAL_ESTIMATES_PATH_PREFIX}${row.share_token}`,
@@ -341,13 +346,16 @@ export async function handleEstimateShareRoutes(
         view_count: number
         signer_name: string | null
         revoked_at: string | null
+        last_accessed_at: string | null
+        access_count: number
         status: string | null
       }>(
         `with latest as (
          select distinct on (project_id)
            id, project_id, recipient_email, recipient_name, sent_at,
            expires_at, accepted_at, declined_at, decline_reason,
-           viewed_at, view_count, signer_name, revoked_at, status
+           viewed_at, view_count, signer_name, revoked_at,
+           last_accessed_at, access_count, status
          from estimate_share_links
          where company_id = $1
          order by project_id, sent_at desc
@@ -360,7 +368,7 @@ export async function handleEstimateShareRoutes(
               l.sent_at, l.expires_at,
               l.accepted_at, l.declined_at, l.decline_reason,
               l.viewed_at, l.view_count, l.signer_name,
-              l.revoked_at, l.status
+              l.revoked_at, l.last_accessed_at, l.access_count, l.status
        from latest l
        join projects p on p.id = l.project_id and p.company_id = $1
        order by l.sent_at desc
@@ -387,6 +395,9 @@ export async function handleEstimateShareRoutes(
           viewed_at: row.viewed_at,
           view_count: row.view_count,
           signer_name: row.signer_name,
+          last_accessed_at: row.last_accessed_at,
+          access_count: row.access_count,
+          revoked_at: row.revoked_at,
           status,
         }
       }),

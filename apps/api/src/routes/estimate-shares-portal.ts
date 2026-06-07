@@ -21,6 +21,7 @@ import {
   loadShareByTokenForUpdate,
   logger,
   maybeApplyLifecycleEvent,
+  recordShareAccess,
   type EstimateShareRow,
 } from '../estimate-share-helpers.js'
 
@@ -112,6 +113,13 @@ export async function handlePublicEstimateShareRoutes(
       return true
     }
     const { row } = lookup
+    // Security access audit (migration 011): bump access_count + last_accessed_at
+    // on EVERY successful public hit, including terminal accepted/declined states
+    // (a forwarded link keeps getting accessed after the deal is closed — that's
+    // exactly the signal the owner wants). Best-effort + non-blocking: the helper
+    // runs a cheap GUC-bound UPDATE in its own tx and swallows its own errors so
+    // the customer's portal load never fails on the audit write.
+    await recordShareAccess(ctx.pool, row)
     // Lazy first-view stamp + view_count bump. Don't bump for terminal
     // states — once a customer has accepted/declined the link is mostly
     // a record, not an active funnel step. The CTE captures the previous
@@ -161,6 +169,7 @@ export async function handlePublicEstimateShareRoutes(
       ctx.sendJson(lookup.status, { error: lookup.error })
       return true
     }
+    await recordShareAccess(ctx.pool, lookup.row)
     await startPortalCaptureSession(ctx, {
       companyId: lookup.row.company_id,
       actorRef: lookup.row.id,
@@ -191,6 +200,7 @@ export async function handlePublicEstimateShareRoutes(
       ctx.sendJson(lookup.status, { error: lookup.error })
       return true
     }
+    await recordShareAccess(ctx.pool, lookup.row)
     await appendPortalCaptureEvents(
       ctx,
       {
@@ -225,6 +235,7 @@ export async function handlePublicEstimateShareRoutes(
       ctx.sendJson(lookup.status, { error: lookup.error })
       return true
     }
+    await recordShareAccess(ctx.pool, lookup.row)
     await uploadPortalCaptureArtifact(
       req,
       ctx,
@@ -260,6 +271,7 @@ export async function handlePublicEstimateShareRoutes(
       ctx.sendJson(lookup.status, { error: lookup.error })
       return true
     }
+    await recordShareAccess(ctx.pool, lookup.row)
     await finalizePortalCaptureSession(
       ctx,
       {
@@ -294,6 +306,7 @@ export async function handlePublicEstimateShareRoutes(
       ctx.sendJson(lookup.status, { error: lookup.error })
       return true
     }
+    await recordShareAccess(ctx.pool, lookup.row)
     await discardPortalCaptureSession(
       ctx,
       {
@@ -363,7 +376,9 @@ export async function handlePublicEstimateShareRoutes(
                signature_data_url = $3,
                signer_ip = $4::inet,
                updated_at = now(),
-               viewed_at = coalesce(viewed_at, now())
+               viewed_at = coalesce(viewed_at, now()),
+               access_count = access_count + 1,
+               last_accessed_at = now()
          where id = $1
          returning ${SHARE_COLUMNS}`,
         [row.id, signer_name, signature_data_url, ip],
@@ -461,7 +476,9 @@ export async function handlePublicEstimateShareRoutes(
            set declined_at = now(),
                decline_reason = $2,
                updated_at = now(),
-               viewed_at = coalesce(viewed_at, now())
+               viewed_at = coalesce(viewed_at, now()),
+               access_count = access_count + 1,
+               last_accessed_at = now()
          where id = $1
          returning ${SHARE_COLUMNS}`,
         [row.id, decline_reason],

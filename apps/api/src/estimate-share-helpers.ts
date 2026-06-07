@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import { verifyShareToken, type VerifyShareTokenResult } from './estimate-share-token.js'
-import { enqueueNotification, recordMutationLedger, recordWorkflowEvent } from './mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withMutationTx } from './mutation-tx.js'
 import { listOperatorRecipientUserIds } from './notifications.js'
 
 export const logger = createLogger('api:estimate-shares')
@@ -53,6 +53,13 @@ export type EstimateShareRow = {
   message: string | null
   include_signed_link: boolean | null
   revoked_at: string | null
+  // Public-surface access audit (migration 011). Distinct from viewed_at/
+  // view_count (the customer-funnel "first view" signal): these bump on EVERY
+  // public hit — GET view + accept/decline/finalize + capture lifecycle — so a
+  // forwarded link shows abnormal access regardless of the terminal funnel
+  // state. Surfaced to the owner so they can spot a leaked link.
+  last_accessed_at: string | null
+  access_count: number
   created_at: string
   updated_at: string
 }
@@ -63,6 +70,7 @@ export const SHARE_COLUMNS = `
   accepted_at, declined_at, decline_reason, viewed_at, view_count,
   signature_data_url, signer_name, host(signer_ip) as signer_ip,
   status, state_version, message, include_signed_link, revoked_at,
+  last_accessed_at, access_count,
   created_at, updated_at
 `
 
@@ -152,11 +160,47 @@ export function classifyShareForRecipient(
 ): ShareLookupResult {
   if (!verify.ok) return { ok: false, status: 401, error: 'invalid share token' }
   if (!row) return { ok: false, status: 404, error: 'share link not found' }
+  // Revocation gate (migration 011): a revoked link is dead — the public
+  // surface must reject BEFORE exposing the estimate or accepting an
+  // accept/decline/finalize, even if the link has not yet expired. 410 Gone is
+  // the right shape (the resource existed and is permanently unavailable). The
+  // `status = 'revoked'` workflow column is checked too so a REVOKE that only
+  // moved the workflow state still gates.
+  if (row.revoked_at || row.status === 'revoked') {
+    return { ok: false, status: 410, error: 'share link has been revoked' }
+  }
   const expiresMs = new Date(row.expires_at).getTime()
   if (Number.isFinite(expiresMs) && expiresMs <= Date.now()) {
     return { ok: false, status: 410, error: 'share link has expired' }
   }
   return { ok: true, row }
+}
+
+/**
+ * Bump the public-surface access audit on an estimate share link. Called
+ * best-effort on every successful public portal hit AFTER the data has been
+ * resolved — a cheap UPDATE in its own GUC-bound tx so it never blocks (or
+ * fails) the read. `access_count` + `last_accessed_at` give the owner a usage
+ * trail to spot a forwarded/leaked link. Swallows its own errors: the customer
+ * must still get their estimate even if the audit write hiccups.
+ */
+export async function recordShareAccess(pool: Pool, row: EstimateShareRow): Promise<void> {
+  try {
+    await withMutationTx(row.company_id, (c) =>
+      c.query(
+        `update estimate_share_links
+           set access_count = access_count + 1,
+               last_accessed_at = now()
+         where company_id = $1 and id = $2`,
+        [row.company_id, row.id],
+      ),
+    )
+  } catch (err) {
+    logger.warn(
+      { estimate_share_link_id: row.id, err: err instanceof Error ? err.message : String(err) },
+      '[estimate-share] access audit bump failed (non-blocking)',
+    )
+  }
 }
 
 export async function loadShareByToken(

@@ -39,6 +39,7 @@ import { handleDamageChargeRoutes } from './damage-charges.js'
 import { handleShipmentRoutes } from './shipments.js'
 import { handlePayrollExportRoutes } from './payroll-exports.js'
 import { handleCustomerPortalRoutes } from './customer-portal-links.js'
+import { handleRentalShareAdminRoutes } from './rental-shares-admin.js'
 import { handleCompanyCamRoutes } from './companycam.js'
 import { handleRentalEventRoutes } from './rental-events.js'
 import { handleRentalRequestRoutes } from './rental-requests.js'
@@ -869,6 +870,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         currentUserId,
         requireRole: requireRoleStr,
         readBody,
+        sendJson,
+      }),
+
+    // Rental share-link owner admin (revoke + access audit; LANE A)
+    () =>
+      handleRentalShareAdminRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
         sendJson,
       }),
 

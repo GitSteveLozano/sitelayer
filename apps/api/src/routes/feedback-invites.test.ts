@@ -35,6 +35,8 @@ class FakePool {
         created_by_user_id: params[8],
         created_at: '2026-06-04T12:00:00.000Z',
         last_used_at: null,
+        last_accessed_at: null,
+        access_count: 0,
         metadata: JSON.parse(String(params[9] ?? '{}')) as Record<string, unknown>,
       }
       this.invites.push(row)
@@ -51,8 +53,14 @@ class FakePool {
       }
     }
     if (normalized.startsWith('update feedback_invites set last_used_at')) {
-      const row = this.invites.find((invite) => invite.id === params[0])
-      if (row) row.last_used_at = '2026-06-04T12:05:00.000Z'
+      // Access-audit bump: `set last_used_at = now(), last_accessed_at = now(),
+      // access_count = access_count + 1 where company_id = $1 and id = $2`.
+      const row = this.invites.find((invite) => invite.company_id === params[0] && invite.id === params[1])
+      if (row) {
+        row.last_used_at = '2026-06-04T12:05:00.000Z'
+        row.last_accessed_at = '2026-06-04T12:05:00.000Z'
+        row.access_count = (Number(row.access_count) || 0) + 1
+      }
       return { rows: [], rowCount: row ? 1 : 0 }
     }
     if (normalized.startsWith('update feedback_invites') && normalized.includes('set revoked_at')) {
