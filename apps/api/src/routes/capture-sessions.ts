@@ -23,6 +23,7 @@ import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { notifyCaptureWorkItem, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureSessionAnchors } from '../anchor-resolve.js'
 import { buildIncidentTimeline } from '../incident-timeline.js'
+import { detectInjectionHeuristic } from '../untrusted-content.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
   buildSupportServerContext,
@@ -411,23 +412,40 @@ type CaptureRoutingDecision = {
   promotionProfile: string
   reason: string
   gates: Record<string, CaptureRoutingGate>
+  /** The injection-heuristic pattern ids that tripped the confirm-gate (empty
+   * when the untrusted content scanned clean). Auditable on the work item. */
+  injectionPatterns: string[]
 }
 
 /**
  * Decide where a finalized capture routes (human triage vs. trusted
  * auto-dispatch) AND record WHY, gate by gate. The auto-dispatch outcome is the
- * same AND of conditions the old boolean used; the value-add is the auditable
- * `gates` / willingness-tier / promotion-profile that rides into the work item
- * so triage (and an agent) can see exactly which gate held a capture back.
+ * AND of all gates; the value-add is the auditable `gates` / willingness-tier /
+ * promotion-profile that rides into the work item so triage (and an agent) can
+ * see exactly which gate held a capture back.
  * (Idea salvaged from the retired `feat/usage-capture` branch, re-applied on top
  * of the current consent-enforcing route.)
+ *
+ * CONFIRM-GATE (prompt-injection defense, default-safe): the finalized bundle
+ * carries user-supplied / DOM-captured content that feeds the LLM agent prompt.
+ * That content is sanitized for secrets/PII but NOT for prompt injection. So
+ * before the (env-gated, currently inert) auto-dispatch path can promote a
+ * capture to an agent lane, the untrusted text (`untrustedFragments` — the
+ * reporter summary/title + captured note text) is scanned for imperative /
+ * instruction-like patterns. If anything trips the heuristic, the
+ * `content_clean` gate fails and the capture HOLDS for human triage instead of
+ * auto-dispatching. Auto-dispatch only proceeds when explicitly allowed (the
+ * env flag + the trusted-actor/consent/mode gates) AND the content is clean.
+ * This never changes the current behavior (auto-dispatch is off by default).
  */
 function evaluateCaptureRoutingPolicy(
   ctx: CaptureSessionRouteCtx,
   snapshot: CaptureFinalizeSnapshot,
   category: string,
   requestedLane: WorkItemLane,
+  untrustedFragments: Array<string | null | undefined>,
 ): CaptureRoutingDecision {
+  const injection = detectInjectionHeuristic(untrustedFragments)
   const gates: Record<string, CaptureRoutingGate> = {
     env_allows_dispatch: {
       passed: process.env.CAPTURE_AUTH_AUTO_DISPATCH === '1',
@@ -453,6 +471,13 @@ function evaluateCaptureRoutingPolicy(
       passed: category !== 'portal_capture_session',
       reason: 'portal captures must remain triage-first',
     },
+    // Defense-in-depth confirm-gate: the untrusted captured/user content must not
+    // trip the prompt-injection heuristic. Default-safe — anything suspicious
+    // holds the capture for human triage instead of auto-dispatching an agent.
+    content_clean: {
+      passed: !injection.suspicious,
+      reason: 'untrusted captured content must not trip the prompt-injection heuristic',
+    },
   }
   const autoDispatch = Object.values(gates).every((gate) => gate.passed)
   return {
@@ -461,8 +486,13 @@ function evaluateCaptureRoutingPolicy(
     policyId: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
     willingnessTier: autoDispatch ? 'T4' : 'T2',
     promotionProfile: autoDispatch ? 'trusted_authenticated_auto_dispatch' : 'human_triage',
-    reason: autoDispatch ? 'trusted_authenticated_capture_promoted' : 'capture_requires_triage_or_review',
+    reason: autoDispatch
+      ? 'trusted_authenticated_capture_promoted'
+      : injection.suspicious
+        ? 'capture_held_for_triage_injection_suspected'
+        : 'capture_requires_triage_or_review',
     gates,
+    injectionPatterns: injection.patterns,
   }
 }
 
@@ -476,6 +506,11 @@ function routingDecisionMetadata(decision: CaptureRoutingDecision, requestedLane
     requested_lane: requestedLane,
     resolved_lane: decision.lane,
     auto_dispatch: decision.autoDispatch,
+    // Confirm-gate evidence: present so triage can see whether (and why) the
+    // prompt-injection heuristic held a capture back from auto-dispatch.
+    untrusted_content_scanned: true,
+    injection_suspected: decision.injectionPatterns.length > 0,
+    injection_patterns: decision.injectionPatterns,
     gates: decision.gates,
   }
 }
@@ -1246,7 +1281,18 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   const summary = finalizeSummary(body, snapshot)
   const clientRequestId = optionalText(body.client_request_id, 160) ?? `capture_session_finalize:${id}`
   const category = optionalText(body.category, 120) ?? 'capture_session'
-  const routingDecision = evaluateCaptureRoutingPolicy(ctx, snapshot, category, requestedLane)
+  // The user-supplied / captured text the LLM agent prompt will read. Scanned by
+  // the confirm-gate for prompt-injection before any (env-gated) auto-dispatch.
+  // The repro-bracket slice labels are user-typed too, so include them.
+  const untrustedFinalizeText: Array<string | null | undefined> = [
+    summary,
+    title,
+    optionalText(body.summary, 4000),
+    optionalText(body.problem, 4000),
+    optionalText(body.title, 240),
+    ...slices.map((slice) => slice.label),
+  ]
+  const routingDecision = evaluateCaptureRoutingPolicy(ctx, snapshot, category, requestedLane, untrustedFinalizeText)
   const autoDispatch = routingDecision.autoDispatch
   const lane: WorkItemLane = routingDecision.lane
   const routingMetadata = routingDecisionMetadata(routingDecision, requestedLane)
