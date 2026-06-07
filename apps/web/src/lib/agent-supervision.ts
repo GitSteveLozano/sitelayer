@@ -11,6 +11,7 @@
 // tested in isolation.
 
 import type { ContextHandoffEvent, WorkItemStatus } from './api/work-requests'
+import { readCaptureArtifactsFromServerContext, type CaptureArtifactSummary } from './api/capture-sessions'
 
 /** One deterministic statechart transition pinned at capture finalize. Mirrors
  * the API's `CaptureSessionAnchor` persisted into `server_context.anchors`. */
@@ -203,4 +204,96 @@ export function latestAgentCallback(events: ContextHandoffEvent[]): AgentCallbac
  */
 export function isAwaitingReview(status: WorkItemStatus): boolean {
   return status === 'review_ready' || status === 'review_stale' || status === 'proposal_expired'
+}
+
+/**
+ * The capture artifacts the supervision REPLAY view needs to play the actual
+ * rrweb session recording (in addition to the deterministic statechart replay).
+ *
+ * Both pieces are already snapshotted into the support packet's
+ * `server_context.capture_session` at finalize — the session id and the artifact
+ * list. We read them straight off the already-loaded server_context (no extra
+ * SPA fetch to LIST artifacts); the bytes are pulled on demand by ReproReplayPanel
+ * through the app_issue.view-gated authed file route. We never touch the
+ * DEBUG_TRACE_TOKEN-gated /api/anchors path from the SPA.
+ */
+export interface ReplayCaptureSelection {
+  captureSessionId: string
+  /** The rrweb DOM-replay artifact (kind === 'rrweb'), if one was captured. */
+  rrwebArtifact: CaptureArtifactSummary | null
+  /** The repro-bracket summary artifact (kind === 'repro_bracket'), if present. */
+  reproArtifact: CaptureArtifactSummary | null
+}
+
+function readCaptureSessionId(serverContext: Record<string, unknown> | null | undefined): string | null {
+  if (!serverContext) return null
+  // Prefer the nested session summary id, then the flat capture_session_id mirror.
+  const session = serverContext.capture_session
+  if (isRecord(session)) {
+    const summary = session.summary
+    if (isRecord(summary) && typeof summary.id === 'string' && summary.id.length > 0) return summary.id
+    if (typeof session.id === 'string' && session.id.length > 0) return session.id
+  }
+  return asString(serverContext.capture_session_id)
+}
+
+/**
+ * Project the rrweb + repro-bracket artifacts (and the session id) from a loaded
+ * support packet's server_context. Returns null when there is no capture session
+ * or no playable replay media — so the panel only mounts the rrweb player when
+ * there is actually something to watch.
+ */
+export function selectReplayCapture(
+  serverContext: Record<string, unknown> | null | undefined,
+): ReplayCaptureSelection | null {
+  const captureSessionId = readCaptureSessionId(serverContext)
+  if (!captureSessionId) return null
+  const artifacts = readCaptureArtifactsFromServerContext(serverContext)
+  const rrwebArtifact = artifacts.find((a) => a.kind === 'rrweb') ?? null
+  const reproArtifact = artifacts.find((a) => a.kind === 'repro_bracket') ?? null
+  if (!rrwebArtifact && !reproArtifact) return null
+  return { captureSessionId, rrwebArtifact, reproArtifact }
+}
+
+/**
+ * Map a raw spoken utterance to a review action, for the optional hands-free
+ * voice control on the fast-review row. VOICE PROPOSES — the panel still gates
+ * every match behind a one-tap visual confirm before it commits, so a raw
+ * utterance can never auto-fire a destructive/irreversible action.
+ *
+ * Matching is keyword-based and tolerant of natural phrasing ("let's approve
+ * this", "reject it") but deliberately conservative: an utterance that contains
+ * NO action keyword — or contains TWO conflicting ones — returns null so the
+ * operator is never surprised by an ambiguous command.
+ */
+const VOICE_ACTION_KEYWORDS: ReadonlyArray<{ action: ReviewAction; words: readonly string[] }> = [
+  { action: 'approve', words: ['approve', 'approved', 'accept', 'accepted', 'looks good', 'ship it'] },
+  { action: 'reject', words: ['reject', 'rejected', 'decline', 'declined', 'deny', 'wont do', "won't do"] },
+  { action: 'reopen', words: ['reopen', 're-open', 'open again', 'send it back', 'send back'] },
+  { action: 'reverse', words: ['reverse', 'revert', 'undo', 'roll back', 'rollback'] },
+]
+
+export function mapUtteranceToReviewAction(utterance: string): ReviewAction | null {
+  const text = utterance.toLowerCase()
+  const matched = new Set<ReviewAction>()
+  for (const { action, words } of VOICE_ACTION_KEYWORDS) {
+    if (words.some((word) => text.includes(word))) matched.add(action)
+  }
+  if (matched.size !== 1) return null
+  return [...matched][0] ?? null
+}
+
+/** The four review actions, mirrored from the panel's ReviewAction union so the
+ * voice mapper can live here (pure, unit-testable) without importing the panel. */
+export type ReviewAction = 'approve' | 'reject' | 'reopen' | 'reverse'
+
+const REVIEW_ACTION_LABELS: Record<ReviewAction, string> = {
+  approve: 'Approve',
+  reject: 'Reject',
+  reopen: 'Reopen',
+  reverse: 'Reverse',
+}
+
+export function reviewActionLabel(action: ReviewAction): string {
+  return REVIEW_ACTION_LABELS[action]
 }
