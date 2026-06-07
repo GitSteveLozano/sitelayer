@@ -20,6 +20,8 @@ import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestContextPreview } from '../../components/work-requests/WorkRequestContextPreview.js'
 import { CaptureMediaPanel } from '../../components/work-requests/CaptureMediaPanel.js'
 import { WorkRequestTimeline } from '../../components/work-requests/WorkRequestTimeline.js'
+import { AgentSupervisionPanel } from '../../components/work-requests/AgentSupervisionPanel.js'
+import { isAwaitingReview } from '@/lib/agent-supervision'
 import { readCaptureArtifactsFromServerContext } from '@/lib/api/capture-sessions'
 import {
   WorkRequestReversibilityBadge,
@@ -138,6 +140,14 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     queryFn: () => fetchSupportPacketAccessLog(supportPacketId),
     enabled: isAdmin && Boolean(supportPacketId),
   })
+  // Auto-load the full packet (admin scope) so the supervision REPLAY view has
+  // the deterministic server_context.anchors + timeline without a manual click —
+  // this is the operator review surface. Gated exactly like the manual loader.
+  const fullSupportPacket = useQuery({
+    queryKey: queryKeys.supportPackets.detail(supportPacketId),
+    queryFn: () => fetchSupportPacket(supportPacketId),
+    enabled: isAdmin && Boolean(supportPacketId),
+  })
 
   const busy =
     appendEvent.isPending ||
@@ -235,6 +245,35 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                 />
               </div>
             ) : null}
+
+            <AgentSupervisionPanel
+              workItem={workItem}
+              events={detail.data.events}
+              supportPacket={detail.data.support_packet}
+              serverContext={
+                isAdmin && fullSupportPacket.data ? fullSupportPacket.data.support_packet.server_context : null
+              }
+              agentPrompt={isAdmin ? (fullSupportPacket.data?.agent_prompt ?? null) : null}
+              review={
+                canTriage && isAwaitingReview(workItem.status)
+                  ? {
+                      onApprove: () => appendEvent.mutate({ event_type: 'resolution.accepted' }),
+                      onReject: () =>
+                        appendEvent.mutate({ event_type: 'work_item.status_changed', status: 'wont_do', lane: 'done' }),
+                      onReopen: () => appendEvent.mutate({ event_type: 'resolution.reopened' }),
+                      ...(canReverse ? { onReverse: (reason: string) => reverse.mutate(reason) } : {}),
+                      canReverse,
+                      busy,
+                      error:
+                        appendEvent.error instanceof Error
+                          ? appendEvent.error.message
+                          : reverse.error instanceof Error
+                            ? reverse.error.message
+                            : null,
+                    }
+                  : undefined
+              }
+            />
 
             {hasActions ? (
               <>

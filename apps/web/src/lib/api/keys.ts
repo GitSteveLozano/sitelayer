@@ -87,6 +87,7 @@ export const queryKeys = {
   },
   supportPackets: {
     all: () => ['support-packets'] as const,
+    detail: (id: string) => [...queryKeys.supportPackets.all(), 'detail', id] as const,
     accessLog: (id: string) => [...queryKeys.supportPackets.all(), 'access-log', id] as const,
   },
   bootstrap: (companySlug: string) => ['bootstrap', companySlug] as const,

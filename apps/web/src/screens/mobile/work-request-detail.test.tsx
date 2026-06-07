@@ -230,6 +230,24 @@ beforeEach(() => {
   mocks.fetchWorkRequest.mockResolvedValue(detailResponse)
   mocks.fetchWorkRequestQueueHealth.mockResolvedValue(disabledHealth)
   mocks.fetchSupportPacketAccessLog.mockResolvedValue(accessLog)
+  mocks.fetchSupportPacket.mockResolvedValue({
+    support_packet: {
+      id: '00000000-0000-4000-8000-000000000002',
+      company_id: 'company-1',
+      actor_user_id: 'admin-1',
+      request_id: 'req-1',
+      route: '/financial/estimate-pushes/ep-1',
+      capture_session_id: null,
+      build_sha: 'test-build',
+      problem: 'Estimate push failed',
+      client: {},
+      server_context: {},
+      created_at: '2026-05-21T12:00:00.000Z',
+      expires_at: '2026-05-22T12:00:00.000Z',
+      redaction_version: 'support-packet-v1',
+    },
+    agent_prompt: '# Sitelayer Work Request\nWork item: 00000000-0000-4000-8000-000000000001',
+  })
   mocks.fetchWorkRequestHandoffPacket.mockResolvedValue({ handoff_packet: handoffPacket })
   mocks.exportWorkRequestHandoffPacket.mockResolvedValue({
     handoff_packet: handoffPacket,
@@ -268,7 +286,7 @@ describe('MobileWorkRequestDetail', () => {
     const Wrapper = makeWrapper()
     render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
 
-    expect(await screen.findByText('Estimate push failed')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Estimate push failed', level: 1 })).toBeTruthy()
     expect(await screen.findByText('Agent dispatch unavailable')).toBeTruthy()
     expect((screen.getByText('Dispatch agent') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByText('Agent Prompt by admin-1')).toBeTruthy()
@@ -289,7 +307,7 @@ describe('MobileWorkRequestDetail', () => {
     const Wrapper = makeWrapper()
     render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
 
-    expect(await screen.findByText('Estimate push failed')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Estimate push failed', level: 1 })).toBeTruthy()
     const previewButton = screen.getByText('Preview handoff packet') as HTMLButtonElement
     expect(previewButton.disabled).toBe(false)
     fireEvent.click(previewButton)
