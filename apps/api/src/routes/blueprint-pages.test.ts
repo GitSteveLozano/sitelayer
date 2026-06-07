@@ -39,6 +39,10 @@ class FakePool {
   pageStoragePath: string | null = `${COMPANY_ID}/${BLUEPRINT_ID}/pages/page-1.png`
   documentStoragePath = `${COMPANY_ID}/${BLUEPRINT_ID}/plan.pdf`
   fileName = 'plan.pdf'
+  // When true, the parent blueprint_documents row is soft-deleted, so the
+  // `deleted_at IS NULL` EXISTS guard on the page-list query yields no rows.
+  docDeleted = false
+  pages: Array<{ id: string; blueprint_document_id: string; page_number: number; storage_path: string | null }> = []
 
   attach() {
     attachMutationTx({
@@ -85,6 +89,21 @@ class FakePool {
       }
     }
 
+    // GET /api/blueprints/:docId/pages — list pages, gated by the parent
+    // document's `deleted_at IS NULL` via a correlated EXISTS subquery.
+    if (
+      /from blueprint_pages p/i.test(sql) &&
+      /exists/i.test(sql) &&
+      /blueprint_documents d/i.test(sql) &&
+      /order by p.page_number/i.test(sql)
+    ) {
+      const [companyId, docId] = params as [string, string]
+      if (this.docDeleted) return { rows: [], rowCount: 0 }
+      const rows = this.pages.filter((p) => p.blueprint_document_id === docId)
+      void companyId
+      return { rows, rowCount: rows.length }
+    }
+
     throw new Error(`unexpected SQL in fake pool: ${sql.slice(0, 160)}`)
   }
 }
@@ -125,6 +144,29 @@ function buildUrl(path: string): URL {
 function mockReq(method: string) {
   return { method, headers: {} } as never
 }
+
+describe('handleBlueprintPageRoutes — GET /api/blueprints/:docId/pages soft-delete', () => {
+  it('lists pages for a live blueprint', async () => {
+    const pool = new FakePool()
+    pool.pages.push({ id: PAGE_ID, blueprint_document_id: BLUEPRINT_ID, page_number: 1, storage_path: 'co/p.png' })
+    const { ctx, responses } = makeCtx(pool, new FakeStorage())
+    await handleBlueprintPageRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/pages`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect((responses[0]?.body as { pages: unknown[] }).pages).toHaveLength(1)
+  })
+
+  it('returns no pages when the parent blueprint is soft-deleted', async () => {
+    const pool = new FakePool()
+    pool.docDeleted = true
+    pool.pages.push({ id: PAGE_ID, blueprint_document_id: BLUEPRINT_ID, page_number: 1, storage_path: 'co/p.png' })
+    const { ctx, responses } = makeCtx(pool, new FakeStorage())
+    await handleBlueprintPageRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/pages`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    // Defense-in-depth: a soft-deleted blueprint exposes none of its pages
+    // (nor their storage paths), even though pages are not soft-deleted.
+    expect((responses[0]?.body as { pages: unknown[] }).pages).toHaveLength(0)
+  })
+})
 
 describe('handleBlueprintPageRoutes — GET /api/blueprint-pages/:id/file', () => {
   it('serves the page image storage object through the authenticated route', async () => {

@@ -22,6 +22,11 @@ class FakeStorage implements BlueprintStorage {
   contentTypes = new Map<string, string | undefined>()
   copies: Array<{ from: string; to: string }> = []
   deletes: string[] = []
+  downloadUrlCalls: string[] = []
+  // When set, getDownloadUrl returns this (simulating an S3 backend that COULD
+  // presign). Default null = the local-FS contract (caller must stream). The
+  // presigned-off guard test sets this to prove the URL is never produced.
+  downloadUrl: string | null = null
 
   async put(key: string, contents: Buffer, contentType?: string) {
     this.files.set(key, contents)
@@ -42,8 +47,9 @@ class FakeStorage implements BlueprintStorage {
     this.deletes.push(key)
     this.files.delete(key)
   }
-  async getDownloadUrl() {
-    return null
+  async getDownloadUrl(key: string) {
+    this.downloadUrlCalls.push(key)
+    return this.downloadUrl
   }
 }
 
@@ -398,6 +404,7 @@ function makeCtx(
   role: 'admin' | 'foreman' | 'member' = 'admin',
   companyOverride?: { id: string; slug: string; name?: string },
   rasterizePdfPage?: PdfPageRasterizer,
+  blueprintDownloadPresigned = false,
 ): { ctx: BlueprintRouteCtx; responses: Array<{ status: number; body: unknown }>; redirects: string[] } {
   pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
@@ -432,7 +439,7 @@ function makeCtx(
       },
       storage,
       maxBlueprintUploadBytes: 200 * 1024 * 1024,
-      blueprintDownloadPresigned: false,
+      blueprintDownloadPresigned,
       sendFileContent: () => {
         responses.push({ status: 200, body: { kind: 'file' } })
       },
@@ -787,6 +794,85 @@ describe('handleBlueprintRoutes — GET /api/blueprints/:id/file cross-company i
     expect(responses).toHaveLength(1)
     expect(responses[0]?.status).toBe(200)
     expect((responses[0]?.body as { kind?: string })?.kind).toBe('file')
+  })
+})
+
+describe('handleBlueprintRoutes — GET /api/blueprints/:id/file soft-delete + presigned guard', () => {
+  function seedLiveBlueprint(pool: FakePool, storage: FakeStorage, deleted: boolean) {
+    const storageKey = `co-1/${BLUEPRINT_ID}/plan.pdf`
+    pool.blueprints.push({
+      id: BLUEPRINT_ID,
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      file_name: 'plan.pdf',
+      storage_path: storageKey,
+      preview_type: 'storage_path',
+      calibration_length: null,
+      calibration_unit: null,
+      sheet_scale: null,
+      version: 1,
+      deleted_at: deleted ? '2026-05-02T00:00:00.000Z' : null,
+      replaces_blueprint_document_id: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    storage.files.set(storageKey, Buffer.from('confidential blueprint contents'))
+    return storageKey
+  }
+
+  it('returns 404 (never streams) for a soft-deleted blueprint', async () => {
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    seedLiveBlueprint(pool, storage, /* deleted */ true)
+    const { ctx, responses } = makeCtx(pool, storage)
+    await handleBlueprintRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/file`), ctx)
+    expect(responses).toHaveLength(1)
+    expect(responses[0]?.status).toBe(404)
+    expect((responses[0]?.body as { error?: string }).error).toBe('blueprint not found')
+    // Defense-in-depth: the file path must not have run.
+    expect(responses.find((r) => (r.body as { kind?: string })?.kind === 'file')).toBeUndefined()
+  })
+
+  it('streams bytes and never produces a presigned URL when presigned is OFF (default)', async () => {
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    // Backend COULD presign, but the flag is off so it must never be asked to.
+    storage.downloadUrl = 'https://spaces.example/leak?sig=should-never-happen'
+    seedLiveBlueprint(pool, storage, /* deleted */ false)
+    const { ctx, responses, redirects } = makeCtx(
+      pool,
+      storage,
+      {},
+      'admin',
+      undefined,
+      undefined,
+      /* blueprintDownloadPresigned */ false,
+    )
+    await handleBlueprintRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/file`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect((responses[0]?.body as { kind?: string })?.kind).toBe('file')
+    expect(storage.downloadUrlCalls).toHaveLength(0)
+    expect(redirects).toHaveLength(0)
+  })
+
+  it('redirects to the presigned URL only when presigned is ON', async () => {
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    storage.downloadUrl = 'https://spaces.example/ok?sig=signed'
+    seedLiveBlueprint(pool, storage, /* deleted */ false)
+    const { ctx, responses, redirects } = makeCtx(
+      pool,
+      storage,
+      {},
+      'admin',
+      undefined,
+      undefined,
+      /* blueprintDownloadPresigned */ true,
+    )
+    await handleBlueprintRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/file`), ctx)
+    expect(storage.downloadUrlCalls).toHaveLength(1)
+    expect(redirects).toEqual(['https://spaces.example/ok?sig=signed'])
+    // No bytes streamed when redirecting.
+    expect(responses.find((r) => (r.body as { kind?: string })?.kind === 'file')).toBeUndefined()
   })
 })
 
