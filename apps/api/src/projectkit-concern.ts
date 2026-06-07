@@ -27,6 +27,16 @@ import {
   validateCallback,
   validateConcern,
   validateWorkRequest,
+  // The two boundary-translation helpers are now OWNED by the published
+  // @operator/projectkit "worklifecycle" core (worklifecycle.d.ts names this
+  // module "the canonical home of sitelayer's workItemStatusToCallbackStatus").
+  // Imported under aliases and re-exported below under the existing local names
+  // so every importer of './projectkit-concern.js' is unchanged. Non-behavioral:
+  // the published implementations are byte-for-byte equivalent to the locals they
+  // replace (verified against
+  // node_modules/@operator/projectkit/dist/worklifecycle.js).
+  workItemStatusToCallbackStatus as pkWorkItemStatusToCallbackStatus,
+  severityToPriority as pkSeverityToPriority,
   type Callback,
   type CallbackArtifact,
   type CallbackStatus,
@@ -41,67 +51,39 @@ const DEFAULT_PROJECT_KEY = 'sitelayer'
 /**
  * Map an internal work-item status to the projectkit `Callback` status.
  *
- * Pure, total, and stable — this is the load-bearing translation the boundary
- * test exercises (the Callback shape must not change when the dispatch adapter
- * changes). Required mapping (per the seam contract):
- *   new, triaged   -> accepted
- *   agent_running  -> running
- *   review_ready   -> running
- *   resolved       -> succeeded
- *   wont_do        -> failed
- *   reversed       -> cancelled
+ * RE-POINTED to the published @operator/projectkit `workItemStatusToCallbackStatus`
+ * (the canonical home for this seam translation). Behaviorally identical to the
+ * former local switch — the load-bearing translation the boundary test exercises
+ * (the Callback shape must not change when the dispatch adapter changes):
+ *   new, triaged, human_assigned, reopened          -> accepted
+ *   agent_running, review_ready, review_stale,
+ *     proposal_expired                              -> running
+ *   resolved                                        -> succeeded
+ *   wont_do                                         -> failed
+ *   reversed                                        -> cancelled
+ *   anything else                                   -> null
  *
- * The remaining internal statuses (human_assigned, review_stale,
- * proposal_expired, reopened) have no first-class Callback meaning at the seam
- * yet; they collapse to the closest published `CallbackStatus` so the helper
- * stays total without inventing new vocabulary. `null` is reserved for
- * genuinely unknown input so a caller can omit the Callback status entirely.
+ * Thin local wrapper that pins the published `CallbackStatus | null` return so
+ * the exported signature is unchanged.
  */
 export function workItemStatusToCallbackStatus(
   status: WorkItemStatus | string | null | undefined,
 ): CallbackStatus | null {
-  switch (status) {
-    case 'new':
-    case 'triaged':
-      return 'accepted'
-    case 'agent_running':
-    case 'review_ready':
-      return 'running'
-    case 'resolved':
-      return 'succeeded'
-    case 'wont_do':
-      return 'failed'
-    case 'reversed':
-      return 'cancelled'
-    // Closest-published collapses for the internal-only statuses so the helper
-    // is total. These are NOT part of the seam's required mapping table.
-    case 'human_assigned':
-    case 'reopened':
-      return 'accepted'
-    case 'review_stale':
-    case 'proposal_expired':
-      return 'running'
-    default:
-      return null
-  }
+  return pkWorkItemStatusToCallbackStatus(status)
 }
 
 /**
  * Map internal severity -> projectkit `Concern`/`WorkRequest` priority.
- * Sitelayer's severities already line up 1:1 with the published priority
- * vocabulary; the helper exists so a future divergence has a single edit site
- * and so a null/unknown severity resolves to the published default (`normal`).
+ *
+ * RE-POINTED to the published @operator/projectkit `severityToPriority`.
+ * Sitelayer's severities line up 1:1 with the published priority vocabulary, so
+ * this is non-behavioral. The published return type (`WorkPriority`, which
+ * widens to `string`) is narrowed back to the local `ConcernPriority` here so
+ * the exported signature is unchanged (the runtime values are only ever the four
+ * canonical priorities or the `normal` default).
  */
 export function severityToPriority(severity: WorkItemSeverity | string | null | undefined): ConcernPriority {
-  switch (severity) {
-    case 'low':
-    case 'normal':
-    case 'high':
-    case 'urgent':
-      return severity
-    default:
-      return 'normal'
-  }
+  return pkSeverityToPriority(severity) as ConcernPriority
 }
 
 /** A subscriber-agnostic evidence pointer (no raw content travels here). */
