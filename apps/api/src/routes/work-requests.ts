@@ -40,7 +40,13 @@ import {
   type JsonRecord,
 } from './support-packets.js'
 import type { WorkRequest as ProjectkitWorkRequest } from '@operator/projectkit'
-import { buildConcernSnapshot, buildWorkRequestSnapshot } from '../projectkit-concern.js'
+import {
+  buildCallbackSnapshot,
+  buildConcernSnapshot,
+  buildWorkRequestSnapshot,
+  isTerminalCallbackStatus,
+  workItemStatusToCallbackStatus,
+} from '../projectkit-concern.js'
 
 export type WorkRequestRouteCtx = {
   pool: Pool
@@ -2175,6 +2181,32 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
     ctx.sendJson(400, { error: 'status reversed must use the reverse endpoint' })
     return
   }
+  // ADDITIVE projectkit seam (RETURN leg): alongside the existing handoff-event
+  // payload, stamp a portable, adapter-agnostic @operator/projectkit `Callback`
+  // snapshot under the new `projectkit_callback` key — the return-direction
+  // mirror of the dispatch leg's `dispatch_request`. concern_ref = work_item_id;
+  // status maps from the work item's NEXT status (so the same shape a different
+  // dispatch adapter would POST back is recorded here). TOKEN SAFETY: the
+  // bearer callback token is NEVER carried in this snapshot. NO behavior change:
+  // every pre-existing payload field is untouched; this key is purely added.
+  const callbackStatus = workItemStatusToCallbackStatus(next.status)
+  const callbackMessage = optionalText(callbackBody.message, MAX_SUMMARY_LENGTH)
+  const callbackSnapshot = callbackStatus
+    ? buildCallbackSnapshot({
+        workItemId: id,
+        status: next.status,
+        artifacts: callbackBody.artifacts,
+        // Surface the agent message as the failure detail only on a failed
+        // Callback (its sole contract meaning); leave it on the existing
+        // payload.message for every other status.
+        ...(callbackStatus === 'failed' && callbackMessage ? { error: callbackMessage } : {}),
+        // completed_at only on terminal states; default to the callback instant
+        // when the agent omitted it so the terminal Callback is well-formed.
+        ...(isTerminalCallbackStatus(callbackStatus)
+          ? { completedAt: optionalText(body.completed_at, 64) ?? new Date().toISOString() }
+          : {}),
+      })
+    : null
   const updated = await withMutationTx(ctx.company.id, (c) =>
     updateContextWorkItemWithEventTx(c, {
       companyId: ctx.company.id,
@@ -2189,6 +2221,8 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
         artifacts: callbackBody.artifacts ?? null,
         status: next.status ?? null,
         lane: next.lane ?? null,
+        // ADDITIVE: portable projectkit Callback snapshot (token-free).
+        ...(callbackSnapshot ? { projectkit_callback: callbackSnapshot } : {}),
       },
       metadata: callbackBody.metadata ?? {},
       ...(next.status ? { status: next.status } : {}),

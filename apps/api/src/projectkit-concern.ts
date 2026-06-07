@@ -24,9 +24,11 @@
  */
 import {
   CONTRACT_VERSION,
+  validateCallback,
   validateConcern,
   validateWorkRequest,
   type Callback,
+  type CallbackArtifact,
   type CallbackStatus,
   type Concern,
   type ConcernPriority,
@@ -248,15 +250,59 @@ export function buildWorkRequestSnapshot(input: BuildWorkRequestInput): WorkRequ
 }
 
 /**
+ * The published `CallbackStatus` values that mean the unit of work has reached
+ * a terminal state — i.e. the executor is done. `completed_at` is meaningful
+ * only for these (the seam derives a default terminal timestamp on them when an
+ * inbound callback omits one).
+ */
+export const TERMINAL_CALLBACK_STATUSES: readonly CallbackStatus[] = ['succeeded', 'failed', 'cancelled']
+
+/** True when the published Callback status is a terminal (work-finished) state. */
+export function isTerminalCallbackStatus(status: CallbackStatus | null | undefined): boolean {
+  return status != null && TERMINAL_CALLBACK_STATUSES.includes(status)
+}
+
+/**
+ * Normalize a free-form inbound `artifacts` value into the published
+ * `CallbackArtifact[]` shape ({ kind, ref }). The inbound agent-callback
+ * `artifacts` field is `z.unknown()`, so it may be an array of loosely-typed
+ * objects (e.g. { kind, ref, url, label, ... }) — this keeps only entries that
+ * carry both a non-empty `kind` and a usable pointer (`ref` | `url` | `id`),
+ * dropping anything malformed so the snapshot stays contract-valid. Returns an
+ * empty array (never throws) for non-array / empty / all-malformed input.
+ */
+export function normalizeCallbackArtifacts(value: unknown): CallbackArtifact[] {
+  if (!Array.isArray(value)) return []
+  const out: CallbackArtifact[] = []
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const kind = cleanText(record.kind)
+    // Accept the published `ref`, or fall back to a `url` / `id` pointer so an
+    // adapter that only stamped one of those still maps cleanly.
+    const ref = cleanText(record.ref) ?? cleanText(record.url) ?? cleanText(record.id)
+    if (!kind || !ref) continue
+    out.push({ kind, ref })
+  }
+  return out
+}
+
+/**
  * Build a projectkit `Callback` for a work item's current status — the
  * return-leg shape an adapter (or a future Sitelayer callback handler) speaks.
  * concern_ref = work_item_id. Returns null when the status has no published
  * Callback meaning (so a caller can skip emitting a malformed Callback).
+ *
+ * TOKEN SAFETY: the published Callback snapshot carries NO scoped-bearer
+ * callback token — only the contract fields. Callers must NOT pass the bearer
+ * token through `outputs` (it travels separately on the dispatch payload).
  */
 export function buildCallbackSnapshot(input: {
   workItemId: string
   status: WorkItemStatus | string | null | undefined
   outputs?: Record<string, unknown>
+  /** Free-form inbound artifacts; normalized to the published { kind, ref } shape. */
+  artifacts?: unknown
   error?: string | null
   completedAt?: string | null
 }): Callback | null {
@@ -268,6 +314,8 @@ export function buildCallbackSnapshot(input: {
     status,
   }
   if (input.outputs && Object.keys(input.outputs).length > 0) callback.outputs = input.outputs
+  const artifacts = normalizeCallbackArtifacts(input.artifacts)
+  if (artifacts.length > 0) callback.artifacts = artifacts
   if (cleanText(input.error)) callback.error = cleanText(input.error)!
   if (cleanText(input.completedAt)) callback.completed_at = cleanText(input.completedAt)!
   return callback
@@ -280,4 +328,8 @@ export function validateConcernSnapshot(snapshot: unknown): string[] {
 
 export function validateWorkRequestSnapshot(snapshot: unknown): string[] {
   return validateWorkRequest(snapshot)
+}
+
+export function validateCallbackSnapshot(snapshot: unknown): string[] {
+  return validateCallback(snapshot)
 }

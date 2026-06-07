@@ -6,12 +6,15 @@ import {
   buildCallbackSnapshot,
   buildConcernSnapshot,
   buildWorkRequestSnapshot,
+  isTerminalCallbackStatus,
+  normalizeCallbackArtifacts,
   severityToPriority,
+  validateCallbackSnapshot,
   validateConcernSnapshot,
   validateWorkRequestSnapshot,
   workItemStatusToCallbackStatus,
 } from './projectkit-concern.js'
-import { WORK_ITEM_STATUSES } from './context-handoff.js'
+import { AGENT_CALLBACK_EVENT_TYPES, WORK_ITEM_STATUSES } from './context-handoff.js'
 
 // Load the PUBLISHED projectkit JSON schemas (schemas/*.json) from the installed
 // package so the conformance test is held to the same cross-language contract a
@@ -29,6 +32,15 @@ function loadSchemaDef(name: string, defName: string): SchemaDef {
 }
 const CONCERN_DEF = loadSchemaDef('concern.schema.json', 'Concern')
 const WORK_REQUEST_DEF = loadSchemaDef('work-request.schema.json', 'WorkRequest')
+
+// callback.schema.json is a flat top-level schema (no $defs wrapper), so load
+// its root required[] + the status enum directly. This holds the inbound-leg
+// snapshot to the same cross-language Callback contract a Go subscriber reads.
+function loadRootSchema(name: string): SchemaDef {
+  const path = require.resolve(`@operator/projectkit/schemas/${name}`)
+  return JSON.parse(readFileSync(path, 'utf8')) as SchemaDef
+}
+const CALLBACK_DEF = loadRootSchema('callback.schema.json')
 
 function requiredFieldProblems(def: { required: string[] }, snapshot: Record<string, unknown>): string[] {
   const problems: string[] = []
@@ -239,5 +251,170 @@ describe('buildWorkRequestSnapshot', () => {
     })
     expect(workRequest.intent).toBe('capture-followup')
     expect(validateWorkRequest(workRequest)).toEqual([])
+  })
+})
+
+describe('normalizeCallbackArtifacts', () => {
+  it('keeps well-formed { kind, ref } entries', () => {
+    expect(
+      normalizeCallbackArtifacts([
+        { kind: 'pr', ref: 'https://github.com/x/y/pull/1' },
+        { kind: 'report', ref: 'report-123' },
+      ]),
+    ).toEqual([
+      { kind: 'pr', ref: 'https://github.com/x/y/pull/1' },
+      { kind: 'report', ref: 'report-123' },
+    ])
+  })
+
+  it('falls back to url / id when ref is absent and drops malformed entries', () => {
+    expect(
+      normalizeCallbackArtifacts([
+        { kind: 'pr', url: 'https://github.com/x/y/pull/2' }, // url -> ref
+        { kind: 'screenshot', id: 'shot-7' }, // id -> ref
+        { kind: 'no-pointer' }, // dropped: no ref/url/id
+        { ref: 'no-kind' }, // dropped: no kind
+        'not-an-object', // dropped
+        null, // dropped
+      ]),
+    ).toEqual([
+      { kind: 'pr', ref: 'https://github.com/x/y/pull/2' },
+      { kind: 'screenshot', ref: 'shot-7' },
+    ])
+  })
+
+  it('returns [] for non-array / empty / all-malformed input', () => {
+    expect(normalizeCallbackArtifacts(undefined)).toEqual([])
+    expect(normalizeCallbackArtifacts(null)).toEqual([])
+    expect(normalizeCallbackArtifacts('x')).toEqual([])
+    expect(normalizeCallbackArtifacts([])).toEqual([])
+    expect(normalizeCallbackArtifacts([{}, { kind: '' }])).toEqual([])
+  })
+
+  it('flows artifacts onto a contract-valid Callback', () => {
+    const callback = buildCallbackSnapshot({
+      workItemId: WORK_ITEM_ID,
+      status: 'resolved',
+      artifacts: [{ kind: 'pr', ref: 'https://github.com/x/y/pull/3' }],
+      completedAt: FIXED_AT,
+    })
+    expect(callback!.artifacts).toEqual([{ kind: 'pr', ref: 'https://github.com/x/y/pull/3' }])
+    expect(validateCallback(callback)).toEqual([])
+  })
+})
+
+// The INBOUND (return-leg) conformance: receiveAgentCallback records a
+// projectkit `Callback` snapshot in the appended context_handoff_events payload
+// under `projectkit_callback`. This block reproduces the route's derivation
+// (deriveAgentCallbackState -> next.status -> workItemStatusToCallbackStatus ->
+// buildCallbackSnapshot) for every agent-callback event type and asserts the
+// resulting snapshot validates against the published Callback contract + schema.
+describe('inbound agent-callback Callback snapshot (RETURN leg conformance)', () => {
+  // Mirror of deriveAgentCallbackState in routes/work-requests.ts (the default
+  // status each agent-callback event resolves to when the agent omits one).
+  const defaultStatusForEvent: Record<string, string | undefined> = {
+    'agent.dispatch_acknowledged': 'agent_running',
+    'agent.message_received': undefined, // no status change -> no Callback snapshot
+    'agent.artifact_attached': undefined, // no status change -> no Callback snapshot
+    'agent.proposal_ready': 'review_ready',
+    'agent.completed': 'review_ready',
+    'human.review_requested': 'review_ready',
+  }
+
+  // Build the snapshot the same way receiveAgentCallback does.
+  function snapshotForInbound(input: {
+    eventType: string
+    requestedStatus?: string
+    artifacts?: unknown
+    message?: string | null
+    completedAt?: string
+  }) {
+    const nextStatus = input.requestedStatus ?? defaultStatusForEvent[input.eventType]
+    const callbackStatus = workItemStatusToCallbackStatus(nextStatus)
+    if (!callbackStatus) return null
+    return buildCallbackSnapshot({
+      workItemId: WORK_ITEM_ID,
+      status: nextStatus,
+      artifacts: input.artifacts,
+      ...(callbackStatus === 'failed' && input.message ? { error: input.message } : {}),
+      ...(isTerminalCallbackStatus(callbackStatus) ? { completedAt: input.completedAt ?? FIXED_AT } : {}),
+    })
+  }
+
+  it('every agent-callback event yields a contract-valid Callback (or null when no status change)', () => {
+    for (const eventType of AGENT_CALLBACK_EVENT_TYPES) {
+      const snapshot = snapshotForInbound({ eventType, artifacts: [{ kind: 'pr', ref: 'pr-1' }] })
+      if (defaultStatusForEvent[eventType] === undefined) {
+        // message_received / artifact_attached do not move status -> no snapshot.
+        expect(snapshot).toBeNull()
+        continue
+      }
+      expect(snapshot).not.toBeNull()
+      expect(snapshot!.concern_ref).toBe(WORK_ITEM_ID) // concern_ref = work_item_id
+      expect(snapshot!.schema_version).toBe(CONTRACT_VERSION)
+      // Validates against the published validator AND the re-export.
+      expect(validateCallback(snapshot)).toEqual([])
+      expect(validateCallbackSnapshot(snapshot)).toEqual([])
+      // Satisfies the published callback.schema.json (required fields + enum).
+      expect(requiredFieldProblems(CALLBACK_DEF, snapshot as unknown as Record<string, unknown>)).toEqual([])
+      expect(CALLBACK_DEF.properties?.status?.enum).toContain(snapshot!.status)
+    }
+  })
+
+  it('covers the full status mapping for an agent-supplied terminal status', () => {
+    // succeeded (resolved): completed_at stamped, no error.
+    const succeeded = snapshotForInbound({ eventType: 'agent.completed', requestedStatus: 'resolved' })
+    expect(succeeded!.status).toBe('succeeded')
+    expect(succeeded!.completed_at).toBe(FIXED_AT)
+    expect(succeeded!.error).toBeUndefined()
+    expect(validateCallback(succeeded)).toEqual([])
+
+    // failed (wont_do): error carries the agent message, completed_at stamped.
+    const failed = snapshotForInbound({
+      eventType: 'agent.completed',
+      requestedStatus: 'wont_do',
+      message: 'cannot reproduce',
+    })
+    expect(failed!.status).toBe('failed')
+    expect(failed!.error).toBe('cannot reproduce')
+    expect(failed!.completed_at).toBe(FIXED_AT)
+    expect(validateCallback(failed)).toEqual([])
+
+    // running (agent_running / review_ready): no completed_at (non-terminal).
+    const running = snapshotForInbound({ eventType: 'agent.dispatch_acknowledged' })
+    expect(running!.status).toBe('running')
+    expect(running!.completed_at).toBeUndefined()
+    expect(validateCallback(running)).toEqual([])
+  })
+
+  it('maps inbound artifacts onto the published CallbackArtifact[] shape', () => {
+    const snapshot = snapshotForInbound({
+      eventType: 'agent.artifact_attached',
+      requestedStatus: 'review_ready',
+      artifacts: [
+        { kind: 'pr', url: 'https://github.com/x/y/pull/9', extra: 'ignored' },
+        { kind: 'screenshot', id: 'shot-1' },
+        { bogus: true },
+      ],
+    })
+    expect(snapshot!.artifacts).toEqual([
+      { kind: 'pr', ref: 'https://github.com/x/y/pull/9' },
+      { kind: 'screenshot', ref: 'shot-1' },
+    ])
+    expect(validateCallback(snapshot)).toEqual([])
+  })
+
+  it('never carries the scoped-bearer callback token in the published snapshot (TOKEN SAFETY)', () => {
+    // Even if a (mis)caller routed token-ish data, the contract Callback only
+    // exposes its own fields — no `token` / `authorization` / `bearer` keys.
+    const snapshot = snapshotForInbound({ eventType: 'agent.completed', requestedStatus: 'resolved' })
+    expect(snapshot).not.toBeNull()
+    const keys = Object.keys(snapshot as unknown as Record<string, unknown>)
+    expect(keys).not.toContain('token')
+    expect(keys).not.toContain('authorization')
+    expect(keys).not.toContain('bearer')
+    expect(keys).not.toContain('callback_token')
+    // The whole serialized snapshot has no token-shaped substring.
+    expect(JSON.stringify(snapshot).toLowerCase()).not.toContain('token')
   })
 })
