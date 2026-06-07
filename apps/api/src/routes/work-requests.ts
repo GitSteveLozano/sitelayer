@@ -18,7 +18,7 @@ import {
   WORK_ITEM_SEVERITIES,
   WORK_ITEM_STATUSES,
   appendContextHandoffEventTx,
-  createContextWorkItemTx,
+  createContextWorkItemWithDedupTx,
   getContextWorkItemWithEvents,
   listContextWorkItems,
   updateContextWorkItemWithEventTx,
@@ -681,6 +681,17 @@ function isUniqueViolation(error: unknown): boolean {
   )
 }
 
+// Sentinel thrown from inside the create tx when the dedup_key ON CONFLICT
+// collapses to an existing row. Throwing rolls back the whole tx (discarding the
+// orphan support packet we already inserted); the caller catches it and replies
+// idempotently with the existing item.
+class FieldRequestDedupConflict extends Error {
+  constructor(readonly dedupKey: string) {
+    super('field_request dedup conflict')
+    this.name = 'FieldRequestDedupConflict'
+  }
+}
+
 async function getWorkItemIdByClientRequestId(
   companyId: string,
   actorUserId: string,
@@ -716,6 +727,68 @@ async function getWorkItemIdByRequestRef(companyId: string, requestRef: string):
   })
 }
 
+async function getWorkItemIdByDedupKey(companyId: string, dedupKey: string): Promise<string | null> {
+  return withCompanyClient(companyId, async (c) => {
+    const result = await c.query<{ id: string }>(
+      `select id
+         from context_work_items
+        where company_id = $1
+          and dedup_key = $2
+        order by created_at asc
+        limit 1`,
+      [companyId, dedupKey],
+    )
+    return result.rows[0]?.id ?? null
+  })
+}
+
+// Coarse time bucket (seconds) for the field_request dedup fingerprint. A burst
+// of identical retries / double-submits inside the same window collapses to one
+// row; the same content filed in a later window is a legitimately distinct row.
+// Override via WORK_REQUEST_DEDUP_WINDOW_SECONDS (clamped 1s..1h).
+const DEFAULT_DEDUP_WINDOW_SECONDS = 120
+
+function dedupWindowSeconds(): number {
+  return Math.min(
+    3600,
+    Math.max(1, readPositiveNumberEnv('WORK_REQUEST_DEDUP_WINDOW_SECONDS', DEFAULT_DEDUP_WINDOW_SECONDS)),
+  )
+}
+
+function normalizeFingerprintText(value: string | null): string {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+/**
+ * Server-derived per-(actor, target-entity, content, coarse-time-bucket)
+ * idempotency fingerprint for a field_request create. Bounds same-tenant create
+ * spam + makes the create idempotent under client retry WITHOUT a client-supplied
+ * key. Mirrors the company boundary: company_id + actor_user_id are part of the
+ * hash so it never collapses two different tenants or two different members.
+ */
+export function computeFieldRequestDedupKey(input: {
+  companyId: string
+  actorUserId: string
+  entityType: string | null
+  entityId: string | null
+  title: string
+  summary: string | null
+  nowMs?: number
+}): string {
+  const bucket = Math.floor((input.nowMs ?? Date.now()) / (dedupWindowSeconds() * 1000))
+  const fingerprint = [
+    'field_request',
+    input.companyId,
+    input.actorUserId,
+    input.entityType ?? '',
+    input.entityId ?? '',
+    normalizeFingerprintText(input.title),
+    normalizeFingerprintText(input.summary),
+    String(bucket),
+  ].join(' ')
+  return createHash('sha256').update(fingerprint).digest('hex')
+}
+
 async function getExistingCreateResponseForWorkItem(companyId: string, workItemId: string) {
   if (!workItemId) return null
   const detail = await getContextWorkItemWithEvents(companyId, workItemId)
@@ -738,6 +811,15 @@ async function getExistingCreateResponseForWorkItem(companyId: string, workItemI
 
 async function getExistingCreateResponse(companyId: string, actorUserId: string, clientRequestId: string) {
   const workItemId = await getWorkItemIdByClientRequestId(companyId, actorUserId, clientRequestId)
+  return workItemId ? getExistingCreateResponseForWorkItem(companyId, workItemId) : null
+}
+
+// The dedup_key already binds (company_id, actor_user_id), so a match is always
+// the SAME actor's prior create — no cross-user read-scope conflict to guard
+// against (unlike request_ref, which is company-wide). Resolve straight to the
+// existing item for an idempotent replay.
+async function getExistingCreateResponseByDedupKey(companyId: string, dedupKey: string) {
+  const workItemId = await getWorkItemIdByDedupKey(companyId, dedupKey)
   return workItemId ? getExistingCreateResponseForWorkItem(companyId, workItemId) : null
 }
 
@@ -1104,6 +1186,20 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
   }
   const clientIdempotency =
     optionalText(body.client_request_id, 160) ?? optionalText(headerText(req.headers['idempotency-key']), 160)
+  // Server-derived per-(actor, target-entity, content, coarse-time-bucket)
+  // idempotency fingerprint (migration 012). Bounds same-tenant create spam and
+  // makes the create idempotent under client retry even when NO client_request_id
+  // / request_ref is supplied. The (company_id, dedup_key) unique partial index
+  // is the authority for concurrent dupes; this fast-path pre-check + the in-tx
+  // ON CONFLICT both resolve to the existing item.
+  const dedupKey = computeFieldRequestDedupKey({
+    companyId: ctx.company.id,
+    actorUserId: ctx.identity.userId,
+    entityType: entity.entityType,
+    entityId: entity.entityId,
+    title: title.value,
+    summary,
+  })
   if (requestRef) {
     const existing = await getExistingCreateResponseByRequestRef(
       ctx.company.id,
@@ -1122,6 +1218,15 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
   }
   if (clientIdempotency) {
     const existing = await getExistingCreateResponse(ctx.company.id, ctx.identity.userId, clientIdempotency)
+    if (existing) {
+      ctx.sendJson(200, existing)
+      return
+    }
+  }
+  // Fast-path dedup pre-check: a rapid duplicate (same actor/entity/content in the
+  // window) returns the EXISTING item without inserting an orphan support packet.
+  {
+    const existing = await getExistingCreateResponseByDedupKey(ctx.company.id, dedupKey)
     if (existing) {
       ctx.sendJson(200, existing)
       return
@@ -1148,7 +1253,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         expiresAt,
         redactionVersion: 'support-packet-v1',
       })
-      const item = await createContextWorkItemTx(c, {
+      const created = await createContextWorkItemWithDedupTx(c, {
         companyId: ctx.company.id,
         supportPacketId: packet.id,
         // WorkRequestAction / field_event flow → a field-request (contractor
@@ -1165,6 +1270,10 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         entityType: entity.entityType,
         entityId: entity.entityId,
         createdByUserId: ctx.identity.userId,
+        // Server-derived dedup fingerprint (migration 012). ON CONFLICT
+        // (company_id, dedup_key) DO NOTHING collapses a concurrent duplicate
+        // that raced past the fast-path pre-check.
+        dedupKey,
         metadata: {
           category,
           source: 'work_request',
@@ -1174,6 +1283,11 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
           support_packet_expires_at: packet.expires_at ?? expiresAt,
         },
       })
+      // A concurrent duplicate already won the (company_id, dedup_key) race.
+      // Throw to roll back THIS tx (incl. the support packet we just inserted) so
+      // we don't leave an orphan; the caller resolves to the existing item.
+      if (!created.created) throw new FieldRequestDedupConflict(dedupKey)
+      const item = created.item
       // ADDITIVE seam (projectkit Concern snapshot): stamp a portable,
       // adapter-agnostic @operator/projectkit `Concern` onto metadata.concern.
       // concern_ref = the work_item_id (only known after insert), so we merge it
@@ -1232,6 +1346,17 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
       return { packet, item: itemWithConcern, event }
     })
   } catch (error) {
+    // Concurrent duplicate collapsed by the dedup_key unique index: resolve to
+    // the existing item for an idempotent reply. Scoped to the sentinel so a
+    // request_ref unique violation still flows to its own handler (which can
+    // return 409 on a cross-user request_ref reuse).
+    if (error instanceof FieldRequestDedupConflict) {
+      const existing = await getExistingCreateResponseByDedupKey(ctx.company.id, dedupKey)
+      if (existing) {
+        ctx.sendJson(200, existing)
+        return
+      }
+    }
     if (requestRef && isUniqueViolation(error)) {
       const existing = await getExistingCreateResponseByRequestRef(
         ctx.company.id,
