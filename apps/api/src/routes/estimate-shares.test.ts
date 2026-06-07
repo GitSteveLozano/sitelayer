@@ -180,11 +180,31 @@ class FakePool {
         message: message ?? null,
         include_signed_link: includeSignedLink ?? true,
         revoked_at: null,
+        last_accessed_at: null,
+        access_count: 0,
         created_at: now,
         updated_at: now,
       }
       this.shares.push(row)
       return { rows: [this.serializeShare(row)], rowCount: 1 }
+    }
+    // Standalone access-audit bump (recordShareAccess) — the GET + capture
+    // routes fire `set access_count = access_count + 1, last_accessed_at = now()`
+    // in its own GUC-bound tx. Matched BEFORE the viewed_at/accept/decline
+    // matchers (none of which contain this exact set-list).
+    if (
+      /update estimate_share_links/i.test(sql) &&
+      /access_count = access_count \+ 1/.test(sql) &&
+      /last_accessed_at = now\(\)/.test(sql) &&
+      !/accepted_at = now\(\)/.test(sql) &&
+      !/declined_at = now\(\)/.test(sql)
+    ) {
+      const [companyId, id] = params as [string, string]
+      const row = this.shares.find((s) => s.company_id === companyId && s.id === id)
+      if (!row) return { rows: [], rowCount: 0 }
+      row.access_count += 1
+      row.last_accessed_at = new Date().toISOString()
+      return { rows: [], rowCount: 1 }
     }
     // Revoke dispatch — select ... for update, then set status/state_version/
     // revoked_at + expires_at = now().
@@ -209,6 +229,8 @@ class FakePool {
       row.signature_data_url = signatureUrl
       row.signer_ip = ip
       row.viewed_at = row.viewed_at ?? now
+      row.access_count += 1
+      row.last_accessed_at = now
       row.updated_at = now
       return { rows: [this.serializeShare(row)], rowCount: 1 }
     }
@@ -220,6 +242,8 @@ class FakePool {
       row.declined_at = now
       row.decline_reason = reason
       row.viewed_at = row.viewed_at ?? now
+      row.access_count += 1
+      row.last_accessed_at = now
       row.updated_at = now
       return { rows: [this.serializeShare(row)], rowCount: 1 }
     }
@@ -1406,6 +1430,107 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const { ctx, responses } = makePublicCtx(pool)
     await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(410)
+  })
+
+  // ── Portal-link revocation gate (migration 011) ──────────────────────────
+  it('GET returns 410 for a REVOKED share (revoked_at set) and does NOT expose the estimate', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    // Revoke but keep it un-expired in the future — the revoke gate must fire
+    // BEFORE the expiry gate so a still-fresh-but-revoked link is dead.
+    pool.shares[0]!.revoked_at = new Date().toISOString()
+    pool.shares[0]!.expires_at = new Date(Date.now() + 86_400_000).toISOString()
+    const { ctx, responses } = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
+    expect(responses[0]?.status).toBe(410)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/revoked/)
+    // No data leaked and no view bump on a revoked link.
+    expect(pool.shares[0]?.view_count).toBe(0)
+  })
+
+  it('GET returns 410 when the workflow status is revoked even if revoked_at is null', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    pool.shares[0]!.status = 'revoked'
+    pool.shares[0]!.revoked_at = null
+    pool.shares[0]!.expires_at = new Date(Date.now() + 86_400_000).toISOString()
+    const { ctx, responses } = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
+    expect(responses[0]?.status).toBe(410)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/revoked/)
+  })
+
+  it('POST /accept returns 410 for a revoked share (cannot sign a killed link)', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    pool.shares[0]!.revoked_at = new Date().toISOString()
+    pool.shares[0]!.expires_at = new Date(Date.now() + 86_400_000).toISOString()
+    const { ctx, responses, reads } = makePublicCtx(pool)
+    reads.push({ signer_name: 'Client', signature_data_url: 'data:image/png;base64,AAAA' })
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/accept`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(410)
+    expect(pool.shares[0]?.accepted_at).toBeNull()
+  })
+
+  it('POST /decline returns 410 for a revoked share', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    pool.shares[0]!.revoked_at = new Date().toISOString()
+    pool.shares[0]!.expires_at = new Date(Date.now() + 86_400_000).toISOString()
+    const { ctx, responses, reads } = makePublicCtx(pool)
+    reads.push({ decline_reason: 'changed my mind' })
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/decline`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(410)
+    expect(pool.shares[0]?.declined_at).toBeNull()
+  })
+
+  // ── Access audit (migration 011) ─────────────────────────────────────────
+  it('GET bumps access_count + stamps last_accessed_at on every hit (not just first view)', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+
+    const first = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/estimates/${token}`),
+      first.ctx,
+    )
+    expect(first.responses[0]?.status).toBe(200)
+    expect(pool.shares[0]?.access_count).toBe(1)
+    expect(pool.shares[0]?.last_accessed_at).not.toBeNull()
+
+    const second = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/estimates/${token}`),
+      second.ctx,
+    )
+    // access_count keeps climbing on repeat hits — the leaked-link signal.
+    expect(pool.shares[0]?.access_count).toBe(2)
+  })
+
+  it('POST /accept bumps the access audit in the same tx as the signature', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    const { ctx, responses, reads } = makePublicCtx(pool)
+    reads.push({ signer_name: 'Client', signature_data_url: 'data:image/png;base64,AAAA' })
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/accept`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(200)
+    expect(pool.shares[0]?.accepted_at).not.toBeNull()
+    expect(pool.shares[0]?.access_count).toBe(1)
+    expect(pool.shares[0]?.last_accessed_at).not.toBeNull()
   })
 
   it('POST /capture-sessions starts a token-bound portal_guest capture session', async () => {

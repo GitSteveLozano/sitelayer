@@ -57,6 +57,25 @@ class FakePool {
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
     }
 
+    // Public-surface access audit (migration 011): recordRentalShareAccess fires
+    // `set access_count = access_count + 1, last_accessed_at = now()`.
+    if (
+      /update rental_share_links/i.test(sql) &&
+      /access_count = access_count \+ 1/.test(sql) &&
+      /last_accessed_at = now\(\)/.test(sql)
+    ) {
+      const [companyId, id] = params as [string, string]
+      const row = this.rentalLinks.find((link) => link.company_id === companyId && link.id === id)
+      if (!row) return { rows: [], rowCount: 0 }
+      row.access_count = (Number(row.access_count) || 0) + 1
+      row.last_accessed_at = new Date().toISOString()
+      return { rows: [], rowCount: 1 }
+    }
+
+    if (normalized.includes('from inventory_items')) {
+      return { rows: [], rowCount: 0 }
+    }
+
     if (normalized.startsWith('select id::text as id, slug, name') && normalized.includes('from companies')) {
       const [companyId] = params as [string]
       const row = this.companies.find((company) => company.id === companyId)
@@ -600,6 +619,9 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
       customer_id: 'cust-1',
       share_token: token,
       expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+      revoked_at: null,
+      access_count: 0,
+      last_accessed_at: null,
     })
     return token
   }
@@ -977,5 +999,75 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
     )
     expect(start.responses[0]?.status).toBe(200)
     expect(pool.captureSessions).toHaveLength(1)
+  })
+
+  // ── Portal-link revocation gate (migration 011) ──────────────────────────
+  it('GET /catalog returns 410 for a REVOKED rental share link and exposes no inventory', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    // Revoke but keep it un-expired — the revoke gate must fire first.
+    pool.rentalLinks[0]!.revoked_at = new Date().toISOString()
+    const base = makeCtx(pool)
+    await handlePortalRentalRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/rentals/${token}/catalog`),
+      base.ctx,
+    )
+    expect(base.responses[0]?.status).toBe(410)
+    expect((base.responses[0]?.body as { error: string }).error).toMatch(/revoked/)
+    // No audit bump on a dead link.
+    expect(pool.rentalLinks[0]?.access_count).toBe(0)
+  })
+
+  it('POST /reserve returns 410 for a revoked rental share link (no rental_request created)', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    pool.rentalLinks[0]!.revoked_at = new Date().toISOString()
+    const base = makeCtx(pool)
+    base.reads.push({ items: [{ inventory_item_id: 'i-1', qty: 1 }], contact_name: 'A' })
+    await handlePortalRentalRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/rentals/${token}/reserve`),
+      base.ctx,
+    )
+    expect(base.responses[0]?.status).toBe(410)
+  })
+
+  it('POST /capture-sessions returns 410 for a revoked rental share link', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    pool.rentalLinks[0]!.revoked_at = new Date().toISOString()
+    const start = makeCtx(pool)
+    start.reads.push({ capture_session_id: '00000000-0000-4000-8000-000000000123', mode: 'trace' })
+    await handlePortalRentalRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/rentals/${token}/capture-sessions`),
+      start.ctx,
+    )
+    expect(start.responses[0]?.status).toBe(410)
+    expect(pool.captureSessions).toHaveLength(0)
+  })
+
+  // ── Access audit (migration 011) ─────────────────────────────────────────
+  it('GET /catalog bumps access_count + last_accessed_at on a live rental link', async () => {
+    const pool = new FakePool()
+    const token = seedLink(pool)
+    const first = makeCtx(pool)
+    await handlePortalRentalRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/rentals/${token}/catalog`),
+      first.ctx,
+    )
+    expect(first.responses[0]?.status).toBe(200)
+    expect(pool.rentalLinks[0]?.access_count).toBe(1)
+    expect(pool.rentalLinks[0]?.last_accessed_at).not.toBeNull()
+
+    const second = makeCtx(pool)
+    await handlePortalRentalRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/rentals/${token}/catalog`),
+      second.ctx,
+    )
+    expect(pool.rentalLinks[0]?.access_count).toBe(2)
   })
 })

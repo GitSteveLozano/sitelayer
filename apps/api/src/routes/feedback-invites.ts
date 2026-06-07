@@ -47,6 +47,11 @@ type FeedbackInviteRow = {
   created_by_user_id: string
   created_at: string
   last_used_at: string | null
+  // Public-surface access audit (migration 011). last_used_at is the legacy
+  // "touched" timestamp; last_accessed_at mirrors it and access_count is the
+  // countable usage signal so the owner can spot a forwarded/leaked invite.
+  last_accessed_at: string | null
+  access_count: number
   metadata: Record<string, unknown>
 }
 
@@ -105,6 +110,8 @@ function adminShape(row: FeedbackInviteRow) {
     created_by_user_id: row.created_by_user_id,
     created_at: row.created_at,
     last_used_at: row.last_used_at,
+    last_accessed_at: row.last_accessed_at,
+    access_count: row.access_count,
     metadata: row.metadata,
   }
 }
@@ -153,7 +160,8 @@ async function loadFeedbackInviteByToken(
   const result = await pool.query<FeedbackInvitePublicRow>(
     `select fi.id, fi.company_id, fi.token_id, fi.token_kid, fi.reviewer_ref, fi.source, fi.target_route,
             fi.allowed_capture_modes, fi.expires_at, fi.revoked_at, fi.created_by_user_id, fi.created_at,
-            fi.last_used_at, fi.metadata, c.slug as company_slug, c.name as company_name
+            fi.last_used_at, fi.last_accessed_at, fi.access_count, fi.metadata,
+            c.slug as company_slug, c.name as company_name
        from feedback_invites fi
        join companies c on c.id = fi.company_id
       where fi.token_id = $1 and fi.token_kid = $2
@@ -209,7 +217,15 @@ async function resolveFeedbackCaptureActor(
     ctx.sendJson(lookup.status, { error: lookup.error })
     return { ok: false }
   }
-  await ctx.pool.query('update feedback_invites set last_used_at = now() where id = $1', [lookup.row.id])
+  // Access audit (migration 011): bump count + timestamps on every successful
+  // public capture-actor resolution. company_id-scoped so the RLS route lint is
+  // satisfied (this is the pre-GUC portal surface) and the write stays tenant-safe.
+  await ctx.pool.query(
+    `update feedback_invites
+        set last_used_at = now(), last_accessed_at = now(), access_count = access_count + 1
+      where company_id = $1 and id = $2`,
+    [lookup.row.company_id, lookup.row.id],
+  )
   const { token: _token, ...captureBody } = body
   void _token
   return { ok: true, actor: actorForFeedbackInvite(lookup.row), body: captureBody }
@@ -235,7 +251,13 @@ export async function handleFeedbackInviteRoutes(
       sendJson(lookup.status, { error: lookup.error })
       return true
     }
-    await pool.query('update feedback_invites set last_used_at = now() where id = $1', [lookup.row.id])
+    // Access audit (migration 011) — see resolveFeedbackCaptureActor.
+    await pool.query(
+      `update feedback_invites
+          set last_used_at = now(), last_accessed_at = now(), access_count = access_count + 1
+        where company_id = $1 and id = $2`,
+      [lookup.row.company_id, lookup.row.id],
+    )
     sendJson(200, { invite: publicShape(lookup.row) })
     return true
   }
@@ -333,7 +355,8 @@ export async function handleFeedbackInviteRoutes(
        )
        values ($1, $2, $3, $4, $5, $6, $7, now() + ($8 || ' days')::interval, $9, $10::jsonb)
        returning id, company_id, token_id, token_kid, reviewer_ref, source, target_route, allowed_capture_modes,
-                 expires_at, revoked_at, created_by_user_id, created_at, last_used_at, metadata`,
+                 expires_at, revoked_at, created_by_user_id, created_at, last_used_at,
+                 last_accessed_at, access_count, metadata`,
       [
         companyId,
         signed.id,
@@ -379,7 +402,8 @@ export async function handleFeedbackInviteRoutes(
     const { limit, offset } = pagination.value
     const result = await pool.query<FeedbackInviteRow>(
       `select id, company_id, token_id, token_kid, reviewer_ref, source, target_route, allowed_capture_modes,
-              expires_at, revoked_at, created_by_user_id, created_at, last_used_at, metadata
+              expires_at, revoked_at, created_by_user_id, created_at, last_used_at,
+              last_accessed_at, access_count, metadata
          from feedback_invites
         where company_id = $1
         order by created_at desc
@@ -404,7 +428,8 @@ export async function handleFeedbackInviteRoutes(
           set revoked_at = coalesce(revoked_at, now())
         where company_id = $1 and id = $2
         returning id, company_id, token_id, token_kid, reviewer_ref, source, target_route, allowed_capture_modes,
-                  expires_at, revoked_at, created_by_user_id, created_at, last_used_at, metadata`,
+                  expires_at, revoked_at, created_by_user_id, created_at, last_used_at,
+                  last_accessed_at, access_count, metadata`,
       [companyId, inviteId],
     )
     const row = result.rows[0]
