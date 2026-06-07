@@ -7,7 +7,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { attachMutationTx } from '../mutation-tx.js'
 import { companyCapabilityGranted } from '../capability.js'
-import { handleWorkRequestRoutes, type WorkRequestRouteCtx } from './work-requests.js'
+import { computeFieldRequestDedupKey, handleWorkRequestRoutes, type WorkRequestRouteCtx } from './work-requests.js'
 
 type JsonRecord = Record<string, unknown>
 
@@ -58,6 +58,7 @@ type WorkItem = {
   reversed_at: string | null
   reversibility_window_seconds: number
   metadata: JsonRecord
+  dedup_key: string | null
   agent_callback_token_hash: string | null
   agent_callback_token_issued_at: string | null
 }
@@ -130,6 +131,11 @@ class FakePool {
   mutationOutbox: MutationOutbox[] = []
   supportPacketAccessLog: SupportPacketAccessLog[] = []
   failSupportPacketAccessLog = false
+  // Test hook: fires once when a support packet is inserted INSIDE the create tx
+  // (after the dedup fast-path pre-check). Lets a test simulate a concurrent
+  // duplicate that wins the (company_id, dedup_key) race so the in-tx ON CONFLICT
+  // path is exercised.
+  onSupportPacketInsert: (() => void) | null = null
   private supportPacketCounter = 0
   private workItemCounter = 0
   private eventCounter = 0
@@ -166,6 +172,11 @@ class FakePool {
     }
 
     if (normalized.startsWith('insert into support_debug_packets')) {
+      if (this.onSupportPacketInsert) {
+        const hook = this.onSupportPacketInsert
+        this.onSupportPacketInsert = null
+        hook()
+      }
       this.supportPacketCounter += 1
       const row: SupportPacket = {
         id: uuid(100 + this.supportPacketCounter),
@@ -189,10 +200,17 @@ class FakePool {
     }
 
     if (normalized.startsWith('insert into context_work_items')) {
+      // params[2] = domain ($3) — added by migration 009; all indices below
+      // shift +1 from the pre-009 layout. The dedup variant (migration 012) adds
+      // dedup_key ($17) + `on conflict (company_id, dedup_key) do nothing`.
+      const dedupKey = (params[16] as string | null) ?? null
+      if (dedupKey && normalized.includes('on conflict') && normalized.includes('dedup_key')) {
+        const existing = this.workItems.find((item) => item.company_id === params[0] && item.dedup_key === dedupKey)
+        // ON CONFLICT (company_id, dedup_key) DO NOTHING → RETURNING yields no row.
+        if (existing) return { rows: [], rowCount: 0 }
+      }
       this.workItemCounter += 1
       const createdAt = '2026-05-21T12:00:01.000Z'
-      // params[2] = domain ($3) — added by migration 009; all indices below
-      // shift +1 from the pre-009 layout.
       const reversibilityWindowSeconds =
         typeof params[15] === 'number' ? (params[15] as number) : params[15] != null ? Number(params[15]) : 86400
       const row: WorkItem = {
@@ -214,6 +232,7 @@ class FakePool {
         created_by_user_id: (params[13] as string | null) ?? null,
         metadata: JSON.parse(params[14] as string) as JsonRecord,
         reversibility_window_seconds: reversibilityWindowSeconds,
+        dedup_key: dedupKey,
         created_at: createdAt,
         updated_at: createdAt,
         resolved_at: null,
@@ -421,6 +440,16 @@ class FakePool {
         (event) => event.company_id === companyId && event.idempotency_key === idempotencyKey,
       )
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+
+    if (normalized.includes('from context_work_items') && normalized.includes('dedup_key = $2')) {
+      const [companyId, dedupKey] = params as [string, string]
+      const row = this.workItems.find((item) => item.company_id === companyId && item.dedup_key === dedupKey)
+      if (!row) return { rows: [], rowCount: 0 }
+      // getWorkItemIdByDedupKey selects only `id`; getContextWorkItemByDedupKeyTx
+      // selects the full column set. Return the full enriched row either way — the
+      // id-only caller just reads `.id`.
+      return { rows: [{ ...row, expires_at: expiresAtFor(row) }], rowCount: 1 }
     }
 
     if (normalized.includes('from context_work_items') && normalized.includes("metadata ->> 'client_request_id'")) {
@@ -779,6 +808,127 @@ describe('handleWorkRequestRoutes', () => {
 
     expect(secondUser.responses[0]?.status).toBe(201)
     expect(pool.workItems.map((item) => item.created_by_user_id)).toEqual(['user-1', 'user-2'])
+  })
+
+  it('collapses a rapid duplicate field_request create (no client key) to one row, idempotently', async () => {
+    const pool = new FakePool()
+    // Same actor, same entity, same content, no client_request_id / request_ref:
+    // the server-derived dedup fingerprint (migration 012) must collapse the
+    // retry to the SAME row and reply idempotently — not mint a second one.
+    const body = { title: 'Generator down at the south gate', client: clientContext }
+    const first = makeCtx(pool, body, 'foreman', 'foreman-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), first.ctx)
+    const second = makeCtx(pool, body, 'foreman', 'foreman-1')
+
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), second.ctx)
+
+    expect(first.responses[0]?.status).toBe(201)
+    expect(second.responses[0]?.status).toBe(200)
+    expect(second.responses[0]?.body).toMatchObject({
+      idempotent_replay: true,
+      work_item: { id: pool.workItems[0]!.id },
+    })
+    expect(pool.workItems).toHaveLength(1)
+    expect(pool.supportPackets).toHaveLength(1)
+    expect(pool.handoffEvents).toHaveLength(1)
+    expect(pool.workItems[0]?.dedup_key).toBeTruthy()
+  })
+
+  it('mints distinct rows for distinct content (different title or summary)', async () => {
+    const pool = new FakePool()
+    const a = makeCtx(pool, { title: 'Crane needs inspection', client: clientContext }, 'foreman', 'foreman-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), a.ctx)
+    const b = makeCtx(pool, { title: 'Forklift needs inspection', client: clientContext }, 'foreman', 'foreman-1')
+
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), b.ctx)
+
+    expect(a.responses[0]?.status).toBe(201)
+    expect(b.responses[0]?.status).toBe(201)
+    expect(pool.workItems).toHaveLength(2)
+    expect(new Set(pool.workItems.map((item) => item.dedup_key)).size).toBe(2)
+  })
+
+  it('mints distinct rows for the same content on a different target entity', async () => {
+    const pool = new FakePool()
+    const title = 'Material short on site'
+    const entityA = {
+      path: { route: '/projects/p-1', entity_type: 'project', entity_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+    }
+    const entityB = {
+      path: { route: '/projects/p-2', entity_type: 'project', entity_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
+    }
+    const a = makeCtx(pool, { title, client: entityA }, 'foreman', 'foreman-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), a.ctx)
+    const b = makeCtx(pool, { title, client: entityB }, 'foreman', 'foreman-1')
+
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), b.ctx)
+
+    expect(a.responses[0]?.status).toBe(201)
+    expect(b.responses[0]?.status).toBe(201)
+    expect(pool.workItems).toHaveLength(2)
+    expect(pool.workItems.map((item) => item.entity_id).sort()).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ])
+  })
+
+  it('collapses a concurrent duplicate that wins the dedup race via the in-tx ON CONFLICT path', async () => {
+    const pool = new FakePool()
+    const body = { title: 'Concurrent double-submit', client: clientContext }
+    const dedupKey = computeFieldRequestDedupKey({
+      companyId: COMPANY_ID,
+      actorUserId: 'foreman-1',
+      entityType: 'estimate_push',
+      entityId: '33333333-3333-4333-8333-333333333333',
+      title: 'Concurrent double-submit',
+      summary: null,
+    })
+    // Simulate the race: a competing request inserts the winning row AFTER our
+    // fast-path pre-check (which sees nothing) but BEFORE our in-tx work-item
+    // insert — so we hit the (company_id, dedup_key) ON CONFLICT DO NOTHING path.
+    pool.onSupportPacketInsert = () => {
+      pool.workItems.push({
+        id: uuid(950),
+        company_id: COMPANY_ID,
+        support_packet_id: uuid(951),
+        domain: 'field_request',
+        title: 'Concurrent double-submit',
+        summary: null,
+        status: 'new',
+        lane: 'triage',
+        severity: null,
+        route: clientContext.path.route,
+        capture_session_id: null,
+        entity_type: 'estimate_push',
+        entity_id: '33333333-3333-4333-8333-333333333333',
+        assignee_user_id: null,
+        created_by_user_id: 'foreman-1',
+        created_at: '2026-05-21T11:59:59.000Z',
+        updated_at: '2026-05-21T11:59:59.000Z',
+        resolved_at: null,
+        reversed_at: null,
+        reversibility_window_seconds: 86400,
+        metadata: { source: 'work_request' },
+        dedup_key: dedupKey,
+        agent_callback_token_hash: null,
+        agent_callback_token_issued_at: null,
+      })
+    }
+    const ctx = makeCtx(pool, body, 'foreman', 'foreman-1')
+
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), ctx.ctx)
+
+    // The losing request must NOT create a second work item — it resolves to the
+    // racing winner and replies idempotently. (In production the tx ROLLBACK also
+    // discards the support packet it speculatively inserted; the in-memory fake
+    // does not model rollback, so we only assert the work-item collapse here.)
+    expect(ctx.responses[0]?.status).toBe(200)
+    expect(ctx.responses[0]?.body).toMatchObject({
+      idempotent_replay: true,
+      work_item: { id: uuid(950) },
+    })
+    expect(pool.workItems).toHaveLength(1)
+    expect(pool.workItems[0]?.id).toBe(uuid(950))
   })
 
   it('lists member-visible work items as created or assigned rows', async () => {

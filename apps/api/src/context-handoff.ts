@@ -144,6 +144,13 @@ export type ContextWorkItemRow = {
   reversibility_window_seconds: number
   expires_at: string | null
   metadata: JsonRecord
+  /**
+   * Server-derived per-(actor, entity, content, coarse-time-bucket) idempotency
+   * fingerprint (migration 012). Only the field_request create path sets it; it
+   * collapses rapid duplicate creates via the (company_id, dedup_key) unique
+   * partial index. NULL for app_issue rows and any pre-012 row.
+   */
+  dedup_key: string | null
 }
 
 export type ContextHandoffEventRow = {
@@ -213,6 +220,7 @@ const WORK_ITEM_COLUMN_NAMES = [
   'reversed_at',
   'reversibility_window_seconds',
   'metadata',
+  'dedup_key',
 ] as const
 
 // Computed `expires_at` (created_at + reversibility_window_seconds seconds) is
@@ -350,6 +358,99 @@ export async function createContextWorkItemTx(
   const row = result.rows[0]
   if (!row) throw new Error('context_work_items insert returned no row')
   return row
+}
+
+async function getContextWorkItemByDedupKeyTx(
+  executor: LedgerExecutor,
+  companyId: string,
+  dedupKey: string,
+): Promise<ContextWorkItemRow | null> {
+  const result = await executor.query<ContextWorkItemRow>(
+    `select ${WORK_ITEM_COLUMNS}
+       from context_work_items
+      where company_id = $1 and dedup_key = $2
+      limit 1`,
+    [companyId, dedupKey],
+  )
+  return result.rows[0] ?? null
+}
+
+/**
+ * field_request-only create with a server-derived idempotency fingerprint
+ * (migration 012). Inserts with the SAME column set as createContextWorkItemTx
+ * plus `dedup_key`, using ON CONFLICT (company_id, dedup_key) DO NOTHING so two
+ * identical creates in the same coarse-time window collapse to one row — the
+ * second resolves to the EXISTING item (idempotent) instead of minting a new one.
+ *
+ * This bounds same-tenant create spam + makes the create idempotent under client
+ * retry WITHOUT requiring a client-supplied key. The (company_id, dedup_key)
+ * unique partial index is the authority, so a concurrent duplicate (two requests
+ * racing past any app-level pre-check) still collapses to one row.
+ *
+ * Returns `{ item, created }`: `created=false` signals a dedup hit (the caller
+ * should reply idempotently rather than 201). app_issue rows never pass a
+ * dedupKey, so the capture finalize path is unaffected.
+ */
+export async function createContextWorkItemWithDedupTx(
+  executor: LedgerExecutor,
+  args: Parameters<typeof createContextWorkItemTx>[1] & { dedupKey: string },
+): Promise<{ item: ContextWorkItemRow; created: boolean }> {
+  const dedupKey = optionalText(args.dedupKey)
+  if (!dedupKey) {
+    return { item: await createContextWorkItemTx(executor, args), created: true }
+  }
+  const title = optionalText(args.title)
+  if (!title) throw new Error('title is required')
+  const status = args.status ?? 'new'
+  const lane = args.lane ?? 'triage'
+  const domain = args.domain ?? 'field_request'
+  assertIn(WORK_ITEM_STATUSES, status, 'status')
+  assertIn(WORK_ITEM_LANES, lane, 'lane')
+  assertIn(WORK_ITEM_DOMAINS, domain, 'domain')
+  if (args.severity) assertIn(WORK_ITEM_SEVERITIES, args.severity, 'severity')
+
+  const reversibilityWindowSeconds =
+    typeof args.reversibilityWindowSeconds === 'number' && Number.isFinite(args.reversibilityWindowSeconds)
+      ? Math.max(0, Math.floor(args.reversibilityWindowSeconds))
+      : reversibilityWindowForSeverity(args.severity ?? null)
+
+  const result = await executor.query<ContextWorkItemRow>(
+    `insert into context_work_items (
+       company_id, support_packet_id, domain, title, summary, status, lane, severity,
+       route, capture_session_id, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata,
+       reversibility_window_seconds, dedup_key
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15::jsonb, $16, $17)
+     on conflict (company_id, dedup_key) where dedup_key is not null do nothing
+     returning ${WORK_ITEM_COLUMNS}`,
+    [
+      args.companyId,
+      args.supportPacketId,
+      domain,
+      title,
+      optionalText(args.summary),
+      status,
+      lane,
+      args.severity ?? null,
+      optionalText(args.route),
+      optionalText(args.captureSessionId),
+      optionalText(args.entityType),
+      optionalText(args.entityId),
+      optionalText(args.assigneeUserId),
+      optionalText(args.createdByUserId),
+      JSON.stringify(toJsonRecord(args.metadata ?? {})),
+      reversibilityWindowSeconds,
+      dedupKey,
+    ],
+  )
+  const inserted = result.rows[0]
+  if (inserted) return { item: inserted, created: true }
+
+  // Conflict (DO NOTHING returned no row): a duplicate already exists for this
+  // (company_id, dedup_key). Resolve to the existing item so the create is
+  // idempotent under retry / concurrent double-submit.
+  const existing = await getContextWorkItemByDedupKeyTx(executor, args.companyId, dedupKey)
+  if (!existing) throw new Error('context_work_items dedup conflict resolved to no row')
+  return { item: existing, created: false }
 }
 
 export async function appendContextHandoffEventTx(
