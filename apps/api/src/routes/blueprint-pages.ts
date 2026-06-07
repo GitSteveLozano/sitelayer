@@ -112,12 +112,21 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'document id must be a valid uuid' })
       return true
     }
+    // Defense-in-depth: only list pages whose parent document is live.
+    // A soft-deleted blueprint must never have its pages (or their storage
+    // paths) served, even though pages are not soft-deleted themselves — the
+    // doc's `deleted_at IS NULL` is the gate. RLS scopes by company; this
+    // EXISTS predicate enforces the soft-delete contract on top of it.
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query<PageRow>(
         `select ${PAGE_COLUMNS}
-       from blueprint_pages
-       where company_id = $1 and blueprint_document_id = $2
-       order by page_number asc`,
+       from blueprint_pages p
+       where p.company_id = $1 and p.blueprint_document_id = $2
+         and exists (
+           select 1 from blueprint_documents d
+           where d.company_id = p.company_id and d.id = p.blueprint_document_id and d.deleted_at is null
+         )
+       order by p.page_number asc`,
         [ctx.company.id, docId],
       ),
     )
@@ -147,7 +156,7 @@ export async function handleBlueprintPageRoutes(
 
     const docCheck = await withCompanyClient(ctx.company.id, (c) =>
       c.query<{ exists: boolean }>(
-        `select exists(select 1 from blueprint_documents where company_id = $1 and id = $2) as exists`,
+        `select exists(select 1 from blueprint_documents where company_id = $1 and id = $2 and deleted_at is null) as exists`,
         [ctx.company.id, docId],
       ),
     )

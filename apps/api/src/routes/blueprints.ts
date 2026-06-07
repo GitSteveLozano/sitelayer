@@ -737,6 +737,13 @@ export async function handleBlueprintRoutes(
     try {
       const storageKey = assertBlueprintFilePath(ctx.company.id, String(blueprint.storage_path))
       const fileName = String(blueprint.file_name)
+      // Presigned-URL download is OFF by default (BLUEPRINT_DOWNLOAD_PRESIGNED).
+      // When OFF we MUST stream the bytes back through the API so no Spaces
+      // URL ever leaves the server — blueprints are untrusted PII blobs and a
+      // leaked presigned URL is a credential-free read of customer data
+      // (see CLAUDE.md "Blueprint storage hygiene" #3). Only flip it on once
+      // Spaces CORS is validated for the web origin; never widen the
+      // presigned TTL past the 15-minute Spaces default.
       if (ctx.blueprintDownloadPresigned) {
         const signedUrl = await ctx.storage.getDownloadUrl(storageKey, { fileName })
         if (signedUrl) {
