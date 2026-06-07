@@ -115,6 +115,15 @@ describe('assembleDebugBundle env-gating', () => {
     expect(bundle.agent_prompt).toContain(PACKET)
     expect(bundle.agent_prompt).toContain('1 statechart transition anchor')
     expect(bundle.support_packet_id).toBe(PACKET)
+    // Prompt-injection defense: the user-supplied problem rides INSIDE the
+    // delimited untrusted block (with the preamble), not as a trusted line.
+    const prompt = bundle.agent_prompt ?? ''
+    expect(prompt).toContain('<<<UNTRUSTED_CAPTURED_EVIDENCE>>>')
+    expect(prompt).toContain('<<<END_UNTRUSTED_CAPTURED_EVIDENCE>>>')
+    expect(prompt).toContain('SECURITY NOTICE')
+    const open = prompt.indexOf('<<<UNTRUSTED_CAPTURED_EVIDENCE>>>')
+    const close = prompt.indexOf('<<<END_UNTRUSTED_CAPTURED_EVIDENCE>>>')
+    expect(prompt.slice(open, close)).toContain('Steve clicked finalize and nothing happened')
   })
 
   it('ENV-PRESENT MERGE: external Sentry/Axiom evidence is merged into the SAME bundle as the in-process context', async () => {
