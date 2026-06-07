@@ -91,6 +91,7 @@ import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
 import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
 import { handleAnchorRoutes } from './anchors.js'
+import { handleAgentToolsRoutes } from './agent-tools.js'
 import { getBuildSha } from '../lib/build-sha.js'
 import { rasterizePdfPageToPng } from '../blueprint-rasterize.js'
 
@@ -299,6 +300,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         setHeader: ctx.setHeader,
         send304: ctx.send304,
       }),
+
+    // Agent-tools discovery — self-describing catalog of the deterministic
+    // workflows as agent-callable tools (instrument-your-own-app surface).
+    () => handleAgentToolsRoutes(req, url, { sendJson }),
 
     // Customer routes
     () =>
