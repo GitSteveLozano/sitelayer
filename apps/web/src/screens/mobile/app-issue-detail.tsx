@@ -1,9 +1,13 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { MBanner, MBody, MButton, MButtonRow, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
+import { AgentSupervisionPanel } from '../../components/work-requests/AgentSupervisionPanel.js'
 import {
+  fetchSupportPacket,
+  queryKeys,
   useAppIssueCapabilities,
   useAppIssueCostLedger,
   useAppIssueDetail,
@@ -52,6 +56,14 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
   const ledger = useAppIssueCostLedger(supportPacketId)
   const escalate = useEscalateAppIssue(issueId)
   const [tier, setTier] = useState<AppIssueEscalateTier>(2)
+  // Full packet (app_issue.view gates the GET) powers the supervision REPLAY view
+  // — the deterministic server_context.anchors + in-window timeline. Read-only on
+  // this surface: app-issues escalate / triage rather than approve/reject.
+  const fullPacket = useQuery({
+    queryKey: queryKeys.supportPackets.detail(supportPacketId ?? ''),
+    queryFn: () => fetchSupportPacket(supportPacketId as string),
+    enabled: Boolean(supportPacketId),
+  })
 
   return (
     <>
@@ -110,6 +122,16 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
                   .toUpperCase()}
               </div>
             </section>
+
+            {/* Agent supervision: read-only replay + agent-output-vs-context. The
+                app-issue surface escalates rather than approves, so no review row. */}
+            <AgentSupervisionPanel
+              workItem={issue}
+              events={detail.data?.events ?? []}
+              supportPacket={detail.data?.support_packet}
+              serverContext={fullPacket.data ? fullPacket.data.support_packet.server_context : null}
+              agentPrompt={fullPacket.data?.agent_prompt ?? null}
+            />
 
             {/* "Go deeper" escalation — only for triagers. */}
             {canTriage ? (
