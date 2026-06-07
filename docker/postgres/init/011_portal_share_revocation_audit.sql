@@ -54,7 +54,18 @@ CREATE INDEX IF NOT EXISTS rental_share_links_active_idx
 -- countable audit signal (last_accessed_at mirrors last_used_at semantics so
 -- the owner-facing share-detail shape is uniform across all three surfaces).
 -- ---------------------------------------------------------------------------
-ALTER TABLE public.feedback_invites
-  ADD COLUMN IF NOT EXISTS last_accessed_at timestamp with time zone;
-ALTER TABLE public.feedback_invites
-  ADD COLUMN IF NOT EXISTS access_count integer DEFAULT 0 NOT NULL;
+-- GUARDED: feedback_invites exists in the rebaselined 000_baseline but NOT in
+-- the historically-migrated prod schema (the feedback-invite portal table was
+-- never created on prod), so an unconditional ALTER aborts the whole migration
+-- there. Apply the audit columns only where the table exists, so 011 is tolerant
+-- of that baseline-vs-prod drift. (estimate_share_links + rental_share_links
+-- above are present in every environment and apply unconditionally.)
+DO $$
+BEGIN
+  IF to_regclass('public.feedback_invites') IS NOT NULL THEN
+    ALTER TABLE public.feedback_invites
+      ADD COLUMN IF NOT EXISTS last_accessed_at timestamp with time zone;
+    ALTER TABLE public.feedback_invites
+      ADD COLUMN IF NOT EXISTS access_count integer DEFAULT 0 NOT NULL;
+  END IF;
+END $$;
