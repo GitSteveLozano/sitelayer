@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { MBanner, MButton, MButtonStack, MInput, MPill, MSectionH } from '../m/index.js'
 import type { ContextHandoffEvent, ContextWorkItem, WorkRequestSupportPacketSummary } from '@/lib/api'
 import {
@@ -7,9 +7,14 @@ import {
   extractReplayTimeline,
   isAwaitingReview,
   latestAgentCallback,
+  mapUtteranceToReviewAction,
+  reviewActionLabel,
+  selectReplayCapture,
   type ReplayAnchor,
   type ReplayTimelineEvent,
+  type ReviewAction,
 } from '@/lib/agent-supervision'
+import { ReproReplayPanel } from './ReproReplayPanel.js'
 
 /**
  * AGENT SUPERVISION console (v1) — the review / replay / exception surface that
@@ -33,7 +38,7 @@ import {
  *      entity, problem, agent_prompt).
  */
 
-export type ReviewAction = 'approve' | 'reject' | 'reopen' | 'reverse'
+export type { ReviewAction } from '@/lib/agent-supervision'
 
 export interface AgentSupervisionReviewHandlers {
   /** resolution.accepted */
@@ -78,6 +83,7 @@ export function AgentSupervisionPanel({
 }: AgentSupervisionPanelProps) {
   const anchors = useMemo(() => extractReplayAnchors(serverContext), [serverContext])
   const timeline = useMemo(() => extractReplayTimeline(serverContext), [serverContext])
+  const replayCapture = useMemo(() => selectReplayCapture(serverContext), [serverContext])
   const callback = useMemo(() => latestAgentCallback(events), [events])
   const awaitingReview = isAwaitingReview(workItem.status)
 
@@ -85,7 +91,12 @@ export function AgentSupervisionPanel({
     <section data-testid="agent-supervision-panel">
       <MSectionH>Agent supervision</MSectionH>
       {review && awaitingReview ? <ReviewActionRow status={workItem.status} review={review} /> : null}
-      <ReplayView anchors={anchors} timeline={timeline} hasServerContext={Boolean(serverContext)} />
+      <ReplayView
+        anchors={anchors}
+        timeline={timeline}
+        hasServerContext={Boolean(serverContext)}
+        replayCapture={replayCapture}
+      />
       <AgentOutputVsContext
         workItem={workItem}
         supportPacket={supportPacket}
@@ -106,6 +117,39 @@ function ReviewActionRow({
   const [reverseReason, setReverseReason] = useState('')
   const [showReverse, setShowReverse] = useState(false)
   const busy = Boolean(review.busy)
+
+  // Which actions this row can actually run, given the host-supplied handlers +
+  // capability gating. The voice control proposes only from this set.
+  const availableActions = useMemo<ReviewAction[]>(() => {
+    const actions: ReviewAction[] = []
+    if (review.onApprove) actions.push('approve')
+    if (review.onReject) actions.push('reject')
+    if (review.onReopen) actions.push('reopen')
+    if (review.onReverse && review.canReverse) actions.push('reverse')
+    return actions
+  }, [review.onApprove, review.onReject, review.onReopen, review.onReverse, review.canReverse])
+
+  // VOICE-APPROVE confirm-gate: a spoken keyword PROPOSES an action; committing
+  // routes through the SAME handlers the buttons use. Reverse is irreversible +
+  // needs a reason, so a confirmed voice "reverse" opens the reason flow rather
+  // than firing blind — never auto-commit a destructive action from an utterance.
+  const runReviewAction = (action: ReviewAction) => {
+    switch (action) {
+      case 'approve':
+        review.onApprove?.()
+        return
+      case 'reject':
+        review.onReject?.()
+        return
+      case 'reopen':
+        review.onReopen?.()
+        return
+      case 'reverse':
+        setShowReverse(true)
+        return
+    }
+  }
+
   return (
     <div style={{ padding: '0 16px 4px', display: 'grid', gap: 10 }}>
       <div style={reviewHeaderStyle}>
@@ -115,6 +159,7 @@ function ReviewActionRow({
         <span style={reviewHintStyle}>The agent finished — approve, reject, or send it back.</span>
       </div>
       {review.error ? <MBanner tone="error" title="Review action failed" body={review.error} /> : null}
+      <VoiceApproveControl availableActions={availableActions} busy={busy} onConfirm={runReviewAction} />
       <MButtonStack>
         {review.onApprove ? (
           <MButton variant="primary" disabled={busy} onClick={review.onApprove}>
@@ -162,14 +207,183 @@ function ReviewActionRow({
   )
 }
 
+// Minimal Web Speech API surface — TypeScript's lib doesn't ship the type. Kept
+// local (mirrors the foreman daily-log voice control) to avoid extra ambient
+// types. The recognizer is feature-detected; the whole control no-ops + hides
+// when SpeechRecognition is unavailable.
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+interface SpeechRecognitionLike {
+  lang: string
+  interimResults: boolean
+  continuous: boolean
+  start(): void
+  stop(): void
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+}
+interface SpeechRecognitionResultEvent {
+  results: ArrayLike<{ isFinal?: boolean; [index: number]: { transcript: string } }>
+}
+
+function getSpeechRecognitionCtor(): SpeechRecognitionConstructor | null {
+  if (typeof window === 'undefined') return null
+  const w = window as Window & {
+    SpeechRecognition?: SpeechRecognitionConstructor
+    webkitSpeechRecognition?: SpeechRecognitionConstructor
+  }
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
+}
+
+/**
+ * VOICE-APPROVE — optional hands-free control on the fast-review row. The mic
+ * dictates an utterance, `mapUtteranceToReviewAction` proposes one of the
+ * available review actions, and the operator must tap a visual CONFIRM before it
+ * commits (voice proposes, a one-tap confirm disposes). A raw utterance can never
+ * auto-fire a destructive/irreversible action. Feature-detected: when
+ * SpeechRecognition is unsupported the control renders nothing.
+ */
+function VoiceApproveControl({
+  availableActions,
+  busy,
+  onConfirm,
+}: {
+  availableActions: ReviewAction[]
+  busy: boolean
+  onConfirm: (action: ReviewAction) => void
+}) {
+  const supported = useMemo(() => getSpeechRecognitionCtor() !== null, [])
+  const [listening, setListening] = useState(false)
+  const [heard, setHeard] = useState('')
+  const [proposed, setProposed] = useState<ReviewAction | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+
+  // Stop the recognizer if the row unmounts mid-listen — otherwise the mic keeps
+  // capturing audio after the panel is gone.
+  useEffect(() => {
+    return () => recognitionRef.current?.stop()
+  }, [])
+
+  if (!supported || availableActions.length === 0) return null
+
+  const available = new Set(availableActions)
+
+  const startListening = () => {
+    const Ctor = getSpeechRecognitionCtor()
+    if (!Ctor || listening) return
+    setNotice(null)
+    setProposed(null)
+    setHeard('')
+    const rec = new Ctor()
+    rec.lang = 'en-US'
+    rec.interimResults = true
+    rec.continuous = false
+    rec.onresult = (event: SpeechRecognitionResultEvent) => {
+      let text = ''
+      for (let i = 0; i < event.results.length; i += 1) {
+        text += event.results[i]?.[0]?.transcript ?? ''
+      }
+      setHeard(text)
+      const action = mapUtteranceToReviewAction(text)
+      if (action && available.has(action)) {
+        setProposed(action)
+        setNotice(null)
+      } else if (text.trim()) {
+        setProposed(null)
+      }
+    }
+    rec.onend = () => {
+      setListening(false)
+      // Resolve the final verdict once dictation ends, so an unrecognized phrase
+      // surfaces a clear "didn't catch that" rather than silently doing nothing.
+      setHeard((finalText) => {
+        const action = mapUtteranceToReviewAction(finalText)
+        if (action && available.has(action)) {
+          setProposed(action)
+        } else if (finalText.trim()) {
+          setProposed(null)
+          setNotice('Didn’t catch an action — try “approve”, “reject”, “reopen”, or “reverse”.')
+        }
+        return finalText
+      })
+    }
+    rec.onerror = () => {
+      setListening(false)
+      setNotice('Voice capture failed — use the buttons below.')
+    }
+    rec.start()
+    recognitionRef.current = rec
+    setListening(true)
+  }
+
+  const stopListening = () => {
+    recognitionRef.current?.stop()
+    setListening(false)
+  }
+
+  const reset = () => {
+    setProposed(null)
+    setHeard('')
+    setNotice(null)
+  }
+
+  return (
+    <div style={voiceWrapStyle}>
+      <div style={voiceRowStyle}>
+        <MButton
+          variant={listening ? 'primary' : 'ghost'}
+          size="sm"
+          disabled={busy}
+          aria-label={listening ? 'Stop voice review' : 'Start voice review'}
+          aria-pressed={listening}
+          onClick={listening ? stopListening : startListening}
+        >
+          {listening ? 'Stop mic' : 'Voice review'}
+        </MButton>
+        {listening ? <span style={voiceHintStyle}>Listening… say approve, reject, reopen, or reverse.</span> : null}
+        {!listening && heard ? <span style={voiceHeardStyle}>Heard: “{heard.trim()}”</span> : null}
+      </div>
+      {proposed ? (
+        <div style={voiceConfirmStyle} data-testid="voice-confirm">
+          <span style={voiceConfirmTextStyle}>
+            Voice proposes: <strong>{reviewActionLabel(proposed)}</strong>. Confirm to{' '}
+            {proposed === 'reverse' ? 'open the reverse step' : 'commit'}.
+          </span>
+          <div style={voiceConfirmButtonsStyle}>
+            <MButton
+              variant="primary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                onConfirm(proposed)
+                reset()
+              }}
+            >
+              Confirm {reviewActionLabel(proposed).toLowerCase()}
+            </MButton>
+            <MButton variant="ghost" size="sm" disabled={busy} onClick={reset}>
+              Cancel
+            </MButton>
+          </div>
+        </div>
+      ) : notice ? (
+        <span style={voiceNoticeStyle}>{notice}</span>
+      ) : null}
+    </div>
+  )
+}
+
 function ReplayView({
   anchors,
   timeline,
   hasServerContext,
+  replayCapture,
 }: {
   anchors: ReplayAnchor[]
   timeline: ReplayTimelineEvent[]
   hasServerContext: boolean
+  replayCapture: ReturnType<typeof selectReplayCapture>
 }) {
   // The replay is a single navigable sequence: the pinned statechart anchors
   // first (the broken transition is the prime suspect), then the chronological
@@ -185,6 +399,16 @@ function ReplayView({
     <>
       <MSectionH>What happened (replay)</MSectionH>
       <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+        {/* REAL REPLAY: the captured rrweb session recording — watch what actually
+            happened, alongside the deterministic statechart replay below. Bytes are
+            pulled on demand through the app_issue.view-gated authed file route. */}
+        {replayCapture ? (
+          <ReproReplayPanel
+            captureSessionId={replayCapture.captureSessionId}
+            rrwebArtifact={replayCapture.rrwebArtifact}
+            reproArtifact={replayCapture.reproArtifact}
+          />
+        ) : null}
         {!hasServerContext ? (
           <div style={hintStyle}>
             Load the support packet to replay the deterministic statechart transitions and the in-window timeline.
@@ -448,6 +672,21 @@ function formatDateTime(value: string): string {
 
 const reviewHeaderStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
 const reviewHintStyle: CSSProperties = { fontSize: 13, color: 'var(--m-ink-2)' }
+const voiceWrapStyle: CSSProperties = { display: 'grid', gap: 8 }
+const voiceRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }
+const voiceHintStyle: CSSProperties = { fontSize: 12, color: 'var(--m-ink-3)' }
+const voiceHeardStyle: CSSProperties = { fontSize: 12, color: 'var(--m-ink-2)', fontStyle: 'italic' }
+const voiceNoticeStyle: CSSProperties = { fontSize: 12, color: 'var(--m-ink-3)' }
+const voiceConfirmStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  padding: 10,
+  borderRadius: 8,
+  border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+  background: 'var(--m-surface-2, #fbfaf6)',
+}
+const voiceConfirmTextStyle: CSSProperties = { fontSize: 13, color: 'var(--m-ink)' }
+const voiceConfirmButtonsStyle: CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap' }
 const hintStyle: CSSProperties = { fontSize: 13, color: 'var(--m-ink-3)', lineHeight: 1.45 }
 const scrubberStyle: CSSProperties = {
   display: 'flex',
