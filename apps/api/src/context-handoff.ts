@@ -1,66 +1,68 @@
 import { getRequestContext } from '@sitelayer/logger'
 import { z } from 'zod'
+// The work-item lifecycle vocabulary + reversibility helpers are now OWNED by
+// the published @operator/projectkit "worklifecycle" core. Imported locally for
+// in-module use (the Zod enums + assertIn guards below) AND re-exported just
+// below so every existing sitelayer importer of these names keeps resolving them
+// from './context-handoff.js' unchanged. A bare `export { … } from` would NOT
+// bring the names into local scope, so the import is required for the in-module
+// uses; the re-export keeps the public surface byte-identical.
+import {
+  WORK_ITEM_STATUSES,
+  WORK_ITEM_LANES,
+  WORK_ITEM_SEVERITIES,
+  REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY,
+  DEFAULT_REVERSIBILITY_WINDOW_SECONDS,
+  reversibilityWindowForSeverity,
+  type WorkItemStatus,
+  type WorkItemLane,
+  type WorkItemSeverity,
+} from '@operator/projectkit'
 import { currentTraceHeaders, type LedgerExecutor, withCompanyClient } from './mutation-tx.js'
 import { sanitizeSupportJson } from './routes/support-packets.js'
 
 export type JsonRecord = Record<string, unknown>
 
-export const WORK_ITEM_STATUSES = [
-  'new',
-  'triaged',
-  'agent_running',
-  'human_assigned',
-  'review_ready',
-  'review_stale',
-  'proposal_expired',
-  'resolved',
-  'reopened',
-  'wont_do',
-  'reversed',
-] as const
-
-export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number]
-
-export const WORK_ITEM_LANES = ['triage', 'human', 'agent', 'both', 'done'] as const
-export type WorkItemLane = (typeof WORK_ITEM_LANES)[number]
-
-export const WORK_ITEM_SEVERITIES = ['low', 'normal', 'high', 'urgent'] as const
-export type WorkItemSeverity = (typeof WORK_ITEM_SEVERITIES)[number]
+/**
+ * The work-item status / lane / severity vocabulary and the
+ * severity→reversibility-window map are re-exported VERBATIM from the published
+ * @operator/projectkit "worklifecycle" core (the published literals/values are
+ * byte-identical to the locals they replace — verified against
+ * node_modules/@operator/projectkit/dist/worklifecycle.js).
+ *
+ * This is the DUPLICATION collapse from the worklifecycle re-point: sitelayer's
+ * Postgres store, routes, Zod schemas, and ALL wire shapes stay identical, but
+ * the status/lane/severity literals and the severity→reversibility-window map
+ * now have a SINGLE source of truth in the shared contract. A sitelayer-internal
+ * divergence is kept as a thin LOCAL extension (see WORK_ITEM_DOMAINS just
+ * below), NOT by forking the published tuple. Non-behavioral by construction.
+ *
+ * The reversibility window mirrors the mesh-side
+ * `tasks.reversibility_window_seconds` column (mesh migration 261); the default
+ * (86400) matches what the outbound dispatch payload at
+ * apps/worker/src/runners/context-work-dispatch.ts has been sending.
+ */
+export {
+  WORK_ITEM_STATUSES,
+  WORK_ITEM_LANES,
+  WORK_ITEM_SEVERITIES,
+  REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY,
+  DEFAULT_REVERSIBILITY_WINDOW_SECONDS,
+  reversibilityWindowForSeverity,
+  type WorkItemStatus,
+  type WorkItemLane,
+  type WorkItemSeverity,
+}
 
 // The two non-bleeding work-item domains (migration 009 context_work_items.domain).
 // app_issue = problems with the sitelayer SOFTWARE (capture-dock born, platform
 // scope); field_request = contractor job problems/requests (WorkRequestAction /
 // field_event born, company scope). The capture finalize writers stamp
 // 'app_issue'; the WorkRequestAction path defaults to / stamps 'field_request'.
+// This is a sitelayer-INTERNAL dimension NOT present in the published
+// worklifecycle core, so it stays LOCAL (the "thin local extension" case).
 export const WORK_ITEM_DOMAINS = ['app_issue', 'field_request'] as const
 export type WorkItemDomain = (typeof WORK_ITEM_DOMAINS)[number]
-
-/**
- * Reversibility window (in seconds) for a newly created context_work_item,
- * keyed by severity. Higher-severity items have a tighter window because the
- * operator/agent likely needs to act quickly before the situation drifts.
- *
- * Mirrors the mesh-side `tasks.reversibility_window_seconds` column shipped
- * in mesh migration 261. The default (86400) matches what the outbound
- * dispatch payload at apps/worker/src/runners/context-work-dispatch.ts
- * has been sending; the helper exists so future code reads the canonical map
- * rather than rehardcoding 86_400.
- */
-export const REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY: Record<WorkItemSeverity, number> = {
-  urgent: 3600,
-  high: 21600,
-  normal: 86400,
-  low: 604800,
-}
-
-export const DEFAULT_REVERSIBILITY_WINDOW_SECONDS = 86400
-
-export function reversibilityWindowForSeverity(severity: WorkItemSeverity | null | undefined): number {
-  if (severity && severity in REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY) {
-    return REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY[severity]
-  }
-  return DEFAULT_REVERSIBILITY_WINDOW_SECONDS
-}
 
 export const HANDOFF_ACTOR_KINDS = ['user', 'agent', 'system', 'external'] as const
 export type HandoffActorKind = (typeof HANDOFF_ACTOR_KINDS)[number]
