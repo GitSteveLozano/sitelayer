@@ -88,6 +88,9 @@ In rough order of authority:
 4. [`DEPLOY_RUNBOOK.md`](DEPLOY_RUNBOOK.md) — deploy/migration contract.
 5. [`docs/DETERMINISTIC_WORKFLOWS.md`](docs/DETERMINISTIC_WORKFLOWS.md) — the temporal.io-style backend contract.
 6. Other `docs/*.md` — current. `docs/archived/*.md` — historical, may have drifted.
+   - Clerk auth operations (find/inspect users, instance config-as-code, env keys) →
+     [`docs/CLERK_CLI.md`](docs/CLERK_CLI.md) — use the agent-agnostic `clerk` CLI
+     (`clerk api …`), not the dashboard, for anything that touches a Clerk resource.
 
 If you change architecture, deployment, secrets layout, external services, or infrastructure, patch the relevant doc (mostly `CLAUDE.md`) in the same change.
 
