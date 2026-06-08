@@ -296,6 +296,24 @@ stage_unit() {
 }
 
 # ============================================================================
+# Stage: conformance — projectkit CONTRACT conformance, asserted EXPLICITLY.
+#
+# The @sitelayer/api projectkit-concern test validates sitelayer's emitted
+# Concern / WorkRequest / callback snapshots against the PUBLISHED
+# @operator/projectkit JSON schema (schemas/project-event.schema.json) loaded
+# from the installed package — i.e. the same cross-language contract a Go
+# subscriber (mesh) would hold us to. This stage runs JUST that test, as a
+# named, unmissable gate, so a projectkit version bump (e.g. 0.5.x -> 0.7.x)
+# or a drift in the snapshot shape fails LOUD and on its own line, instead of
+# being buried in the ~1700-test workspace run. (It also runs inside the unit
+# stage; this is the deliberate, isolated assertion the operator asked for.)
+# ============================================================================
+stage_conformance() {
+  echo "  -> projectkit contract conformance (@sitelayer/api projectkit-concern)"
+  npm run test:conformance --workspace=@sitelayer/api || return 1
+}
+
+# ============================================================================
 # Stage: integration — RUN_API_INTEGRATION=1 suite against an ISOLATED
 #        throwaway postgres. This is the same shape the removed
 #        quality.yml test-integration job used to run (deleted 2026-06-02):
@@ -638,10 +656,11 @@ main() {
   log "repo=$REPO_ROOT sha=$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
   local run_start; run_start="$(date +%s)"
 
-  # Always: static, build, unit.
+  # Always: static, build, unit, conformance (the projectkit contract gate).
   run_stage "static" stage_static || true
   run_stage "build" stage_build || true
   run_stage "unit" stage_unit || true
+  run_stage "conformance" stage_conformance || true
 
   if [ "$VERIFY_LEVEL" = "fast" ]; then
     loud "VERIFY_LEVEL=fast — integration + e2e SKIPPED (static+build+unit only)." \

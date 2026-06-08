@@ -12,6 +12,7 @@
     "lint": "npm run typecheck",
     "format": "npm run typecheck",
     "test": "vitest run",
+    "test:conformance": "vitest run src/projectkit-concern.test.ts",
     "test:integration": "RUN_API_INTEGRATION=1 vitest run"
   },
   "dependencies": {
