@@ -82,9 +82,22 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   const clerkJwtKey = env.CLERK_JWT_KEY?.trim().replace(/\\n/g, '\n') || null
   const internalAuthToken = env.INTERNAL_AUTH_TOKEN?.trim() || null
   const authConfigured = Boolean(clerkJwtKey || internalAuthToken)
+  // Fail closed on EVERY tier once an auth provider is configured. The header
+  // fallback (x-sitelayer-user-id / ACTIVE_USER_ID default user) is a
+  // no-real-auth convenience for a local box that has no Clerk key / internal
+  // token wired — NOT a non-prod-wide default. Previously the unset default was
+  // `!authConfigured || tier !== 'prod'`, so a `dev`/`preview` tier that DID
+  // have a real Clerk key still defaulted the fallback ON — turning the public
+  // dev copy into a fully unauthenticated, header-impersonatable mirror of the
+  // app. The corrected default is `!authConfigured`: a tier with a (even
+  // shared) Clerk session requirement now demands a real session by default,
+  // while a key-less local box keeps the RoleSwitcher QA path. `prod` is
+  // unchanged (it always has auth configured, so the default was already off),
+  // and an explicit `AUTH_ALLOW_HEADER_FALLBACK=1` still works where it's
+  // deliberately wanted (and is still refused in prod without break-glass).
   const allowHeaderFallback = env.AUTH_ALLOW_HEADER_FALLBACK
     ? env.AUTH_ALLOW_HEADER_FALLBACK === '1' || env.AUTH_ALLOW_HEADER_FALLBACK === 'true'
-    : !authConfigured || tier !== 'prod'
+    : !authConfigured
   const breakGlassHeaderFallback =
     env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === '1' || env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === 'true'
 

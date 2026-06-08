@@ -71,6 +71,58 @@ describe('loadAuthConfig', () => {
     })
     expect(config.allowHeaderFallback).toBe(false)
   })
+
+  // --- Fail-closed default once an auth provider is configured (sec fix) ---
+  // Regression guard for the public dev copy: a dev/preview tier WITH a real
+  // Clerk key must default the header fallback OFF, so it demands a real (even
+  // shared) Clerk session instead of accepting x-sitelayer-user-id / the
+  // ACTIVE_USER_ID default user. Previously the unset default was
+  // `!authConfigured || tier !== 'prod'`, which left it ON for these tiers.
+  it('defaults header fallback OFF on dev when a Clerk key is configured', () => {
+    const config = loadAuthConfig({
+      APP_TIER: 'dev',
+      CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+    })
+    expect(config.allowHeaderFallback).toBe(false)
+  })
+
+  it('defaults header fallback OFF on preview/demo when a Clerk key is configured', () => {
+    for (const tier of ['preview', 'demo']) {
+      const config = loadAuthConfig({
+        APP_TIER: tier,
+        CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      })
+      expect(config.allowHeaderFallback, `tier ${tier}`).toBe(false)
+    }
+  })
+
+  it('defaults header fallback OFF on dev when only an internal auth token is configured', () => {
+    const config = loadAuthConfig({ APP_TIER: 'dev', INTERNAL_AUTH_TOKEN: 'svc-token' })
+    expect(config.allowHeaderFallback).toBe(false)
+  })
+
+  it('keeps header fallback ON on a key-less dev box (RoleSwitcher QA path unchanged)', () => {
+    // No CLERK_JWT_KEY / INTERNAL_AUTH_TOKEN ⇒ no real auth to enforce, so the
+    // local/dev convenience fallback stays on. This is the case the operator
+    // env step closes on the live droplet (wire a shared key + set =0, or
+    // front with Cloudflare Access / IP-allowlist).
+    expect(loadAuthConfig({ APP_TIER: 'dev' }).allowHeaderFallback).toBe(true)
+    expect(loadAuthConfig({ APP_TIER: 'local' }).allowHeaderFallback).toBe(true)
+  })
+
+  it('honours an explicit AUTH_ALLOW_HEADER_FALLBACK=1 on dev (deliberate opt-in still works)', () => {
+    const config = loadAuthConfig({
+      APP_TIER: 'dev',
+      CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      AUTH_ALLOW_HEADER_FALLBACK: '1',
+    })
+    expect(config.allowHeaderFallback).toBe(true)
+  })
+
+  it('honours an explicit AUTH_ALLOW_HEADER_FALLBACK=0 on a key-less dev box', () => {
+    const config = loadAuthConfig({ APP_TIER: 'dev', AUTH_ALLOW_HEADER_FALLBACK: '0' })
+    expect(config.allowHeaderFallback).toBe(false)
+  })
 })
 
 describe('resolveActAsOverride', () => {
