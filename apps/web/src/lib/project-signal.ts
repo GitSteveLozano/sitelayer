@@ -33,13 +33,26 @@ export function getProjectSignal(): ProjectSignal {
   const url = override === undefined ? DEFAULT_SIGNAL_SINK_URL : override
   signal = createProjectSignal({
     projectKey: PROJECT_KEY,
-    sink: url ? new HttpSink({ url, timeoutMs: 4000 }) : new NullSink(),
+    // fetchImpl MUST be bound to the global scope. projectkit's HttpSink stores
+    // the impl as an instance field and calls `this.fetchImpl(...)`, which sets
+    // `this` to the HttpSink instance — and the browser's native `fetch` throws
+    // "Failed to execute 'fetch' on 'Window': Illegal invocation" unless `this`
+    // is the Window. (Node's fetch tolerates any `this`, which is why the
+    // server-side relay worked while every browser capture silently failed.)
+    // A *bound* fn ignores the call-site `this`, so this app-local fix works
+    // even against an un-republished projectkit dist. See chess commit 708f751.
+    sink: url ? new HttpSink({ url, timeoutMs: 4000, fetchImpl: globalThis.fetch.bind(globalThis) }) : new NullSink(),
     defaults: {
       environment: env?.MODE ?? 'unknown',
       ...(env?.VITE_BUILD_SHA ? { build_sha: env.VITE_BUILD_SHA } : {}),
       source_surface: 'web',
     },
-    onError: () => {},
+    // Surface delivery failures instead of swallowing them — a silent onError
+    // (plus the capture dock's fire-and-forget catch) is exactly what hid the
+    // Illegal-invocation bug above.
+    onError: (result) => {
+      console.warn('[sitelayer] capture signal delivery failed', result)
+    },
   })
   return signal
 }
