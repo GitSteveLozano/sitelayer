@@ -173,6 +173,38 @@ to_delete="$(doctl registry repository list-tags sitelayer --no-header --format 
 for t in $to_delete; do doctl registry repository delete-tag sitelayer "$t" --force >/dev/null 2>&1 || true; done
 [ -n "$to_delete" ] && doctl registry garbage-collection start --include-untagged-manifests --force >/dev/null 2>&1 || true
 
+# --- refresh the droplet's DO registry credential ----------------------------
+# DO registry login tokens are short-lived and the droplet has no doctl/DO-token
+# to self-refresh, so its docker config silently expires and the remote
+# `compose pull` 401s mid-deploy (the image is built+pushed, then can't be
+# pulled). Generate a fresh short-lived docker-config locally (this fleet box IS
+# authed via `doctl registry login` above) and merge it into the droplet's
+# ~/.docker/config.json BEFORE the pull, preserving any other auth entries.
+if [ "${SKIP_DROPLET_REGISTRY_LOGIN:-0}" != "1" ]; then
+  REG_CFG_TMP="$(mktemp)"
+  if doctl registry docker-config --expiry-seconds 14400 > "$REG_CFG_TMP" 2>/dev/null \
+    && grep -q 'registry.digitalocean.com' "$REG_CFG_TMP"; then
+    scp -q -o BatchMode=yes "$REG_CFG_TMP" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/sl-regcfg.json"
+    ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" 'python3 - <<PY
+import json, os
+home = os.path.expanduser("~/.docker/config.json")
+os.makedirs(os.path.dirname(home), exist_ok=True)
+try:
+    cur = json.load(open(home))
+except Exception:
+    cur = {}
+new = json.load(open("/tmp/sl-regcfg.json"))
+cur.setdefault("auths", {}).update(new.get("auths", {}))
+json.dump(cur, open(home, "w"), indent=2)
+print("[registry-auth] droplet docker config refreshed")
+PY
+rm -f /tmp/sl-regcfg.json'
+  else
+    echo "WARN: could not mint a droplet registry credential; remote pull may 401" >&2
+  fi
+  rm -f "$REG_CFG_TMP"
+fi
+
 # --- remote deploy (reuse existing droplet .env) -----------------------------
 ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
   "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' SKIP_MIGRATIONS='$SKIP_MIGRATIONS' bash -s" <<'REMOTE'
