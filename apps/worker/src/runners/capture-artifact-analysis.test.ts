@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { CONTRACT_VERSION, validateWorkRequest } from '@operator/projectkit'
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import { createCaptureArtifactAnalysisRunner } from './capture-artifact-analysis.js'
 import type { ObjectStorageClient } from './blueprint-storage-gc.js'
@@ -368,6 +369,19 @@ describe('createCaptureArtifactAnalysisRunner', () => {
     // machine's home path (cwd is env-driven via CAPTURE_EXPORT_CWD and omitted
     // when unset).
     expect(JSON.stringify(payload)).not.toContain('/home/taylorsando')
+    // The published @operator/projectkit WorkRequest rides the live capture
+    // auto-dispatch hop (the One-Line Boundary Test on the real enqueue, not just
+    // the conformance test). Contract-valid, keyed by the work-item id, with the
+    // originating Concern embedded.
+    const dispatchRequest = payload.dispatch_request as Record<string, unknown>
+    expect(dispatchRequest).toBeTruthy()
+    expect(validateWorkRequest(dispatchRequest)).toEqual([])
+    expect(dispatchRequest.schema_version).toBe(CONTRACT_VERSION)
+    expect(dispatchRequest.request_ref).toBe('work-1')
+    expect((dispatchRequest.payload as Record<string, unknown>).concern).toMatchObject({
+      concern_ref: 'work-1',
+      schema_version: CONTRACT_VERSION,
+    })
     expect(payload.callback).toMatchObject({
       path: '/api/work-requests/work-1/agent-callback',
       token_type: 'scoped_bearer',

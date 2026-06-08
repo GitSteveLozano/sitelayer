@@ -8,6 +8,7 @@ import { setCompanyGuc } from '../runner-utils.js'
 import type { ObjectStorageClient } from './blueprint-storage-gc.js'
 import { createMediaUnderstandingProcessor } from '../media/create-media-understanding-processor.js'
 import { resolveMediaUnderstandMode, type MediaProcessor, type MediaUnderstanding } from '../media/media-processor.js'
+import { buildWorkRequestSnapshot } from '@sitelayer/projectkit-bridge'
 
 export type CaptureArtifactAnalysisSummary = {
   ran: boolean
@@ -492,6 +493,29 @@ async function enqueueAnalysisReadyDispatchForRow(
       },
     },
     agent_brief_markdown: buildAnalysisReadyBrief(row, readiness, captureExport),
+    // First-class @operator/projectkit WorkRequest (with the originating Concern
+    // embedded) on the EMIT side so a subscriber other than mesh can route off
+    // the published contract — the One-Line Boundary Test on the live capture
+    // auto-dispatch hop, matching the human-promote path in apps/api
+    // (work-requests.ts buildDispatchPayload). The worker (context-work-dispatch.ts)
+    // forwards this untouched.
+    dispatch_request: buildWorkRequestSnapshot({
+      workItemId: row.id,
+      title: row.title,
+      summary: row.summary,
+      severity: row.severity,
+      status: row.status,
+      route: row.route,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      captureSessionId: row.capture_session_id,
+      supportPacketId: row.support_packet_id,
+      sourceEventRef: row.support_packet_id,
+      lane: row.lane,
+      kind: 'execute',
+      intent: 'fix',
+      callback: callback.url ? { url: callback.url, mode: 'webhook' } : { mode: 'webhook' },
+    }),
     callback,
   }
   await client.query(

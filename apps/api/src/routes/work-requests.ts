@@ -46,7 +46,7 @@ import {
   buildWorkRequestSnapshot,
   isTerminalCallbackStatus,
   workItemStatusToCallbackStatus,
-} from '../projectkit-concern.js'
+} from '@sitelayer/projectkit-bridge'
 
 export type WorkRequestRouteCtx = {
   pool: Pool

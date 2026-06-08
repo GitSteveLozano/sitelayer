@@ -298,7 +298,7 @@ stage_unit() {
 # ============================================================================
 # Stage: conformance — projectkit CONTRACT conformance, asserted EXPLICITLY.
 #
-# The @sitelayer/api projectkit-concern test validates sitelayer's emitted
+# The @sitelayer/projectkit-bridge test validates sitelayer's emitted
 # Concern / WorkRequest / callback snapshots against the PUBLISHED
 # @operator/projectkit JSON schema (schemas/project-event.schema.json) loaded
 # from the installed package — i.e. the same cross-language contract a Go
@@ -309,8 +309,8 @@ stage_unit() {
 # stage; this is the deliberate, isolated assertion the operator asked for.)
 # ============================================================================
 stage_conformance() {
-  echo "  -> projectkit contract conformance (@sitelayer/api projectkit-concern)"
-  npm run test:conformance --workspace=@sitelayer/api || return 1
+  echo "  -> projectkit contract conformance (@sitelayer/projectkit-bridge)"
+  npm run test:conformance --workspace=@sitelayer/projectkit-bridge || return 1
 }
 
 # ============================================================================
@@ -391,6 +391,7 @@ stage_integration() {
       && npm run build --workspace @sitelayer/domain \
       && npm run build --workspace @sitelayer/logger \
       && npm run build --workspace @sitelayer/workflows \
+      && npm run build --workspace @sitelayer/projectkit-bridge \
       && npm run build --workspace @sitelayer/queue \
       && npm run build --workspace @sitelayer/scenario \
       && npm run build --workspace @sitelayer/capture-schema \

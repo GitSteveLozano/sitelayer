@@ -25,6 +25,7 @@
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/formula-evaluator": "file:../../packages/formula-evaluator",
     "@sitelayer/logger": "file:../../packages/logger",
+    "@sitelayer/projectkit-bridge": "file:../../packages/projectkit-bridge",
     "@sitelayer/queue": "file:../../packages/queue",
     "@sitelayer/scenario": "file:../../packages/scenario",
     "@sitelayer/workflows": "file:../../packages/workflows",

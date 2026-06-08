@@ -43,8 +43,14 @@ import {
   type Concern,
   type ConcernPriority,
   type WorkRequest,
+  // WorkItemSeverity/WorkItemStatus are published @operator/projectkit types
+  // (apps/api/context-handoff.ts merely re-exports them). Import them straight
+  // from the contract so this bridge has ZERO app coupling — it depends only on
+  // @operator/projectkit and is shared by the api emit side (work-requests.ts)
+  // and the worker dispatch transport (capture-artifact-analysis.ts).
+  type WorkItemSeverity,
+  type WorkItemStatus,
 } from '@operator/projectkit'
-import type { WorkItemSeverity, WorkItemStatus } from './context-handoff.js'
 
 const DEFAULT_PROJECT_KEY = 'sitelayer'
 

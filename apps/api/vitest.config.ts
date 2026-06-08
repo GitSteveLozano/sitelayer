@@ -13,6 +13,9 @@ export default defineConfig({
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
       '@sitelayer/scenario': fileURLToPath(new URL('../../packages/scenario/src/index.ts', import.meta.url)),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
+      '@sitelayer/projectkit-bridge': fileURLToPath(
+        new URL('../../packages/projectkit-bridge/src/index.ts', import.meta.url),
+      ),
     },
   },
   // Keep the @sitelayer/* workspace packages on the source-alias path above and
@@ -29,6 +32,7 @@ export default defineConfig({
       '@sitelayer/queue',
       '@sitelayer/scenario',
       '@sitelayer/workflows',
+      '@sitelayer/projectkit-bridge',
     ],
   },
 })

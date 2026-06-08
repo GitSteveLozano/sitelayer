@@ -43,7 +43,7 @@ build_tier() {
 }
 
 t0=$(date +%s)
-build_tier "leaf" @sitelayer/config @sitelayer/domain @sitelayer/logger @sitelayer/workflows @sitelayer/capture-schema @sitelayer/formula-evaluator || exit 1
+build_tier "leaf" @sitelayer/config @sitelayer/domain @sitelayer/logger @sitelayer/workflows @sitelayer/projectkit-bridge @sitelayer/capture-schema @sitelayer/formula-evaluator || exit 1
 build_tier "mid"  @sitelayer/queue @sitelayer/scenario @sitelayer/capture-catalog @sitelayer/pipe-blueprint @sitelayer/pipe-roomplan @sitelayer/pipe-photogrammetry @sitelayer/pipe-drone || exit 1
 build_tier "apps" @sitelayer/api @sitelayer/web @sitelayer/worker || exit 1
 echo "==> [build] parallel build complete in $(( $(date +%s) - t0 ))s"

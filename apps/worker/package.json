@@ -22,6 +22,7 @@
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
+    "@sitelayer/projectkit-bridge": "file:../../packages/projectkit-bridge",
     "@sitelayer/queue": "file:../../packages/queue",
     "@sitelayer/workflows": "file:../../packages/workflows",
     "pg": "^8.21.0",

@@ -1,7 +1,13 @@
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CONTRACT_VERSION, validateCallback, validateConcern, validateWorkRequest } from '@operator/projectkit'
+import {
+  CONTRACT_VERSION,
+  validateCallback,
+  validateConcern,
+  validateWorkRequest,
+  WORK_ITEM_STATUSES,
+} from '@operator/projectkit'
 import {
   buildCallbackSnapshot,
   buildConcernSnapshot,
@@ -13,8 +19,20 @@ import {
   validateConcernSnapshot,
   validateWorkRequestSnapshot,
   workItemStatusToCallbackStatus,
-} from './projectkit-concern.js'
-import { AGENT_CALLBACK_EVENT_TYPES, WORK_ITEM_STATUSES } from './context-handoff.js'
+} from './index.js'
+
+// Test fixture: the sitelayer agent-callback event vocabulary. Source of truth
+// is apps/api/src/context-handoff.ts (AGENT_CALLBACK_EVENT_TYPES); mirrored here
+// as a literal so this contract test lives with the bridge it exercises and has
+// no cross-app import. If context-handoff.ts adds an event type, add it here.
+const AGENT_CALLBACK_EVENT_TYPES = [
+  'agent.dispatch_acknowledged',
+  'agent.message_received',
+  'agent.artifact_attached',
+  'agent.proposal_ready',
+  'agent.completed',
+  'human.review_requested',
+] as const
 
 // Load the PUBLISHED projectkit JSON schemas (schemas/*.json) from the installed
 // package so the conformance test is held to the same cross-language contract a
