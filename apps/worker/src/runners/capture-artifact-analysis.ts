@@ -543,10 +543,16 @@ async function enqueueAnalysisReadyDispatchForRow(
 
 function buildCaptureExportInstructions(captureSessionId: string | null): Record<string, unknown> | null {
   if (!captureSessionId) return null
+  // The export runs inside the agent's checkout of the sitelayer repo. Operators
+  // can pin the path via CAPTURE_EXPORT_CWD (or SITELAYER_REPO_ROOT); otherwise
+  // the brief omits cwd so the agent runs from its own working dir. Never bake a
+  // specific machine's home path into a dispatched brief (breaks every other
+  // deployment/agent).
+  const cwd = process.env.CAPTURE_EXPORT_CWD ?? process.env.SITELAYER_REPO_ROOT
   return {
     command: 'npm run capture:export',
     args: ['--', '--include-artifact-files'],
-    cwd: '/home/taylorsando/projects/sitelayer',
+    ...(cwd ? { cwd } : {}),
     env: {
       CAPTURE_SESSION_ID: captureSessionId,
     },

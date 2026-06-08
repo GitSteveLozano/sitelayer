@@ -364,6 +364,10 @@ describe('createCaptureArtifactAnalysisRunner', () => {
         },
       },
     })
+    // Portability guard: a dispatched brief must never bake in a specific
+    // machine's home path (cwd is env-driven via CAPTURE_EXPORT_CWD and omitted
+    // when unset).
+    expect(JSON.stringify(payload)).not.toContain('/home/taylorsando')
     expect(payload.callback).toMatchObject({
       path: '/api/work-requests/work-1/agent-callback',
       token_type: 'scoped_bearer',
