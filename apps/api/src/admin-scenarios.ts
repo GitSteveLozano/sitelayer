@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Pool, PoolClient } from 'pg'
 import { listWorkflows } from '@sitelayer/workflows'
 import { applyScenario, parseScenario, planScenario, type ApplyOp, type ScenarioDoc } from '@sitelayer/scenario'
@@ -44,11 +45,23 @@ export interface PlanPreviewDto {
 // A fixed placeholder company id for previews — the plan is never applied; this
 // just resolves the (companyId-parameterised) op values for display.
 const PREVIEW_COMPANY_ID = '00000000-0000-4000-8000-000000000000'
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
+
+function firstExistingScenarioDir(candidates: string[]): string {
+  return candidates.find((dir) => existsSync(dir)) ?? candidates[0]!
+}
 
 /** Where the scenario YAML fixtures live. Override with SCENARIO_DIR (e.g. in a
  *  container where the repo's scenarios/ isn't at the process cwd). */
 export function scenarioDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.SCENARIO_DIR?.trim() || path.join(process.cwd(), 'scenarios')
+  const configured = env.SCENARIO_DIR?.trim()
+  if (configured) return configured
+
+  return firstExistingScenarioDir([
+    path.join(process.cwd(), 'scenarios'),
+    path.join(process.cwd(), '..', '..', 'scenarios'),
+    path.join(MODULE_DIR, '..', '..', '..', 'scenarios'),
+  ])
 }
 
 export function listRegistryWorkflows(): RegistryWorkflowDto[] {

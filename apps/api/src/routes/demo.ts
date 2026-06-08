@@ -19,7 +19,7 @@ import type { AppTier } from '@sitelayer/config'
  * user. This is the supported "act as a seeded user without a password" path
  * when Clerk is configured (the dev header bypass is NOT available here).
  *
- * STRUCTURAL TIER GATE: every handler in this module returns `false`
+ * STRUCTURAL TIER GATE: every public handler in this module returns `false`
  * (i.e. "not my route, keep walking → 404") unless `ctx.tier === 'demo'`.
  * On any other tier the `/api/demo/*` surface does not exist. The gate is
  * the first thing each branch checks and is unit-tested.
@@ -229,10 +229,10 @@ ${accessLine}Choose: ${label}
 }
 
 /**
- * The capability needed to mint sendable demo links from the super-admin
- * console. Only available on the demo tier (where the TEST-instance
- * `CLERK_SECRET_KEY` + seeded demo users live); `null` everywhere else, which
- * the admin route turns into a clear 409.
+ * The capability needed to mint sendable seeded-user links from the super-admin
+ * console. Available on dev/demo where the TEST-instance `CLERK_SECRET_KEY` +
+ * seeded users live; `null` elsewhere, which the admin route turns into a
+ * clear 409.
  */
 export type DemoLinkCapability = {
   mintSignInToken: SignInTokenMinter
@@ -242,28 +242,32 @@ export type DemoLinkCapability = {
 }
 
 /**
- * Build the demo-link capability from the environment, mirroring the demo-tier
- * minter wired in `server.ts`. Returns `null` off the demo tier or when
+ * Build the seeded-link capability from the environment, mirroring the
+ * demo-tier minter wired in `server.ts`. Returns `null` off dev/demo or when
  * `CLERK_SECRET_KEY` is unset (so the feature is structurally absent there).
  */
 export function demoLinkCapabilityFromEnv(
   tier: AppTier | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): DemoLinkCapability | null {
-  if (tier !== 'demo') return null
+  if (tier !== 'dev' && tier !== 'demo') return null
   const secretKey = env.CLERK_SECRET_KEY?.trim()
   if (!secretKey) return null
   const ttlSeconds = resolveDemoSignInTokenTtlSeconds(env)
+  const defaultOrigin =
+    tier === 'dev' ? 'https://dev.sitelayer.sandolab.xyz' : 'https://demo.preview.sitelayer.sandolab.xyz'
   return {
     mintSignInToken: createClerkSignInTokenMinter({ secretKey, env, expiresInSeconds: ttlSeconds }),
-    appOrigin: env.DEMO_APP_ORIGIN?.trim() || 'https://demo.preview.sitelayer.sandolab.xyz',
+    appOrigin: env.DEMO_APP_ORIGIN?.trim() || env.SITELAYER_PUBLIC_BASE?.trim() || defaultOrigin,
     ttlSeconds,
     accessCode: env.DEMO_ACCESS_CODE?.trim() || null,
   }
 }
 
 /**
- * Demo-tier route handler. Structurally inert unless `ctx.tier === 'demo'`.
+ * Demo-tier public route handler. Structurally inert unless
+ * `ctx.tier === 'demo'`; dev seeded links are super-admin gated through
+ * POST /api/admin/demo-link.
  *
  * Routes:
  *   POST /api/demo/sign-in-link  { role, accessCode } → { redirect_url }

@@ -218,22 +218,17 @@ export type DispatchContext = {
   send304: (etag: string) => void
 }
 
+export type PlatformAdminDispatchContext = Pick<
+  DispatchContext,
+  'req' | 'url' | 'pool' | 'identity' | 'tier' | 'sendJson' | 'readBody'
+>
+
 /**
- * Walks the registered route cascade. Each handler is a thunk that
- * closes over the per-request context and returns true once it has
- * handled the URL+method pair. Order is significant — earlier entries
- * win when paths overlap. Adding a new route is one entry on the array.
- *
- * Returns true if a handler responded; false to let the caller emit 404.
+ * Platform-admin routes are intentionally tenantless. Server calls this before
+ * getCompany() so a stale active-company slug cannot block /api/admin/*.
  */
-export async function dispatch(ctx: DispatchContext): Promise<boolean> {
-  const { req, res, url, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
-  const currentUserId = ctx.getCurrentUserId()
-
-  // Handlers take `readonly string[]`; DispatchContext narrows to
-  // `readonly CompanyRole[]`. Hoist the cast once.
-  const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
-
+export async function dispatchPlatformAdminRoutes(ctx: PlatformAdminDispatchContext): Promise<boolean> {
+  const { req, url, pool, identity, sendJson, readBody, tier } = ctx
   const routes: Array<() => Promise<boolean>> = [
     // Read-only platform-admin job-fleet + queue-health (/api/admin/jobs) —
     // powers the read-only /admin/jobs page. Gated IDENTICALLY to the other
@@ -265,16 +260,42 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       }),
 
     // Cross-tenant platform-admin API (/api/admin/*) — gated by requirePlatformAdmin
-    // on the raw (pre-act-as) identity. Placed first; its namespace is distinct.
+    // on the raw (pre-act-as) identity.
     () =>
       handleAdminRoutes(req, url, {
         pool,
         identity,
         sendJson,
         readBody,
-        tier: ctx.tier,
+        tier,
         runScenarioApply: makeScenarioApplyRunner(pool, seedCompanyDefaults),
       }),
+  ]
+
+  for (const route of routes) {
+    if (await route()) return true
+  }
+  return false
+}
+
+/**
+ * Walks the registered route cascade. Each handler is a thunk that
+ * closes over the per-request context and returns true once it has
+ * handled the URL+method pair. Order is significant — earlier entries
+ * win when paths overlap. Adding a new route is one entry on the array.
+ *
+ * Returns true if a handler responded; false to let the caller emit 404.
+ */
+export async function dispatch(ctx: DispatchContext): Promise<boolean> {
+  const { req, res, url, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
+  const currentUserId = ctx.getCurrentUserId()
+
+  // Handlers take `readonly string[]`; DispatchContext narrows to
+  // `readonly CompanyRole[]`. Hoist the cast once.
+  const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
+
+  const routes: Array<() => Promise<boolean>> = [
+    () => dispatchPlatformAdminRoutes({ req, url, pool, identity, tier: ctx.tier, sendJson, readBody }),
 
     // Custom-role management API (admin-gated CRUD for custom_roles +
     // custom_role_grants; GET surfaces the read-only built-in matrix). The

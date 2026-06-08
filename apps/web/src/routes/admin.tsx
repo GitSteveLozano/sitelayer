@@ -621,14 +621,14 @@ function DemoLinksTab() {
       .catch(() => setCopied(null))
   }
 
-  const notDemoTier = !!error && /demo tier/i.test(error)
+  const wrongTier = !!error && /dev\/demo tiers/i.test(error)
   const hours = result ? Math.round(result.expires_in_seconds / 3600) : 0
 
   return (
     <div style={{ maxWidth: 720 }}>
       <p style={styles.sub}>
-        Mint a one-click, 24-hour sign-in link for a seeded demo role and a ready-to-send email. Demo tier only — the
-        link signs the recipient straight into the sample-data demo as that role.
+        Mint a one-click, 24-hour sign-in link for a seeded role and a ready-to-send email. Dev/demo only — the link
+        signs the recipient straight into the seeded environment as that role.
       </p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <select
@@ -669,8 +669,8 @@ function DemoLinksTab() {
 
       {error && (
         <div style={styles.err}>
-          {notDemoTier
-            ? 'Demo links can only be generated from the demo console (the demo tier holds the demo Clerk instance + seeded users).'
+          {wrongTier
+            ? 'Seeded-user links can only be generated from the dev/demo console with the Clerk test instance and seeded users configured.'
             : `Error: ${error}`}
         </div>
       )}

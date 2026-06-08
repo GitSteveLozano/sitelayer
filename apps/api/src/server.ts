@@ -27,7 +27,7 @@ import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapp
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { resolveBlueprintVisionProvider } from './takeoff-capture-pipelines/blueprint-vision.js'
 import { isAiChatEnabled } from './mesh-dispatcher.js'
-import { dispatch } from './routes/dispatch.js'
+import { dispatch, dispatchPlatformAdminRoutes } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
 import { handleSignalRoutes } from './routes/signal.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
@@ -977,6 +977,17 @@ const server = http.createServer(async (req, res) => {
                 sendJson: (status, body) => sendJson(res, status, body, req),
               })
               if (adminWorkRequestsHandled) return
+
+              const platformAdminHandled = await dispatchPlatformAdminRoutes({
+                req,
+                url,
+                pool,
+                identity,
+                tier: appConfig.tier,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
+              })
+              if (platformAdminHandled) return
 
               // Company routes (GET/POST /api/companies,
               // POST /api/companies/:id/memberships) handled by the extracted

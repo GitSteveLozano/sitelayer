@@ -83,8 +83,8 @@ export interface AdminRouteDeps {
   /** Applies a scenario fixture in a tx; injected from dispatch (needs the pool
    *  + seedCompanyDefaults). Absent → apply returns 501. */
   runScenarioApply?: ScenarioApplyRunner
-  /** Demo-link generation capability. Defaults to env-derived (demo tier only,
-   *  needs CLERK_SECRET_KEY). Absent/null → POST /api/admin/demo-link → 409. */
+  /** Seeded-user link generation capability. Defaults to env-derived (dev/demo
+   *  only, needs CLERK_SECRET_KEY). Absent/null → POST /api/admin/demo-link → 409. */
   demoLink?: DemoLinkCapability | null
 }
 
@@ -254,13 +254,14 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
     return true
   }
 
-  // Mutation: mint a sendable demo sign-in link (super-admin surface over the
-  // demo-tier minter). Only works on the demo tier — the capability is null
-  // elsewhere, so this is a clean 409 rather than a confusing 404/500.
+  // Mutation: mint a sendable seeded-user sign-in link (super-admin surface
+  // over the Clerk test-instance minter). Only works on dev/demo — the
+  // capability is null elsewhere, so this is a clean 409 rather than a
+  // confusing 404/500.
   if (method === 'POST' && path === '/api/admin/demo-link') {
     const demoLink = deps.demoLink !== undefined ? deps.demoLink : demoLinkCapabilityFromEnv(deps.tier)
     if (!demoLink) {
-      sendJson(409, { error: 'demo link generation is only available on the demo tier' })
+      sendJson(409, { error: 'seeded-user link generation is only available on the dev/demo tiers' })
       return true
     }
     const parsedDemoLink = parseJsonBody(DemoLinkBodySchema, deps.readBody ? await deps.readBody() : {})

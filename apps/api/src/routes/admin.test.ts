@@ -433,7 +433,7 @@ describe('handleAdminRoutes — demo-link', () => {
     ...over,
   })
 
-  it('409s when no demo-link capability (not the demo tier)', async () => {
+  it('409s when no demo-link capability (not dev/demo or missing Clerk secret)', async () => {
     const { calls, sendJson } = capture()
     await handleAdminRoutes(req('POST'), url(), deps({ sendJson, readBody: async () => ({ role: 'owner' }) }))
     expect(calls[0]?.status).toBe(409)

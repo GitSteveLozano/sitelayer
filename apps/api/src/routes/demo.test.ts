@@ -4,6 +4,7 @@ import type { AppTier } from '@sitelayer/config'
 import {
   buildTicketRedirectUrl,
   createClerkSignInTokenMinter,
+  demoLinkCapabilityFromEnv,
   handleDemoRoutes,
   resolveDemoSignInTokenTtlSeconds,
   resolveDemoUserEmail,
@@ -181,6 +182,36 @@ describe('resolveDemoSignInTokenTtlSeconds', () => {
     expect(resolveDemoSignInTokenTtlSeconds({ DEMO_SIGN_IN_TOKEN_TTL_SECONDS: '172800' } as NodeJS.ProcessEnv)).toBe(
       172800,
     )
+  })
+})
+
+describe('demoLinkCapabilityFromEnv', () => {
+  it('enables super-admin seeded links on dev with the public base origin', () => {
+    const capability = demoLinkCapabilityFromEnv('dev', {
+      CLERK_SECRET_KEY: 'sk_test_x',
+      SITELAYER_PUBLIC_BASE: 'https://dev.sitelayer.sandolab.xyz',
+      DEMO_SIGN_IN_TOKEN_TTL_SECONDS: '172800',
+    } as NodeJS.ProcessEnv)
+    expect(capability).not.toBeNull()
+    expect(capability?.appOrigin).toBe('https://dev.sitelayer.sandolab.xyz')
+    expect(capability?.ttlSeconds).toBe(172800)
+  })
+
+  it('enables super-admin seeded links on demo with DEMO_APP_ORIGIN and access code', () => {
+    const capability = demoLinkCapabilityFromEnv('demo', {
+      CLERK_SECRET_KEY: 'sk_test_x',
+      DEMO_APP_ORIGIN: 'https://demo.example.com',
+      DEMO_ACCESS_CODE: 'demo-code',
+    } as NodeJS.ProcessEnv)
+    expect(capability).not.toBeNull()
+    expect(capability?.appOrigin).toBe('https://demo.example.com')
+    expect(capability?.accessCode).toBe('demo-code')
+  })
+
+  it('is absent off dev/demo or without a Clerk secret', () => {
+    expect(demoLinkCapabilityFromEnv('preview', { CLERK_SECRET_KEY: 'sk_test_x' } as NodeJS.ProcessEnv)).toBeNull()
+    expect(demoLinkCapabilityFromEnv('prod', { CLERK_SECRET_KEY: 'sk_test_x' } as NodeJS.ProcessEnv)).toBeNull()
+    expect(demoLinkCapabilityFromEnv('dev', {} as NodeJS.ProcessEnv)).toBeNull()
   })
 })
 

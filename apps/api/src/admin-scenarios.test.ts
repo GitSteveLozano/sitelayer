@@ -1,3 +1,4 @@
+import { chdir } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
@@ -10,6 +11,7 @@ import {
 } from './admin-scenarios.js'
 
 const REAL_SCENARIOS = fileURLToPath(new URL('../../../scenarios', import.meta.url))
+const API_PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url))
 const NOW = new Date('2026-05-31T12:00:00.000Z')
 
 describe('listRegistryWorkflows', () => {
@@ -42,6 +44,17 @@ describe('listScenarioFiles', () => {
   it('defaults to <cwd>/scenarios, overridable via SCENARIO_DIR', () => {
     expect(scenarioDir({ SCENARIO_DIR: '/custom/scenarios' })).toBe('/custom/scenarios')
     expect(scenarioDir({})).toMatch(/scenarios$/)
+  })
+
+  it('finds repo scenarios when the API dev process cwd is apps/api', () => {
+    const prior = process.cwd()
+    try {
+      chdir(API_PACKAGE_DIR)
+      expect(scenarioDir({})).toBe(REAL_SCENARIOS)
+      expect(listScenarioFiles().length).toBeGreaterThan(0)
+    } finally {
+      chdir(prior)
+    }
   })
 })
 
