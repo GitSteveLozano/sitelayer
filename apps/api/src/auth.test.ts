@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 import { createSign, generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { AuthConfigError, loadAuthConfig, resolveActAsOverride, resolveIdentity } from './auth.js'
+import { AuthConfigError, AuthError, loadAuthConfig, resolveActAsOverride, resolveIdentity } from './auth.js'
 
 function fakeReq(headers: Record<string, string | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage
@@ -189,5 +189,57 @@ describe('resolveIdentity — Clerk JWT + impersonation act claim', () => {
   it('ignores a malformed `act` claim (no sub) and stays self-auth', () => {
     const identity = resolveIdentity(clerkReq({ sub: 'user_subject', act: { foo: 'bar' } }), clerkConfig)
     expect(identity).toEqual({ userId: 'user_subject', source: 'clerk' })
+  })
+
+  // --- Malformed-credential → 401, NOT 500 (regression guard) ---
+  // A bearer with three dot-separated segments LOOKS like a JWT but whose
+  // base64/JSON is garbage previously tripped an unguarded JSON.parse in
+  // decodeJwtSegment: the SyntaxError escaped the AuthError catch in server.ts
+  // and surfaced as a 500. It must REJECT as a 401 'malformed token' instead —
+  // it never bypasses auth, it just reports the right status.
+  function expectMalformed401(token: string) {
+    let thrown: unknown
+    try {
+      resolveIdentity(fakeReq({ authorization: `Bearer ${token}` }), clerkConfig)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown, `token ${token} must throw`).toBeInstanceOf(AuthError)
+    expect((thrown as AuthError).status, `token ${token} status`).toBe(401)
+    expect((thrown as AuthError).message).toBe('malformed token')
+  }
+
+  it('rejects a 3-segment bearer whose header segment is not valid base64-JSON as 401', () => {
+    // `@@@` decodes to bytes that are not parseable JSON → SyntaxError path.
+    expectMalformed401('@@@.@@@.@@@')
+  })
+
+  it('rejects a 3-segment bearer with non-JSON ascii segments as 401', () => {
+    // `notbase64json` base64-decodes to bytes that JSON.parse cannot parse.
+    expectMalformed401('notbase64json.notbase64json.sig')
+  })
+
+  it('rejects a 3-segment bearer whose header decodes to a non-object (bare value) as 401', () => {
+    // A segment that successfully JSON.parses to a bare number is still unusable
+    // as a JWT header — the explicit non-object guard turns it into a 401, not a
+    // later crash on `header.alg` of a primitive.
+    const bareNumberHeader = b64url('42')
+    expectMalformed401(`${bareNumberHeader}.${b64url('{}')}.sig`)
+  })
+
+  it('rejects a valid-RS256-header but garbage-payload bearer as 401 (not 500)', () => {
+    // Header parses fine (alg RS256) but the payload segment is junk JSON. This
+    // reaches decodeJwtSegment for the payload only AFTER signature verify; here
+    // the signature is wrong so it 401s at the signature step — but the point of
+    // the guard is that NO segment decode can produce a 500.
+    const goodHeader = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+    let thrown: unknown
+    try {
+      resolveIdentity(fakeReq({ authorization: `Bearer ${goodHeader}.@@@.sig` }), clerkConfig)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(AuthError)
+    expect((thrown as AuthError).status).toBe(401)
   })
 })

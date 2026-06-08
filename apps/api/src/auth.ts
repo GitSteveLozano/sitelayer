@@ -120,11 +120,28 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
 }
 
 function decodeJwtSegment(segment: string): Record<string, unknown> {
-  const padded = segment
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-    .padEnd(Math.ceil(segment.length / 4) * 4, '=')
-  return JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as Record<string, unknown>
+  // A bearer that LOOKS like a JWT (three dot-separated segments) but whose
+  // base64 / JSON is garbage is a malformed *credential*, not a server bug:
+  // the caller sent us junk. Buffer.from(..,'base64') is lenient, but
+  // JSON.parse throws SyntaxError on invalid JSON, and a successfully-parsed
+  // non-object (a bare number / string / array / null) is equally unusable.
+  // Both must surface as AuthError(401) so the auth gate in server.ts maps
+  // them to a 401 reject instead of escaping the AuthError catch and becoming
+  // a 500. It still REJECTS in every case — the only change is the status code.
+  let decoded: unknown
+  try {
+    const padded = segment
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(segment.length / 4) * 4, '=')
+    decoded = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'))
+  } catch {
+    throw new AuthError(401, 'malformed token')
+  }
+  if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) {
+    throw new AuthError(401, 'malformed token')
+  }
+  return decoded as Record<string, unknown>
 }
 
 function verifyClerkJwt(token: string, config: AuthConfig): Identity {
