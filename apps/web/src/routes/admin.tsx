@@ -71,9 +71,17 @@ interface DemoLinkResult {
   fallback: { url: string; access_code: string | null; role_label: string }
 }
 
+interface PlatformSuperadmin {
+  clerk_user_id: string
+  created_at: string | null
+  note: string | null
+  env_allowed: boolean
+  db_present: boolean
+}
+
 const DEMO_ROLE_OPTIONS = ['owner', 'estimator', 'foreman', 'crew'] as const
 
-type TabKey = 'companies' | 'issues' | 'grants' | 'workflows' | 'scenarios' | 'demo'
+type TabKey = 'companies' | 'issues' | 'superadmins' | 'grants' | 'workflows' | 'scenarios' | 'demo'
 
 interface LoadState<T> {
   data: T | null
@@ -730,6 +738,177 @@ function DemoLinksTab() {
   )
 }
 
+function SuperadminsTab() {
+  const [reload, setReload] = useState(0)
+  const [clerkUserId, setClerkUserId] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const state = useLoad<{ current_user_id: string; admins: PlatformSuperadmin[] }>(
+    true,
+    `/api/admin/superadmins?reload=${reload}`,
+  )
+
+  async function add() {
+    setError(null)
+    const id = clerkUserId.trim()
+    if (!id) {
+      setError('Enter a Clerk user id.')
+      return
+    }
+    setBusy(true)
+    try {
+      await request('/api/admin/superadmins', {
+        method: 'POST',
+        json: { clerk_user_id: id, note: note.trim() || undefined },
+      })
+      setClerkUserId('')
+      setNote('')
+      setReload((n) => n + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id: string) {
+    setError(null)
+    setBusy(true)
+    try {
+      await request(`/api/admin/superadmins/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      setReload((n) => n + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function copyCurrent(id: string) {
+    void navigator.clipboard
+      ?.writeText(id)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false))
+  }
+
+  if (state.loading || state.error) return <Status loading={state.loading} error={state.error} />
+
+  const admins = state.data?.admins ?? []
+  const currentUserId = state.data?.current_user_id ?? ''
+
+  return (
+    <div style={{ maxWidth: 820 }}>
+      <p style={styles.sub}>
+        Full cross-tenant admins. Add the Clerk <span style={styles.code}>user_...</span> id here; env allowlist entries
+        remain controlled by <span style={styles.code}>PLATFORM_SUPERADMIN_CLERK_IDS</span>.
+      </p>
+
+      {currentUserId ? (
+        <div style={{ ...styles.card, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={styles.muted}>Current Clerk user id</div>
+            <span style={styles.code}>{currentUserId}</span>
+          </div>
+          <button type="button" style={styles.smallButton} onClick={() => copyCurrent(currentUserId)}>
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      ) : null}
+
+      <div style={styles.controls}>
+        <input
+          value={clerkUserId}
+          onChange={(e) => setClerkUserId(e.target.value)}
+          placeholder="Clerk user id (user_...)"
+          style={{ ...styles.input, flex: '0 0 260px' }}
+        />
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="note"
+          style={{ ...styles.input, flex: '1 1 240px' }}
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void add()}
+          style={{
+            background: busy ? '#9ca3af' : '#2563eb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: busy ? 'default' : 'pointer',
+          }}
+        >
+          {busy ? 'Saving…' : 'Add superadmin'}
+        </button>
+      </div>
+      {error ? <div style={styles.err}>{error}</div> : null}
+
+      <table style={{ ...styles.table, marginTop: 12 }}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Clerk user id</th>
+            <th style={styles.th}>Source</th>
+            <th style={styles.th}>Note</th>
+            <th style={styles.th}>Added</th>
+            <th style={styles.th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {admins.map((admin) => {
+            const isCurrent = admin.clerk_user_id === currentUserId
+            const source = [admin.db_present ? 'db' : null, admin.env_allowed ? 'env' : null]
+              .filter(Boolean)
+              .join(' + ')
+            const locked = isCurrent || admin.env_allowed || !admin.db_present
+            return (
+              <tr key={admin.clerk_user_id}>
+                <td style={styles.td}>
+                  <span style={styles.code}>{admin.clerk_user_id}</span>
+                  {isCurrent ? <span style={{ ...styles.muted, marginLeft: 6 }}>you</span> : null}
+                </td>
+                <td style={styles.td}>{source || 'db'}</td>
+                <td style={styles.td}>{admin.note || <span style={styles.muted}>No note</span>}</td>
+                <td style={styles.td}>{admin.created_at ? admin.created_at.slice(0, 10) : 'env'}</td>
+                <td style={styles.td}>
+                  <button
+                    type="button"
+                    style={{ ...styles.link, color: locked ? '#9ca3af' : '#b91c1c' }}
+                    disabled={busy || locked}
+                    onClick={() => void remove(admin.clerk_user_id)}
+                    title={
+                      isCurrent
+                        ? 'You cannot remove your own superadmin access here.'
+                        : admin.env_allowed
+                          ? 'Remove this from PLATFORM_SUPERADMIN_CLERK_IDS.'
+                          : undefined
+                    }
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+          {admins.length === 0 && (
+            <tr>
+              <td style={styles.td} colSpan={5}>
+                <span style={styles.muted}>No superadmins configured in the DB or env allowlist.</span>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // app_issue.* capability → short human description for the grants table.
 const APP_ISSUE_CAP_BLURB: Record<string, string> = {
   'app_issue.capture': 'Open the capture dock + record an app issue.',
@@ -875,6 +1054,7 @@ export default function AdminRoute() {
   const tabs: Array<{ key: TabKey; label: string }> = [
     { key: 'companies', label: 'Companies' },
     { key: 'issues', label: 'Issues' },
+    { key: 'superadmins', label: 'Superadmins' },
     { key: 'grants', label: 'Platform grants' },
     { key: 'workflows', label: 'Workflows' },
     { key: 'scenarios', label: 'Scenarios' },
@@ -898,6 +1078,7 @@ export default function AdminRoute() {
       </div>
       {tab === 'companies' && <CompaniesTab />}
       {tab === 'issues' && <WorkRequestsTab />}
+      {tab === 'superadmins' && <SuperadminsTab />}
       {tab === 'grants' && <PlatformGrantsTab />}
       {tab === 'workflows' && <WorkflowsTab />}
       {tab === 'scenarios' && <ScenariosTab />}

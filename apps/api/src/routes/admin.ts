@@ -58,6 +58,13 @@ const DemoLinkBodySchema = z
   })
   .loose()
 
+const SuperadminBodySchema = z
+  .object({
+    clerk_user_id: z.string().nullish(),
+    note: z.string().nullish(),
+  })
+  .loose()
+
 const ImpersonateBodySchema = z
   .object({
     user_id: z.string().nullish(),
@@ -102,6 +109,12 @@ interface MembershipRow {
   created_at: string
 }
 
+interface PlatformAdminRow {
+  clerk_user_id: string
+  created_at: string | null
+  note: string | null
+}
+
 interface ImpersonationSessionRow {
   id: string
   created_at: string
@@ -125,6 +138,34 @@ function clampTtl(raw: unknown): number {
   return Math.min(Math.max(Math.trunc(n), MIN_IMPERSONATION_TTL_SECONDS), MAX_IMPERSONATION_TTL_SECONDS)
 }
 
+function parseClerkUserId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  if (!value || value.length > 128 || /\s/.test(value)) return null
+  return value
+}
+
+function platformAdminDto(row: PlatformAdminRow, envIds: ReadonlySet<string>) {
+  return {
+    clerk_user_id: row.clerk_user_id,
+    created_at: row.created_at,
+    note: row.note,
+    env_allowed: envIds.has(row.clerk_user_id),
+    db_present: row.created_at !== null,
+  }
+}
+
+function mergePlatformAdmins(rows: PlatformAdminRow[], envIds: ReadonlySet<string>) {
+  const byId = new Map<string, PlatformAdminRow>()
+  for (const row of rows) byId.set(row.clerk_user_id, row)
+  for (const id of [...envIds].sort()) {
+    if (!byId.has(id)) byId.set(id, { clerk_user_id: id, created_at: null, note: 'PLATFORM_SUPERADMIN_CLERK_IDS' })
+  }
+  return [...byId.values()]
+    .sort((a, b) => a.clerk_user_id.localeCompare(b.clerk_user_id))
+    .map((row) => platformAdminDto(row, envIds))
+}
+
 /**
  * Returns true once it has handled (or rejected) an `/api/admin/*` request;
  * false to let the rest of the route cascade run.
@@ -143,6 +184,65 @@ export async function handleAdminRoutes(req: IncomingMessage, url: URL, deps: Ad
   }
 
   const method = (req.method ?? 'GET').toUpperCase()
+
+  if (method === 'GET' && path === '/api/admin/superadmins') {
+    const result = (await pool.query(
+      `select clerk_user_id, created_at, note
+         from platform_admins
+        order by clerk_user_id asc`,
+    )) as { rows: PlatformAdminRow[] }
+    sendJson(200, {
+      current_user_id: gate.sub,
+      admins: mergePlatformAdmins(result.rows, envIds),
+    })
+    return true
+  }
+
+  if (method === 'POST' && path === '/api/admin/superadmins') {
+    const parsed = parseJsonBody(SuperadminBodySchema, deps.readBody ? await deps.readBody() : {})
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    const clerkUserId = parseClerkUserId(parsed.value.clerk_user_id)
+    if (!clerkUserId) {
+      sendJson(400, { error: 'clerk_user_id is required' })
+      return true
+    }
+    const note = typeof parsed.value.note === 'string' && parsed.value.note.trim() ? parsed.value.note.trim() : null
+    const inserted = (await pool.query(
+      `insert into platform_admins (clerk_user_id, note)
+       values ($1, $2)
+       on conflict (clerk_user_id) do update set note = excluded.note
+       returning clerk_user_id, created_at, note`,
+      [clerkUserId, note],
+    )) as { rows: PlatformAdminRow[] }
+    sendJson(201, { admin: platformAdminDto(inserted.rows[0]!, envIds) })
+    return true
+  }
+
+  const superadminDelete = path.match(/^\/api\/admin\/superadmins\/([^/]+)$/)
+  if (method === 'DELETE' && superadminDelete) {
+    const clerkUserId = decodeURIComponent(superadminDelete[1]!)
+    if (clerkUserId === gate.sub) {
+      sendJson(409, { error: 'cannot remove your own superadmin access from the app' })
+      return true
+    }
+    if (envIds.has(clerkUserId)) {
+      sendJson(409, { error: 'env-allowlisted superadmins must be removed from PLATFORM_SUPERADMIN_CLERK_IDS' })
+      return true
+    }
+    const deleted = (await pool.query(
+      `delete from platform_admins where clerk_user_id = $1 returning clerk_user_id, created_at, note`,
+      [clerkUserId],
+    )) as { rows: PlatformAdminRow[] }
+    if (!deleted.rows[0]) {
+      sendJson(404, { error: 'superadmin not found' })
+      return true
+    }
+    sendJson(200, { removed: deleted.rows[0].clerk_user_id })
+    return true
+  }
 
   // Mutation: start an audited impersonation session (Clerk actor token).
   if (method === 'POST' && path === '/api/admin/impersonate') {

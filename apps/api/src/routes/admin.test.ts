@@ -12,8 +12,18 @@ const ENV_IDS = new Set(['admin-sub'])
 
 class FakePool {
   queries: string[] = []
-  async query(text: string, _values?: unknown[]): Promise<{ rows: unknown[] }> {
+  async query(text: string, values?: unknown[]): Promise<{ rows: unknown[] }> {
     this.queries.push(text)
+    if (/select clerk_user_id, created_at, note\s+from platform_admins/i.test(text)) {
+      return { rows: [{ clerk_user_id: 'user_db', created_at: '2026-06-08T00:00:00.000Z', note: 'db admin' }] }
+    }
+    if (/insert into platform_admins/i.test(text)) {
+      return { rows: [{ clerk_user_id: values?.[0], created_at: '2026-06-08T00:00:00.000Z', note: values?.[1] }] }
+    }
+    if (/delete from platform_admins/i.test(text)) {
+      if (values?.[0] === 'missing') return { rows: [] }
+      return { rows: [{ clerk_user_id: values?.[0], created_at: '2026-06-08T00:00:00.000Z', note: 'removed' }] }
+    }
     if (/from companies c/i.test(text)) {
       return { rows: [{ id: COMPANY_ID, slug: 'acme', name: 'Acme', created_at: 't', member_count: 2 }] }
     }
@@ -89,6 +99,25 @@ describe('handleAdminRoutes — namespace + gate', () => {
 })
 
 describe('handleAdminRoutes — read-only endpoints (as superadmin)', () => {
+  it('GET /api/admin/superadmins returns db + env admins and the current Clerk subject', async () => {
+    const { calls, sendJson } = capture()
+    const handled = await handleAdminRoutes(
+      req('GET'),
+      new URL('http://x/api/admin/superadmins'),
+      deps({ sendJson, envIds: new Set(['admin-sub', 'user_env']) }),
+    )
+    expect(handled).toBe(true)
+    expect(calls[0]?.status).toBe(200)
+    const body = calls[0]?.body as { current_user_id: string; admins: Array<Record<string, unknown>> }
+    expect(body.current_user_id).toBe('admin-sub')
+    expect(body.admins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ clerk_user_id: 'user_db', db_present: true, env_allowed: false, note: 'db admin' }),
+        expect.objectContaining({ clerk_user_id: 'user_env', db_present: false, env_allowed: true }),
+      ]),
+    )
+  })
+
   it('GET /api/admin/companies returns the cross-tenant list', async () => {
     const { calls, sendJson } = capture()
     const handled = await handleAdminRoutes(
@@ -146,6 +175,60 @@ describe('handleAdminRoutes — read-only endpoints (as superadmin)', () => {
     const { calls, sendJson } = capture()
     const handled = await handleAdminRoutes(req('GET'), new URL('http://x/api/admin/nope'), deps({ sendJson }))
     expect(handled).toBe(true)
+    expect(calls[0]?.status).toBe(404)
+  })
+})
+
+describe('handleAdminRoutes — superadmin membership', () => {
+  it('adds or updates a DB-backed superadmin', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      new URL('http://x/api/admin/superadmins'),
+      deps({ sendJson, readBody: async () => ({ clerk_user_id: 'user_new', note: 'ops lead' }) }),
+    )
+    expect(calls[0]?.status).toBe(201)
+    expect(calls[0]?.body).toMatchObject({
+      admin: { clerk_user_id: 'user_new', note: 'ops lead', db_present: true, env_allowed: false },
+    })
+  })
+
+  it('400s when adding without a Clerk user id', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('POST'),
+      new URL('http://x/api/admin/superadmins'),
+      deps({ sendJson, readBody: async () => ({ note: 'missing id' }) }),
+    )
+    expect(calls[0]?.status).toBe(400)
+  })
+
+  it('removes a DB-backed superadmin', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('DELETE'), new URL('http://x/api/admin/superadmins/user_old'), deps({ sendJson }))
+    expect(calls[0]?.status).toBe(200)
+    expect(calls[0]?.body).toEqual({ removed: 'user_old' })
+  })
+
+  it('does not remove the current superadmin from the app', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('DELETE'), new URL('http://x/api/admin/superadmins/admin-sub'), deps({ sendJson }))
+    expect(calls[0]?.status).toBe(409)
+  })
+
+  it('does not pretend env-allowlisted admins can be removed from the app', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(
+      req('DELETE'),
+      new URL('http://x/api/admin/superadmins/user_env'),
+      deps({ sendJson, envIds: new Set(['admin-sub', 'user_env']) }),
+    )
+    expect(calls[0]?.status).toBe(409)
+  })
+
+  it('404s when removing a DB admin that does not exist', async () => {
+    const { calls, sendJson } = capture()
+    await handleAdminRoutes(req('DELETE'), new URL('http://x/api/admin/superadmins/missing'), deps({ sendJson }))
     expect(calls[0]?.status).toBe(404)
   })
 })
