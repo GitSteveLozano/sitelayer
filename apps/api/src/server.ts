@@ -932,7 +932,20 @@ const server = http.createServer(async (req, res) => {
                   sendJson(res, err.status, { error: err.message, request_id: requestId })
                   return
                 }
-                throw err
+                // Defense in depth: identity resolution must FAIL CLOSED. A
+                // malformed credential that trips an unexpected throw in the
+                // auth chain (e.g. a future unguarded decode/parse) is a 401
+                // reject, never a 500 — a bad credential never becomes a server
+                // error, and it never bypasses auth. The real root-cause fix is
+                // in auth.ts (decodeJwtSegment now throws AuthError); this is
+                // the backstop so any other surprise can't leak a 500 either.
+                logger.warn(
+                  { err: err instanceof Error ? err.message : String(err), request_id: requestId },
+                  '[auth] non-AuthError during identity resolution; treating as 401',
+                )
+                res.setHeader('www-authenticate', 'Bearer realm="sitelayer"')
+                sendJson(res, 401, { error: 'authentication failed', request_id: requestId })
+                return
               }
               requestContext.actorUserId = identity.userId
               // Impersonation: a Clerk actor-token session carries the real admin

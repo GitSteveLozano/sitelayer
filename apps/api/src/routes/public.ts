@@ -266,6 +266,17 @@ export async function handlePublicRoutes(
         ctx.sendJson(401, { error: 'metrics token required' })
         return true
       }
+    } else if (ctx.tier !== 'local') {
+      // Fail closed on every shared/deployed tier. `prod` already refuses to
+      // boot without API_METRICS_TOKEN (server.ts), but `dev`/`preview`/`demo`
+      // previously served unauthenticated Prometheus metrics whenever the token
+      // was left blank — leaking request volumes, route maps, and pool/queue
+      // internals from the public dev copy. Only `local` may serve metrics
+      // open (no token wired on a developer box). Set API_METRICS_TOKEN to
+      // restore scraping on a deployed tier.
+      res.setHeader('www-authenticate', 'Bearer realm="sitelayer-metrics"')
+      ctx.sendJson(401, { error: 'metrics token required' })
+      return true
     }
     const { contentType, body } = await renderMetrics()
     res.writeHead(200, {

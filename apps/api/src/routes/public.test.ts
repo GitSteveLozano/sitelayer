@@ -313,3 +313,66 @@ describe('handlePublicRoutes — GET /api/features', () => {
     expect((responses[0]?.body as Record<string, unknown>).ai_chat_enabled).toBe(false)
   })
 })
+
+describe('handlePublicRoutes — GET /api/metrics (fail-closed on deployed tiers)', () => {
+  const URL_METRICS = new URL('http://localhost/api/metrics')
+  function getReq(headers: Record<string, string> = {}): import('node:http').IncomingMessage {
+    return { method: 'GET', headers } as unknown as import('node:http').IncomingMessage
+  }
+
+  it('serves metrics open on the local tier when no token is configured', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, rawStatus, res } = makeCtx(pool, '')
+    ctx.tier = 'local'
+    ctx.metricsToken = null
+
+    const handled = await handlePublicRoutes(getReq(), URL_METRICS, res, ctx)
+
+    expect(handled).toBe(true)
+    // local with no token = open scrape (200 via writeHead, not a sendJson 401)
+    expect(rawStatus.code).toBe(200)
+    expect(responses.find((r) => r.status === 401)).toBeUndefined()
+  })
+
+  it('401s on dev/preview/demo/prod when no token is configured (was a public leak on dev)', async () => {
+    for (const tier of ['dev', 'preview', 'demo', 'prod'] as const) {
+      const pool = new FakePool()
+      const { ctx, responses, rawStatus, res } = makeCtx(pool, '')
+      ctx.tier = tier
+      ctx.metricsToken = null
+
+      const handled = await handlePublicRoutes(getReq(), URL_METRICS, res, ctx)
+
+      expect(handled, `tier ${tier} handled`).toBe(true)
+      expect(responses[0], `tier ${tier} body`).toEqual({ status: 401, body: { error: 'metrics token required' } })
+      // Must NOT have rendered the Prometheus body (no open 200).
+      expect(rawStatus.code, `tier ${tier} must not 200`).toBeNull()
+    }
+  })
+
+  it('401s without a bearer when a token IS configured (every tier, unchanged)', async () => {
+    for (const tier of ['local', 'dev', 'preview', 'demo', 'prod'] as const) {
+      const pool = new FakePool()
+      const { ctx, responses, res } = makeCtx(pool, '')
+      ctx.tier = tier
+      ctx.metricsToken = 'secret-token'
+
+      await handlePublicRoutes(getReq(), URL_METRICS, res, ctx)
+
+      expect(responses[0], `tier ${tier}`).toEqual({ status: 401, body: { error: 'metrics token required' } })
+    }
+  })
+
+  it('serves metrics with the correct bearer when a token IS configured', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, rawStatus, res } = makeCtx(pool, '')
+    ctx.tier = 'dev'
+    ctx.metricsToken = 'secret-token'
+
+    const handled = await handlePublicRoutes(getReq({ authorization: 'Bearer secret-token' }), URL_METRICS, res, ctx)
+
+    expect(handled).toBe(true)
+    expect(rawStatus.code).toBe(200)
+    expect(responses.find((r) => r.status === 401)).toBeUndefined()
+  })
+})
