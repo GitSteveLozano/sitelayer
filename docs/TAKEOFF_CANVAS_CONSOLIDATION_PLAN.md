@@ -146,7 +146,11 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
   in the mobile single-selected-measurement area — a drop-in. A phone estimator
   can now attach an assembly recipe to a takeoff and see the exploded
   material/labor/sub/freight cost preview inline, at parity with desktop.
-- ⏳ **Remaining gaps:** conditions, true arc tool on mobile.
+- ✅ **Conditions on mobile.** Rendered the reusable, form-factor-agnostic
+  `ConditionPicker` (pick/create the typed/named/colored template the next draw
+  is tagged against) in the mobile scope-entry section, wired to `useConditions`
+  / `useCreateCondition`, and stamp `condition_id` on save — parity with desktop.
+- ⏳ **Remaining gap:** true arc tool on mobile (currently arc→lineal).
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.

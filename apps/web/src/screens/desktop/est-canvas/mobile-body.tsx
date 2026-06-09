@@ -52,6 +52,8 @@ import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { AssemblyAttachPanel } from './assembly-panel'
+import { ConditionPicker } from './condition-picker'
+import { useConditions, useCreateCondition, type ConditionMeasurementKind } from '@/lib/api/conditions'
 
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
@@ -297,6 +299,21 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const scaleLength = sctx.calibration.lengthText || '24'
   const setScaleLength = (next: string) => sdispatch({ type: 'SET_SCALE_LENGTH', lengthText: next })
   const [scaleError, setScaleError] = useState<string | null>(null)
+  // Conditions (Takeoff Deep Dive H1) — parity with desktop. A condition is the
+  // reusable typed/named/colored template the next draw is tagged against;
+  // `condition_id` is stamped on save. "None" keeps the legacy shape-first flow.
+  const conditionsQuery = useConditions()
+  const conditions = useMemo(() => conditionsQuery.data?.conditions ?? [], [conditionsQuery.data])
+  const createCondition = useCreateCondition()
+  const [activeConditionId, setActiveConditionId] = useState<string | null>(null)
+  const activeCondition = useMemo(
+    () => conditions.find((c) => c.id === activeConditionId) ?? null,
+    [conditions, activeConditionId],
+  )
+  const [conditionFormOpen, setConditionFormOpen] = useState(false)
+  const [newConditionName, setNewConditionName] = useState('')
+  const [newConditionColor, setNewConditionColor] = useState('#2f7d32')
+  const [newConditionKind, setNewConditionKind] = useState<ConditionMeasurementKind>('area')
   // Bulk multi-select (msg23). When on, canvas taps toggle membership in a set
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
   // `bulkMode` is the phone-only toggle (no machine equivalent); the bulk *set*
@@ -505,6 +522,8 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         ...(isDeduction ? { is_deduction: true } : {}),
         // Land on the selected draft; null falls back to the project default.
         draft_id: activeDraftId,
+        // Tag the active condition when one is picked (null = legacy flow).
+        condition_id: activeConditionId,
       })
       // COMMIT-equivalent UI reset through the machine (persistence already
       // happened above via the existing create hook — hybrid dep wiring).
@@ -560,6 +579,30 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       setMode('draw')
     } catch (err) {
       setScaleError(err instanceof Error ? err.message : 'Could not save the scale.')
+    }
+  }
+
+  // Create a condition inline (name + color + kind) and make it active so the
+  // next draw tags it. Mirrors the desktop create-condition flow.
+  const onCreateCondition = async () => {
+    const name = newConditionName.trim()
+    if (!name) {
+      setError('Condition name is required')
+      return
+    }
+    setError(null)
+    try {
+      const res = await createCondition.mutateAsync({
+        name,
+        color: newConditionColor,
+        measurement_kind: newConditionKind,
+      })
+      setActiveConditionId(res.condition.id)
+      setNewConditionName('')
+      setConditionFormOpen(false)
+      setSavedToast(`Condition “${res.condition.name}” ready — draws will tag it.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create condition failed')
     }
   }
 
@@ -1381,6 +1424,24 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                     {/* --- Scope item + quantity entry --- */}
                     <MSectionH>Scope item</MSectionH>
                     <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {/* Condition picker (parity with desktop) — pick/create the
+                          reusable typed template the next draw is tagged against. */}
+                      <ConditionPicker
+                        conditions={conditions}
+                        activeConditionId={activeConditionId}
+                        setActiveConditionId={setActiveConditionId}
+                        activeCondition={activeCondition}
+                        conditionFormOpen={conditionFormOpen}
+                        setConditionFormOpen={setConditionFormOpen}
+                        newConditionName={newConditionName}
+                        setNewConditionName={setNewConditionName}
+                        newConditionColor={newConditionColor}
+                        setNewConditionColor={setNewConditionColor}
+                        newConditionKind={newConditionKind}
+                        setNewConditionKind={setNewConditionKind}
+                        onCreateCondition={() => void onCreateCondition()}
+                        createPending={createCondition.isPending}
+                      />
                       <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
                         {items.length === 0 ? <option value="">Loading…</option> : null}
                         {items.map((it: ServiceItem) => (
