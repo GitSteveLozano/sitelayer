@@ -16,6 +16,12 @@ machine as a collaborator Mac, not Taylor's operator workstation. In that mode:
 - report missing GitHub, Docker, browser-profile, Clerk, or production access
   as blockers instead of trying to recreate Taylor's setup.
 
+If this is Steve using Claude Code locally, read
+[`docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md`](./docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md)
+first. Steve's machine should make feature branches and push those branches back
+to GitHub; Taylor's workstation/fleet path owns `dev`/`main` promotion and
+dev/demo/prod deploys.
+
 ## ⚠️ Architecture at a glance
 
 **One web app: `apps/web/`.** The old parallel frontend track was removed on 2026-05-05 (ADR 0003). New screens, primitives, and machines all go under `apps/web/src/`.

@@ -2,6 +2,8 @@
 
 This file is for AI agents (Claude, Codex, Gemini, anything) editing this repository. If you are a human, read [`CLAUDE.md`](./CLAUDE.md) first; it covers the same ground with more detail.
 
+> **Steve / Claude Code local work? Read [`docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md`](docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md) FIRST.** Steve's machine is a collaborator workstation: feature branches and PRs only; Taylor's workstation/fleet path pushes `dev`/`main` and deploys dev/demo/prod.
+>
 > **Collaborator agent with none of the operator infra (mesh / MCP / browser-bridge / Tailnet / prod / Taylor's creds)? Read [`docs/agents/COLLABORATOR.md`](docs/agents/COLLABORATOR.md) FIRST** — it is the self-contained guide for running, testing, and contributing to Sitelayer from a clean GitHub clone.
 
 ## Collaborator Workstation Override

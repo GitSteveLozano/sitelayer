@@ -9,6 +9,11 @@ machine.
 If you came here from `AGENTS.md` or `CLAUDE.md`: read this file first, then
 those for depth.
 
+If this is Steve running Claude Code locally, start with
+[`docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md`](../STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md).
+The intended flow is local edits on a feature branch, push that branch to
+GitHub, and let Taylor integrate/promote/deploy from his workstation/fleet path.
+
 ---
 
 ## (a) What you have
