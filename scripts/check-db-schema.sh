@@ -130,11 +130,16 @@ expected_required_columns(table_name, column_name) as (
     ('support_packet_access_log', 'request_id'),
     ('support_packet_access_log', 'metadata'),
     ('context_work_items', 'support_packet_id'),
+    ('context_work_items', 'domain'),
     ('context_work_items', 'status'),
     ('context_work_items', 'lane'),
     ('context_work_items', 'metadata'),
     ('context_work_items', 'agent_callback_token_hash'),
     ('context_work_items', 'agent_callback_token_issued_at'),
+    ('context_work_items', 'reversibility_window_seconds'),
+    ('context_work_items', 'reversed_at'),
+    ('context_work_items', 'capture_session_id'),
+    ('context_work_items', 'dedup_key'),
     ('context_handoff_events', 'work_item_id'),
     ('context_handoff_events', 'event_type'),
     ('context_handoff_events', 'actor_kind'),
@@ -145,6 +150,10 @@ expected_required_columns(table_name, column_name) as (
     ('context_handoff_events', 'sentry_trace'),
     ('context_handoff_events', 'sentry_baggage'),
     ('schema_migrations', 'checksum')
+),
+expected_required_indexes(index_name) as (
+  values
+    ('context_work_items_company_dedup_key_uidx')
 ),
 missing_tables as (
   select 'missing table: ' || e.table_name as failure
@@ -198,6 +207,14 @@ missing_required_columns as (
    and c.table_name = e.table_name
    and c.column_name = e.column_name
   where c.column_name is null
+),
+missing_required_indexes as (
+  select 'missing required index: ' || e.index_name as failure
+  from expected_required_indexes e
+  left join pg_indexes i
+    on i.schemaname = '$schema_name'
+   and i.indexname = e.index_name
+  where i.indexname is null
 )
 select failure from missing_tables
 union all
@@ -210,6 +227,8 @@ union all
 select failure from missing_queue_columns
 union all
 select failure from missing_required_columns
+union all
+select failure from missing_required_indexes
 order by failure;
 ")"
 
