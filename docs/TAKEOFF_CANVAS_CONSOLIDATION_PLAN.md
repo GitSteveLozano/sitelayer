@@ -141,7 +141,12 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
   cancel). Wired through the *same* machine events desktop uses
   (`START_CALIBRATION` / `PLACE_SCALE_POINT` / `SET_SCALE_LENGTH`) and the shared
   `useCalibratePage` mutation, so a phone-calibrated sheet persists identically.
-- ⏳ **Remaining gaps:** conditions, assemblies, true arc tool on mobile.
+- ✅ **Assemblies on mobile.** Rendered the existing, form-factor-agnostic
+  `AssemblyAttachPanel` (already built on the mobile `@/components/m` primitives)
+  in the mobile single-selected-measurement area — a drop-in. A phone estimator
+  can now attach an assembly recipe to a takeoff and see the exploded
+  material/labor/sub/freight cost preview inline, at parity with desktop.
+- ⏳ **Remaining gaps:** conditions, true arc tool on mobile.
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.

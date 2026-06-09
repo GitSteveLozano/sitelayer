@@ -51,6 +51,7 @@ import { MBody, MButton, MChip, MChipRow, MI, MInput, MSectionH, MSelect, MTopBa
 import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
+import { AssemblyAttachPanel } from './assembly-panel'
 
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
@@ -1223,114 +1224,131 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         while multi-selecting (the canvas masks selection the same
                         way via `bulkMode ? null : selectedId`). */}
                     {selected && !bulkMode ? (
-                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
-                        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              letterSpacing: '0.06em',
-                              color: 'var(--m-accent)',
-                            }}
-                          >
-                            {editId === selected.id
-                              ? 'EDIT GEOM · DRAG A HANDLE'
-                              : `SELECTED · POLY ${selectedIndex >= 0 ? selectedIndex + 1 : 1} OF ${canvasPolyCount} · ${selected.service_item_code}`}
-                          </div>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-font-display)',
-                              fontWeight: 800,
-                              fontSize: 26,
-                              lineHeight: 1,
-                              marginTop: 4,
-                              color: 'var(--m-sand)',
-                              fontVariantNumeric: 'tabular-nums',
-                            }}
-                          >
-                            {formatQty(Number(selected.quantity))}
-                            <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                              {selected.unit?.toUpperCase()}
-                            </span>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex' }}>
-                          {(editId === selected.id
-                            ? ([
-                                {
-                                  label: patchMeasurement.isPending ? 'SAVING…' : 'APPLY',
-                                  sub: 'SAVE SHAPE',
-                                  on: () => void commitEditGeom(),
-                                  danger: false,
-                                },
-                                { label: 'CANCEL', sub: 'DISCARD', on: cancelEditGeom, danger: false },
-                              ] as const)
-                            : ([
-                                {
-                                  label: 'EDIT GEOM',
-                                  sub: 'DRAG PTS',
-                                  on: startEditGeom,
-                                  danger: false,
-                                },
-                                {
-                                  label: 'REASSIGN',
-                                  sub: 'CHANGE ITEM',
-                                  on: () => void reassignSelected(),
-                                  danger: false,
-                                },
-                                {
-                                  label: 'DUPLICATE',
-                                  sub: 'NEW POLY',
-                                  on: () => void duplicateSelected(),
-                                  danger: false,
-                                },
-                                {
-                                  label: copyOpen ? 'COPY ✕' : 'COPY…',
-                                  sub: 'ARRAY / MIRROR',
-                                  on: () => setCopyOpen((v) => !v),
-                                  danger: false,
-                                },
-                                { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
-                              ] as const)
-                          ).map((a, i, arr) => (
-                            <button
-                              key={a.label}
-                              type="button"
-                              onClick={a.on}
-                              disabled={patchMeasurement.isPending || deleteMeasurement.isPending || create.isPending}
+                      <>
+                        <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
+                          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
+                            <div
                               style={{
-                                flex: 1,
-                                padding: '12px 6px',
-                                background: 'transparent',
-                                color: a.danger ? 'var(--m-red)' : 'var(--m-sand)',
-                                border: 'none',
-                                borderRight: i < arr.length - 1 ? '1px solid var(--m-ink-2)' : 'none',
                                 fontFamily: 'var(--m-num)',
-                                cursor: 'pointer',
-                                textAlign: 'center',
+                                fontSize: 10,
+                                fontWeight: 700,
+                                letterSpacing: '0.06em',
+                                color: 'var(--m-accent)',
                               }}
                             >
-                              <span
-                                style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em' }}
-                              >
-                                {a.label}
+                              {editId === selected.id
+                                ? 'EDIT GEOM · DRAG A HANDLE'
+                                : `SELECTED · POLY ${selectedIndex >= 0 ? selectedIndex + 1 : 1} OF ${canvasPolyCount} · ${selected.service_item_code}`}
+                            </div>
+                            <div
+                              style={{
+                                fontFamily: 'var(--m-font-display)',
+                                fontWeight: 800,
+                                fontSize: 26,
+                                lineHeight: 1,
+                                marginTop: 4,
+                                color: 'var(--m-sand)',
+                                fontVariantNumeric: 'tabular-nums',
+                              }}
+                            >
+                              {formatQty(Number(selected.quantity))}
+                              <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
+                                {selected.unit?.toUpperCase()}
                               </span>
-                              <span
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex' }}>
+                            {(editId === selected.id
+                              ? ([
+                                  {
+                                    label: patchMeasurement.isPending ? 'SAVING…' : 'APPLY',
+                                    sub: 'SAVE SHAPE',
+                                    on: () => void commitEditGeom(),
+                                    danger: false,
+                                  },
+                                  { label: 'CANCEL', sub: 'DISCARD', on: cancelEditGeom, danger: false },
+                                ] as const)
+                              : ([
+                                  {
+                                    label: 'EDIT GEOM',
+                                    sub: 'DRAG PTS',
+                                    on: startEditGeom,
+                                    danger: false,
+                                  },
+                                  {
+                                    label: 'REASSIGN',
+                                    sub: 'CHANGE ITEM',
+                                    on: () => void reassignSelected(),
+                                    danger: false,
+                                  },
+                                  {
+                                    label: 'DUPLICATE',
+                                    sub: 'NEW POLY',
+                                    on: () => void duplicateSelected(),
+                                    danger: false,
+                                  },
+                                  {
+                                    label: copyOpen ? 'COPY ✕' : 'COPY…',
+                                    sub: 'ARRAY / MIRROR',
+                                    on: () => setCopyOpen((v) => !v),
+                                    danger: false,
+                                  },
+                                  { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
+                                ] as const)
+                            ).map((a, i, arr) => (
+                              <button
+                                key={a.label}
+                                type="button"
+                                onClick={a.on}
+                                disabled={patchMeasurement.isPending || deleteMeasurement.isPending || create.isPending}
                                 style={{
-                                  display: 'block',
-                                  fontSize: 9,
-                                  fontWeight: 600,
-                                  marginTop: 2,
-                                  color: 'var(--m-ink-4)',
+                                  flex: 1,
+                                  padding: '12px 6px',
+                                  background: 'transparent',
+                                  color: a.danger ? 'var(--m-red)' : 'var(--m-sand)',
+                                  border: 'none',
+                                  borderRight: i < arr.length - 1 ? '1px solid var(--m-ink-2)' : 'none',
+                                  fontFamily: 'var(--m-num)',
+                                  cursor: 'pointer',
+                                  textAlign: 'center',
                                 }}
                               >
-                                {a.sub}
-                              </span>
-                            </button>
-                          ))}
+                                <span
+                                  style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em' }}
+                                >
+                                  {a.label}
+                                </span>
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    fontSize: 9,
+                                    fontWeight: 600,
+                                    marginTop: 2,
+                                    color: 'var(--m-ink-4)',
+                                  }}
+                                >
+                                  {a.sub}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
+                        {/* Assembly attach (PlanSwift "drop assembly onto a takeoff")
+                          — parity with desktop. Hidden during geometry edit. The
+                          panel is form-factor-agnostic (mobile primitives). */}
+                        {editId !== selected.id ? (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              padding: '12px 14px',
+                              background: 'var(--m-bg)',
+                              border: '2px solid var(--m-ink)',
+                            }}
+                          >
+                            <AssemblyAttachPanel measurement={selected} />
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                     {/* Live measurement strip — brutalist eyebrow + big-number readout
                         on an ink slab; Undo/Clear as mono chips. */}
