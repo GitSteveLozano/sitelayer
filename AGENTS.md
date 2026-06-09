@@ -84,7 +84,7 @@ If you fix one of those, do it as a focused PR.
 
 In rough order of authority:
 
-1. **Live code and checked-in deployment files** — `Dockerfile`, `docker-compose.*.yml`, `.github/workflows/`, and `apps/api/src/routes/dispatch.ts` + the `apps/api/src/routes/` handler modules (the canonical endpoint registry; `server.ts` is HTTP+auth+middleware only).
+1. **Live code and checked-in deployment files** — `Dockerfile`, `docker-compose.*.yml`, `scripts/deploy.sh` + `scripts/verify-local.sh` (the repo runs ZERO GitHub Actions; `.github/workflows/` no longer exists), and `apps/api/src/routes/dispatch.ts` + the `apps/api/src/routes/` handler modules (the canonical endpoint registry; `server.ts` is HTTP+auth+middleware only).
 2. [`CLAUDE.md`](./CLAUDE.md) — operating rules, deploy procedure, env management. Trust this over historical docs.
 3. [`docs/adr/`](docs/adr/) — durable architectural decisions. Newer ADRs supersede older ones; the most recent is the truth.
 4. [`DEPLOY_RUNBOOK.md`](DEPLOY_RUNBOOK.md) — deploy/migration contract.

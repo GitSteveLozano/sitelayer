@@ -415,6 +415,35 @@ Quick links to the rule each runbook gestures at:
 Broader on-call orientation (DB down, Clerk outage, Cloudflare, cert
 renewal, compromised cred) stays in [`docs/INCIDENT_RESPONSE.md`](./docs/INCIDENT_RESPONSE.md).
 
+## Capture → issue board (`app_issue`) — locked decisions
+
+Two decisions here are **locked**; do not relitigate them in new work:
+
+1. **Issue-board architecture = Decision C** (2026-06-04,
+   `docs/FEEDBACK_ISSUE_BOARD_DECISION_2026-06-04.md`): a self-contained
+   capability behind the `IssueBoard` port (`apps/web/src/lib/api/issue-board.ts`),
+   sitelayer-first — NOT a standalone service, NOT a per-site re-implementation,
+   and mesh never owns the data. The board substrate is on `main`
+   (`routes/{work-requests,admin-work-requests}.ts`, `screens/mobile/issue-board.tsx`).
+2. **`app_issue` and `field_request` are permanently separate domains.**
+   `app_issue` = software bugs/feedback about the app itself — a platform
+   domain; `app_issue.*` is a platform-superadmin capability a normal company
+   role can never hold. `field_request` = the contractor's real-world job
+   problems — a separate crew feature all company roles can use. They were
+   wrongly merged once; never merge them again. The capture dock is the
+   `app_issue` surface and never routes into `field_request`; dock visibility
+   is identity-driven (`app_issue.capture` grant, e.g. Steve via the
+   platform-grants UI), never a dev flag and never every-visitor.
+
+The work-request lifecycle (`new → … → review_ready → resolved`; agents can
+only reach `review_ready` via `agent.completed` — a human accepts to resolve)
+speaks the `@operator/projectkit` contract: the dispatch payload carries a
+`Concern`/`WorkRequest` snapshot and the inbound agent-callback carries a
+`Callback` snapshot (`packages/projectkit-bridge`, conformance gate
+`apps/api/src/projectkit-concern.test.ts`). mesh is the default dispatch
+backend behind a URL — one swappable adapter, never the owner. The
+cross-testbed reference is `~/notes/how-capture-works-across-testbeds-2026-06-06.md`.
+
 ## Local/preview role testing
 
 The substrate ships a dev-only auth-bypass so QA can exercise RBAC paths
