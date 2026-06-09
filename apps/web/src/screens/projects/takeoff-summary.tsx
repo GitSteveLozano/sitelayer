@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { useProjectMeasurements, useServiceItems, type MeasurementGeometry, type TakeoffMeasurement } from '@/lib/api'
 import { readElevation, type ElevationTag } from './takeoff-canvas'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
 /**
  * `prj-takeoff-summary` — Sitemap §5 panel 4 ("Summary · sizes").
@@ -21,6 +22,7 @@ import { readElevation, type ElevationTag } from './takeoff-canvas'
  */
 export function TakeoffSummaryScreen() {
   const { id: projectId } = useParams<{ id: string }>()
+  const canvasPath = useTakeoffCanvasPath()
   const measurements = useProjectMeasurements(projectId)
   const serviceItems = useServiceItems()
   const [groupBy, setGroupBy] = useState<'item' | 'elevation'>('item')
@@ -153,7 +155,7 @@ export function TakeoffSummaryScreen() {
             body="Open the canvas to draw polygons or lineal runs — items roll up here automatically."
             primaryAction={
               <Link
-                to={`/projects/${projectId}/takeoff-canvas`}
+                to={canvasPath(projectId)}
                 className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
               >
                 Open canvas
@@ -167,7 +169,7 @@ export function TakeoffSummaryScreen() {
             ))}
             <Attribution source="Live from /api/projects/:id/takeoff/measurements + /api/service-items" />
             <div className="pt-2 grid grid-cols-2 gap-2">
-              <Link to={`/projects/${projectId}/takeoff-canvas`} className="block">
+              <Link to={canvasPath(projectId)} className="block">
                 <MobileButton variant="primary">Add measurement</MobileButton>
               </Link>
               <Link to={`/projects/${projectId}/takeoff-preview`} className="block">
@@ -197,9 +199,10 @@ function SummaryRow({
   maxQty: number
   projectId: string
 }) {
+  const canvasPath = useTakeoffCanvasPath()
   const ratio = maxQty > 0 ? group.totalQty / maxQty : 0
   return (
-    <Link to={`/projects/${projectId}/takeoff-canvas?item=${encodeURIComponent(group.code)}`} className="block">
+    <Link to={canvasPath(projectId)} className="block">
       <Card>
         <div className="flex items-baseline justify-between gap-3 mb-1.5">
           <div className="min-w-0 flex items-baseline gap-2">

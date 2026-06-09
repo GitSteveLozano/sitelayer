@@ -12,6 +12,7 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { readElevation } from './takeoff-canvas'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 import { TakeoffTagSheet } from './takeoff-tag-sheet'
 import { EstimateLineAssembly } from './estimate-line-assembly'
 
@@ -22,14 +23,16 @@ import { EstimateLineAssembly } from './estimate-line-assembly'
  * with code + qty + unit, multi-condition tags list, metadata, and
  * Edit / Delete actions. Reached from the to-list rows.
  *
- * Editing routes to the canvas with this measurement pre-selected
- * (canvas keys off `?selected=<id>` already). Delete confirms via
- * ConfirmSheet then sends DELETE /api/takeoff/measurements/:id with
- * the row's expected_version for optimistic concurrency.
+ * Editing routes to the consolidated est-canvas takeoff editor
+ * (deep-link-to-measurement pre-selection is a planned est-canvas
+ * enhancement; see docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md). Delete
+ * confirms via ConfirmSheet then sends DELETE /api/takeoff/measurements/:id
+ * with the row's expected_version for optimistic concurrency.
  */
 export function TakeoffDetailScreen() {
   const params = useParams<{ id: string; measurementId: string }>()
   const projectId = params.id
+  const canvasPath = useTakeoffCanvasPath()
   const measurementId = params.measurementId
   const navigate = useNavigate()
   const project = useProject(projectId)
@@ -199,10 +202,7 @@ export function TakeoffDetailScreen() {
         {error ? <div className="text-[12px] text-bad">{error}</div> : null}
 
         <div className="grid grid-cols-2 gap-2 pt-2">
-          <Link
-            to={`/projects/${projectId}/takeoff-canvas?selected=${encodeURIComponent(measurement.id)}`}
-            className="block"
-          >
+          <Link to={canvasPath(projectId ?? '')} className="block">
             <MobileButton variant="primary">Edit on canvas</MobileButton>
           </Link>
           <MobileButton variant="ghost" onClick={onDelete} disabled={deleteMutation.isPending}>
