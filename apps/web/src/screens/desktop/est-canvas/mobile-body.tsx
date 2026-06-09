@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { calculateLinealLength, calculatePolygonArea } from '@sitelayer/domain'
+import {
+  calculateLinealLength,
+  calculateLinealLengthScaled,
+  calculatePolygonAreaScaled,
+  slopeFactor,
+  type PitchDriver,
+} from '@sitelayer/domain'
 import {
   useBlueprintPages,
   useCreateMeasurement,
@@ -28,6 +34,8 @@ import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 // were deleted). The standalone float-palette exports are unchanged.
 
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
+import { worldScaleStamp, pitchStamp } from '@/lib/takeoff/measurement-geometry'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 
@@ -49,7 +57,7 @@ import { MAX_POLYGON_POINTS } from './constants'
 import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
-import { SegmentedControl, WallHeightPanel, MobileCanvasSurface } from './mobile-components'
+import { SegmentedControl, WallHeightPanel, PitchPanel, MobileCanvasSurface } from './mobile-components'
 import {
   MobileAiLaunch,
   MobileToolToolbar,
@@ -160,6 +168,40 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   )
   const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
 
+  // --- World scale (sheet calibration) --------------------------------------
+  // Parity with the desktop body: a page calibrated on EITHER surface persists
+  // its two-point reference on the blueprint_page row, so the phone reads the
+  // same per-axis real-world scale and saves true sqft/lf instead of board-space
+  // units. The page's isotropic PDF point size turns the anisotropic 0–100 board
+  // into a per-axis scale; null page size (non-PDF / image engine) or an
+  // uncalibrated page ⇒ board space, exactly as on desktop.
+  const activePageNumber = activePage?.page_number ?? 1
+  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const doc = pdfDocState.doc
+    if (!doc?.getPageSize) {
+      setPageSize(null)
+      return
+    }
+    let cancelled = false
+    setPageSize(null)
+    void doc
+      .getPageSize(activePageNumber)
+      .then((size) => {
+        if (!cancelled && size) setPageSize({ width: size.width, height: size.height })
+      })
+      .catch(() => {
+        if (!cancelled) setPageSize(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocState.doc, activePageNumber])
+  const worldScale: WorldScale | null = useMemo(
+    () => solveWorldScale(activePage, pageSize?.width, pageSize?.height),
+    [activePage, pageSize],
+  )
+
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
@@ -224,6 +266,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // > 0 with the LIN tool, the committed measurement is an AREA (length ×
   // height) rather than raw length.
   const [wallHeight, setWallHeight] = useState<number>(0)
+  // Pitch / slope driver (parity with desktop H2). A rise:run turns plan
+  // area/length into true sloped-surface area/length — critical for exterior
+  // envelope (roof / sloped wall). Empty or non-positive ⇒ flat (factor 1.0).
+  // The driver is stamped into the saved geometry; the server applies the slope.
+  const [pitchRise, setPitchRise] = useState('')
+  const [pitchRun, setPitchRun] = useState('12')
   // Deduct/cutout (msg19 "WIN"): when on, a drawn polygon is saved as a
   // deduction (its area subtracts from the net for its scope item) via the
   // real `is_deduction` field.
@@ -302,12 +350,39 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     ? 'sqft'
     : (selectedItem?.unit ?? (mode === 'draw' && tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'))
 
+  // Pitch driver + slope factor (parity with desktop). Pitch only multiplies
+  // sloped-surface tools (polygon area, plain lineal run) — never counts, and
+  // not the wall-height→area path (which carries its own explicit quantity).
+  const activePitch = useMemo<PitchDriver | null>(() => {
+    const rise = Number(pitchRise)
+    const run = Number(pitchRun)
+    if (!Number.isFinite(rise) || !Number.isFinite(run)) return null
+    if (rise <= 0 || run <= 0) return null
+    return { rise, run }
+  }, [pitchRise, pitchRun])
+  const pitchAppliesToTool = (tool === 'polygon' || tool === 'lineal') && !linHasHeight
+  const pitchFactor = pitchAppliesToTool ? slopeFactor(activePitch) : 1
+  // Scale stamps applied to polygon + plain-lineal geometry (never count, never
+  // the wall-height path). `appliesScale` matches the same tool set.
+  const appliesScale = tool === 'polygon' || (tool === 'lineal' && !linHasHeight)
+
   const draftQuantity = useMemo(() => {
     if (mode === 'manual') return Number(manualQty) || 0
-    if (tool === 'polygon') return round2(calculatePolygonArea(draftPoints))
-    if (tool === 'lineal') return linHasHeight ? round2(linealLength * wallHeight) : linealLength
+    // Mirror the server's quantity math: a calibrated page reads true sqft/lf,
+    // and pitch multiplies the sloped surface. Uncalibrated ⇒ wx=wy=1 ⇒
+    // board-space, the legacy behavior.
+    const wx = worldScale?.wx ?? 1
+    const wy = worldScale?.wy ?? 1
+    if (tool === 'polygon') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'lineal') {
+      // Wall-height→area keeps its explicit board-length × height preview
+      // (unchanged); a plain lineal run reads scaled, pitch-corrected length.
+      return linHasHeight
+        ? round2(linealLength * wallHeight)
+        : round2(calculateLinealLengthScaled(draftPoints, wx, wy, pitchFactor))
+    }
     return draftPoints.length
-  }, [mode, tool, manualQty, draftPoints, linHasHeight, linealLength, wallHeight])
+  }, [mode, tool, manualQty, draftPoints, linHasHeight, linealLength, wallHeight, worldScale, pitchFactor])
 
   // Clear the in-progress draft via the machine while staying on the draw
   // surface (CANCEL drops points and lands in idle; START_DRAW re-enters
@@ -363,12 +438,29 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         geometry = { kind: 'count', points: [{ x: 50, y: 50 }] }
         quantity = round2(Number(manualQty))
       } else if (tool === 'polygon') {
-        geometry = { kind: 'polygon', points: draftPoints }
+        // Stamp the per-axis page scale + pitch so the server computes true
+        // sqft (board-space stays the fallback when uncalibrated/flat).
+        geometry = {
+          kind: 'polygon',
+          points: draftPoints,
+          ...worldScaleStamp(worldScale, appliesScale),
+          ...pitchStamp(activePitch, pitchAppliesToTool),
+        }
       } else if (tool === 'lineal') {
-        geometry = { kind: 'lineal', points: draftPoints }
-        // LIN → area: persist the explicit length × height area so the row
-        // contributes square footage, not raw length (msg21).
-        if (linHasHeight) quantity = round2(linealLength * wallHeight)
+        if (linHasHeight) {
+          // LIN → area: persist the explicit length × height area so the row
+          // contributes square footage, not raw length (msg21). No scale/pitch
+          // stamp — the explicit quantity drives this path.
+          geometry = { kind: 'lineal', points: draftPoints }
+          quantity = round2(linealLength * wallHeight)
+        } else {
+          geometry = {
+            kind: 'lineal',
+            points: draftPoints,
+            ...worldScaleStamp(worldScale, appliesScale),
+            ...pitchStamp(activePitch, pitchAppliesToTool),
+          }
+        }
       } else {
         geometry = { kind: 'count', points: draftPoints }
       }
@@ -900,6 +992,18 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         an area (polygon/rect) tool. */}
                     {tool === 'polygon' ? (
                       <MobileDeductToggle deduct={deduct} onToggle={() => setDeduct((d) => !d)} />
+                    ) : null}
+                    {/* Pitch → slope-corrected area (parity with desktop). Shown
+                        for the sloped-surface tools (polygon area, plain lineal
+                        run); hidden once a wall height drives the lineal area. */}
+                    {pitchAppliesToTool ? (
+                      <PitchPanel
+                        rise={pitchRise}
+                        run={pitchRun}
+                        onRise={setPitchRise}
+                        onRun={setPitchRun}
+                        factor={pitchFactor}
+                      />
                     ) : null}
                     {/* Bulk-select toggle (msg23) — switches canvas taps from
                         draw to multi-select. */}

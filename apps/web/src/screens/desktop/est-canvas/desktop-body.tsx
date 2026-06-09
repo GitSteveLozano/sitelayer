@@ -53,6 +53,7 @@ import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
+import { worldScaleStamp, pitchStamp } from '@/lib/takeoff/measurement-geometry'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 
@@ -879,16 +880,13 @@ export function EstCanvasDesktopBody() {
     setSavedToast(null)
     try {
       let geometry: MeasurementGeometry
-      // When the page is calibrated, stamp the per-axis world scale so the
-      // server computes true sqft/lf (board-space stays the fallback).
-      const scale =
-        worldScale && (tool === 'polygon' || tool === 'rect' || tool === 'arc' || tool === 'lineal')
-          ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
-          : {}
-      // Pitch (H2): stamp the rise:run driver inside the JSONB geometry (no
-      // column) for sloped-surface tools when a valid pitch is set. The server's
-      // `calculateGeometryQuantity` applies the slope factor; flat ⇒ omitted.
-      const pitch = pitchAppliesToTool && activePitch ? { pitch: activePitch } : {}
+      // Stamp the per-axis page scale + pitch (rise:run) into the JSONB geometry
+      // for the sloped-surface tools (area / lineal / arc), so the server's
+      // `calculateGeometryQuantity` computes true sqft/lf and applies the slope
+      // factor. Board-space + flat stay the fallback. Shared with the mobile
+      // body via `@/lib/takeoff/measurement-geometry` so the two never drift.
+      const scale = worldScaleStamp(worldScale, pitchAppliesToTool)
+      const pitch = pitchStamp(activePitch, pitchAppliesToTool)
       // RECT produces a polygon; ARC tessellates its 3 control points into a
       // lineal polyline. Both reuse the existing geometry kinds — no new model.
       if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale, ...pitch }

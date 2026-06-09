@@ -1,4 +1,4 @@
-import { type PointerEvent as ReactPointerEvent } from 'react'
+import { type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { calculatePolygonCentroid, type TakeoffPoint } from '@sitelayer/domain'
 import { type MeasurementGeometry } from '@/lib/api'
 import { clamp, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
@@ -163,6 +163,128 @@ export function WallHeightPanel({
       ) : null}
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Pitch → slope-corrected area. Mirrors the desktop pitch driver: a rise:run
+// turns plan area/length into true sloped-surface area/length (the server
+// applies √(rise²+run²)/run). Critical for exterior envelope (roof / sloped
+// wall) takeoff. Empty rise ⇒ flat (factor 1.0). Presets cover the common
+// residential roof pitches.
+// ---------------------------------------------------------------------------
+const PITCH_PRESETS = ['4', '6', '8', '12'] as const
+
+export function PitchPanel({
+  rise,
+  run,
+  onRise,
+  onRun,
+  factor,
+}: {
+  rise: string
+  run: string
+  onRise: (v: string) => void
+  onRun: (v: string) => void
+  factor: number
+}) {
+  const active = factor > 1
+  return (
+    <div style={{ marginTop: 8, border: '2px solid var(--m-ink)' }}>
+      <div
+        style={{
+          padding: '10px 14px',
+          borderBottom: '1px solid var(--m-line-2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span className="m-topbar-eyebrow">PITCH → SLOPE AREA</span>
+        <span
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            background: active ? 'var(--m-ink)' : 'transparent',
+            color: active ? 'var(--m-sand)' : 'var(--m-ink-3)',
+            padding: '3px 8px',
+          }}
+        >
+          ×{active ? factor.toFixed(3) : '1.000'}
+        </span>
+      </div>
+      <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <label style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step="any"
+            placeholder="0"
+            aria-label="Pitch rise"
+            value={rise}
+            onChange={(e) => onRise(e.target.value)}
+            style={pitchInput}
+          />
+          <span style={{ fontFamily: 'var(--m-num)', fontSize: 13, fontWeight: 700, color: 'var(--m-ink-2)' }}>:</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            step="any"
+            aria-label="Pitch run"
+            value={run}
+            onChange={(e) => onRun(e.target.value)}
+            style={pitchInput}
+          />
+          <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 600, color: 'var(--m-ink-3)' }}>
+            rise : run
+          </span>
+        </label>
+      </div>
+      <div style={{ padding: '0 14px 12px', display: 'flex', gap: 6 }}>
+        {PITCH_PRESETS.map((r) => {
+          const on = rise === r && run === '12'
+          return (
+            <button
+              key={r}
+              type="button"
+              onClick={() => {
+                onRise(on ? '' : r)
+                onRun('12')
+              }}
+              aria-pressed={on}
+              style={{
+                flex: 1,
+                padding: '8px 0',
+                background: on ? 'var(--m-accent)' : 'transparent',
+                color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-2)',
+                border: '2px solid var(--m-ink)',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {r}/12
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const pitchInput: CSSProperties = {
+  width: 56,
+  padding: '8px 10px',
+  background: 'var(--m-bg)',
+  color: 'var(--m-ink)',
+  border: '2px solid var(--m-ink)',
+  fontFamily: 'var(--m-font-display)',
+  fontWeight: 800,
+  fontSize: 22,
+  textAlign: 'center',
 }
 
 // ---------------------------------------------------------------------------

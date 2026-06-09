@@ -107,17 +107,37 @@ the v1 surface stays primary for capture):
 
 - **Verify:** typecheck + lint + unit suites for the touched file.
 
-### Phase 2 — Full mobile parity + UX polish on est-canvas (medium)
+### Phase 2 — Full mobile parity + UX polish on est-canvas (medium, in progress)
 Now that est-canvas is the single editor, **bring mobile-body to full desktop
 capability parity** (owner decision §1), then tune each body's ergonomics.
 
-- **Close the mobile parity gaps** (build, not design-call): pitch, scale
-  calibration, conditions, assemblies, arc/rect — all currently desktop-only —
-  get thumb-friendly mobile surfaces wired to the *same* machine actions. Keep
-  the mobile-only conveniences (manual-qty, wall-height→area, CSV import) and
-  promote them to desktop too if useful (parity cuts both ways).
-- Since both bodies already share the machine + geometry, parity work is mostly
-  surfacing existing capabilities in mobile-body, not reimplementing logic.
+**Closing the mobile parity gaps** (build, not design-call): pitch, scale
+calibration, conditions, assemblies, arc/rect — all currently desktop-only —
+get thumb-friendly mobile surfaces wired to the *same* machine actions.
+
+- ✅ **Quantity parity — world-scale + pitch (the accuracy core).** Verified a
+  real data-correctness gap: the server recomputes a measurement's quantity from
+  its geometry (`calculateGeometryQuantity`), reading `world_per_board_x/y`
+  (per-axis page scale) + `pitch` off the JSONB. Desktop stamped both; **mobile
+  stamped neither**, so a mobile-drawn measurement on a calibrated/pitched sheet
+  silently persisted a *board-space* quantity (wrong sqft/lf). Fixed: mobile now
+  reads the persisted page calibration via the same `solveWorldScale(activePage,
+  …)` desktop uses (no mobile calibration-DRAWING UI needed — a sheet calibrated
+  on either surface flows through), previews scaled+pitch-corrected quantities,
+  and stamps `world_per_board_x/y` + `pitch` into saved geometry. Added a mobile
+  `PitchPanel` (rise:run + roof presets). Extracted the stamp into the shared,
+  unit-tested `lib/takeoff/measurement-geometry.ts` (`worldScaleStamp` /
+  `pitchStamp`) and refactored desktop onto it so the two can't drift again.
+  - **Known follow-up (pre-existing, separate):** the mobile wall-height→area
+    path passes an explicit `quantity` with a plain lineal geometry, but the
+    server overrides client quantity from geometry — so wall-height area doesn't
+    round-trip server-side. Left unchanged here (needs a geometry representation
+    for "lineal × height"); tracked, not regressed.
+- ⏳ **Remaining gaps:** scale-calibration *drawing* UI on mobile (so a phone can
+  calibrate an uncalibrated sheet itself), conditions, assemblies, true arc tool.
+- Since both bodies already share the machine + geometry, the remaining parity
+  work is mostly surfacing existing capabilities in mobile-body, not
+  reimplementing logic.
 - Collapse internal duplication: `CopyPanel`/`MobileCopyPanel`,
   `RunningTotals`/`MobileRunningTotals` share a data model — extract shared
   components, keep body-specific layout.
