@@ -30,7 +30,10 @@ export type SheetCallout = {
 }
 
 export type MobileTool = 'polygon' | 'lineal' | 'count'
-export type MobileMode = 'manual' | 'draw'
+//   manual — type a quantity per scope item, no drawn geometry.
+//   draw   — tap to add points to a draft measurement.
+//   scale  — calibrate the sheet scale from a two-tap reference line.
+export type MobileMode = 'manual' | 'draw' | 'scale'
 
 export interface MobileCanvasSurfaceProps {
   svgRef: React.RefObject<SVGSVGElement | null>
@@ -52,6 +55,9 @@ export interface MobileCanvasSurfaceProps {
   editPoints: TakeoffPoint[]
   editDragIdxRef: React.RefObject<number | null>
   onEditPoint: (idx: number, p: TakeoffPoint) => void
+  /** SCALE mode: the 0–2 board-space calibration reference points to render as a
+   *  measured line over the sheet. Empty / undefined ⇒ not calibrating. */
+  scalePoints?: TakeoffPoint[]
 }
 
 // MobileScopeTotal removed — the mobile body now uses the canonical ScopeTotal

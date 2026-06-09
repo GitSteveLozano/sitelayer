@@ -9,6 +9,7 @@ import {
 } from '@sitelayer/domain'
 import {
   useBlueprintPages,
+  useCalibratePage,
   useCreateMeasurement,
   useCreateTakeoffDraft,
   useDeleteMeasurement,
@@ -57,7 +58,13 @@ import { MAX_POLYGON_POINTS } from './constants'
 import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
-import { SegmentedControl, WallHeightPanel, PitchPanel, MobileCanvasSurface } from './mobile-components'
+import {
+  SegmentedControl,
+  WallHeightPanel,
+  PitchPanel,
+  MobileScalePanel,
+  MobileCanvasSurface,
+} from './mobile-components'
 import {
   MobileAiLaunch,
   MobileToolToolbar,
@@ -201,6 +208,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     () => solveWorldScale(activePage, pageSize?.width, pageSize?.height),
     [activePage, pageSize],
   )
+  const calibratePage = useCalibratePage()
 
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
@@ -279,6 +287,15 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  // Scale calibration (parity with desktop SCALE mode). The two board-space
+  // reference points + the typed real-world length live in the machine's
+  // calibration slice; `applyScale` persists them to the page via the same
+  // `calibratePage` mutation the desktop overlay uses, after which `worldScale`
+  // recomputes and new measurements carry true sqft/lf.
+  const scalePoints = sctx.calibration.points
+  const scaleLength = sctx.calibration.lengthText || '24'
+  const setScaleLength = (next: string) => sdispatch({ type: 'SET_SCALE_LENGTH', lengthText: next })
+  const [scaleError, setScaleError] = useState<string | null>(null)
   // Bulk multi-select (msg23). When on, canvas taps toggle membership in a set
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
   // `bulkMode` is the phone-only toggle (no machine equivalent); the bulk *set*
@@ -317,17 +334,17 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   }, [serviceItemCode, items])
 
   // Park the machine in the mode that matches the phone surface: 'draw' →
-  // `drawing` (so PLACE_POINT lands), 'manual' → `idle`. Selection/edit drive
-  // their own machine sub-states from the canvas handlers and are left alone
-  // here (only flip when actually entering/leaving the manual↔draw surfaces).
+  // `drawing` (so PLACE_POINT lands), 'scale' → `calibrating` (so PLACE_SCALE_POINT
+  // lands), 'manual' → `idle`. Selection/edit drive their own machine sub-states
+  // from the canvas handlers. The START_* entries are valid only from `idle`, so
+  // a cross-mode flip CANCELs back to idle first (xstate runs both this tick).
   useEffect(() => {
-    if (mode === 'draw') {
-      // Land on the draw surface from idle (selecting cancels to idle first).
-      if (session.matches('selecting')) sdispatch({ type: 'CANCEL' })
-      if (!session.matches('drawing')) sdispatch({ type: 'START_DRAW' })
-    } else if (!session.matches('idle')) {
-      sdispatch({ type: 'CANCEL' })
-    }
+    const target = mode === 'draw' ? 'drawing' : mode === 'scale' ? 'calibrating' : 'idle'
+    if (session.matches(target)) return
+    if (!session.matches('idle')) sdispatch({ type: 'CANCEL' })
+    if (target === 'drawing') sdispatch({ type: 'START_DRAW' })
+    else if (target === 'calibrating') sdispatch({ type: 'START_CALIBRATION' })
+    // target === 'idle' → the CANCEL above already landed us there.
     // Re-runs only on a mode flip; `session`/`sdispatch` are stable for the
     // machine's lifetime. (react-hooks/exhaustive-deps is not enabled here.)
   }, [mode])
@@ -395,6 +412,18 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = svgRef.current
     if (!svg) return
+    // SCALE mode: tap two points of a known dimension to define the reference
+    // line. The machine's PLACE_SCALE_POINT models the two-max / third-tap-
+    // restarts behavior; `applyScale` persists the line + typed length.
+    if (mode === 'scale') {
+      const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+      if (!local) return
+      const p = { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }
+      setScaleError(null)
+      if (!session.matches('calibrating')) sdispatch({ type: 'START_CALIBRATION' })
+      sdispatch({ type: 'PLACE_SCALE_POINT', point: p })
+      return
+    }
     // In bulk-select mode an empty-grid tap does nothing (taps land on polys).
     if (bulkMode) return
     // While editing geometry, a background tap is inert — the vertex handles
@@ -489,6 +518,47 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  // Persist the drawn reference line as the page calibration (parity with the
+  // desktop SCALE overlay). The two board points + typed real-world length flow
+  // through the shared `calibratePage` mutation; once saved, `worldScale`
+  // recomputes and new measurements carry true sqft/lf. Returns to draw mode.
+  const applyScale = async () => {
+    setScaleError(null)
+    if (!activePage) {
+      setScaleError('Open a sheet page first.')
+      return
+    }
+    if (scalePoints.length < 2) {
+      setScaleError('Tap two points of a known dimension on the sheet.')
+      return
+    }
+    const [a, b] = scalePoints as [{ x: number; y: number }, { x: number; y: number }]
+    if (a.x === b.x && a.y === b.y) {
+      setScaleError('The two points must be distinct.')
+      return
+    }
+    const dist = Number(scaleLength)
+    if (!Number.isFinite(dist) || dist <= 0) {
+      setScaleError('Enter the line’s real-world length (ft).')
+      return
+    }
+    try {
+      await calibratePage.mutateAsync({
+        pageId: activePage.id,
+        world_distance: dist,
+        world_unit: 'ft',
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+      })
+      setSavedToast('Sheet scale saved — new measurements read in real units.')
+      setMode('draw')
+    } catch (err) {
+      setScaleError(err instanceof Error ? err.message : 'Could not save the scale.')
     }
   }
 
@@ -842,6 +912,28 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // --- Render ---------------------------------------------------------------
   const loading = drafts.isLoading || blueprints.isLoading
 
+  // Shared page underlay (PDFium for PDFs, server raster otherwise) reused by
+  // the draw + scale canvases so the calibration surface draws over the real
+  // sheet, not a blank grid.
+  const canvasUnderlay =
+    pdfEngineOn && blueprintIsPdf ? (
+      pdfDocState.doc ? (
+        <PdfPageCanvas
+          doc={pdfDocState.doc}
+          pageNumber={activePage?.page_number ?? 1}
+          scale={3}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: 0.7 }}
+        />
+      ) : null
+    ) : sourceImage.url ? (
+      <img
+        src={sourceImage.url}
+        alt=""
+        draggable={false}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: 0.7 }}
+      />
+    ) : null
+
   return (
     <>
       <MTopBar
@@ -949,26 +1041,66 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                   </>
                 )}
 
-                {/* --- MobileMode toggle: manual vs draw --- */}
+                {/* --- MobileMode toggle: manual / draw / (set scale) --- */}
                 <div style={{ padding: '8px 16px 0' }}>
                   <SegmentedControl
                     options={[
                       { value: 'manual', label: 'Manual qty' },
                       { value: 'draw', label: 'Draw on page' },
+                      // Set-scale needs a sheet page to calibrate against.
+                      ...(activeBlueprint && activePage ? [{ value: 'scale', label: 'Set scale' }] : []),
                     ]}
                     value={mode}
                     onChange={(v) => {
                       // The machine syncs to the new mode in an effect (START_DRAW
-                      // on 'draw', CANCEL — which clears the draft — on 'manual'),
-                      // so no explicit point clearing is needed here.
+                      // on 'draw', START_CALIBRATION on 'scale', CANCEL — which
+                      // clears the draft — on 'manual'), so no explicit clearing here.
                       setMode(v as MobileMode)
                       setError(null)
+                      setScaleError(null)
                     }}
                   />
                 </div>
 
-                {/* --- AI launch button --- */}
-                <MobileAiLaunch onLaunch={() => navigate(`/projects/${projectId}/takeoff-ai`)} />
+                {/* --- AI launch button (hidden while calibrating) --- */}
+                {mode !== 'scale' ? (
+                  <MobileAiLaunch onLaunch={() => navigate(`/projects/${projectId}/takeoff-ai`)} />
+                ) : null}
+
+                {/* --- Scale calibration surface --- */}
+                {mode === 'scale' ? (
+                  <div style={{ padding: '10px 16px 0' }}>
+                    <MobileCanvasSurface
+                      svgRef={svgRef}
+                      tool={tool}
+                      deduct={false}
+                      onTap={onCanvasTap}
+                      draftPoints={[]}
+                      measurements={canvasMeasurements}
+                      selectedId={null}
+                      bulkIds={null}
+                      onSelectMeasurement={() => {}}
+                      underlay={canvasUnderlay}
+                      editId={null}
+                      editPoints={[]}
+                      editDragIdxRef={editDragIdxRef}
+                      onEditPoint={() => {}}
+                      scalePoints={scalePoints}
+                    />
+                    <MobileScalePanel
+                      scalePoints={scalePoints}
+                      scaleLength={scaleLength}
+                      onScaleLength={setScaleLength}
+                      scaleError={scaleError}
+                      onApply={() => void applyScale()}
+                      onCancel={() => {
+                        setScaleError(null)
+                        setMode('draw')
+                      }}
+                      applyPending={calibratePage.isPending}
+                    />
+                  </div>
+                ) : null}
 
                 {/* --- Canvas (draw mode) --- */}
                 {mode === 'draw' ? (
@@ -1040,39 +1172,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         // already-selected row clears it.
                         else sdispatch({ type: 'SELECT_MEASUREMENT', measurementId: selectedId === id ? null : id })
                       }}
-                      underlay={
-                        pdfEngineOn && blueprintIsPdf ? (
-                          pdfDocState.doc ? (
-                            <PdfPageCanvas
-                              doc={pdfDocState.doc}
-                              pageNumber={activePage?.page_number ?? 1}
-                              scale={3}
-                              style={{
-                                position: 'absolute',
-                                inset: 0,
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'fill',
-                                opacity: 0.7,
-                              }}
-                            />
-                          ) : null
-                        ) : sourceImage.url ? (
-                          <img
-                            src={sourceImage.url}
-                            alt=""
-                            draggable={false}
-                            style={{
-                              position: 'absolute',
-                              inset: 0,
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'fill',
-                              opacity: 0.7,
-                            }}
-                          />
-                        ) : null
-                      }
+                      underlay={canvasUnderlay}
                       editId={editId}
                       editPoints={editPoints}
                       editDragIdxRef={editDragIdxRef}
@@ -1257,67 +1357,72 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                   </div>
                 ) : null}
 
-                {/* --- Scope item + quantity entry --- */}
-                <MSectionH>Scope item</MSectionH>
-                <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
-                    {items.length === 0 ? <option value="">Loading…</option> : null}
-                    {items.map((it: ServiceItem) => (
-                      <option key={it.code} value={it.code}>
-                        {it.code} — {it.name}
-                      </option>
-                    ))}
-                  </MSelect>
+                {/* Scope entry + running totals are hidden while calibrating. */}
+                {mode !== 'scale' ? (
+                  <>
+                    {/* --- Scope item + quantity entry --- */}
+                    <MSectionH>Scope item</MSectionH>
+                    <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
+                        {items.length === 0 ? <option value="">Loading…</option> : null}
+                        {items.map((it: ServiceItem) => (
+                          <option key={it.code} value={it.code}>
+                            {it.code} — {it.name}
+                          </option>
+                        ))}
+                      </MSelect>
 
-                  {mode === 'manual' ? (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.06em',
-                          color: 'var(--m-ink-3)',
-                        }}
-                      >
-                        Quantity ({unitForItem})
-                      </span>
-                      <MInput
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        step="any"
-                        placeholder={`0 ${unitForItem}`}
-                        value={manualQty}
-                        onChange={(e) => setManualQty(e.target.value)}
-                      />
-                    </label>
-                  ) : null}
+                      {mode === 'manual' ? (
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.06em',
+                              color: 'var(--m-ink-3)',
+                            }}
+                          >
+                            Quantity ({unitForItem})
+                          </span>
+                          <MInput
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="any"
+                            placeholder={`0 ${unitForItem}`}
+                            value={manualQty}
+                            onChange={(e) => setManualQty(e.target.value)}
+                          />
+                        </label>
+                      ) : null}
 
-                  <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
-                    {create.isPending
-                      ? 'Saving…'
-                      : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
-                  </MButton>
+                      <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
+                        {create.isPending
+                          ? 'Saving…'
+                          : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
+                      </MButton>
 
-                  {error ? <div style={{ fontSize: 13, color: 'var(--m-red)' }}>{error}</div> : null}
-                  {savedToast ? <div style={{ fontSize: 13, color: 'var(--m-green)' }}>{savedToast}</div> : null}
-                </div>
+                      {error ? <div style={{ fontSize: 13, color: 'var(--m-red)' }}>{error}</div> : null}
+                      {savedToast ? <div style={{ fontSize: 13, color: 'var(--m-green)' }}>{savedToast}</div> : null}
+                    </div>
 
-                {/* --- Running totals by scope item --- */}
-                <MobileRunningTotals
-                  totals={totals}
-                  measurementCount={draftMeasurements.length}
-                  grandTotal={grandTotal}
-                  onItemTap={(code) =>
-                    navigate(
-                      `/projects/${projectId}/takeoff-item/${encodeURIComponent(code)}${
-                        activeDraftId ? `?draft=${activeDraftId}` : ''
-                      }`,
-                    )
-                  }
-                  onDone={() => navigate(`/projects/${projectId}/estimate`)}
-                />
+                    {/* --- Running totals by scope item --- */}
+                    <MobileRunningTotals
+                      totals={totals}
+                      measurementCount={draftMeasurements.length}
+                      grandTotal={grandTotal}
+                      onItemTap={(code) =>
+                        navigate(
+                          `/projects/${projectId}/takeoff-item/${encodeURIComponent(code)}${
+                            activeDraftId ? `?draft=${activeDraftId}` : ''
+                          }`,
+                        )
+                      }
+                      onDone={() => navigate(`/projects/${projectId}/estimate`)}
+                    />
+                  </>
+                ) : null}
               </>
             ) : null}
           </>

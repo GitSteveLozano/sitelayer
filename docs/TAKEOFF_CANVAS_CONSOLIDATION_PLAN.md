@@ -133,8 +133,15 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
     server overrides client quantity from geometry — so wall-height area doesn't
     round-trip server-side. Left unchanged here (needs a geometry representation
     for "lineal × height"); tracked, not regressed.
-- ⏳ **Remaining gaps:** scale-calibration *drawing* UI on mobile (so a phone can
-  calibrate an uncalibrated sheet itself), conditions, assemblies, true arc tool.
+- ✅ **Scale-calibration *drawing* UI on mobile.** A phone can now calibrate an
+  uncalibrated sheet itself (previously it could only *read* a sheet calibrated
+  on desktop). Added a `scale` MobileMode + a "Set scale" segmented option (gated
+  on an active sheet page), a two-tap reference-line surface (calibration points
+  rendered on `MobileCanvasSurface`), and a `MobileScalePanel` (length + apply /
+  cancel). Wired through the *same* machine events desktop uses
+  (`START_CALIBRATION` / `PLACE_SCALE_POINT` / `SET_SCALE_LENGTH`) and the shared
+  `useCalibratePage` mutation, so a phone-calibrated sheet persists identically.
+- ⏳ **Remaining gaps:** conditions, assemblies, true arc tool on mobile.
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.

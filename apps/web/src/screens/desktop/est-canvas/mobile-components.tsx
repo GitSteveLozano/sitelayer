@@ -288,6 +288,117 @@ const pitchInput: CSSProperties = {
 }
 
 // ---------------------------------------------------------------------------
+// Sheet-scale calibration (parity with the desktop DCanvasScale overlay). Tap
+// two points of a known dimension on the sheet above, type its real-world
+// length, and Apply persists the scale to the page so every later measurement
+// reads in true sqft/lf. Mirrors the desktop flow on the phone form factor.
+// ---------------------------------------------------------------------------
+export function MobileScalePanel({
+  scalePoints,
+  scaleLength,
+  onScaleLength,
+  scaleError,
+  onApply,
+  onCancel,
+  applyPending,
+}: {
+  scalePoints: TakeoffPoint[]
+  scaleLength: string
+  onScaleLength: (v: string) => void
+  scaleError: string | null
+  onApply: () => void
+  onCancel: () => void
+  applyPending: boolean
+}) {
+  const ready = scalePoints.length >= 2
+  return (
+    <div style={{ marginTop: 8, border: '2px solid var(--m-ink)' }}>
+      <div
+        style={{
+          padding: '10px 14px',
+          borderBottom: '1px solid var(--m-line-2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span className="m-topbar-eyebrow">SET SHEET SCALE</span>
+        <span
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            background: ready ? 'var(--m-ink)' : 'transparent',
+            color: ready ? 'var(--m-sand)' : 'var(--m-ink-3)',
+            padding: '3px 8px',
+          }}
+        >
+          {scalePoints.length}/2 PTS
+        </span>
+      </div>
+      <div style={{ padding: '10px 14px 0', fontSize: 12, color: 'var(--m-ink-3)', lineHeight: 1.45 }}>
+        {ready
+          ? 'Enter the real-world length of the line you drew, then Apply.'
+          : 'Tap two points of a known dimension on the sheet above.'}
+      </div>
+      <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          aria-label="Real-world length in feet"
+          value={scaleLength}
+          onChange={(e) => onScaleLength(e.target.value.replace(/[^\d.]/g, ''))}
+          style={{ ...pitchInput, width: 92 }}
+        />
+        <span style={{ fontFamily: 'var(--m-num)', fontSize: 13, fontWeight: 700, color: 'var(--m-ink-3)' }}>FT</span>
+      </div>
+      {scaleError ? (
+        <div style={{ padding: '0 14px 8px', fontSize: 12, fontWeight: 600, color: 'var(--m-red)' }}>{scaleError}</div>
+      ) : null}
+      <div style={{ padding: '0 14px 12px', display: 'flex', gap: 8 }}>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={!ready || applyPending}
+          style={{
+            flex: 2,
+            padding: '10px 0',
+            background: ready ? 'var(--m-accent)' : 'transparent',
+            color: ready ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+            border: '2px solid var(--m-ink)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: ready ? 'pointer' : 'default',
+          }}
+        >
+          {applyPending ? 'SAVING…' : 'APPLY TO SHEET'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            flex: 1,
+            padding: '10px 0',
+            background: 'transparent',
+            color: 'var(--m-ink-2)',
+            border: '2px solid var(--m-ink)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          CANCEL
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Canvas — board-space (0–100) SVG overlay matching the desktop canvas so
 // rows are interchangeable. Touch-friendly: full-width square, tap to drop
 // points. Pinch-zoom is deferred (manual entry covers the no-zoom case).
@@ -307,6 +418,7 @@ export function MobileCanvasSurface({
   editPoints,
   editDragIdxRef,
   onEditPoint,
+  scalePoints,
 }: MobileCanvasSurfaceProps) {
   // Map a touch/pointer position to 0–100 board space (same CTM the tap path
   // uses). Used by the vertex-drag handles.
@@ -558,6 +670,28 @@ export function MobileCanvasSurface({
               )
             })()
           : null}
+        {/* SCALE mode: the calibration reference line + endpoint markers. */}
+        {scalePoints && scalePoints.length > 0 ? (
+          <g aria-hidden="true">
+            {scalePoints.length >= 2 ? (
+              <line
+                x1={scalePoints[0]!.x}
+                y1={scalePoints[0]!.y}
+                x2={scalePoints[1]!.x}
+                y2={scalePoints[1]!.y}
+                stroke="var(--m-amber)"
+                strokeWidth={0.6}
+              />
+            ) : null}
+            {scalePoints.map((p, i) => (
+              <g key={`sp${i}`}>
+                <circle cx={p.x} cy={p.y} r={1.2} fill="var(--m-amber)" stroke="var(--m-ink)" strokeWidth={0.4} />
+                <line x1={p.x - 2} y1={p.y} x2={p.x + 2} y2={p.y} stroke="var(--m-ink)" strokeWidth={0.3} />
+                <line x1={p.x} y1={p.y - 2} x2={p.x} y2={p.y + 2} stroke="var(--m-ink)" strokeWidth={0.3} />
+              </g>
+            ))}
+          </g>
+        ) : null}
       </svg>
     </div>
   )
