@@ -150,7 +150,22 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
   `ConditionPicker` (pick/create the typed/named/colored template the next draw
   is tagged against) in the mobile scope-entry section, wired to `useConditions`
   / `useCreateCondition`, and stamp `condition_id` on save — parity with desktop.
-- ⏳ **Remaining gap:** true arc tool on mobile (currently arc→lineal).
+- ⏳ **Deferred — true arc tool on mobile** (currently arc→lineal). Unlike the
+  reuse-based drop-ins above, arc is invasive (the `MobileTool` type drives
+  exhaustive `polygon|lineal|count` switches across the body, plus the tool
+  toolbar and `MobileCanvasSurface` need new tessellated-arc rendering + a
+  3-control-point drawing interaction) and it's the lowest-value tool for the
+  exterior-envelope anchor (curved edges are niche; the workload is straight
+  area/linear/count + pitch, all now at parity). It's new canvas-interaction
+  code that warrants device verification, so it's deferred to a device-review
+  pass rather than shipped blind.
+
+**Phase 2 status:** the high-value mobile parity is done — world-scale, pitch,
+sheet calibration, conditions, assemblies (on top of the pre-existing manual-qty,
+draw, deduct, bulk-select, copy/array/mirror, edit-geom, snapping, wall-height,
+CSV import). Arc is the one deferred tool; the UX-polish sub-bullets below
+(collapse `CopyPanel`/`MobileCopyPanel` duplication, document the `mode`↔machine
+mapping, dead-code removal) remain as tidy-ups.
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.
