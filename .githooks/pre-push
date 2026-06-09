@@ -87,5 +87,38 @@ if ! ( cd "$REPO_ROOT" && VERIFY_LEVEL="$VERIFY_LEVEL" npm run verify ); then
   exit 1
 fi
 
+# --- Visual-regression gate (visregress) -------------------------------------
+# Render a FRESH candidate of the top screens and gate it against the committed
+# baselines with the shared analyzer (Tier-0 pixel gate -> local qwen3-vl-8b VLM
+# judge, $0). A CONFIRMED regression (analyzer exit 2) BLOCKS the push.
+#
+# Set PREPUSH_SKIP_VISREGRESS=1 to skip just this sub-gate (npm/playwright/judge
+# unavailable on this box). Exit 1 from the gate (no app reachable / no fresh
+# candidate rendered) is treated as a non-blocking SKIP — only a confirmed
+# regression (exit 2) blocks, so an offline push is never wedged by a missing
+# local stack, but a real visual break is caught at land time.
+PREPUSH_SKIP_VISREGRESS="${PREPUSH_SKIP_VISREGRESS:-0}"
+if [ "$PREPUSH_SKIP_VISREGRESS" = "1" ]; then
+  echo "==> pre-push: PREPUSH_SKIP_VISREGRESS=1 — skipping the visregress visual gate."
+else
+  echo "==> pre-push: running the visregress visual-regression gate (npm run test:visregress)."
+  set +e
+  ( cd "$REPO_ROOT" && npm run test:visregress )
+  vr_status=$?
+  set -e
+  if [ "$vr_status" = "2" ]; then
+    echo "ERROR: visregress confirmed a VISUAL REGRESSION — refusing to push to '$gated_ref'." >&2
+    echo "       Review e2e/visual/__candidates__ vs e2e/visual/__baselines__, fix the UI" >&2
+    echo "       (or re-baseline intentionally), and re-push — or 'git push --no-verify'." >&2
+    exit 1
+  elif [ "$vr_status" != "0" ]; then
+    echo "WARNING: visregress gate did not run cleanly (exit $vr_status: no app reachable /" >&2
+    echo "         no fresh candidate). NOT blocking the push — but the visual gate did NOT" >&2
+    echo "         confirm this change. Bring up a seeded app (E2E_BASE_URL) to gate visually." >&2
+  else
+    echo "==> pre-push: visregress visual gate passed."
+  fi
+fi
+
 echo "==> pre-push: verification gate passed — allowing push to '$gated_ref'."
 exit 0

@@ -4,6 +4,9 @@ coverage
 test-results
 playwright-report
 e2e/walkthroughs/.artifacts
+# visregress: ephemeral fresh candidate renders + Playwright artifacts (baselines ARE committed)
+e2e/visual/__candidates__
+e2e/visual/.artifacts
 .turbo
 .vite
 .vite-cache

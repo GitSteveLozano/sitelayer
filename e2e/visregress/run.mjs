@@ -7,29 +7,34 @@
  * shared implementation, invoked via a stable entrypoint (VISREGRESS_HOME). Do NOT copy the engine
  * into this repo. The same analyzer backs chess/nhl/learn/sitelayer/sandolab/winwar.
  *
- * Flow: committed-baseline PNGs (e2e/visual/__baselines__/, produced by
- * `npx playwright test -c e2e/visual.config.ts`) are the reference; a fresh candidate is the matching
- * Playwright capture under e2e/visual/.artifacts (or e2e/visual/__candidates__), falling back to the
- * baseline itself (a clean no-op pair) so the gate is always runnable in CI even with no delta. This
- * script pairs them, runs the analyzer, fails CI (exit 2) on a confirmed regression, and — on a
- * confirmed regression with SIGNAL_URL set — emits a contract-conformant `visual.regression.detected`
- * ProjectEvent envelope through sitelayer's existing /api/signal relay.
+ * END-TO-END FLOW (this is a REAL gate, not a baseline-vs-baseline no-op):
+ *   1. clean any stale candidates under e2e/visual/__candidates__
+ *   2. render a FRESH candidate of each gated screen via THIS repo's Playwright
+ *      (e2e/visual.config.ts + top-screens.visual.spec.ts with VISUAL_SNAP_DIR=__candidates__),
+ *      pointed at E2E_BASE_URL (a running app)
+ *   3. pair each committed baseline (e2e/visual/__baselines__/<id>.png) with its fresh candidate
+ *   4. run the shared analyzer; exit 2 on a confirmed regression -> CI / pre-push gate fails
+ *   5. on a confirmed regression with SIGNAL_URL set, the analyzer itself emits a
+ *      projectkit-conformant ENVELOPE event (validateProjectEvent-shaped) to sitelayer's relay.
  *
- * EMIT SHAPE (important): sitelayer's relay (apps/api/src/routes/signal.ts) runs
- * @operator/projectkit `validateProjectEvent` on every inner event, which REQUIRES four string
- * fields: schema_version, event_type, project_key, occurred_at. The analyzer's own --emit-url
- * envelope omits schema_version + project_key (built for the flat chess/nhl relays), so it 422s here.
- * We therefore do NOT pass --emit-url to the analyzer; we read its JSON verdict and POST our OWN
- * conformant envelope. (If projectkit's contract changes, adjust buildEnvelope below.)
+ * Only screens that produced a fresh candidate are gated. If NO candidate rendered (no app
+ * reachable) the gate fails loudly (exit 1) instead of silently passing on stale pairs.
+ *
+ * EMIT SHAPE: sitelayer's relay (apps/api/src/routes/signal.ts) runs @operator/projectkit
+ * `validateProjectEvent`, which REQUIRES schema_version + project_key on every inner event. The
+ * shared analyzer's `--emit-format envelope --project-key sitelayer` builds exactly that, so we let
+ * the analyzer emit — we no longer hand-roll an envelope here.
  *
  * Env:
  *   VISREGRESS_HOME   dir containing visregress.py (default: ~/projects/model-bench)
+ *   E2E_BASE_URL      running app to capture candidates from (default: dev tier)
  *   JUDGE             local | deepinfra | gemini   (default: local, $0)
  *   SIGNAL_URL        relay endpoint to emit to     (default: none; inert)
  *   BLOCK_GATE_PCT    gate-only floor that blocks even without a VLM (default: 0.02)
+ *   VISREGRESS_SKIP_CAPTURE=1  reuse existing __candidates__ (CI already rendered them)
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,36 +43,70 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const HOME = process.env.HOME || '/home/taylorsando'
 const VISREGRESS_HOME = process.env.VISREGRESS_HOME || join(HOME, 'projects/model-bench')
 const BASELINES = join(ROOT, 'e2e/visual/__baselines__')
-const ARTIFACTS = join(ROOT, 'e2e/visual/.artifacts')
 const CANDIDATES = join(ROOT, 'e2e/visual/__candidates__')
 const JUDGE = process.env.JUDGE || 'local'
 const BLOCK = process.env.BLOCK_GATE_PCT || '0.02'
 const PROJECT = 'sitelayer'
+const SKIP_CAPTURE = process.env.VISREGRESS_SKIP_CAPTURE === '1'
 
-// The 3 highest-value screens to gate (baseline file id). candidate defaults to a fresh capture of
-// the same id (under __candidates__ or .artifacts) if present, else the baseline itself (clean pair).
-const SCREENS = [
-  { id: 'takeoff-3d-demo' },
-  { id: 'rental-billing-review' },
-  { id: 'estimate-push-review' },
-]
+// Default candidate-capture target = the local app (docker stack / `npm run dev`). An explicit
+// E2E_BASE_URL always wins (e.g. the persistent dev tier). The visual.config.ts default is the
+// remote dev tier, which is wrong for a local pre-push gate, so we set localhost here when unset.
+if (!process.env.E2E_BASE_URL) process.env.E2E_BASE_URL = 'http://localhost:3000'
 
-function candidateFor(id) {
-  for (const dir of [CANDIDATES, ARTIFACTS]) {
-    const p = join(dir, `${id}.png`)
-    if (existsSync(p)) return p
+// The screens to gate (baseline file id). `takeoff-3d-demo` is the public, auth-free, byte-stable
+// surface; the two financial review screens need a seeded stack (E2E_BASE_URL + e2e act-as).
+const SCREENS = [{ id: 'takeoff-3d-demo' }, { id: 'rental-billing-review' }, { id: 'estimate-push-review' }]
+
+// 1+2. render fresh candidates via this repo's Playwright (unless CI / a test already did).
+// We clean stale candidates ONLY when we are about to re-render — VISREGRESS_SKIP_CAPTURE=1
+// deliberately reuses whatever is in __candidates__ (e.g. an injected break, or a CI render).
+if (!SKIP_CAPTURE) {
+  rmSync(CANDIDATES, { recursive: true, force: true })
+  mkdirSync(CANDIDATES, { recursive: true })
+  console.log(
+    `[sitelayer] rendering fresh candidates -> e2e/visual/__candidates__ (E2E_BASE_URL=${process.env.E2E_BASE_URL || '(default dev)'})`,
+  )
+  const pw = spawnSync('npx', ['playwright', 'test', '-c', 'e2e/visual.config.ts'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: 'inherit',
+    env: { ...process.env, VISUAL_SNAP_DIR: 'e2e/visual/__candidates__' },
+  })
+  if (pw.status !== 0) {
+    // A non-zero capture run is NOT fatal on its own — some screens (the auth-gated ones) may fail
+    // to render when only the public app is reachable. We gate whatever candidates DID render below.
+    console.warn(`[sitelayer] candidate capture exited ${pw.status} — gating the screens that rendered.`)
   }
-  return join(BASELINES, `${id}.png`) // fall back to baseline = clean pair
+} else {
+  console.log('[sitelayer] VISREGRESS_SKIP_CAPTURE=1 — reusing existing __candidates__')
 }
 
-const pairs = SCREENS.map((s) => ({
-  id: s.id,
-  baseline: join(BASELINES, `${s.id}.png`),
-  candidate: candidateFor(s.id),
-})).filter((p) => existsSync(p.baseline))
+// 3. pair each baseline with its FRESH candidate. Only gate ids that produced a real candidate.
+const pairs = []
+const skipped = []
+for (const s of SCREENS) {
+  const baseline = join(BASELINES, `${s.id}.png`)
+  const candidate = join(CANDIDATES, `${s.id}.png`)
+  if (!existsSync(baseline)) continue
+  if (!existsSync(candidate)) {
+    skipped.push(s.id)
+    continue
+  }
+  pairs.push({ id: s.id, baseline, candidate })
+}
+
+if (skipped.length) {
+  console.warn(
+    `[sitelayer] no fresh candidate for: ${skipped.join(', ')} — not gated this run (app not reachable / screen failed to render).`,
+  )
+}
 
 if (!pairs.length) {
-  console.error('[sitelayer] no baseline PNGs under', BASELINES, '\n  run: npx playwright test -c e2e/visual.config.ts')
+  console.error(
+    '[sitelayer] no fresh candidates rendered — refusing to pass on stale pairs.\n' +
+      '  start a seeded app and set E2E_BASE_URL (e.g. http://localhost:3000), then re-run.',
+  )
   process.exit(1)
 }
 
@@ -76,77 +115,40 @@ const manifest = join(dir, 'pairs.json')
 const resultsJson = join(dir, 'results.json')
 writeFileSync(manifest, JSON.stringify(pairs, null, 2))
 
-// Run the analyzer WITHOUT --emit-url (its envelope omits schema_version/project_key and would 422
-// against this relay). Capture its stdout JSON so we can emit a conformant envelope ourselves.
+// 4. run the analyzer. When SIGNAL_URL is set, the analyzer emits an ENVELOPE event itself
+// (--emit-format envelope --project-key sitelayer) — projectkit validateProjectEvent-conformant.
 const args = [
   join(VISREGRESS_HOME, 'visregress.py'),
-  '--manifest', manifest,
-  '--judge', JUDGE,
-  '--block-gate-pct', BLOCK,
-  '--project', PROJECT,
+  '--manifest',
+  manifest,
+  '--judge',
+  JUDGE,
+  '--block-gate-pct',
+  BLOCK,
+  '--project',
+  PROJECT,
+  '--producer',
+  'sitelayer-visregress',
 ]
+if (process.env.SIGNAL_URL) {
+  args.push('--emit-url', process.env.SIGNAL_URL, '--emit-format', 'envelope', '--project-key', PROJECT)
+}
 
-console.log(`[sitelayer] visregress: ${pairs.length} screens, judge=${JUDGE}, block=${BLOCK}`)
+console.log(
+  `[sitelayer] visregress: ${pairs.length} screen(s) [${pairs.map((p) => p.id).join(', ')}], judge=${JUDGE}, block=${BLOCK}`,
+)
 const res = spawnSync('python3', args, { cwd: VISREGRESS_HOME, encoding: 'utf8' })
 process.stdout.write(res.stdout || '')
 if (res.stderr) process.stderr.write(res.stderr)
 
-// The analyzer prints the per-screen lines then a trailing JSON array; parse the JSON tail.
-let verdicts = []
+// Persist the verdicts (the analyzer prints per-screen lines then a trailing JSON array).
 try {
-  // The analyzer prints per-screen "[sitelayer] ..." lines, THEN the JSON array via
-  // json.dumps(indent=2) — whose opening bracket sits alone on its own line ("\n[\n").
-  // Match that to avoid grabbing a "[sitelayer]" log line.
   const out = res.stdout || ''
   const m = out.match(/\n\[\n[\s\S]*\n\]\s*$/)
   const jsonText = m ? m[0] : out.slice(out.indexOf('['))
-  verdicts = JSON.parse(jsonText.trim())
-  writeFileSync(resultsJson, JSON.stringify(verdicts, null, 2))
+  writeFileSync(resultsJson, JSON.stringify(JSON.parse(jsonText.trim()), null, 2))
 } catch {
-  /* keep the analyzer's own exit code; just skip emit */
+  /* keep the analyzer's own exit code; results-file is best-effort */
 }
 
-// Emit a contract-conformant envelope for any confirmed regression (inert unless SIGNAL_URL set).
-if (process.env.SIGNAL_URL && verdicts.some((v) => v && v.is_regression)) {
-  await emitRegressions(process.env.SIGNAL_URL, verdicts.filter((v) => v && v.is_regression))
-}
-
-process.exit(res.status ?? 1) // 0 clean, 2 regression -> CI gate
-
-/**
- * Build the projectkit-conformant envelope sitelayer's /api/signal relay accepts. Each inner event
- * carries the four required strings (schema_version, event_type, project_key, occurred_at) +
- * optional payload object, matching validateProjectEvent in @operator/projectkit.
- */
-function buildEnvelope(regressions) {
-  const now = new Date().toISOString()
-  return {
-    schema_version: '1.0.0',
-    project_key: PROJECT,
-    emitted_at: now,
-    producer: 'visregress',
-    events: regressions.map((v) => ({
-      schema_version: '1.0.0',
-      event_type: 'visual.regression.detected',
-      project_key: PROJECT,
-      occurred_at: now,
-      status: 'regression',
-      payload: v,
-    })),
-  }
-}
-
-async function emitRegressions(url, regressions) {
-  const envelope = buildEnvelope(regressions)
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(envelope),
-    })
-    const body = await r.text().catch(() => '')
-    console.log(`[sitelayer] emit -> ${url} : ${r.status} ${body}`)
-  } catch (e) {
-    console.warn(`[sitelayer] emit failed: ${e}`)
-  }
-}
+process.exit(res.status ?? 1) // 0 clean, 2 regression -> CI / pre-push gate

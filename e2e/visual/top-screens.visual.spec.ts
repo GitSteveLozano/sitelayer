@@ -25,8 +25,16 @@ import { test as base, type BrowserContext, type Page } from '@playwright/test'
  */
 
 // Playwright runs from the repo root; the visual config's testDir is e2e/visual.
-// Resolve the baseline dir from cwd so the path matches run.mjs's BASELINES.
-const BASELINES = path.join(process.cwd(), 'e2e/visual/__baselines__')
+// Resolve the snapshot dir from cwd so the path matches run.mjs's BASELINES.
+//
+// This SAME spec produces both the committed BASELINES and the fresh CANDIDATES:
+//   - default (no env)             -> e2e/visual/__baselines__  (refresh the reference)
+//   - VISUAL_SNAP_DIR=<absdir/rel> -> that dir                  (run.mjs renders candidates)
+// run.mjs sets VISUAL_SNAP_DIR=e2e/visual/__candidates__ so the gate compares a FRESH
+// capture of the live UI against the committed baselines — never baseline-vs-baseline.
+const SNAP_DIR = process.env.VISUAL_SNAP_DIR
+  ? path.resolve(process.cwd(), process.env.VISUAL_SNAP_DIR)
+  : path.join(process.cwd(), 'e2e/visual/__baselines__')
 
 const E2E_COMPANY_SLUG = 'e2e-fixtures'
 
@@ -53,11 +61,11 @@ async function buildRolePage(context: BrowserContext, role: string): Promise<Pag
 }
 
 async function snap(page: Page, id: string): Promise<void> {
-  mkdirSync(BASELINES, { recursive: true })
+  mkdirSync(SNAP_DIR, { recursive: true })
   // Let async data / canvas settle so the capture is deterministic.
   await page.waitForLoadState('networkidle').catch(() => {})
   await page.waitForTimeout(1200)
-  await page.screenshot({ path: path.join(BASELINES, `${id}.png`), fullPage: true })
+  await page.screenshot({ path: path.join(SNAP_DIR, `${id}.png`), fullPage: true })
 }
 
 const test = base
@@ -66,10 +74,7 @@ test('baseline: takeoff-3d-demo', { tag: '@visual' }, async ({ page }) => {
   // Public, client-side fixtures → no auth, deterministic.
   await page.goto('/demo/takeoff-preview-3d', { waitUntil: 'domcontentloaded' })
   await page.getByRole('heading', { name: '3D takeoff demo' }).waitFor({ state: 'visible' })
-  await page
-    .getByText('Simple house plan', { exact: true })
-    .first()
-    .waitFor({ state: 'visible' })
+  await page.getByText('Simple house plan', { exact: true }).first().waitFor({ state: 'visible' })
   // Wait for the WebGL canvas to actually render pixels before we snap.
   const canvas = page.getByTestId('takeoff-preview-canvas')
   await canvas.waitFor({ state: 'visible' }).catch(() => {})
