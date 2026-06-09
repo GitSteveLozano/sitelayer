@@ -76,20 +76,26 @@ Stop users reaching two different takeoff screens.
   no screen links to both.
 
 ### Phase 1 — Bug fixes (small, high-confidence)
-Concrete defects found in est-canvas (`est-canvas/desktop-body.tsx` unless noted):
+Candidate defects (from exploration) — **verified against `est-canvas/desktop-body.tsx`
+on 2026-06-09; only #1 survived. Recorded so we don't re-chase the others.**
 
-1. Copy panel doesn't close on mode switch (SELECT→SCALE/DRAW leaves `copyOpen`
-   floating). Clear `copyOpen` in the mode-change handler / tool-palette buttons.
-2. Reassign has no pending-state indicator → silent failure if the machine
-   update races. Surface a "REASSIGN PENDING" affordance while `reassignIds` set.
-3. Scale overlay uses a hand-rolled Escape handler — align with the shared
-   overlay/Escape convention.
-4. Marquee bulk-select ignores active blueprint when `activeBlueprint` is null →
-   can lasso measurements across sheets. Guard the `blueprintMeasurements` filter.
-5. `editDragIdxRef` not cleared on pointer-cancel → next EDIT GEOM can start with
-   a stale vertex index. Clear on cancel path.
-6. Condition legend silently omits deleted-but-referenced conditions — reconcile
-   legend vs picker.
+1. ✅ **FIXED — Copy panel re-opens after leaving SELECT.** `copyOpen` stayed
+   latched after a mode change, so the COPY panel silently re-opened on the next
+   selection. Cleared `copyOpen` whenever `mode !== 'select'`.
+2. ❌ **Not a bug — reassign already has an affordance.** "Reassign" sets
+   `reassignIds` AND opens the item palette (`setItemPaletteOpen(true)`), which
+   clears `reassignIds` on close. The open palette IS the pending indicator.
+3. ❌ **Not a bug — the scale-overlay Escape handler is correct.** It's a
+   deliberate hand-rolled handler (the scale box bypasses `DModal`/`useEscapeClose`)
+   and covers scale + ai-count + ai-takeoff. Cosmetic refactor at most.
+4. ❌ **Not present — marquee is already sheet-scoped.** It iterates
+   `blueprintMeasurements`, which is filtered to the active blueprint (and empty
+   when none is active), so it can't lasso across sheets.
+5. ❌ **Not present — pointer-cancel is wired.** The SVG has
+   `onPointerCancel={onPointerUpCanvas}`, which clears `editDragIdxRef`.
+6. ❌ **Defensible — condition legend.** Measurements tied to a deleted condition
+   still count in scope totals; the legend simply omits the missing condition
+   object. Acceptable current behavior, not a silent data loss.
 
 v1-side defects (address in Phase 3 when these features migrate, or sooner if
 the v1 surface stays primary for capture):
@@ -99,7 +105,7 @@ the v1 surface stays primary for capture):
 - Photo-measure images are client-only (no upload).
 - `blueprint_vision` is dry-run only on this surface.
 
-- **Verify:** unit/interaction coverage for each fix; `npm run verify` standard gate.
+- **Verify:** typecheck + lint + unit suites for the touched file.
 
 ### Phase 2 — Full mobile parity + UX polish on est-canvas (medium)
 Now that est-canvas is the single editor, **bring mobile-body to full desktop

@@ -493,6 +493,15 @@ export function EstCanvasDesktopBody() {
   const [copyRotate, setCopyRotate] = useState('0')
   const [copyBusy, setCopyBusy] = useState(false)
 
+  // Close the copy parameter panel whenever we leave SELECT mode. The panel only
+  // renders in select mode, so this isn't visible immediately — but without it
+  // `copyOpen` stays latched and the panel silently re-opens on the next
+  // selection (without the user re-toggling COPY). Clearing on mode change keeps
+  // COPY an explicit, per-selection action.
+  useEffect(() => {
+    if (mode !== 'select') setCopyOpen(false)
+  }, [mode])
+
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
   // the "JUMPED FROM …" panel can offer a one-click RETURN. The callouts are
