@@ -44,6 +44,7 @@
     "test:e2e": "playwright test",
     "test:e2e:tagged": "playwright test --grep",
     "test:e2e:ui": "playwright test --ui",
+    "test:visregress": "node e2e/visregress/run.mjs",
     "typecheck": "npm run typecheck --workspaces && npm run typecheck:e2e",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "typecheck:fast": "node scripts/typecheck-fast.mjs",
