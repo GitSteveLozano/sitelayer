@@ -27,9 +27,7 @@ export function worldScaleStamp(
   worldScale: WorldScale | null,
   appliesToTool: boolean,
 ): { world_per_board_x: number; world_per_board_y: number } | Record<string, never> {
-  return worldScale && appliesToTool
-    ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
-    : {}
+  return worldScale && appliesToTool ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy } : {}
 }
 
 /**

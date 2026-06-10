@@ -15,14 +15,14 @@ There are **two live, independently-navigable takeoff surfaces**, and which one 
 user lands on depends on which screen cluster linked them there — not on their
 persona or device:
 
-| | **est-canvas** (Phase C) | **v1 `projects/takeoff-canvas`** |
-| --- | --- | --- |
-| Editor file | `screens/desktop/est-canvas.tsx` → `est-canvas/{desktop,mobile}-body.tsx` | `screens/projects/takeoff-canvas.tsx` |
-| Desktop route | `/desktop/canvas/:id` | — |
-| Mobile route | `/projects/:id/takeoff-mobile` | `/projects/:id/takeoff-canvas` |
-| List screen | `screens/mobile/takeoff-list.tsx` | `screens/projects/takeoff-list.tsx` |
-| Editor strength | **Strong** (snapping, pan/zoom, arc/rect, calibration, pitch, deduction, marquee, vertex edit, copy/array/mirror, conditions, assemblies, running totals, undo/redo, XState machine) | **Thin** (polygon/lineal/count, button zoom, single undo) |
-| Capture/AI/IA strength | **None** | **Strong** (4 capture pipelines, AI quantity-review panel, multi-page page-strip, per-page calibration overlay, elevation tags, multi-condition tag sheet, revision compare, photo-measure) |
+|                        | **est-canvas** (Phase C)                                                                                                                                                             | **v1 `projects/takeoff-canvas`**                                                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Editor file            | `screens/desktop/est-canvas.tsx` → `est-canvas/{desktop,mobile}-body.tsx`                                                                                                            | `screens/projects/takeoff-canvas.tsx`                                                                                                                                                       |
+| Desktop route          | `/desktop/canvas/:id`                                                                                                                                                                | —                                                                                                                                                                                           |
+| Mobile route           | `/projects/:id/takeoff-mobile`                                                                                                                                                       | `/projects/:id/takeoff-canvas`                                                                                                                                                              |
+| List screen            | `screens/mobile/takeoff-list.tsx`                                                                                                                                                    | `screens/projects/takeoff-list.tsx`                                                                                                                                                         |
+| Editor strength        | **Strong** (snapping, pan/zoom, arc/rect, calibration, pitch, deduction, marquee, vertex edit, copy/array/mirror, conditions, assemblies, running totals, undo/redo, XState machine) | **Thin** (polygon/lineal/count, button zoom, single undo)                                                                                                                                   |
+| Capture/AI/IA strength | **None**                                                                                                                                                                             | **Strong** (4 capture pipelines, AI quantity-review panel, multi-page page-strip, per-page calibration overlay, elevation tags, multi-condition tag sheet, revision compare, photo-measure) |
 
 Phase C consolidated the desktop/mobile **editor** into est-canvas but never
 folded in the v1 `projects/` IA, leaving two front doors (and two
@@ -44,7 +44,7 @@ already owns the hard editor capabilities and is already responsive
 thin editor would rebuild what exists.
 
 **Capability parity: full. Mobile gets every desktop feature.** Owner's call:
-mobile-body and desktop-body expose the *same* capability set — desktop simply has
+mobile-body and desktop-body expose the _same_ capability set — desktop simply has
 more resolution, making dense editing easier; mobile presents the same features
 through thumb-friendly affordances. There is no "desktop-only" tier. The current
 gaps (pitch, scale calibration, conditions, assemblies, arc/rect missing on mobile)
@@ -59,6 +59,7 @@ only for ergonomics/layout.**
 ## 2. Phased plan
 
 ### Phase 0 — De-fork the front door (small)
+
 Stop users reaching two different takeoff screens.
 
 - Decide the single canonical canvas per viewport (desktop → `/desktop/canvas/:id`;
@@ -76,6 +77,7 @@ Stop users reaching two different takeoff screens.
   no screen links to both.
 
 ### Phase 1 — Bug fixes (small, high-confidence)
+
 Candidate defects (from exploration) — **verified against `est-canvas/desktop-body.tsx`
 on 2026-06-09; only #1 survived. Recorded so we don't re-chase the others.**
 
@@ -99,6 +101,7 @@ on 2026-06-09; only #1 survived. Recorded so we don't re-chase the others.**
 
 v1-side defects (address in Phase 3 when these features migrate, or sooner if
 the v1 surface stays primary for capture):
+
 - AI rejections are session-only (no backend persistence).
 - Revision-compare "affected measurements" usually renders nothing (no diff
   worker populates `blueprint_page_diffs`); PDF pairs can't rasterize client-side.
@@ -108,21 +111,22 @@ the v1 surface stays primary for capture):
 - **Verify:** typecheck + lint + unit suites for the touched file.
 
 ### Phase 2 — Full mobile parity + UX polish on est-canvas (medium, in progress)
+
 Now that est-canvas is the single editor, **bring mobile-body to full desktop
 capability parity** (owner decision §1), then tune each body's ergonomics.
 
 **Closing the mobile parity gaps** (build, not design-call): pitch, scale
 calibration, conditions, assemblies, arc/rect — all currently desktop-only —
-get thumb-friendly mobile surfaces wired to the *same* machine actions.
+get thumb-friendly mobile surfaces wired to the _same_ machine actions.
 
 - ✅ **Quantity parity — world-scale + pitch (the accuracy core).** Verified a
   real data-correctness gap: the server recomputes a measurement's quantity from
   its geometry (`calculateGeometryQuantity`), reading `world_per_board_x/y`
   (per-axis page scale) + `pitch` off the JSONB. Desktop stamped both; **mobile
   stamped neither**, so a mobile-drawn measurement on a calibrated/pitched sheet
-  silently persisted a *board-space* quantity (wrong sqft/lf). Fixed: mobile now
+  silently persisted a _board-space_ quantity (wrong sqft/lf). Fixed: mobile now
   reads the persisted page calibration via the same `solveWorldScale(activePage,
-  …)` desktop uses (no mobile calibration-DRAWING UI needed — a sheet calibrated
+…)` desktop uses (no mobile calibration-DRAWING UI needed — a sheet calibrated
   on either surface flows through), previews scaled+pitch-corrected quantities,
   and stamps `world_per_board_x/y` + `pitch` into saved geometry. Added a mobile
   `PitchPanel` (rise:run + roof presets). Extracted the stamp into the shared,
@@ -133,12 +137,12 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
     server overrides client quantity from geometry — so wall-height area doesn't
     round-trip server-side. Left unchanged here (needs a geometry representation
     for "lineal × height"); tracked, not regressed.
-- ✅ **Scale-calibration *drawing* UI on mobile.** A phone can now calibrate an
-  uncalibrated sheet itself (previously it could only *read* a sheet calibrated
+- ✅ **Scale-calibration _drawing_ UI on mobile.** A phone can now calibrate an
+  uncalibrated sheet itself (previously it could only _read_ a sheet calibrated
   on desktop). Added a `scale` MobileMode + a "Set scale" segmented option (gated
   on an active sheet page), a two-tap reference-line surface (calibration points
   rendered on `MobileCanvasSurface`), and a `MobileScalePanel` (length + apply /
-  cancel). Wired through the *same* machine events desktop uses
+  cancel). Wired through the _same_ machine events desktop uses
   (`START_CALIBRATION` / `PLACE_SCALE_POINT` / `SET_SCALE_LENGTH`) and the shared
   `useCalibratePage` mutation, so a phone-calibrated sheet persists identically.
 - ✅ **Assemblies on mobile.** Rendered the existing, form-factor-agnostic
@@ -165,6 +169,7 @@ the `mode`↔machine mapping, dead-code removal) remain as optional tidy-ups.
 **Note:** the parity UI was verified by typecheck/lint/unit suites only — the
 interaction surfaces (calibration two-tap, arc 3-point draw, pickers) want a
 device-review pass before pilot use.
+
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.
@@ -180,6 +185,7 @@ device-review pass before pilot use.
 - **Verify:** interaction tests; manual pass on both viewports.
 
 ### Phase 3 — Capability migration + retire v1 (large; can trail Phases 0–2)
+
 Port v1's unique capabilities into the est-canvas engine, then delete the v1
 editor. **This is the on-ramp to the AI-first north star (§5):** v1's capture
 pipelines + AI quantity-review panel are an early version of "AI proposes items
@@ -203,7 +209,7 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
   triggered by a "Tags / conditions" affordance under the selected-measurement
   action bar — parity with v1's long-press → tag sheet.
 - ⏳ **Remaining to migrate:** capture pipelines (`useCaptureTakeoffDraft` + the
-  4 pipe-* invokers) + AI quantity-review panel (`AgentSuggestionsPanel`) — the
+  4 pipe-\* invokers) + AI quantity-review panel (`AgentSuggestionsPanel`) — the
   large, mostly dry-run/stub block that is the on-ramp to the AI-first north star
   (§5); multi-page page-strip + per-page calibration overlay (est-canvas already
   has page switching + the calibration UI, so this is incremental); revision
@@ -224,12 +230,14 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
    now; it lands later as the AI on-ramp (§5).
 
 Remaining (north-star, not blocking this consolidation):
+
 - Collaboration model (spec §6 item 5): cloud-native multi-user w/ locking in v1,
   real-time co-edit later — confirm before that work starts.
 - Overlay renderer migration SVG → Canvas/Konva (see §5 divergence) — schedule
   before the large-plan-set / AI-volume goals, not during Phase 0.
 
 ## 4. Notes / invariants to respect
+
 - Board space is 0–100 both axes; SVG `viewBox="0 0 100 100"`. Don't fork geometry.
 - All persistence stays through existing `lib/api` hooks; measurements remain
   interchangeable across bodies.
@@ -242,21 +250,22 @@ Remaining (north-star, not blocking this consolidation):
 
 The owner-provided spec ([`docs/PLANSWIFT_REBUILD_SPEC.md`](./PLANSWIFT_REBUILD_SPEC.md))
 is the destination: **AI-first takeoff + estimating**, where the default
-workflow is *review-and-correct AI-proposed items* on a single plan canvas, with
+workflow is _review-and-correct AI-proposed items_ on a single plan canvas, with
 a correction-capture flywheel from commit one. This consolidation is **Phase 1 of
 that spec** — "build the place the answers land before the thing that produces
 them" (spec §4.7). Mapping:
 
-| Spec phase (§4.10) | This plan |
-| --- | --- |
-| 1. Foundation: plan canvas + calibration + geometry kernel + editable `TakeoffItem` + manual area/linear/count | **Phases 0–2** — collapse to one est-canvas editor, full mobile parity, polish. est-canvas already has the canvas/calibration/geometry kernel + manual tools; we're making it *the* surface. |
-| 2. Vector-PDF AI pipeline + correction-capture loop | builds on **Phase 3** (the capture/AI surface folded into est-canvas) then extends |
-| 3. Parts/assemblies/formula engine + estimate rollup + export | est-canvas already has conditions/assemblies primitives to grow into the formula engine |
-| 4. SiteLayer bid-lifecycle integration | existing estimate/`lib/api` wiring |
-| 5. Scan/raster AI pipeline | later ML track |
-| 6. Revision compare + collaboration + reporting + trade packs | v1 has a revision-compare seed (migrate in Phase 3); collaboration is spec §6-item-5 (open) |
+| Spec phase (§4.10)                                                                                             | This plan                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Foundation: plan canvas + calibration + geometry kernel + editable `TakeoffItem` + manual area/linear/count | **Phases 0–2** — collapse to one est-canvas editor, full mobile parity, polish. est-canvas already has the canvas/calibration/geometry kernel + manual tools; we're making it _the_ surface. |
+| 2. Vector-PDF AI pipeline + correction-capture loop                                                            | builds on **Phase 3** (the capture/AI surface folded into est-canvas) then extends                                                                                                           |
+| 3. Parts/assemblies/formula engine + estimate rollup + export                                                  | est-canvas already has conditions/assemblies primitives to grow into the formula engine                                                                                                      |
+| 4. SiteLayer bid-lifecycle integration                                                                         | existing estimate/`lib/api` wiring                                                                                                                                                           |
+| 5. Scan/raster AI pipeline                                                                                     | later ML track                                                                                                                                                                               |
+| 6. Revision compare + collaboration + reporting + trade packs                                                  | v1 has a revision-compare seed (migrate in Phase 3); collaboration is spec §6-item-5 (open)                                                                                                  |
 
 ### What already aligns (don't rebuild)
+
 - **Geometry kernel in world/board space, pure + tested** (`lib/takeoff/*`) — matches
   spec §4.3. Pitch correction, cutouts/deductions, arcs already exist on desktop.
 - **Editable typed item model** — `takeoff_measurements` + `takeoff_drafts` with a
@@ -268,6 +277,7 @@ them" (spec §4.7). Mapping:
   seed of spec §4.7's "AI proposes, human reviews."
 
 ### Known divergences to schedule (honest gaps vs the spec)
+
 1. **Overlay renderer: SVG today vs Canvas/Konva in spec §4.1/§4.11.** est-canvas
    draws items as SVG (`viewBox 0 0 100 100`). The spec explicitly warns SVG DOM
    "dies on big takeoffs" and mandates a canvas/WebGL overlay for 100+ MB sets and
@@ -280,7 +290,7 @@ them" (spec §4.7). Mapping:
    post-consolidation work, gated behind the single canvas existing first.
 3. **Correction-capture flywheel not built.** Spec calls it the highest-leverage
    non-obvious decision ("build it in from commit one"). Nothing logs AI-proposed
-   vs human-final deltas yet. Should land *with* Phase 3's AI surface, not after.
+   vs human-final deltas yet. Should land _with_ Phase 3's AI surface, not after.
 4. **Formula/assembly engine is partial.** est-canvas has conditions/assemblies as
    tagging, not the sandboxed formula evaluator (mathjs/expr-eval) the spec §4.5
    specifies. Grows in spec-phase 3.
@@ -288,5 +298,5 @@ them" (spec §4.7). Mapping:
 **Bottom line:** the consolidation is directly on the critical path to the north
 star and reuses the spec's hardest already-built pieces (canvas, geometry kernel,
 typed item model, capture pipelines). The big net-new work — AI-first default,
-correction flywheel, formula engine, canvas renderer swap — all sits *after* a
+correction flywheel, formula engine, canvas renderer swap — all sits _after_ a
 single canvas exists, which is exactly what Phases 0–3 deliver.
