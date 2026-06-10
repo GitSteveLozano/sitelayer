@@ -52,6 +52,7 @@ import { MBody, MButton, MChip, MChipRow, MI, MInput, MSectionH, MSelect, MTopBa
 import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
+import { TakeoffTagSheet } from '../../projects/takeoff-tag-sheet'
 import { AssemblyAttachPanel } from './assembly-panel'
 import { ConditionPicker } from './condition-picker'
 import { ElevationPicker } from './elevation-picker'
@@ -293,6 +294,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  // Multi-condition tag sheet (parity with v1) — a bottom sheet to add/remove
+  // per-measurement condition tags on a committed measurement. `null` = closed.
+  const [tagSheetMeasurementId, setTagSheetMeasurementId] = useState<string | null>(null)
   // Scale calibration (parity with desktop SCALE mode). The two board-space
   // reference points + the typed real-world length live in the machine's
   // calibration slice; `applyScale` persists them to the page via the same
@@ -1416,6 +1420,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                             <AssemblyAttachPanel measurement={selected} />
                           </div>
                         ) : null}
+                        {/* Multi-condition tag sheet trigger (parity with v1's
+                            long-press → tag sheet). Below the action bar to avoid
+                            crowding the button row. */}
+                        {editId !== selected.id ? (
+                          <MButton variant="ghost" size="sm" onClick={() => setTagSheetMeasurementId(selected.id)}>
+                            <MI.Layers size={14} /> Tags / conditions
+                          </MButton>
+                        ) : null}
                       </>
                     ) : null}
                     {/* Live measurement strip — brutalist eyebrow + big-number readout
@@ -1548,6 +1560,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
           onImported={(count) => setSavedToast(`Imported ${count} measurement${count === 1 ? '' : 's'}.`)}
         />
       ) : null}
+      <TakeoffTagSheet
+        open={tagSheetMeasurementId !== null}
+        onClose={() => setTagSheetMeasurementId(null)}
+        measurementId={tagSheetMeasurementId}
+        defaultQuantity={selected ? Number(selected.quantity) || undefined : undefined}
+        defaultUnit={selected?.unit}
+      />
     </>
   )
 }

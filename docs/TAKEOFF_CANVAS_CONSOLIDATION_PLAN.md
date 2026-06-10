@@ -198,11 +198,16 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
   `elevation` on the primary save (neither body did before, despite the machine
   owning the `draft.elevation` slice + `SET_ELEVATION`). Tags the next draw with
   a building face (N/S/E/W/roof) so the per-elevation rollup works.
+- ✅ **Multi-condition tag sheet on mobile.** Dropped in the self-contained
+  `TakeoffTagSheet` (its own `useTakeoffTags` / `useAddTakeoffTag` hooks),
+  triggered by a "Tags / conditions" affordance under the selected-measurement
+  action bar — parity with v1's long-press → tag sheet.
 - ⏳ **Remaining to migrate:** capture pipelines (`useCaptureTakeoffDraft` + the
-  4 pipe-* invokers), AI quantity-review panel (`AgentSuggestionsPanel`),
-  multi-page page-strip + per-page calibration overlay, multi-condition tag
-  sheet, revision compare, photo-measure cross-link. Several are dry-run/stub on
-  v1 and are the on-ramp to the AI-first north star (§5).
+  4 pipe-* invokers) + AI quantity-review panel (`AgentSuggestionsPanel`) — the
+  large, mostly dry-run/stub block that is the on-ramp to the AI-first north star
+  (§5); multi-page page-strip + per-page calibration overlay (est-canvas already
+  has page switching + the calibration UI, so this is incremental); revision
+  compare (stub on v1); photo-measure cross-link (the de-fork already routes it).
 - ⏳ Then: re-point the rest of the `projects/*` cluster, retire
   `screens/projects/takeoff-canvas.tsx`, remove its route (App.tsx:352).
 - **Verify:** typecheck + lint + unit suites per increment; full
