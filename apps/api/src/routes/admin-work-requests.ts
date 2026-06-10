@@ -1,22 +1,40 @@
 import type { IncomingMessage } from 'node:http'
+import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
 import type { Identity } from '../auth.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { buildPaginationMeta, isValidUuid, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
 import { WORK_ITEM_LANES, WORK_ITEM_STATUSES, type WorkItemLane, type WorkItemStatus } from '../context-handoff.js'
+import { buildAgentPrompt, type SupportPacketRow } from './support-packets.js'
+import {
+  agentFeedBaseUrl,
+  insertAgentFeedConcernTx,
+  mapCaptureArtifactsToConcernRefs,
+  type CaptureArtifactSummaryRow,
+} from './agent-feed.js'
 
 /**
- * Read-only platform-admin work-request board.
+ * Platform-admin work-request board + the agent dispatch door.
  *
  * This is intentionally mounted before company resolution. The normal
  * `/api/work-requests/*` routes are company/RLS-scoped and require an active
  * tenant membership; the operator board is a cross-tenant fleet view gated only
  * by `authorizePlatformAdmin`.
+ *
+ * POST /api/admin/work-requests/:id/dispatch-to-agent {audience} addresses a
+ * work item to a projectkit pull-executor lane (e.g. 'steve' — the
+ * collaborator's Claude Code): it builds a @operator/projectkit Concern from
+ * the work item + its support packet (including the same agent_prompt the
+ * support-packet read endpoint serves) and inserts it into agent_feed_concerns,
+ * idempotent on concern_ref `wi:<work_item_id>:<audience>`. The executor polls
+ * GET /api/agent-feed/concerns and reports back via POST
+ * /api/agent-feed/callbacks (routes/agent-feed.ts).
  */
 
 export interface AdminWorkRequestRouteDeps {
   pool: AdminQueryExecutor
   identity: Identity
   sendJson: (status: number, body: unknown) => void
+  readBody?: () => Promise<Record<string, unknown>>
   envIds?: ReadonlySet<string>
 }
 
@@ -135,12 +153,144 @@ function buildBoardColumns(rows: AdminWorkItemResponse[], groupBy: BoardGroupBy)
   }))
 }
 
+type DispatchWorkItemRow = {
+  id: string
+  company_id: string
+  support_packet_id: string
+  title: string
+  summary: string | null
+  severity: string | null
+  route: string | null
+  capture_session_id: string | null
+  metadata: Record<string, unknown> | null
+}
+
+/** Bounded string[] acceptance criteria from work-item metadata, else []. */
+function acceptanceFromMetadata(metadata: Record<string, unknown> | null): string[] {
+  const raw = metadata?.acceptance
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .map((entry) => entry.trim().slice(0, 500))
+    .slice(0, 25)
+}
+
+/**
+ * POST /api/admin/work-requests/:id/dispatch-to-agent — address a work item to
+ * a pull-executor audience. Idempotent on concern_ref `wi:<id>:<audience>`:
+ * a repeat dispatch returns the existing feed row (200), a first dispatch the
+ * created one (201).
+ */
+async function handleDispatchToAgent(deps: AdminWorkRequestRouteDeps, workItemId: string): Promise<void> {
+  if (!isValidUuid(workItemId)) {
+    deps.sendJson(400, { error: 'work item id must be a uuid' })
+    return
+  }
+  const body = deps.readBody ? await deps.readBody() : {}
+  const audience = optionalText(body.audience, 80)
+  if (!audience) {
+    deps.sendJson(400, { error: 'audience is required' })
+    return
+  }
+
+  const workItemResult = (await deps.pool.query(
+    `select w.id, w.company_id, w.support_packet_id, w.title, w.summary, w.severity,
+            w.route, w.capture_session_id, w.metadata
+       from context_work_items w
+      where w.id = $1::uuid
+      limit 1`,
+    [workItemId],
+  )) as { rows?: DispatchWorkItemRow[] }
+  const workItem = workItemResult.rows?.[0]
+  if (!workItem) {
+    deps.sendJson(404, { error: 'work item not found' })
+    return
+  }
+
+  // The same agent prompt the support-packet read endpoint serves
+  // (support-packets.ts buildAgentPrompt — copy-agent-bundle's source text).
+  const packetResult = (await deps.pool.query(
+    `select id, company_id, actor_user_id, request_id, route, capture_session_id, build_sha, problem,
+            client, server_context, created_at, expires_at, redaction_version
+       from support_debug_packets
+      where company_id = $1 and id = $2
+      limit 1`,
+    [workItem.company_id, workItem.support_packet_id],
+  )) as { rows?: SupportPacketRow[] }
+  const packet = packetResult.rows?.[0] ?? null
+  const agentPrompt = packet ? buildAgentPrompt(packet) : null
+
+  // Same artifact-ref mapping as the capture-analyzer enqueue at finalize.
+  let artifacts: ReturnType<typeof mapCaptureArtifactsToConcernRefs> = []
+  if (workItem.capture_session_id) {
+    const artifactRows = (await deps.pool.query(
+      `select id, kind, content_type, byte_size, duration_ms
+         from capture_artifacts
+        where company_id = $1
+          and capture_session_id = $2::uuid
+          and deleted_at is null
+          and storage_key is not null
+        order by created_at asc
+        limit 25`,
+      [workItem.company_id, workItem.capture_session_id],
+    )) as { rows?: CaptureArtifactSummaryRow[] }
+    artifacts = mapCaptureArtifactsToConcernRefs(artifactRows.rows ?? [], agentFeedBaseUrl())
+  }
+
+  const concernRef = `wi:${workItem.id}:${audience}`
+  const concern: Concern = {
+    schema_version: CONTRACT_VERSION,
+    project_key: 'sitelayer',
+    dispatched_at: new Date().toISOString(),
+    concern_ref: concernRef,
+    kind: 'execute',
+    title: workItem.title,
+    ...(workItem.summary ? { summary: workItem.summary } : {}),
+    audience,
+    assignee: audience,
+    acceptance: acceptanceFromMetadata(workItem.metadata),
+    source_event_ref: workItem.support_packet_id,
+    inputs: {
+      work_item_id: workItem.id,
+      support_packet_id: workItem.support_packet_id,
+      url: workItem.route,
+      agent_prompt: agentPrompt,
+      artifacts,
+    },
+  }
+
+  const insertedId = await insertAgentFeedConcernTx(deps.pool as Parameters<typeof insertAgentFeedConcernTx>[0], {
+    companyId: workItem.company_id,
+    audience,
+    concern,
+    workItemId: workItem.id,
+    captureSessionId: workItem.capture_session_id,
+  })
+
+  const rowResult = (await deps.pool.query(
+    `select id, company_id, audience, project_key, concern_ref, concern, status,
+            callback, work_item_id, capture_session_id, claimed_at, completed_at,
+            created_at, updated_at
+       from agent_feed_concerns
+      where company_id = $1 and project_key = 'sitelayer' and concern_ref = $2
+      limit 1`,
+    [workItem.company_id, concernRef],
+  )) as { rows?: Array<Record<string, unknown>> }
+  const row = rowResult.rows?.[0]
+  if (!row) {
+    deps.sendJson(500, { error: 'agent feed concern insert returned no row' })
+    return
+  }
+  deps.sendJson(insertedId ? 201 : 200, { concern: row, created: Boolean(insertedId) })
+}
+
 export async function handleAdminWorkRequestRoutes(
   req: IncomingMessage,
   url: URL,
   deps: AdminWorkRequestRouteDeps,
 ): Promise<boolean> {
-  if (url.pathname !== '/api/admin/work-requests/board') return false
+  const dispatchMatch = url.pathname.match(/^\/api\/admin\/work-requests\/([^/]+)\/dispatch-to-agent$/)
+  if (url.pathname !== '/api/admin/work-requests/board' && !dispatchMatch) return false
 
   const gate = await authorizePlatformAdmin(
     deps.pool,
@@ -153,6 +303,16 @@ export async function handleAdminWorkRequestRoutes(
   }
 
   const method = (req.method ?? 'GET').toUpperCase()
+
+  if (dispatchMatch) {
+    if (method !== 'POST') {
+      deps.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    await handleDispatchToAgent(deps, decodeURIComponent(dispatchMatch[1]!))
+    return true
+  }
+
   if (method !== 'GET') {
     deps.sendJson(405, { error: 'method not allowed' })
     return true

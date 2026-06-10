@@ -30,6 +30,7 @@ import { isAiChatEnabled } from './mesh-dispatcher.js'
 import { dispatch, dispatchPlatformAdminRoutes } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
 import { handleSignalRoutes } from './routes/signal.js'
+import { handleAgentFeedRoutes } from './routes/agent-feed.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
@@ -833,6 +834,28 @@ const server = http.createServer(async (req, res) => {
               })
               if (signalHandled) return
 
+              // Agent feed — the producer-side @operator/projectkit pull-executor
+              // feed (capture-analyzer + Steve's Claude Code poll Concerns and
+              // POST Callbacks). MACHINE auth boundary: AGENT_FEED_TOKENS bearer
+              // map (constant-time, audience-scoped), NOT Clerk — so it mounts
+              // pre-identity like the portal/webhook surfaces. All routes 503
+              // when AGENT_FEED_TOKENS is unset (feed off, fail loud not open).
+              const agentFeedHandled = await handleAgentFeedRoutes(req, url, {
+                pool,
+                storage,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
+                sendFileContent: (mimeType, fileName, content) => {
+                  res.writeHead(200, {
+                    'content-type': mimeType,
+                    'content-disposition': `inline; filename="${fileName}"`,
+                    'cache-control': 'no-store',
+                  })
+                  res.end(content)
+                },
+              })
+              if (agentFeedHandled) return
+
               // Public client-portal routes (sales loop + rentals catalog). No
               // Clerk auth — recipients hold an HMAC-signed share token. Handled
               // BEFORE identity resolution so customers without a Clerk session
@@ -975,6 +998,7 @@ const server = http.createServer(async (req, res) => {
                 pool,
                 identity,
                 sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
               })
               if (adminWorkRequestsHandled) return
 

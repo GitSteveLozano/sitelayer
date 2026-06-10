@@ -79,6 +79,16 @@ const RAW_QUERY_REVIEWED: Readonly<Record<string, string>> = {
   'admin-work-requests.ts':
     'platform-admin cross-tenant surface (authorizePlatformAdmin): cross-tenant context_work_items board',
 
+  // Machine-token agent feed (the @operator/projectkit pull-executor producer
+  // surface). Gated by AGENT_FEED_TOKENS bearer auth (constant-time,
+  // audience-scoped; 503 when unset) BEFORE any query. The pending-concern poll
+  // is audience-scoped and cross-tenant BY DESIGN (an executor lane spans
+  // companies); callback/claim updates and the artifact stream re-derive the
+  // tenant from the matched row and carry explicit company_id predicates, and
+  // the work-item write-back goes through withMutationTx (GUC-bound).
+  'agent-feed.ts':
+    'machine-token cross-tenant agent feed (AGENT_FEED_TOKENS bearer): audience-scoped pull-executor poll; per-row writes carry company_id / withMutationTx',
+
   // Platform app_issue.* capability grants (migration 009 platform_admin_grants).
   // Gated by authorizePlatformAdmin on the RAW pre-act-as identity before any
   // query; platform_admin_grants is a global table keyed by the globally-unique

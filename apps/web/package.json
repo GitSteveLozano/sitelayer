@@ -14,7 +14,8 @@
     "@clerk/clerk-react": "5.61.8",
     "@embedpdf/engines": "^2.14.3",
     "@embedpdf/pdfium": "^2.14.3",
-    "@operator/projectkit": "git+https://github.com/taylorSando/projectkit.git#v0.7.1",
+    "@operator/capture-overlay": "github:taylorSando/capture-overlay#v0.4.1",
+    "@operator/projectkit": "github:taylorSando/projectkit#v0.9.0",
     "@operator/types": "github:taylorSando/operator-types#v1.4.1",
     "@rrweb/record": "^2.0.1",
     "@sentry/react": "^10.56.0",
@@ -33,8 +34,7 @@
     "serve": "^14.2.0",
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",
-    "xstate": "^5.32.0",
-    "@operator/capture-overlay": "github:taylorSando/capture-overlay#v0.4.1"
+    "xstate": "^5.32.0"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

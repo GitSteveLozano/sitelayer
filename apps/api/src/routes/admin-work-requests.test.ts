@@ -161,3 +161,266 @@ describe('handleAdminWorkRequestRoutes', () => {
     expect(pool.queries.at(-1)?.params).toEqual(['co-a', 'new', 'triage', 'operator', 200, 0])
   })
 })
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/work-requests/:id/dispatch-to-agent — the agent-feed door.
+// ---------------------------------------------------------------------------
+
+const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+const WORK_ITEM_ID = '00000000-0000-4000-9000-000000000001'
+const SUPPORT_PACKET_ID = '00000000-0000-4000-8000-000000000301'
+const CAPTURE_SESSION_ID = '00000000-0000-4000-8000-000000000123'
+const ARTIFACT_ID = '00000000-0000-4000-8000-00000000a001'
+
+type JsonRecord = Record<string, unknown>
+
+class FakeDispatchPool {
+  queries: Array<{ sql: string; params: unknown[] }> = []
+  workItems: JsonRecord[] = []
+  supportPackets: JsonRecord[] = []
+  artifacts: JsonRecord[] = []
+  agentFeedConcerns: JsonRecord[] = []
+
+  async query(sql: string, params: unknown[] = []) {
+    this.queries.push({ sql, params })
+    const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalized.includes('from platform_admins')) {
+      return { rows: params[0] === 'admin-1' ? [{ '?column?': 1 }] : [], rowCount: params[0] === 'admin-1' ? 1 : 0 }
+    }
+    if (normalized.includes('from context_work_items w') && normalized.includes('w.id = $1::uuid')) {
+      const row = this.workItems.find((w) => w.id === params[0])
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+    if (normalized.includes('from support_debug_packets')) {
+      const row = this.supportPackets.find((p) => p.company_id === params[0] && p.id === params[1])
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+    if (normalized.includes('from capture_artifacts')) {
+      const rows = this.artifacts.filter(
+        (a) => a.company_id === params[0] && a.capture_session_id === params[1] && a.storage_key,
+      )
+      return { rows, rowCount: rows.length }
+    }
+    if (normalized.startsWith('insert into agent_feed_concerns')) {
+      const [companyId, audience, projectKey, concernRef, concernRaw, workItemId, captureSessionId] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+      ]
+      const existing = this.agentFeedConcerns.find(
+        (row) => row.project_key === projectKey && row.concern_ref === concernRef,
+      )
+      if (existing) return { rows: [], rowCount: 0 }
+      const row = {
+        id: `00000000-0000-4000-c000-${String(this.agentFeedConcerns.length + 1).padStart(12, '0')}`,
+        company_id: companyId,
+        audience,
+        project_key: projectKey,
+        concern_ref: concernRef,
+        concern: JSON.parse(concernRaw) as JsonRecord,
+        status: 'pending',
+        callback: null,
+        work_item_id: workItemId,
+        capture_session_id: captureSessionId,
+        claimed_at: null,
+        completed_at: null,
+        created_at: '2026-06-09T12:00:00.000Z',
+        updated_at: '2026-06-09T12:00:00.000Z',
+      }
+      this.agentFeedConcerns.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
+    }
+    if (normalized.includes('from agent_feed_concerns') && normalized.includes('concern_ref = $2')) {
+      const row = this.agentFeedConcerns.find((r) => r.company_id === params[0] && r.concern_ref === params[1])
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+    throw new Error(`unexpected SQL: ${normalized.slice(0, 200)}`)
+  }
+
+  seedWorkItem(overrides: JsonRecord = {}) {
+    const row = {
+      id: WORK_ITEM_ID,
+      company_id: COMPANY_ID,
+      support_packet_id: SUPPORT_PACKET_ID,
+      title: 'Verify scale button failed',
+      summary: 'The recorded user could not verify scale.',
+      severity: 'high',
+      route: '/desktop/takeoff',
+      capture_session_id: null,
+      metadata: {},
+      ...overrides,
+    }
+    this.workItems.push(row)
+    return row
+  }
+
+  seedSupportPacket() {
+    const row = {
+      id: SUPPORT_PACKET_ID,
+      company_id: COMPANY_ID,
+      actor_user_id: 'user-1',
+      request_id: 'req-1',
+      route: '/desktop/takeoff',
+      capture_session_id: CAPTURE_SESSION_ID,
+      build_sha: 'build-test',
+      problem: 'The recorded user could not verify scale.',
+      client: {},
+      server_context: { request_ids: ['req-1'], trace_ids: [] },
+      created_at: '2026-06-09T11:00:00.000Z',
+      expires_at: null,
+      redaction_version: 'support-packet-v1',
+    }
+    this.supportPackets.push(row)
+    return row
+  }
+}
+
+function makeDispatchDeps(
+  pool: FakeDispatchPool,
+  body: Record<string, unknown>,
+  identity: Identity = { userId: 'admin-1', source: 'clerk' },
+) {
+  const responses: Response[] = []
+  return {
+    responses,
+    deps: {
+      pool,
+      identity,
+      sendJson: (status: number, body: unknown) => responses.push({ status, body }),
+      readBody: async () => body,
+      envIds: new Set<string>(),
+    },
+  }
+}
+
+function dispatchUrl(id = WORK_ITEM_ID): URL {
+  return buildUrl(`/api/admin/work-requests/${id}/dispatch-to-agent`)
+}
+
+describe('POST /api/admin/work-requests/:id/dispatch-to-agent', () => {
+  it('requires a verified platform admin identity', async () => {
+    const pool = new FakeDispatchPool()
+    pool.seedWorkItem()
+    const { deps, responses } = makeDispatchDeps(pool, { audience: 'steve' }, { userId: 'rando', source: 'clerk' })
+
+    const handled = await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), deps)
+
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(403)
+    expect(pool.agentFeedConcerns).toHaveLength(0)
+  })
+
+  it('creates the addressed steve concern from the work item + support packet (201)', async () => {
+    const pool = new FakeDispatchPool()
+    pool.seedWorkItem({ metadata: { acceptance: ['scale verification works on /desktop/takeoff'] } })
+    pool.seedSupportPacket()
+    const { deps, responses } = makeDispatchDeps(pool, { audience: 'steve' })
+
+    const handled = await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), deps)
+
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { concern: JsonRecord; created: boolean }
+    expect(body.created).toBe(true)
+    expect(pool.agentFeedConcerns).toHaveLength(1)
+    expect(pool.agentFeedConcerns[0]).toMatchObject({
+      audience: 'steve',
+      project_key: 'sitelayer',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      status: 'pending',
+      work_item_id: WORK_ITEM_ID,
+    })
+    const concern = pool.agentFeedConcerns[0]?.concern as JsonRecord
+    expect(concern).toMatchObject({
+      kind: 'execute',
+      title: 'Verify scale button failed',
+      summary: 'The recorded user could not verify scale.',
+      audience: 'steve',
+      assignee: 'steve',
+      acceptance: ['scale verification works on /desktop/takeoff'],
+      source_event_ref: SUPPORT_PACKET_ID,
+    })
+    const inputs = concern.inputs as JsonRecord
+    expect(inputs).toMatchObject({
+      work_item_id: WORK_ITEM_ID,
+      support_packet_id: SUPPORT_PACKET_ID,
+      url: '/desktop/takeoff',
+    })
+    // The SAME prompt text the support-packet agent_prompt endpoint serves.
+    expect(String(inputs.agent_prompt)).toContain(`Investigate Sitelayer support packet ${SUPPORT_PACKET_ID}`)
+    expect(inputs.artifacts).toEqual([])
+  })
+
+  it('is idempotent on concern_ref — a repeat dispatch returns the existing row (200)', async () => {
+    const pool = new FakeDispatchPool()
+    pool.seedWorkItem()
+    pool.seedSupportPacket()
+
+    const first = makeDispatchDeps(pool, { audience: 'steve' })
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), first.deps)
+    expect(first.responses[0]?.status).toBe(201)
+
+    const second = makeDispatchDeps(pool, { audience: 'steve' })
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), second.deps)
+    expect(second.responses[0]?.status).toBe(200)
+    const body = second.responses[0]?.body as { concern: JsonRecord; created: boolean }
+    expect(body.created).toBe(false)
+    expect((body.concern as JsonRecord).concern_ref).toBe(`wi:${WORK_ITEM_ID}:steve`)
+    expect(pool.agentFeedConcerns).toHaveLength(1)
+  })
+
+  it('maps the capture artifacts into the concern inputs when the work item has a capture session', async () => {
+    const pool = new FakeDispatchPool()
+    pool.seedWorkItem({ capture_session_id: CAPTURE_SESSION_ID })
+    pool.seedSupportPacket()
+    pool.artifacts.push({
+      id: ARTIFACT_ID,
+      company_id: COMPANY_ID,
+      capture_session_id: CAPTURE_SESSION_ID,
+      kind: 'rrweb',
+      storage_key: `${COMPANY_ID}/capture-sessions/${CAPTURE_SESSION_ID}/replay.json`,
+      content_type: 'application/json',
+      byte_size: 1024,
+      duration_ms: null,
+    })
+    const { deps, responses } = makeDispatchDeps(pool, { audience: 'steve' })
+
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), deps)
+
+    expect(responses[0]?.status).toBe(201)
+    const concern = pool.agentFeedConcerns[0]?.concern as JsonRecord
+    const artifacts = (concern.inputs as JsonRecord).artifacts as JsonRecord[]
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0]).toMatchObject({ kind: 'rrweb', content_type: 'application/json', byte_size: 1024 })
+    expect(String(artifacts[0]?.ref)).toContain(`/api/agent-feed/artifacts/${ARTIFACT_ID}`)
+  })
+
+  it('validates the work item id, audience, and existence', async () => {
+    const pool = new FakeDispatchPool()
+    const badId = makeDispatchDeps(pool, { audience: 'steve' })
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl('not-a-uuid'), badId.deps)
+    expect(badId.responses[0]).toMatchObject({ status: 400, body: { error: 'work item id must be a uuid' } })
+
+    const noAudience = makeDispatchDeps(pool, {})
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), noAudience.deps)
+    expect(noAudience.responses[0]).toMatchObject({ status: 400, body: { error: 'audience is required' } })
+
+    const missing = makeDispatchDeps(pool, { audience: 'steve' })
+    await handleAdminWorkRequestRoutes(buildReq('POST'), dispatchUrl(), missing.deps)
+    expect(missing.responses[0]).toMatchObject({ status: 404, body: { error: 'work item not found' } })
+  })
+
+  it('rejects non-POST methods on the dispatch path', async () => {
+    const pool = new FakeDispatchPool()
+    pool.seedWorkItem()
+    const { deps, responses } = makeDispatchDeps(pool, { audience: 'steve' })
+
+    await handleAdminWorkRequestRoutes(buildReq('GET'), dispatchUrl(), deps)
+
+    expect(responses[0]).toMatchObject({ status: 405 })
+  })
+})

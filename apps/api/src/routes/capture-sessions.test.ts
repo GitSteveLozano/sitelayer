@@ -123,6 +123,7 @@ class FakeCapturePool {
   handoffEvents: JsonRecord[] = []
   notifications: JsonRecord[] = []
   mutationOutbox: JsonRecord[] = []
+  agentFeedConcerns: JsonRecord[] = []
   // Seeded company admins for the operator-notification fan-out. Includes the
   // default submitter ('user-1') so the authed path's submitter-exclusion is
   // actually exercised.
@@ -312,6 +313,50 @@ class FakeCapturePool {
         .filter((a) => a.capture_session_id === id && a.company_id === companyId && !a.deleted_at && a.storage_key)
         .map((a) => ({ storage_key: a.storage_key }))
       return { rows, rowCount: rows.length }
+    }
+
+    // Agent-feed analyzer enqueue — the storage-backed artifact summary select.
+    if (normalized.startsWith('select id, kind, content_type, byte_size, duration_ms')) {
+      const [companyId, id] = params as [string, string]
+      const rows = this.artifacts
+        .filter((a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at && a.storage_key)
+        .map((a) => ({
+          id: a.id,
+          kind: a.kind,
+          content_type: a.content_type,
+          byte_size: a.byte_size,
+          duration_ms: a.duration_ms,
+        }))
+      return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.startsWith('insert into agent_feed_concerns')) {
+      const [companyId, audience, projectKey, concernRef, concernRaw, workItemId, captureSessionId] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+      ]
+      const existing = this.agentFeedConcerns.find(
+        (row) => row.project_key === projectKey && row.concern_ref === concernRef,
+      )
+      if (existing) return { rows: [], rowCount: 0 }
+      const row = {
+        id: `00000000-0000-4000-c000-${String(this.agentFeedConcerns.length + 1).padStart(12, '0')}`,
+        company_id: companyId,
+        audience,
+        project_key: projectKey,
+        concern_ref: concernRef,
+        concern: JSON.parse(concernRaw) as JsonRecord,
+        status: 'pending',
+        work_item_id: workItemId,
+        capture_session_id: captureSessionId,
+      }
+      this.agentFeedConcerns.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
     }
 
     if (normalized.includes('from capture_artifacts') && normalized.includes('and id = $3::uuid')) {
@@ -1541,5 +1586,124 @@ describe('capture session routes', () => {
 
     const memberRead = await callRoute(pool, 'GET', `/api/capture-sessions/${SESSION_ID}`, {}, 'member')
     expect(memberRead.responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+  })
+
+  it('enqueues ONE addressed capture-analyzer agent-feed concern at finalize when AGENT_FEED_CAPTURE_ANALYZER=1', async () => {
+    const prevFlag = process.env.AGENT_FEED_CAPTURE_ANALYZER
+    const prevBase = process.env.APP_PUBLIC_URL
+    process.env.AGENT_FEED_CAPTURE_ANALYZER = '1'
+    process.env.APP_PUBLIC_URL = 'https://app.test'
+    try {
+      const pool = new FakeCapturePool()
+      await callRoute(pool, 'POST', '/api/capture-sessions', {
+        capture_session_id: SESSION_ID,
+        mode: 'feedback',
+        route_path: '/desktop/takeoff',
+        consent_version: 'pilot-v1',
+      })
+      // Stored (storage_key-backed) artifacts the analyzer can fetch back…
+      await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+        artifacts: [
+          {
+            kind: 'rrweb',
+            storage_key: `${COMPANY_ID}/capture-sessions/${SESSION_ID}/replay.json`,
+            content_type: 'application/json',
+            byte_size: 1024,
+          },
+          {
+            kind: 'audio',
+            storage_key: `${COMPANY_ID}/capture-sessions/${SESSION_ID}/audio.webm`,
+            content_type: 'audio/webm',
+            byte_size: 2048,
+            duration_ms: 9000,
+          },
+          {
+            kind: 'video',
+            storage_key: `${COMPANY_ID}/capture-sessions/${SESSION_ID}/video.webm`,
+            content_type: 'video/webm',
+            byte_size: 4096,
+          },
+          {
+            kind: 'screenshot',
+            storage_key: `${COMPANY_ID}/capture-sessions/${SESSION_ID}/shot.png`,
+            content_type: 'image/png',
+            byte_size: 512,
+          },
+          // …and a uri-only artifact (no stored bytes) the feed must NOT point at.
+          { kind: 'transcript', uri: 's3://capture/transcript.txt' },
+        ],
+      })
+
+      const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+        title: 'Verify scale button failed',
+        summary: 'The recorded user could not verify scale.',
+      })
+      expect(finalized.responses[0]?.status).toBe(201)
+
+      expect(pool.agentFeedConcerns).toHaveLength(1)
+      const row = pool.agentFeedConcerns[0]!
+      expect(row).toMatchObject({
+        audience: 'capture-analyzer',
+        project_key: 'sitelayer',
+        concern_ref: `capan:${SESSION_ID}`,
+        status: 'pending',
+        work_item_id: pool.workItems[0]?.id,
+        capture_session_id: SESSION_ID,
+      })
+      const concern = row.concern as JsonRecord
+      expect(concern).toMatchObject({
+        schema_version: expect.any(String),
+        project_key: 'sitelayer',
+        concern_ref: `capan:${SESSION_ID}`,
+        kind: 'execute',
+        title: 'Analyze capture for Verify scale button failed',
+        summary: 'The recorded user could not verify scale.',
+        audience: 'capture-analyzer',
+        assignee: 'capture-analyzer',
+      })
+      const inputs = concern.inputs as JsonRecord
+      expect(inputs).toMatchObject({
+        capture_session_id: SESSION_ID,
+        work_item_id: pool.workItems[0]?.id,
+        url: '/desktop/takeoff',
+        summary: 'The recorded user could not verify scale.',
+      })
+      const artifacts = inputs.artifacts as Array<JsonRecord>
+      expect(artifacts.map((a) => a.kind)).toEqual(['rrweb', 'audio', 'video', 'screenshot'])
+      expect(artifacts[0]?.ref).toBe(`https://app.test/api/agent-feed/artifacts/${pool.artifacts[0]?.id}`)
+      expect(artifacts[1]).toMatchObject({ content_type: 'audio/webm', byte_size: 2048, duration_ms: 9000 })
+
+      // Replay-idempotent: a second finalize short-circuits and never enqueues twice.
+      const replay = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {})
+      expect(replay.responses[0]?.status).toBe(200)
+      expect(pool.agentFeedConcerns).toHaveLength(1)
+    } finally {
+      if (prevFlag === undefined) delete process.env.AGENT_FEED_CAPTURE_ANALYZER
+      else process.env.AGENT_FEED_CAPTURE_ANALYZER = prevFlag
+      if (prevBase === undefined) delete process.env.APP_PUBLIC_URL
+      else process.env.APP_PUBLIC_URL = prevBase
+    }
+  })
+
+  it('does NOT enqueue an agent-feed concern at finalize when the env flag is off', async () => {
+    const prevFlag = process.env.AGENT_FEED_CAPTURE_ANALYZER
+    delete process.env.AGENT_FEED_CAPTURE_ANALYZER
+    try {
+      const pool = new FakeCapturePool()
+      await callRoute(pool, 'POST', '/api/capture-sessions', {
+        capture_session_id: SESSION_ID,
+        mode: 'feedback',
+        consent_version: 'pilot-v1',
+      })
+      const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+        title: 'No analyzer wanted',
+        summary: 'Flag is off.',
+      })
+      expect(finalized.responses[0]?.status).toBe(201)
+      expect(pool.workItems).toHaveLength(1)
+      expect(pool.agentFeedConcerns).toHaveLength(0)
+    } finally {
+      if (prevFlag !== undefined) process.env.AGENT_FEED_CAPTURE_ANALYZER = prevFlag
+    }
   })
 })

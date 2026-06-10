@@ -20,7 +20,13 @@ import {
 } from '../context-handoff.js'
 import type { Capability } from '@sitelayer/domain'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
-import { notifyCaptureWorkItem, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import {
+  notifyCaptureWorkItem,
+  recordMutationOutbox,
+  withCompanyClient,
+  withMutationTx,
+  type LedgerExecutor,
+} from '../mutation-tx.js'
 import { buildCaptureSessionAnchors } from '../anchor-resolve.js'
 import { buildIncidentTimeline } from '../incident-timeline.js'
 import { detectInjectionHeuristic } from '../untrusted-content.js'
@@ -32,6 +38,14 @@ import {
   supportJsonRecord,
   type JsonRecord,
 } from './support-packets.js'
+import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
+import {
+  CAPTURE_ANALYZER_AUDIENCE,
+  agentFeedBaseUrl,
+  insertAgentFeedConcernTx,
+  mapCaptureArtifactsToConcernRefs,
+  type CaptureArtifactSummaryRow,
+} from './agent-feed.js'
 
 export type CaptureSessionRouteCtx = {
   pool: Pool
@@ -1231,6 +1245,72 @@ async function getFinalizedCaptureWorkItemForSlice(companyId: string, captureSes
   return workItemId ? getContextWorkItemWithEvents(companyId, workItemId) : null
 }
 
+/**
+ * STEP — agent-feed analyzer enqueue (env-gated, default OFF). When
+ * AGENT_FEED_CAPTURE_ANALYZER=1, finalize also inserts ONE addressed
+ * @operator/projectkit Concern (audience 'capture-analyzer') into
+ * agent_feed_concerns on the SAME tx as the work item, so the local
+ * pull-executor (bin/pull-executor.mjs) picks it up on its next poll and
+ * returns the analysis as a terminal Callback (routes/agent-feed.ts writes it
+ * back into the work item's metadata.capture_analysis). Idempotent on
+ * concern_ref `capan:<capture_session_id>` (ON CONFLICT DO NOTHING) so a
+ * finalize replay / multi-slice finalize never enqueues twice. The Concern's
+ * inputs.artifacts map the session's stored capture_artifacts to the analyzer
+ * vocabulary (rrweb/audio/video/screenshot) with refs pointing at the
+ * bearer-authed GET /api/agent-feed/artifacts/:id stream.
+ */
+async function enqueueCaptureAnalyzerConcernTx(
+  c: LedgerExecutor,
+  args: {
+    companyId: string
+    captureSessionId: string
+    workItem: ContextWorkItemRow
+    summary: string
+    route: string | null
+    pageTitle: string | null
+  },
+): Promise<void> {
+  const artifactRows = await c.query<CaptureArtifactSummaryRow>(
+    `select id, kind, content_type, byte_size, duration_ms
+       from capture_artifacts
+      where company_id = $1
+        and capture_session_id = $2::uuid
+        and deleted_at is null
+        and storage_key is not null
+      order by created_at asc
+      limit 25`,
+    [args.companyId, args.captureSessionId],
+  )
+  const artifacts = mapCaptureArtifactsToConcernRefs(artifactRows.rows, agentFeedBaseUrl())
+  const concern: Concern = {
+    schema_version: CONTRACT_VERSION,
+    project_key: 'sitelayer',
+    dispatched_at: new Date().toISOString(),
+    concern_ref: `capan:${args.captureSessionId}`,
+    kind: 'execute',
+    title: `Analyze capture for ${args.workItem.title}`,
+    summary: args.summary,
+    audience: CAPTURE_ANALYZER_AUDIENCE,
+    assignee: CAPTURE_ANALYZER_AUDIENCE,
+    source_event_ref: `capture_session:${args.captureSessionId}`,
+    inputs: {
+      capture_session_id: args.captureSessionId,
+      work_item_id: args.workItem.id,
+      url: args.route,
+      page_title: args.pageTitle,
+      summary: args.summary,
+      artifacts,
+    },
+  }
+  await insertAgentFeedConcernTx(c, {
+    companyId: args.companyId,
+    audience: CAPTURE_ANALYZER_AUDIENCE,
+    concern,
+    workItemId: args.workItem.id,
+    captureSessionId: args.captureSessionId,
+  })
+}
+
 async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   // Finalizing the capture dock mints an app_issue work item — gate on the
   // PLATFORM capability, not the company role.
@@ -1539,6 +1619,19 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       // The session stop + the finalize lifecycle mark happen ONCE per finalize
       // call regardless of slice count. Point them at the first created item.
       const primary = created[0]!
+
+      // Agent-feed analyzer enqueue (env-gated; idempotent on capan:<id>) —
+      // same tx so the addressed Concern commits atomically with the work item.
+      if (process.env.AGENT_FEED_CAPTURE_ANALYZER === '1') {
+        await enqueueCaptureAnalyzerConcernTx(c, {
+          companyId: ctx.company.id,
+          captureSessionId: id,
+          workItem: primary.item,
+          summary,
+          route,
+          pageTitle: optionalText(snapshot.session.metadata?.page_title, 240),
+        })
+      }
       await c.query(
         `update capture_sessions
             set status = case when status = 'open' then 'stopped' else status end,
