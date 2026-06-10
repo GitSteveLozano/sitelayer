@@ -4,6 +4,7 @@ import { Card, MobileButton } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { ErrorState } from '@/components/shell/ErrorState'
 import { useCreateMeasurement, useServiceItems, type ServiceItem } from '@/lib/api'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
 /**
  * `prj-photo-measure` — photo measure mode from Sitemap §5 panel 3.
@@ -27,6 +28,7 @@ import { useCreateMeasurement, useServiceItems, type ServiceItem } from '@/lib/a
  */
 export function PhotoMeasureScreen() {
   const { id: projectId } = useParams<{ id: string }>()
+  const canvasPath = useTakeoffCanvasPath()
   const navigate = useNavigate()
   const serviceItems = useServiceItems()
   const create = useCreateMeasurement(projectId ?? '')
@@ -186,7 +188,7 @@ export function PhotoMeasureScreen() {
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
-        <Link to={`/projects/${projectId}/takeoff-canvas`} className="text-[12px] text-ink-3">
+        <Link to={canvasPath(projectId ?? '')} className="text-[12px] text-ink-3">
           ← Canvas
         </Link>
         <h1 className="mt-2 font-display text-[22px] font-bold tracking-tight leading-tight">Photo measure</h1>

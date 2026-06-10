@@ -29,6 +29,7 @@ import {
   type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
+import { ELEVATION_TAGS, type ElevationTag } from '@/lib/takeoff/elevation'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
@@ -1681,26 +1682,6 @@ function derivedCodeFor(q: CapturedQuantity): string | null {
   return q.masterformatCode ?? q.uniformatCode ?? q.omniclassCode ?? null
 }
 
-/**
- * Elevation tags from Sitemap §5 panel 1 ("Items by location"). Stored
- * as a first-class column (`elevation`) on `takeoff_measurements` since
- * migration 042. The legacy `elev:<tag>` notes prefix is migrated in
- * place by 042's UPDATE; this helper still exists for any pre-migrated
- * data the API might return null `elevation` on.
- */
-export const ELEVATION_TAGS = ['none', 'east', 'south', 'west', 'north', 'roof', 'other'] as const
-export type ElevationTag = (typeof ELEVATION_TAGS)[number]
-
-export function readElevation(measurement: { elevation: string | null; notes: string | null }): ElevationTag {
-  if (measurement.elevation) {
-    const t = measurement.elevation.toLowerCase()
-    return ELEVATION_TAGS.includes(t as ElevationTag) ? (t as ElevationTag) : 'other'
-  }
-  // Fallback: parse legacy notes-prefix for any rows that escaped the
-  // 042 backfill (e.g. queued offline mutations from an older client).
-  if (!measurement.notes) return 'none'
-  const match = /^elev:(\w+)/i.exec(measurement.notes.trim())
-  if (!match) return 'none'
-  const t = match[1]?.toLowerCase()
-  return ELEVATION_TAGS.includes(t as ElevationTag) ? (t as ElevationTag) : 'other'
-}
+// Elevation tags + helpers now live in `@/lib/takeoff/elevation` (shared with
+// the est-canvas editor and the projects/* summary cluster). Imported at the
+// top of this file for internal use.

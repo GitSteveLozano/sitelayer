@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { calculateLinealLength, calculatePolygonArea } from '@sitelayer/domain'
+import {
+  calculateLinealLength,
+  calculateLinealLengthScaled,
+  calculatePolygonAreaScaled,
+  slopeFactor,
+  type PitchDriver,
+} from '@sitelayer/domain'
 import {
   useBlueprintPages,
+  useCalibratePage,
   useCreateMeasurement,
   useCreateTakeoffDraft,
   useDeleteMeasurement,
@@ -28,9 +35,12 @@ import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 // were deleted). The standalone float-palette exports are unchanged.
 
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
+import { worldScaleStamp, pitchStamp } from '@/lib/takeoff/measurement-geometry'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 
+import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
@@ -42,6 +52,11 @@ import { MBody, MButton, MChip, MChipRow, MI, MInput, MSectionH, MSelect, MTopBa
 import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
+import { TakeoffTagSheet } from '../../projects/takeoff-tag-sheet'
+import { AssemblyAttachPanel } from './assembly-panel'
+import { ConditionPicker } from './condition-picker'
+import { ElevationPicker } from './elevation-picker'
+import { useConditions, useCreateCondition, type ConditionMeasurementKind } from '@/lib/api/conditions'
 
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
@@ -49,7 +64,13 @@ import { MAX_POLYGON_POINTS } from './constants'
 import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
-import { SegmentedControl, WallHeightPanel, MobileCanvasSurface } from './mobile-components'
+import {
+  SegmentedControl,
+  WallHeightPanel,
+  PitchPanel,
+  MobileScalePanel,
+  MobileCanvasSurface,
+} from './mobile-components'
 import {
   MobileAiLaunch,
   MobileToolToolbar,
@@ -61,13 +82,14 @@ import {
   MobileRunningTotals,
 } from './mobile-panels'
 
-// The phone canvas only surfaces three of the machine's six drawing tools
-// (POLY/RECT both map to the `polygon` value, plus `lineal` and `count`).
-// Narrow the machine's `TakeoffTool` down to the `MobileTool` the surface
-// understands so the rest of the body keeps its original, exhaustive
-// `polygon | lineal | count` switches without a stray arc/volume/rect branch.
+// The phone canvas surfaces four of the machine's six drawing tools (POLY/RECT
+// both map to the `polygon` value, plus `lineal`, `arc`, and `count`). Narrow
+// the machine's `TakeoffTool` down to the `MobileTool` the surface understands
+// so the rest of the body keeps its exhaustive switches without a stray
+// `volume` branch.
 function toMobileTool(tool: TakeoffTool): MobileTool {
-  if (tool === 'lineal' || tool === 'arc') return 'lineal'
+  if (tool === 'arc') return 'arc'
+  if (tool === 'lineal') return 'lineal'
   if (tool === 'count') return 'count'
   return 'polygon' // polygon | rect | volume → the polygon draw surface
 }
@@ -160,6 +182,41 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   )
   const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
 
+  // --- World scale (sheet calibration) --------------------------------------
+  // Parity with the desktop body: a page calibrated on EITHER surface persists
+  // its two-point reference on the blueprint_page row, so the phone reads the
+  // same per-axis real-world scale and saves true sqft/lf instead of board-space
+  // units. The page's isotropic PDF point size turns the anisotropic 0–100 board
+  // into a per-axis scale; null page size (non-PDF / image engine) or an
+  // uncalibrated page ⇒ board space, exactly as on desktop.
+  const activePageNumber = activePage?.page_number ?? 1
+  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const doc = pdfDocState.doc
+    if (!doc?.getPageSize) {
+      setPageSize(null)
+      return
+    }
+    let cancelled = false
+    setPageSize(null)
+    void doc
+      .getPageSize(activePageNumber)
+      .then((size) => {
+        if (!cancelled && size) setPageSize({ width: size.width, height: size.height })
+      })
+      .catch(() => {
+        if (!cancelled) setPageSize(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocState.doc, activePageNumber])
+  const worldScale: WorldScale | null = useMemo(
+    () => solveWorldScale(activePage, pageSize?.width, pageSize?.height),
+    [activePage, pageSize],
+  )
+  const calibratePage = useCalibratePage()
+
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
@@ -211,12 +268,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // phone on the draw tab WITHOUT the mode-sync effect cancelling the seeded
   // draft on mount.
   const [mode, setMode] = useState<MobileMode>(() => (session.matches('drawing') ? 'draw' : 'manual'))
-  // The tool *label* the user picked (POLY/RECT/LIN/PT). RECT shares the
+  // The tool *label* the user picked (POLY/RECT/LIN/ARC/PT). RECT shares the
   // `polygon` tool value, so we track the label separately to highlight the
   // right chip without changing the draw behavior.
-  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT'>(() => {
+  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC'>(() => {
     const t = toMobileTool(sctx.draft.tool)
-    return t === 'lineal' ? 'LIN' : t === 'count' ? 'PT' : 'POLY'
+    return t === 'lineal' ? 'LIN' : t === 'arc' ? 'ARC' : t === 'count' ? 'PT' : 'POLY'
   })
   const [serviceItemCode, setServiceItemCode] = useState('')
   const [manualQty, setManualQty] = useState('')
@@ -224,6 +281,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // > 0 with the LIN tool, the committed measurement is an AREA (length ×
   // height) rather than raw length.
   const [wallHeight, setWallHeight] = useState<number>(0)
+  // Pitch / slope driver (parity with desktop H2). A rise:run turns plan
+  // area/length into true sloped-surface area/length — critical for exterior
+  // envelope (roof / sloped wall). Empty or non-positive ⇒ flat (factor 1.0).
+  // The driver is stamped into the saved geometry; the server applies the slope.
+  const [pitchRise, setPitchRise] = useState('')
+  const [pitchRun, setPitchRun] = useState('12')
   // Deduct/cutout (msg19 "WIN"): when on, a drawn polygon is saved as a
   // deduction (its area subtracts from the net for its scope item) via the
   // real `is_deduction` field.
@@ -231,6 +294,33 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  // Multi-condition tag sheet (parity with v1) — a bottom sheet to add/remove
+  // per-measurement condition tags on a committed measurement. `null` = closed.
+  const [tagSheetMeasurementId, setTagSheetMeasurementId] = useState<string | null>(null)
+  // Scale calibration (parity with desktop SCALE mode). The two board-space
+  // reference points + the typed real-world length live in the machine's
+  // calibration slice; `applyScale` persists them to the page via the same
+  // `calibratePage` mutation the desktop overlay uses, after which `worldScale`
+  // recomputes and new measurements carry true sqft/lf.
+  const scalePoints = sctx.calibration.points
+  const scaleLength = sctx.calibration.lengthText || '24'
+  const setScaleLength = (next: string) => sdispatch({ type: 'SET_SCALE_LENGTH', lengthText: next })
+  const [scaleError, setScaleError] = useState<string | null>(null)
+  // Conditions (Takeoff Deep Dive H1) — parity with desktop. A condition is the
+  // reusable typed/named/colored template the next draw is tagged against;
+  // `condition_id` is stamped on save. "None" keeps the legacy shape-first flow.
+  const conditionsQuery = useConditions()
+  const conditions = useMemo(() => conditionsQuery.data?.conditions ?? [], [conditionsQuery.data])
+  const createCondition = useCreateCondition()
+  const [activeConditionId, setActiveConditionId] = useState<string | null>(null)
+  const activeCondition = useMemo(
+    () => conditions.find((c) => c.id === activeConditionId) ?? null,
+    [conditions, activeConditionId],
+  )
+  const [conditionFormOpen, setConditionFormOpen] = useState(false)
+  const [newConditionName, setNewConditionName] = useState('')
+  const [newConditionColor, setNewConditionColor] = useState('#2f7d32')
+  const [newConditionKind, setNewConditionKind] = useState<ConditionMeasurementKind>('area')
   // Bulk multi-select (msg23). When on, canvas taps toggle membership in a set
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
   // `bulkMode` is the phone-only toggle (no machine equivalent); the bulk *set*
@@ -269,17 +359,17 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   }, [serviceItemCode, items])
 
   // Park the machine in the mode that matches the phone surface: 'draw' →
-  // `drawing` (so PLACE_POINT lands), 'manual' → `idle`. Selection/edit drive
-  // their own machine sub-states from the canvas handlers and are left alone
-  // here (only flip when actually entering/leaving the manual↔draw surfaces).
+  // `drawing` (so PLACE_POINT lands), 'scale' → `calibrating` (so PLACE_SCALE_POINT
+  // lands), 'manual' → `idle`. Selection/edit drive their own machine sub-states
+  // from the canvas handlers. The START_* entries are valid only from `idle`, so
+  // a cross-mode flip CANCELs back to idle first (xstate runs both this tick).
   useEffect(() => {
-    if (mode === 'draw') {
-      // Land on the draw surface from idle (selecting cancels to idle first).
-      if (session.matches('selecting')) sdispatch({ type: 'CANCEL' })
-      if (!session.matches('drawing')) sdispatch({ type: 'START_DRAW' })
-    } else if (!session.matches('idle')) {
-      sdispatch({ type: 'CANCEL' })
-    }
+    const target = mode === 'draw' ? 'drawing' : mode === 'scale' ? 'calibrating' : 'idle'
+    if (session.matches(target)) return
+    if (!session.matches('idle')) sdispatch({ type: 'CANCEL' })
+    if (target === 'drawing') sdispatch({ type: 'START_DRAW' })
+    else if (target === 'calibrating') sdispatch({ type: 'START_CALIBRATION' })
+    // target === 'idle' → the CANCEL above already landed us there.
     // Re-runs only on a mode flip; `session`/`sdispatch` are stable for the
     // machine's lifetime. (react-hooks/exhaustive-deps is not enabled here.)
   }, [mode])
@@ -296,18 +386,54 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
   // LIN trace length (board-space) reused by the wall-height → area step.
   const linealLength = useMemo(() => round2(calculateLinealLength(draftPoints)), [draftPoints])
+  // ARC tool: tessellate the 3 control points (start, through, end) into a
+  // lineal polyline for length/render/save once all three are placed.
+  const arcCurve = useMemo(() => {
+    if (tool !== 'arc' || draftPoints.length !== 3) return null
+    const [a, b, c] = draftPoints
+    return a && b && c ? arcPolyline(a, b, c) : null
+  }, [tool, draftPoints])
   // The LIN tool yields an AREA once a wall height is set (msg21).
   const linHasHeight = tool === 'lineal' && wallHeight > 0
   const unitForItem = linHasHeight
     ? 'sqft'
-    : (selectedItem?.unit ?? (mode === 'draw' && tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'))
+    : (selectedItem?.unit ??
+      (mode === 'draw' && tool === 'polygon' ? 'sqft' : tool === 'lineal' || tool === 'arc' ? 'lf' : 'ea'))
+
+  // Pitch driver + slope factor (parity with desktop). Pitch only multiplies
+  // sloped-surface tools (polygon area, plain lineal run, arc) — never counts,
+  // and not the wall-height→area path (which carries its own explicit quantity).
+  const activePitch = useMemo<PitchDriver | null>(() => {
+    const rise = Number(pitchRise)
+    const run = Number(pitchRun)
+    if (!Number.isFinite(rise) || !Number.isFinite(run)) return null
+    if (rise <= 0 || run <= 0) return null
+    return { rise, run }
+  }, [pitchRise, pitchRun])
+  const pitchAppliesToTool = (tool === 'polygon' || tool === 'lineal' || tool === 'arc') && !linHasHeight
+  const pitchFactor = pitchAppliesToTool ? slopeFactor(activePitch) : 1
+  // Scale stamps applied to polygon + plain-lineal + arc geometry (never count,
+  // never the wall-height path). `appliesScale` matches the same tool set.
+  const appliesScale = tool === 'polygon' || tool === 'arc' || (tool === 'lineal' && !linHasHeight)
 
   const draftQuantity = useMemo(() => {
     if (mode === 'manual') return Number(manualQty) || 0
-    if (tool === 'polygon') return round2(calculatePolygonArea(draftPoints))
-    if (tool === 'lineal') return linHasHeight ? round2(linealLength * wallHeight) : linealLength
+    // Mirror the server's quantity math: a calibrated page reads true sqft/lf,
+    // and pitch multiplies the sloped surface. Uncalibrated ⇒ wx=wy=1 ⇒
+    // board-space, the legacy behavior.
+    const wx = worldScale?.wx ?? 1
+    const wy = worldScale?.wy ?? 1
+    if (tool === 'polygon') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy, pitchFactor)) : 0
+    if (tool === 'lineal') {
+      // Wall-height→area keeps its explicit board-length × height preview
+      // (unchanged); a plain lineal run reads scaled, pitch-corrected length.
+      return linHasHeight
+        ? round2(linealLength * wallHeight)
+        : round2(calculateLinealLengthScaled(draftPoints, wx, wy, pitchFactor))
+    }
     return draftPoints.length
-  }, [mode, tool, manualQty, draftPoints, linHasHeight, linealLength, wallHeight])
+  }, [mode, tool, manualQty, draftPoints, arcCurve, linHasHeight, linealLength, wallHeight, worldScale, pitchFactor])
 
   // Clear the in-progress draft via the machine while staying on the draw
   // surface (CANCEL drops points and lands in idle; START_DRAW re-enters
@@ -320,6 +446,18 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = svgRef.current
     if (!svg) return
+    // SCALE mode: tap two points of a known dimension to define the reference
+    // line. The machine's PLACE_SCALE_POINT models the two-max / third-tap-
+    // restarts behavior; `applyScale` persists the line + typed length.
+    if (mode === 'scale') {
+      const local = screenToBoardPoint(svg, e.clientX, e.clientY)
+      if (!local) return
+      const p = { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }
+      setScaleError(null)
+      if (!session.matches('calibrating')) sdispatch({ type: 'START_CALIBRATION' })
+      sdispatch({ type: 'PLACE_SCALE_POINT', point: p })
+      return
+    }
     // In bulk-select mode an empty-grid tap does nothing (taps land on polys).
     if (bulkMode) return
     // While editing geometry, a background tap is inert — the vertex handles
@@ -329,6 +467,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     // a fresh draft point.
     if (selectedId) sdispatch({ type: 'CLEAR_SELECTION' })
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
+    if (tool === 'arc' && draftPoints.length >= 3) return // arc = exactly 3 control points
     const local = screenToBoardPoint(svg, e.clientX, e.clientY)
     if (!local) return
     // Snap to existing committed geometry (+ ortho) before committing the
@@ -340,7 +479,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     })
   }
 
-  const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
+  const minPoints = tool === 'polygon' ? 3 : tool === 'arc' ? 3 : tool === 'lineal' ? 2 : 1
   const canSave =
     !create.isPending &&
     Boolean(serviceItemCode) &&
@@ -363,12 +502,38 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         geometry = { kind: 'count', points: [{ x: 50, y: 50 }] }
         quantity = round2(Number(manualQty))
       } else if (tool === 'polygon') {
-        geometry = { kind: 'polygon', points: draftPoints }
+        // Stamp the per-axis page scale + pitch so the server computes true
+        // sqft (board-space stays the fallback when uncalibrated/flat).
+        geometry = {
+          kind: 'polygon',
+          points: draftPoints,
+          ...worldScaleStamp(worldScale, appliesScale),
+          ...pitchStamp(activePitch, pitchAppliesToTool),
+        }
       } else if (tool === 'lineal') {
-        geometry = { kind: 'lineal', points: draftPoints }
-        // LIN → area: persist the explicit length × height area so the row
-        // contributes square footage, not raw length (msg21).
-        if (linHasHeight) quantity = round2(linealLength * wallHeight)
+        if (linHasHeight) {
+          // LIN → area: persist the explicit length × height area so the row
+          // contributes square footage, not raw length (msg21). No scale/pitch
+          // stamp — the explicit quantity drives this path.
+          geometry = { kind: 'lineal', points: draftPoints }
+          quantity = round2(linealLength * wallHeight)
+        } else {
+          geometry = {
+            kind: 'lineal',
+            points: draftPoints,
+            ...worldScaleStamp(worldScale, appliesScale),
+            ...pitchStamp(activePitch, pitchAppliesToTool),
+          }
+        }
+      } else if (tool === 'arc') {
+        // ARC tessellates its 3 control points into a lineal polyline (same
+        // geometry kind, no new model) carrying the scale + pitch stamps.
+        geometry = {
+          kind: 'lineal',
+          points: arcCurve ?? draftPoints,
+          ...worldScaleStamp(worldScale, appliesScale),
+          ...pitchStamp(activePitch, pitchAppliesToTool),
+        }
       } else {
         geometry = { kind: 'count', points: draftPoints }
       }
@@ -383,6 +548,10 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         ...(isDeduction ? { is_deduction: true } : {}),
         // Land on the selected draft; null falls back to the project default.
         draft_id: activeDraftId,
+        // Tag the active condition when one is picked (null = legacy flow).
+        condition_id: activeConditionId,
+        // Tag the building face (N/S/E/W/roof) from the machine draft slice.
+        elevation: sctx.draft.elevation,
       })
       // COMMIT-equivalent UI reset through the machine (persistence already
       // happened above via the existing create hook — hybrid dep wiring).
@@ -397,6 +566,71 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
       )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  // Persist the drawn reference line as the page calibration (parity with the
+  // desktop SCALE overlay). The two board points + typed real-world length flow
+  // through the shared `calibratePage` mutation; once saved, `worldScale`
+  // recomputes and new measurements carry true sqft/lf. Returns to draw mode.
+  const applyScale = async () => {
+    setScaleError(null)
+    if (!activePage) {
+      setScaleError('Open a sheet page first.')
+      return
+    }
+    if (scalePoints.length < 2) {
+      setScaleError('Tap two points of a known dimension on the sheet.')
+      return
+    }
+    const [a, b] = scalePoints as [{ x: number; y: number }, { x: number; y: number }]
+    if (a.x === b.x && a.y === b.y) {
+      setScaleError('The two points must be distinct.')
+      return
+    }
+    const dist = Number(scaleLength)
+    if (!Number.isFinite(dist) || dist <= 0) {
+      setScaleError('Enter the line’s real-world length (ft).')
+      return
+    }
+    try {
+      await calibratePage.mutateAsync({
+        pageId: activePage.id,
+        world_distance: dist,
+        world_unit: 'ft',
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+      })
+      setSavedToast('Sheet scale saved — new measurements read in real units.')
+      setMode('draw')
+    } catch (err) {
+      setScaleError(err instanceof Error ? err.message : 'Could not save the scale.')
+    }
+  }
+
+  // Create a condition inline (name + color + kind) and make it active so the
+  // next draw tags it. Mirrors the desktop create-condition flow.
+  const onCreateCondition = async () => {
+    const name = newConditionName.trim()
+    if (!name) {
+      setError('Condition name is required')
+      return
+    }
+    setError(null)
+    try {
+      const res = await createCondition.mutateAsync({
+        name,
+        color: newConditionColor,
+        measurement_kind: newConditionKind,
+      })
+      setActiveConditionId(res.condition.id)
+      setNewConditionName('')
+      setConditionFormOpen(false)
+      setSavedToast(`Condition “${res.condition.name}” ready — draws will tag it.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Create condition failed')
     }
   }
 
@@ -750,6 +984,28 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // --- Render ---------------------------------------------------------------
   const loading = drafts.isLoading || blueprints.isLoading
 
+  // Shared page underlay (PDFium for PDFs, server raster otherwise) reused by
+  // the draw + scale canvases so the calibration surface draws over the real
+  // sheet, not a blank grid.
+  const canvasUnderlay =
+    pdfEngineOn && blueprintIsPdf ? (
+      pdfDocState.doc ? (
+        <PdfPageCanvas
+          doc={pdfDocState.doc}
+          pageNumber={activePage?.page_number ?? 1}
+          scale={3}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: 0.7 }}
+        />
+      ) : null
+    ) : sourceImage.url ? (
+      <img
+        src={sourceImage.url}
+        alt=""
+        draggable={false}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', opacity: 0.7 }}
+      />
+    ) : null
+
   return (
     <>
       <MTopBar
@@ -857,26 +1113,66 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                   </>
                 )}
 
-                {/* --- MobileMode toggle: manual vs draw --- */}
+                {/* --- MobileMode toggle: manual / draw / (set scale) --- */}
                 <div style={{ padding: '8px 16px 0' }}>
                   <SegmentedControl
                     options={[
                       { value: 'manual', label: 'Manual qty' },
                       { value: 'draw', label: 'Draw on page' },
+                      // Set-scale needs a sheet page to calibrate against.
+                      ...(activeBlueprint && activePage ? [{ value: 'scale', label: 'Set scale' }] : []),
                     ]}
                     value={mode}
                     onChange={(v) => {
                       // The machine syncs to the new mode in an effect (START_DRAW
-                      // on 'draw', CANCEL — which clears the draft — on 'manual'),
-                      // so no explicit point clearing is needed here.
+                      // on 'draw', START_CALIBRATION on 'scale', CANCEL — which
+                      // clears the draft — on 'manual'), so no explicit clearing here.
                       setMode(v as MobileMode)
                       setError(null)
+                      setScaleError(null)
                     }}
                   />
                 </div>
 
-                {/* --- AI launch button --- */}
-                <MobileAiLaunch onLaunch={() => navigate(`/projects/${projectId}/takeoff-ai`)} />
+                {/* --- AI launch button (hidden while calibrating) --- */}
+                {mode !== 'scale' ? (
+                  <MobileAiLaunch onLaunch={() => navigate(`/projects/${projectId}/takeoff-ai`)} />
+                ) : null}
+
+                {/* --- Scale calibration surface --- */}
+                {mode === 'scale' ? (
+                  <div style={{ padding: '10px 16px 0' }}>
+                    <MobileCanvasSurface
+                      svgRef={svgRef}
+                      tool={tool}
+                      deduct={false}
+                      onTap={onCanvasTap}
+                      draftPoints={[]}
+                      measurements={canvasMeasurements}
+                      selectedId={null}
+                      bulkIds={null}
+                      onSelectMeasurement={() => {}}
+                      underlay={canvasUnderlay}
+                      editId={null}
+                      editPoints={[]}
+                      editDragIdxRef={editDragIdxRef}
+                      onEditPoint={() => {}}
+                      scalePoints={scalePoints}
+                    />
+                    <MobileScalePanel
+                      scalePoints={scalePoints}
+                      scaleLength={scaleLength}
+                      onScaleLength={setScaleLength}
+                      scaleError={scaleError}
+                      onApply={() => void applyScale()}
+                      onCancel={() => {
+                        setScaleError(null)
+                        setMode('draw')
+                      }}
+                      applyPending={calibratePage.isPending}
+                    />
+                  </div>
+                ) : null}
 
                 {/* --- Canvas (draw mode) --- */}
                 {mode === 'draw' ? (
@@ -900,6 +1196,18 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         an area (polygon/rect) tool. */}
                     {tool === 'polygon' ? (
                       <MobileDeductToggle deduct={deduct} onToggle={() => setDeduct((d) => !d)} />
+                    ) : null}
+                    {/* Pitch → slope-corrected area (parity with desktop). Shown
+                        for the sloped-surface tools (polygon area, plain lineal
+                        run); hidden once a wall height drives the lineal area. */}
+                    {pitchAppliesToTool ? (
+                      <PitchPanel
+                        rise={pitchRise}
+                        run={pitchRun}
+                        onRise={setPitchRise}
+                        onRun={setPitchRun}
+                        factor={pitchFactor}
+                      />
                     ) : null}
                     {/* Bulk-select toggle (msg23) — switches canvas taps from
                         draw to multi-select. */}
@@ -936,45 +1244,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         // already-selected row clears it.
                         else sdispatch({ type: 'SELECT_MEASUREMENT', measurementId: selectedId === id ? null : id })
                       }}
-                      underlay={
-                        pdfEngineOn && blueprintIsPdf ? (
-                          pdfDocState.doc ? (
-                            <PdfPageCanvas
-                              doc={pdfDocState.doc}
-                              pageNumber={activePage?.page_number ?? 1}
-                              scale={3}
-                              style={{
-                                position: 'absolute',
-                                inset: 0,
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'fill',
-                                opacity: 0.7,
-                              }}
-                            />
-                          ) : null
-                        ) : sourceImage.url ? (
-                          <img
-                            src={sourceImage.url}
-                            alt=""
-                            draggable={false}
-                            style={{
-                              position: 'absolute',
-                              inset: 0,
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'fill',
-                              opacity: 0.7,
-                            }}
-                          />
-                        ) : null
-                      }
+                      underlay={canvasUnderlay}
                       editId={editId}
                       editPoints={editPoints}
                       editDragIdxRef={editDragIdxRef}
                       onEditPoint={(idx, p) =>
                         sdispatch({ type: 'DRAG_VERTEX', index: idx, point: { x: p.x, y: p.y } })
                       }
+                      arcPreview={tool === 'arc' ? arcCurve : null}
                     />
                     {/* Bulk selection footer (msg23). */}
                     {bulkMode && bulkSelected.length > 0 ? (
@@ -1019,114 +1296,139 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         while multi-selecting (the canvas masks selection the same
                         way via `bulkMode ? null : selectedId`). */}
                     {selected && !bulkMode ? (
-                      <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
-                        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-num)',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              letterSpacing: '0.06em',
-                              color: 'var(--m-accent)',
-                            }}
-                          >
-                            {editId === selected.id
-                              ? 'EDIT GEOM · DRAG A HANDLE'
-                              : `SELECTED · POLY ${selectedIndex >= 0 ? selectedIndex + 1 : 1} OF ${canvasPolyCount} · ${selected.service_item_code}`}
-                          </div>
-                          <div
-                            style={{
-                              fontFamily: 'var(--m-font-display)',
-                              fontWeight: 800,
-                              fontSize: 26,
-                              lineHeight: 1,
-                              marginTop: 4,
-                              color: 'var(--m-sand)',
-                              fontVariantNumeric: 'tabular-nums',
-                            }}
-                          >
-                            {formatQty(Number(selected.quantity))}
-                            <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                              {selected.unit?.toUpperCase()}
-                            </span>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex' }}>
-                          {(editId === selected.id
-                            ? ([
-                                {
-                                  label: patchMeasurement.isPending ? 'SAVING…' : 'APPLY',
-                                  sub: 'SAVE SHAPE',
-                                  on: () => void commitEditGeom(),
-                                  danger: false,
-                                },
-                                { label: 'CANCEL', sub: 'DISCARD', on: cancelEditGeom, danger: false },
-                              ] as const)
-                            : ([
-                                {
-                                  label: 'EDIT GEOM',
-                                  sub: 'DRAG PTS',
-                                  on: startEditGeom,
-                                  danger: false,
-                                },
-                                {
-                                  label: 'REASSIGN',
-                                  sub: 'CHANGE ITEM',
-                                  on: () => void reassignSelected(),
-                                  danger: false,
-                                },
-                                {
-                                  label: 'DUPLICATE',
-                                  sub: 'NEW POLY',
-                                  on: () => void duplicateSelected(),
-                                  danger: false,
-                                },
-                                {
-                                  label: copyOpen ? 'COPY ✕' : 'COPY…',
-                                  sub: 'ARRAY / MIRROR',
-                                  on: () => setCopyOpen((v) => !v),
-                                  danger: false,
-                                },
-                                { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
-                              ] as const)
-                          ).map((a, i, arr) => (
-                            <button
-                              key={a.label}
-                              type="button"
-                              onClick={a.on}
-                              disabled={patchMeasurement.isPending || deleteMeasurement.isPending || create.isPending}
+                      <>
+                        <div style={{ marginTop: 8, background: 'var(--m-ink)', border: '2px solid var(--m-ink)' }}>
+                          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--m-ink-2)' }}>
+                            <div
                               style={{
-                                flex: 1,
-                                padding: '12px 6px',
-                                background: 'transparent',
-                                color: a.danger ? 'var(--m-red)' : 'var(--m-sand)',
-                                border: 'none',
-                                borderRight: i < arr.length - 1 ? '1px solid var(--m-ink-2)' : 'none',
                                 fontFamily: 'var(--m-num)',
-                                cursor: 'pointer',
-                                textAlign: 'center',
+                                fontSize: 10,
+                                fontWeight: 700,
+                                letterSpacing: '0.06em',
+                                color: 'var(--m-accent)',
                               }}
                             >
-                              <span
-                                style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em' }}
-                              >
-                                {a.label}
+                              {editId === selected.id
+                                ? 'EDIT GEOM · DRAG A HANDLE'
+                                : `SELECTED · POLY ${selectedIndex >= 0 ? selectedIndex + 1 : 1} OF ${canvasPolyCount} · ${selected.service_item_code}`}
+                            </div>
+                            <div
+                              style={{
+                                fontFamily: 'var(--m-font-display)',
+                                fontWeight: 800,
+                                fontSize: 26,
+                                lineHeight: 1,
+                                marginTop: 4,
+                                color: 'var(--m-sand)',
+                                fontVariantNumeric: 'tabular-nums',
+                              }}
+                            >
+                              {formatQty(Number(selected.quantity))}
+                              <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
+                                {selected.unit?.toUpperCase()}
                               </span>
-                              <span
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex' }}>
+                            {(editId === selected.id
+                              ? ([
+                                  {
+                                    label: patchMeasurement.isPending ? 'SAVING…' : 'APPLY',
+                                    sub: 'SAVE SHAPE',
+                                    on: () => void commitEditGeom(),
+                                    danger: false,
+                                  },
+                                  { label: 'CANCEL', sub: 'DISCARD', on: cancelEditGeom, danger: false },
+                                ] as const)
+                              : ([
+                                  {
+                                    label: 'EDIT GEOM',
+                                    sub: 'DRAG PTS',
+                                    on: startEditGeom,
+                                    danger: false,
+                                  },
+                                  {
+                                    label: 'REASSIGN',
+                                    sub: 'CHANGE ITEM',
+                                    on: () => void reassignSelected(),
+                                    danger: false,
+                                  },
+                                  {
+                                    label: 'DUPLICATE',
+                                    sub: 'NEW POLY',
+                                    on: () => void duplicateSelected(),
+                                    danger: false,
+                                  },
+                                  {
+                                    label: copyOpen ? 'COPY ✕' : 'COPY…',
+                                    sub: 'ARRAY / MIRROR',
+                                    on: () => setCopyOpen((v) => !v),
+                                    danger: false,
+                                  },
+                                  { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
+                                ] as const)
+                            ).map((a, i, arr) => (
+                              <button
+                                key={a.label}
+                                type="button"
+                                onClick={a.on}
+                                disabled={patchMeasurement.isPending || deleteMeasurement.isPending || create.isPending}
                                 style={{
-                                  display: 'block',
-                                  fontSize: 9,
-                                  fontWeight: 600,
-                                  marginTop: 2,
-                                  color: 'var(--m-ink-4)',
+                                  flex: 1,
+                                  padding: '12px 6px',
+                                  background: 'transparent',
+                                  color: a.danger ? 'var(--m-red)' : 'var(--m-sand)',
+                                  border: 'none',
+                                  borderRight: i < arr.length - 1 ? '1px solid var(--m-ink-2)' : 'none',
+                                  fontFamily: 'var(--m-num)',
+                                  cursor: 'pointer',
+                                  textAlign: 'center',
                                 }}
                               >
-                                {a.sub}
-                              </span>
-                            </button>
-                          ))}
+                                <span
+                                  style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em' }}
+                                >
+                                  {a.label}
+                                </span>
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    fontSize: 9,
+                                    fontWeight: 600,
+                                    marginTop: 2,
+                                    color: 'var(--m-ink-4)',
+                                  }}
+                                >
+                                  {a.sub}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
+                        {/* Assembly attach (PlanSwift "drop assembly onto a takeoff")
+                          — parity with desktop. Hidden during geometry edit. The
+                          panel is form-factor-agnostic (mobile primitives). */}
+                        {editId !== selected.id ? (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              padding: '12px 14px',
+                              background: 'var(--m-bg)',
+                              border: '2px solid var(--m-ink)',
+                            }}
+                          >
+                            <AssemblyAttachPanel measurement={selected} />
+                          </div>
+                        ) : null}
+                        {/* Multi-condition tag sheet trigger (parity with v1's
+                            long-press → tag sheet). Below the action bar to avoid
+                            crowding the button row. */}
+                        {editId !== selected.id ? (
+                          <MButton variant="ghost" size="sm" onClick={() => setTagSheetMeasurementId(selected.id)}>
+                            <MI.Layers size={14} /> Tags / conditions
+                          </MButton>
+                        ) : null}
+                      </>
                     ) : null}
                     {/* Live measurement strip — brutalist eyebrow + big-number readout
                         on an ink slab; Undo/Clear as mono chips. */}
@@ -1153,67 +1455,96 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                   </div>
                 ) : null}
 
-                {/* --- Scope item + quantity entry --- */}
-                <MSectionH>Scope item</MSectionH>
-                <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
-                    {items.length === 0 ? <option value="">Loading…</option> : null}
-                    {items.map((it: ServiceItem) => (
-                      <option key={it.code} value={it.code}>
-                        {it.code} — {it.name}
-                      </option>
-                    ))}
-                  </MSelect>
-
-                  {mode === 'manual' ? (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.06em',
-                          color: 'var(--m-ink-3)',
-                        }}
-                      >
-                        Quantity ({unitForItem})
-                      </span>
-                      <MInput
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        step="any"
-                        placeholder={`0 ${unitForItem}`}
-                        value={manualQty}
-                        onChange={(e) => setManualQty(e.target.value)}
+                {/* Scope entry + running totals are hidden while calibrating. */}
+                {mode !== 'scale' ? (
+                  <>
+                    {/* --- Scope item + quantity entry --- */}
+                    <MSectionH>Scope item</MSectionH>
+                    <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {/* Condition picker (parity with desktop) — pick/create the
+                          reusable typed template the next draw is tagged against. */}
+                      <ConditionPicker
+                        conditions={conditions}
+                        activeConditionId={activeConditionId}
+                        setActiveConditionId={setActiveConditionId}
+                        activeCondition={activeCondition}
+                        conditionFormOpen={conditionFormOpen}
+                        setConditionFormOpen={setConditionFormOpen}
+                        newConditionName={newConditionName}
+                        setNewConditionName={setNewConditionName}
+                        newConditionColor={newConditionColor}
+                        setNewConditionColor={setNewConditionColor}
+                        newConditionKind={newConditionKind}
+                        setNewConditionKind={setNewConditionKind}
+                        onCreateCondition={() => void onCreateCondition()}
+                        createPending={createCondition.isPending}
                       />
-                    </label>
-                  ) : null}
+                      {/* Elevation tag (parity with v1) — tags the next draw with
+                          a building face for the per-elevation rollup. */}
+                      <ElevationPicker
+                        value={sctx.draft.elevation}
+                        onChange={(next) => sdispatch({ type: 'SET_ELEVATION', elevation: next })}
+                      />
+                      <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
+                        {items.length === 0 ? <option value="">Loading…</option> : null}
+                        {items.map((it: ServiceItem) => (
+                          <option key={it.code} value={it.code}>
+                            {it.code} — {it.name}
+                          </option>
+                        ))}
+                      </MSelect>
 
-                  <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
-                    {create.isPending
-                      ? 'Saving…'
-                      : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
-                  </MButton>
+                      {mode === 'manual' ? (
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.06em',
+                              color: 'var(--m-ink-3)',
+                            }}
+                          >
+                            Quantity ({unitForItem})
+                          </span>
+                          <MInput
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="any"
+                            placeholder={`0 ${unitForItem}`}
+                            value={manualQty}
+                            onChange={(e) => setManualQty(e.target.value)}
+                          />
+                        </label>
+                      ) : null}
 
-                  {error ? <div style={{ fontSize: 13, color: 'var(--m-red)' }}>{error}</div> : null}
-                  {savedToast ? <div style={{ fontSize: 13, color: 'var(--m-green)' }}>{savedToast}</div> : null}
-                </div>
+                      <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
+                        {create.isPending
+                          ? 'Saving…'
+                          : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
+                      </MButton>
 
-                {/* --- Running totals by scope item --- */}
-                <MobileRunningTotals
-                  totals={totals}
-                  measurementCount={draftMeasurements.length}
-                  grandTotal={grandTotal}
-                  onItemTap={(code) =>
-                    navigate(
-                      `/projects/${projectId}/takeoff-item/${encodeURIComponent(code)}${
-                        activeDraftId ? `?draft=${activeDraftId}` : ''
-                      }`,
-                    )
-                  }
-                  onDone={() => navigate(`/projects/${projectId}/estimate`)}
-                />
+                      {error ? <div style={{ fontSize: 13, color: 'var(--m-red)' }}>{error}</div> : null}
+                      {savedToast ? <div style={{ fontSize: 13, color: 'var(--m-green)' }}>{savedToast}</div> : null}
+                    </div>
+
+                    {/* --- Running totals by scope item --- */}
+                    <MobileRunningTotals
+                      totals={totals}
+                      measurementCount={draftMeasurements.length}
+                      grandTotal={grandTotal}
+                      onItemTap={(code) =>
+                        navigate(
+                          `/projects/${projectId}/takeoff-item/${encodeURIComponent(code)}${
+                            activeDraftId ? `?draft=${activeDraftId}` : ''
+                          }`,
+                        )
+                      }
+                      onDone={() => navigate(`/projects/${projectId}/estimate`)}
+                    />
+                  </>
+                ) : null}
               </>
             ) : null}
           </>
@@ -1229,6 +1560,13 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
           onImported={(count) => setSavedToast(`Imported ${count} measurement${count === 1 ? '' : 's'}.`)}
         />
       ) : null}
+      <TakeoffTagSheet
+        open={tagSheetMeasurementId !== null}
+        onClose={() => setTagSheetMeasurementId(null)}
+        measurementId={tagSheetMeasurementId}
+        defaultQuantity={selected ? Number(selected.quantity) || undefined : undefined}
+        defaultUnit={selected?.unit}
+      />
     </>
   )
 }

@@ -7,6 +7,7 @@ import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { useProject, useServiceItems, type EstimateLine, type PricingProfile, type ServiceItem } from '@/lib/api'
 import { currentCaptureRoutePath } from '@/lib/capture-session'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 import { registerCaptureStateProvider } from '@/lib/capture-state-providers'
 import { buildEstimateBuilderStateSnapshot } from '@/lib/estimate-builder-state-snapshot'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
@@ -54,6 +55,7 @@ const COMPACT_KEYSTONE_LINE_THRESHOLD = 10
 export function EstimateBuilderScreen() {
   const params = useParams<{ id: string }>()
   const projectId = params.id ?? ''
+  const canvasPath = useTakeoffCanvasPath()
 
   const project = useProject(projectId || null)
   const builder = useEstimateBuilder(projectId, getActiveCompanySlug())
@@ -239,7 +241,7 @@ export function EstimateBuilderScreen() {
           body="Add takeoff measurements or scope items, then run Recompute to populate this builder."
           primaryAction={
             <Link
-              to={`/projects/${projectId}/takeoff-canvas`}
+              to={canvasPath(projectId)}
               className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
             >
               Open takeoff

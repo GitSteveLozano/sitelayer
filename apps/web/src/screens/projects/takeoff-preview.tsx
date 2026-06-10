@@ -10,6 +10,7 @@ import {
   type TakeoffDraft,
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import {
   buildCapturedGeometryScene,
@@ -21,6 +22,7 @@ import { TakeoffThreeScene } from './takeoff-3d-scene'
 
 export function TakeoffPreviewScreen() {
   const { id: projectId } = useParams<{ id: string }>()
+  const canvasPath = useTakeoffCanvasPath()
   const [searchParams, setSearchParams] = useSearchParams()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -94,7 +96,7 @@ export function TakeoffPreviewScreen() {
       <header className="shrink-0 border-b border-white/10 px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <Link to={`/projects/${projectId}/takeoff-canvas`} className="text-[12px] text-white/60 hover:text-white">
+            <Link to={canvasPath(projectId ?? '')} className="text-[12px] text-white/60 hover:text-white">
               ← Canvas
             </Link>
             <h1 className="mt-1 text-[20px] font-semibold tracking-normal truncate">3D takeoff view</h1>

@@ -90,19 +90,19 @@ export function MobileAiLaunch({ onLaunch }: { onLaunch: () => void }) {
 }
 
 // ---------------------------------------------------------------------------
-// Mono tool toolbar — square brutalist chips (POLY/RECT/LIN/PT/TAP).
+// Mono tool toolbar — square brutalist chips (POLY/RECT/LIN/ARC/PT/TAP).
 // POLY/LIN/PT drive the existing draw handlers unchanged. RECT is a polygon
-// alias (tap the 4 corners). TAP hands off to the AI tap-to-detect canvas.
-// Extracted verbatim from mobile-body.tsx.
+// alias (tap the 4 corners). ARC tessellates 3 control points into a lineal
+// curve. TAP hands off to the AI tap-to-detect canvas.
 // ---------------------------------------------------------------------------
 export function MobileToolToolbar({
   toolLabel,
   onPickTool,
   onTap,
 }: {
-  toolLabel: 'POLY' | 'RECT' | 'LIN' | 'PT'
-  /** Picks a real draw tool (POLY/RECT → polygon, LIN → lineal, PT → count). */
-  onPickTool: (tool: MobileTool, label: 'POLY' | 'RECT' | 'LIN' | 'PT') => void
+  toolLabel: 'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC'
+  /** Picks a real draw tool (POLY/RECT → polygon, LIN → lineal, ARC → arc, PT → count). */
+  onPickTool: (tool: MobileTool, label: 'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC') => void
   /** Hands off to the AI tap-to-detect canvas (the TAP chip). */
   onTap: () => void
 }) {
@@ -120,6 +120,7 @@ export function MobileToolToolbar({
           { tool: 'polygon', label: 'POLY' },
           { tool: 'polygon', label: 'RECT' },
           { tool: 'lineal', label: 'LIN' },
+          { tool: 'arc', label: 'ARC' },
           { tool: 'count', label: 'PT' },
           { tool: null, label: 'TAP' },
         ] as const
@@ -549,7 +550,9 @@ export function MobileMeasurementStrip({
             ? `POLY · ${pointCount} PTS`
             : tool === 'lineal'
               ? `LIN · ${pointCount} PTS`
-              : `PT · ${pointCount}`}
+              : tool === 'arc'
+                ? `ARC · ${pointCount}/3 PTS`
+                : `PT · ${pointCount}`}
         </div>
         <div
           style={{
@@ -564,7 +567,13 @@ export function MobileMeasurementStrip({
         >
           {tool === 'count' ? `${pointCount}` : formatQty(draftQuantity)}
           <span style={{ fontSize: 14, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-            {tool === 'polygon' ? 'AREA' : tool === 'lineal' ? 'LEN' : pointCount === 1 ? 'CT' : 'CTS'}
+            {tool === 'polygon'
+              ? 'AREA'
+              : tool === 'lineal' || tool === 'arc'
+                ? 'LEN'
+                : pointCount === 1
+                  ? 'CT'
+                  : 'CTS'}
           </span>
         </div>
       </div>

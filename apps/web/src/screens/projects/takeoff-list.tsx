@@ -16,7 +16,8 @@ import {
   type TakeoffMeasurement,
   type TakeoffToBidPayload,
 } from '@/lib/api'
-import { readElevation } from './takeoff-canvas'
+import { readElevation } from '@/lib/takeoff/elevation'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
 /**
  * `prj-takeoff-list` — Sitemap §5 panel 2 ("Measurements list").
@@ -37,6 +38,7 @@ export interface TakeoffListScreenProps {
 }
 
 export function TakeoffListScreen({ projectId }: TakeoffListScreenProps) {
+  const canvasPath = useTakeoffCanvasPath()
   const measurements = useProjectMeasurements(projectId)
   const rows = useMemo(
     () =>
@@ -48,7 +50,7 @@ export function TakeoffListScreen({ projectId }: TakeoffListScreenProps) {
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
         <Link
-          to={`/projects/${projectId}/takeoff-canvas`}
+          to={canvasPath(projectId)}
           className="block rounded-md bg-accent text-white text-[12px] font-semibold py-2.5 text-center"
         >
           + Polygon
@@ -75,7 +77,7 @@ export function TakeoffListScreen({ projectId }: TakeoffListScreenProps) {
           body="Open the polygon canvas, photo-measure a feature, or paste a CSV export from Bluebeam / PlanSwift to get started."
           primaryAction={
             <Link
-              to={`/projects/${projectId}/takeoff-canvas`}
+              to={canvasPath(projectId)}
               className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
             >
               Open canvas

@@ -53,6 +53,7 @@ import { buildDuplicateGeometries, type CopyPlan, type MirrorAxis } from '@/lib/
 import { buildScopeTotals, formatQty } from '@/lib/takeoff/canvas-totals'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
+import { worldScaleStamp, pitchStamp } from '@/lib/takeoff/measurement-geometry'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 
@@ -73,6 +74,7 @@ import { ScaleOverlay } from './scale-overlay'
 import { ItemPalette } from './item-palette'
 import { CopyPanel } from './copy-panel'
 import { ConditionPicker } from './condition-picker'
+import { ElevationPicker } from './elevation-picker'
 import { DraftHud } from './draft-hud'
 import { RunningTotals } from './running-totals'
 import { SingleSelectBar, BulkSelectToolbar } from './select-toolbars'
@@ -493,6 +495,15 @@ export function EstCanvasDesktopBody() {
   const [copyRotate, setCopyRotate] = useState('0')
   const [copyBusy, setCopyBusy] = useState(false)
 
+  // Close the copy parameter panel whenever we leave SELECT mode. The panel only
+  // renders in select mode, so this isn't visible immediately — but without it
+  // `copyOpen` stays latched and the panel silently re-opens on the next
+  // selection (without the user re-toggling COPY). Clearing on mode change keeps
+  // COPY an explicit, per-selection action.
+  useEffect(() => {
+    if (mode !== 'select') setCopyOpen(false)
+  }, [mode])
+
   // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
   // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
   // the "JUMPED FROM …" panel can offer a one-click RETURN. The callouts are
@@ -870,16 +881,13 @@ export function EstCanvasDesktopBody() {
     setSavedToast(null)
     try {
       let geometry: MeasurementGeometry
-      // When the page is calibrated, stamp the per-axis world scale so the
-      // server computes true sqft/lf (board-space stays the fallback).
-      const scale =
-        worldScale && (tool === 'polygon' || tool === 'rect' || tool === 'arc' || tool === 'lineal')
-          ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
-          : {}
-      // Pitch (H2): stamp the rise:run driver inside the JSONB geometry (no
-      // column) for sloped-surface tools when a valid pitch is set. The server's
-      // `calculateGeometryQuantity` applies the slope factor; flat ⇒ omitted.
-      const pitch = pitchAppliesToTool && activePitch ? { pitch: activePitch } : {}
+      // Stamp the per-axis page scale + pitch (rise:run) into the JSONB geometry
+      // for the sloped-surface tools (area / lineal / arc), so the server's
+      // `calculateGeometryQuantity` computes true sqft/lf and applies the slope
+      // factor. Board-space + flat stay the fallback. Shared with the mobile
+      // body via `@/lib/takeoff/measurement-geometry` so the two never drift.
+      const scale = worldScaleStamp(worldScale, pitchAppliesToTool)
+      const pitch = pitchStamp(activePitch, pitchAppliesToTool)
       // RECT produces a polygon; ARC tessellates its 3 control points into a
       // lineal polyline. Both reuse the existing geometry kinds — no new model.
       if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale, ...pitch }
@@ -902,6 +910,8 @@ export function EstCanvasDesktopBody() {
         // Condition layer (Deep Dive H1): stamp the active condition when one
         // is picked. NULL keeps the legacy shape-first behavior unchanged.
         condition_id: activeConditionId,
+        // Elevation tag (building face) from the machine draft slice.
+        elevation: sctx.draft.elevation,
       })
       // COMMIT-equivalent UI reset through the machine: persistence already
       // happened above via the existing create hook (hybrid dep wiring). The
@@ -2025,6 +2035,13 @@ export function EstCanvasDesktopBody() {
             setNewConditionKind={setNewConditionKind}
             onCreateCondition={onCreateCondition}
             createPending={createCondition.isPending}
+          />
+
+          {/* Elevation tag (building face) — tags the next draw for the
+              per-elevation rollup. Stamped on save from the machine draft slice. */}
+          <ElevationPicker
+            value={sctx.draft.elevation}
+            onChange={(next) => sdispatch({ type: 'SET_ELEVATION', elevation: next })}
           />
 
           {/* Scope item selector */}
