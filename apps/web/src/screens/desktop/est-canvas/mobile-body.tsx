@@ -54,6 +54,7 @@ import { MEmptyState, MSkeletonList } from '@/components/m-states'
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { TakeoffTagSheet } from '../../projects/takeoff-tag-sheet'
 import { AssemblyAttachPanel } from './assembly-panel'
+import { CapturePanel } from './capture-panel'
 import { ConditionPicker } from './condition-picker'
 import { ElevationPicker } from './elevation-picker'
 import { useConditions, useCreateCondition, type ConditionMeasurementKind } from '@/lib/api/conditions'
@@ -1055,6 +1056,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                     <MButton variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
                       <MI.FileText size={15} /> Import CSV / TSV
                     </MButton>
+                  </div>
+                ) : null}
+                {/* Capture pipelines (migrated from v1) — RoomPlan / photogrammetry
+                    / drone JSON upload + dry-run blueprint, each landing a new
+                    AI-proposed draft the estimator reviews on the canvas. */}
+                {activeDraftId ? (
+                  <div style={{ padding: '8px 16px 0' }}>
+                    <CapturePanel projectId={projectId} onCaptured={(id) => setActiveDraft(id)} />
                   </div>
                 ) : null}
               </>
