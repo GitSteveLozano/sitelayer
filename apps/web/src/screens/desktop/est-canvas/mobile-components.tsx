@@ -707,15 +707,3 @@ export function MobileCanvasSurface({
     </div>
   )
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-// NOTE: this is kept local (NOT the shared `@/lib/takeoff/canvas-totals`
-// `buildScopeTotals`) because the mobile copy DRIFTED from desktop — it sums
-// `quantity` WITHOUT the `is_deduction` sign that the desktop/server use. Until
-// that behavioral difference is reconciled it stays separate so the
-// Blocker-1 canvas-math extraction is a pure, behavior-identical refactor.
-// buildMobileScopeTotals removed — it duplicated buildScopeTotals but dropped the
-// is_deduction sign (overcounting net quantity). The mobile body now uses the
-// canonical signed buildScopeTotals from lib/takeoff/canvas-totals.

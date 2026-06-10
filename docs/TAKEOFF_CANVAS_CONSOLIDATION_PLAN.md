@@ -207,13 +207,36 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
 - ✅ **Multi-condition tag sheet on mobile.** Dropped in the self-contained
   `TakeoffTagSheet` (its own `useTakeoffTags` / `useAddTakeoffTag` hooks),
   triggered by a "Tags / conditions" affordance under the selected-measurement
-  action bar — parity with v1's long-press → tag sheet.
-- ⏳ **Remaining to migrate:** capture pipelines (`useCaptureTakeoffDraft` + the
-  4 pipe-\* invokers) + AI quantity-review panel (`AgentSuggestionsPanel`) — the
-  large, mostly dry-run/stub block that is the on-ramp to the AI-first north star
-  (§5); multi-page page-strip + per-page calibration overlay (est-canvas already
-  has page switching + the calibration UI, so this is incremental); revision
-  compare (stub on v1); photo-measure cross-link (the de-fork already routes it).
+  action bar — parity with v1's long-press → tag sheet. Desktop parity added
+  alongside the Phase 3 migration.
+- ✅ **Capture-pipeline entry migrated.** Added a reusable `CapturePanel`
+  (RoomPlan / photogrammetry / drone JSON upload + dry-run blueprint*vision) to
+  the mobile body, wiring `useCaptureTakeoffDraft` exactly as v1 did. These three
+  scan-upload pipelines were the last v1-unique \_entry* not covered by
+  `takeoff-ai/*`. **Combined with the elevation relocation, NOTHING imports code
+  from `screens/projects/takeoff-canvas.tsx` anymore** — only its App.tsx route
+  keeps it reachable.
+- ✅ **Capture→review→promote loop completed.** Extracted v1's
+  `AgentSuggestionsPanel` (+ `AgentSuggestionCard` + confidence/source helpers +
+  `derivedCodeFor`, ~530 lines) into the shared
+  `est-canvas/agent-suggestions-panel.tsx`, and render it in the mobile body when
+  the active draft has un-promoted AI proposals (`review_required`). It reviews
+  the server-captured `TakeoffResult.quantities` via `useTakeoffDraftResult` and
+  promotes via `usePromoteCapturedQuantities` — the exact flow v1 had. v1 now
+  imports the panel from the shared file (dependency points est-canvas-ward, not
+  the reverse). This closes the functional blocker noted earlier: est-canvas now
+  owns the capture _entry_ (CapturePanel) AND the review/promote surface.
+- ⏳ Low-value remainder: page-strip (est-canvas already switches pages), revision
+  compare (a stub on v1), photo-measure cross-link (the de-fork already routes it).
+
+**Phase 3 status:** all _functional_ v1-unique capabilities are now in est-canvas
+and v1 is **code-decoupled** (it depends on est-canvas, not vice versa). The only
+thing left before deleting v1 (route + `takeoff-canvas.tsx` + its v1-only deps
+`page-strip` / `page-calibration-overlay` / `revision-compare-stub`) is the
+verification gate this environment can't run: a full `npm run verify` + e2e + a
+device-review pass on the new mobile UI. No more feature migration is required.
+v1 stays mounted at its route until that pass clears.
+
 - ⏳ Then: re-point the rest of the `projects/*` cluster, retire
   `screens/projects/takeoff-canvas.tsx`, remove its route (App.tsx:352).
 - **Verify:** typecheck + lint + unit suites per increment; full

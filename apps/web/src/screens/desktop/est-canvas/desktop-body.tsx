@@ -75,6 +75,7 @@ import { ItemPalette } from './item-palette'
 import { CopyPanel } from './copy-panel'
 import { ConditionPicker } from './condition-picker'
 import { ElevationPicker } from './elevation-picker'
+import { TakeoffTagSheet } from '../../projects/takeoff-tag-sheet'
 import { DraftHud } from './draft-hud'
 import { RunningTotals } from './running-totals'
 import { SingleSelectBar, BulkSelectToolbar } from './select-toolbars'
@@ -510,6 +511,8 @@ export function EstCanvasDesktopBody() {
   // only meaningful in draw mode (they overlay the takeoff surface).
   const [showCallouts, setShowCallouts] = useState(false)
   const [jumpedFrom, setJumpedFrom] = useState<{ pageId: string; label: string } | null>(null)
+  // Multi-condition tag sheet (desktop parity with mobile) — `null` = closed.
+  const [tagSheetMeasurementId, setTagSheetMeasurementId] = useState<string | null>(null)
 
   // --- On-canvas AI review (capturing.reviewing) ---------------------------
   // "AI proposes, human ratifies ON the plan." When the machine is in
@@ -2234,6 +2237,7 @@ export function EstCanvasDesktopBody() {
           onDuplicate={onDuplicateSelected}
           copyOpen={copyOpen}
           toggleCopy={() => setCopyOpen((v) => !v)}
+          onTags={() => setTagSheetMeasurementId(selectedMeasurement.id)}
           onDelete={onDeleteSelected}
         />
       ) : null}
@@ -2296,6 +2300,16 @@ export function EstCanvasDesktopBody() {
           }}
         />
       ) : null}
+
+      {/* Multi-condition tag sheet (desktop parity) — opened from the
+          single-select bar's TAGS action. */}
+      <TakeoffTagSheet
+        open={tagSheetMeasurementId !== null}
+        onClose={() => setTagSheetMeasurementId(null)}
+        measurementId={tagSheetMeasurementId}
+        defaultQuantity={selectedMeasurement ? Number(selectedMeasurement.quantity) || undefined : undefined}
+        defaultUnit={selectedMeasurement?.unit}
+      />
     </div>
   )
 }
