@@ -29,7 +29,7 @@ describe('CapturePanel', () => {
     render(<CapturePanel projectId="p-1" onCaptured={() => {}} />)
     fireEvent.click(screen.getByText('Blueprint (dry-run)'))
     expect(mutate).toHaveBeenCalledTimes(1)
-    const [body] = mutate.mock.calls[0]
+    const [body] = mutate.mock.calls[0]!
     expect(body.kind).toBe('blueprint_vision')
     expect(body.payload).toMatchObject({ dryRun: true, knownDimensionFt: 30 })
   })
@@ -44,7 +44,7 @@ describe('CapturePanel', () => {
     fireEvent.change(input, { target: { files: [file] } })
     // FileReader.onload is async; wait a tick.
     await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(1))
-    const [body] = mutate.mock.calls[0]
+    const [body] = mutate.mock.calls[0]!
     expect(body.kind).toBe('roomplan')
     expect(body.payload).toHaveProperty('capturedRoomJson')
   })

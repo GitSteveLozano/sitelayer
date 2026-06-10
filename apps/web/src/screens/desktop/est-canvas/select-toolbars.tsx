@@ -19,6 +19,7 @@ export function SingleSelectBar({
   onDuplicate,
   copyOpen,
   toggleCopy,
+  onTags,
   onDelete,
 }: {
   selectedMeasurement: TakeoffMeasurement
@@ -33,6 +34,7 @@ export function SingleSelectBar({
   onDuplicate: () => void
   copyOpen: boolean
   toggleCopy: () => void
+  onTags: () => void
   onDelete: () => void
 }) {
   return (
@@ -76,6 +78,7 @@ export function SingleSelectBar({
             { l: 'EDIT GEOM', action: onEditGeom },
             { l: 'DUPLICATE', action: () => void onDuplicate() },
             { l: copyOpen ? 'COPY ✕' : 'COPY…', action: toggleCopy },
+            { l: 'TAGS', action: onTags },
             { l: 'DELETE', danger: true, action: onDelete },
           ] as const)
       ).map((b, i, arr) => (

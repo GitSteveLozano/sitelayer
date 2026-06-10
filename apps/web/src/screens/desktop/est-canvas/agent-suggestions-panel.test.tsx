@@ -78,8 +78,8 @@ describe('AgentSuggestionsPanel', () => {
 
   it('promotes a quantity on Confirm', () => {
     render(<AgentSuggestionsPanel projectId="p-1" draft={DRAFT} />)
-    fireEvent.click(screen.getAllByText('Confirm', { exact: true })[0])
+    fireEvent.click(screen.getAllByText('Confirm', { exact: true })[0]!)
     expect(promoteMutate).toHaveBeenCalledTimes(1)
-    expect(promoteMutate.mock.calls[0][0].quantity_ids).toContain('q-high')
+    expect(promoteMutate.mock.calls[0]![0].quantity_ids).toContain('q-high')
   })
 })
