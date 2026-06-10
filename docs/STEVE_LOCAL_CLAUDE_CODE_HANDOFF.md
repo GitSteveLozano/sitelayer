@@ -1,6 +1,6 @@
 # Steve Local Claude Code Handoff
 
-Date: 2026-06-09
+Date: 2026-06-10
 
 Audience: Steve and any Claude Code/Codex/Gemini agent running on Steve's local
 machine.
@@ -145,6 +145,51 @@ Important code conventions:
   shared `request<T>()` client.
 - API routes live under `apps/api/src/routes/`, with dispatch in
   `apps/api/src/routes/dispatch.ts`.
+
+## Picking Up Assigned Issues Automatically (agent-feed)
+
+When Taylor dispatches an issue to you from the work-item board, your machine
+can pick it up WITHOUT copy-paste: sitelayer hosts an agent feed
+(`/api/agent-feed`) that the `@operator/projectkit` pull-executor polls for
+work addressed to `audience=steve`. Each dispatched issue arrives as a
+projectkit `Concern` whose `inputs.agent_prompt` carries the full sanitized
+context bundle (the same text as the receipt card's "Copy agent bundle"
+button) plus authenticated URLs for the capture evidence (rrweb replay JSON,
+audio, screen video, screenshots).
+
+One-time setup (in addition to the setup above):
+
+1. Get from Taylor: the feed URL for the tier you review (normally
+   `https://dev.sitelayer.sandolab.xyz/api/agent-feed`), your feed token
+   (it only grants the `steve` lane), and read access to the
+   `taylorSando/projectkit` GitHub repo (the executor installs from a git
+   ref).
+2. Run the executor from your sitelayer checkout:
+
+```bash
+PULL_FEED_URL=https://dev.sitelayer.sandolab.xyz/api/agent-feed \
+PULL_AUDIENCE=steve \
+PULL_FEED_TOKEN=<token-from-taylor> \
+PULL_STATE_FILE=$HOME/.local/state/sitelayer-agent/done.json \
+LOCAL_EXECUTOR_TIMEOUT_MS=3600000 \
+LOCAL_EXECUTOR_CMD='claude -p "You are picking up a dispatched sitelayer issue on Steve'\''s collaborator machine. The full Concern JSON is on stdin — read inputs.agent_prompt for the context bundle and inputs.artifacts for evidence URLs (fetch with: Authorization: Bearer $PULL_FEED_TOKEN). Follow docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md: feature branch only, npm run verify:fast, push agent/steve/<topic>, then print a short summary and the branch name." --permission-mode acceptEdits' \
+npx --yes --package=github:taylorSando/projectkit#v0.9.0 pull-executor
+```
+
+What happens:
+
+- The executor polls the feed (30s default), claims a dispatched issue, and
+  runs one Claude Code session per issue with the full context on stdin.
+- The session's final output is reported back automatically as a projectkit
+  `Callback` — Taylor sees it on the work item (the item moves to agent
+  review, a human still accepts/resolves).
+- Stop it any time with Ctrl-C; `--once` runs a single poll (good for
+  trying it out). Already-completed issues never re-run (the state file).
+
+The same collaborator rules apply to these sessions: feature branches only,
+no operator infra, report blockers instead of recreating Taylor's setup. The
+"Copy agent bundle" button on the feedback receipt card remains the manual
+fallback for handing an issue to Claude Code yourself.
 
 ## Optional Review-Only Link
 
