@@ -53,6 +53,7 @@ import { MEmptyState, MSkeletonList } from '@/components/m-states'
 
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { TakeoffTagSheet } from '../../projects/takeoff-tag-sheet'
+import { AgentSuggestionsPanel } from './agent-suggestions-panel'
 import { AssemblyAttachPanel } from './assembly-panel'
 import { CapturePanel } from './capture-panel'
 import { ConditionPicker } from './condition-picker'
@@ -1064,6 +1065,14 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                 {activeDraftId ? (
                   <div style={{ padding: '8px 16px 0' }}>
                     <CapturePanel projectId={projectId} onCaptured={(id) => setActiveDraft(id)} />
+                  </div>
+                ) : null}
+                {/* AI-captured quantity review/promote (closes the capture→
+                    review→promote loop migrated from v1). Shown when the active
+                    draft has un-promoted AI proposals. */}
+                {activeDraft && activeDraft.review_required ? (
+                  <div style={{ padding: '8px 16px 0' }}>
+                    <AgentSuggestionsPanel projectId={projectId} draft={activeDraft} />
                   </div>
                 ) : null}
               </>
