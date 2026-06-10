@@ -173,7 +173,7 @@ PULL_FEED_TOKEN=<token-from-taylor> \
 PULL_STATE_FILE=$HOME/.local/state/sitelayer-agent/done.json \
 LOCAL_EXECUTOR_TIMEOUT_MS=3600000 \
 LOCAL_EXECUTOR_CMD='claude -p "You are picking up a dispatched sitelayer issue on Steve'\''s collaborator machine. The full Concern JSON is on stdin — read inputs.agent_prompt for the context bundle and inputs.artifacts for evidence URLs (fetch with: Authorization: Bearer $PULL_FEED_TOKEN). Follow docs/STEVE_LOCAL_CLAUDE_CODE_HANDOFF.md: feature branch only, npm run verify:fast, push agent/steve/<topic>, then print a short summary and the branch name." --permission-mode acceptEdits' \
-npx --yes --package=github:taylorSando/projectkit#v0.9.0 pull-executor
+npx --yes --package=github:taylorSando/projectkit#v0.9.1 pull-executor
 ```
 
 What happens:
