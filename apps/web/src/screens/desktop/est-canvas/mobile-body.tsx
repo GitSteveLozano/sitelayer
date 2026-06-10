@@ -40,6 +40,7 @@ import { worldScaleStamp, pitchStamp } from '@/lib/takeoff/measurement-geometry'
 import { buildCanvasGeometryArtifact, uploadCanvasGeometryArtifact } from '@/lib/takeoff/canvas-geometry-artifact'
 import { buildTakeoffCanvasStateSnapshot } from '@/lib/takeoff/canvas-state-snapshot'
 
+import { arcPolyline } from '@/lib/takeoff/arc'
 import { clamp, round2, screenToBoardPoint } from '@/lib/takeoff/canvas-math'
 import { useSnapping, resolveDraftPoint } from '@/lib/takeoff/snapping'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
@@ -79,13 +80,14 @@ import {
   MobileRunningTotals,
 } from './mobile-panels'
 
-// The phone canvas only surfaces three of the machine's six drawing tools
-// (POLY/RECT both map to the `polygon` value, plus `lineal` and `count`).
-// Narrow the machine's `TakeoffTool` down to the `MobileTool` the surface
-// understands so the rest of the body keeps its original, exhaustive
-// `polygon | lineal | count` switches without a stray arc/volume/rect branch.
+// The phone canvas surfaces four of the machine's six drawing tools (POLY/RECT
+// both map to the `polygon` value, plus `lineal`, `arc`, and `count`). Narrow
+// the machine's `TakeoffTool` down to the `MobileTool` the surface understands
+// so the rest of the body keeps its exhaustive switches without a stray
+// `volume` branch.
 function toMobileTool(tool: TakeoffTool): MobileTool {
-  if (tool === 'lineal' || tool === 'arc') return 'lineal'
+  if (tool === 'arc') return 'arc'
+  if (tool === 'lineal') return 'lineal'
   if (tool === 'count') return 'count'
   return 'polygon' // polygon | rect | volume → the polygon draw surface
 }
@@ -264,12 +266,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // phone on the draw tab WITHOUT the mode-sync effect cancelling the seeded
   // draft on mount.
   const [mode, setMode] = useState<MobileMode>(() => (session.matches('drawing') ? 'draw' : 'manual'))
-  // The tool *label* the user picked (POLY/RECT/LIN/PT). RECT shares the
+  // The tool *label* the user picked (POLY/RECT/LIN/ARC/PT). RECT shares the
   // `polygon` tool value, so we track the label separately to highlight the
   // right chip without changing the draw behavior.
-  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT'>(() => {
+  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC'>(() => {
     const t = toMobileTool(sctx.draft.tool)
-    return t === 'lineal' ? 'LIN' : t === 'count' ? 'PT' : 'POLY'
+    return t === 'lineal' ? 'LIN' : t === 'arc' ? 'ARC' : t === 'count' ? 'PT' : 'POLY'
   })
   const [serviceItemCode, setServiceItemCode] = useState('')
   const [manualQty, setManualQty] = useState('')
@@ -379,15 +381,23 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
   // LIN trace length (board-space) reused by the wall-height → area step.
   const linealLength = useMemo(() => round2(calculateLinealLength(draftPoints)), [draftPoints])
+  // ARC tool: tessellate the 3 control points (start, through, end) into a
+  // lineal polyline for length/render/save once all three are placed.
+  const arcCurve = useMemo(() => {
+    if (tool !== 'arc' || draftPoints.length !== 3) return null
+    const [a, b, c] = draftPoints
+    return a && b && c ? arcPolyline(a, b, c) : null
+  }, [tool, draftPoints])
   // The LIN tool yields an AREA once a wall height is set (msg21).
   const linHasHeight = tool === 'lineal' && wallHeight > 0
   const unitForItem = linHasHeight
     ? 'sqft'
-    : (selectedItem?.unit ?? (mode === 'draw' && tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'))
+    : (selectedItem?.unit ??
+      (mode === 'draw' && tool === 'polygon' ? 'sqft' : tool === 'lineal' || tool === 'arc' ? 'lf' : 'ea'))
 
   // Pitch driver + slope factor (parity with desktop). Pitch only multiplies
-  // sloped-surface tools (polygon area, plain lineal run) — never counts, and
-  // not the wall-height→area path (which carries its own explicit quantity).
+  // sloped-surface tools (polygon area, plain lineal run, arc) — never counts,
+  // and not the wall-height→area path (which carries its own explicit quantity).
   const activePitch = useMemo<PitchDriver | null>(() => {
     const rise = Number(pitchRise)
     const run = Number(pitchRun)
@@ -395,11 +405,11 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     if (rise <= 0 || run <= 0) return null
     return { rise, run }
   }, [pitchRise, pitchRun])
-  const pitchAppliesToTool = (tool === 'polygon' || tool === 'lineal') && !linHasHeight
+  const pitchAppliesToTool = (tool === 'polygon' || tool === 'lineal' || tool === 'arc') && !linHasHeight
   const pitchFactor = pitchAppliesToTool ? slopeFactor(activePitch) : 1
-  // Scale stamps applied to polygon + plain-lineal geometry (never count, never
-  // the wall-height path). `appliesScale` matches the same tool set.
-  const appliesScale = tool === 'polygon' || (tool === 'lineal' && !linHasHeight)
+  // Scale stamps applied to polygon + plain-lineal + arc geometry (never count,
+  // never the wall-height path). `appliesScale` matches the same tool set.
+  const appliesScale = tool === 'polygon' || tool === 'arc' || (tool === 'lineal' && !linHasHeight)
 
   const draftQuantity = useMemo(() => {
     if (mode === 'manual') return Number(manualQty) || 0
@@ -409,6 +419,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     const wx = worldScale?.wx ?? 1
     const wy = worldScale?.wy ?? 1
     if (tool === 'polygon') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy, pitchFactor))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy, pitchFactor)) : 0
     if (tool === 'lineal') {
       // Wall-height→area keeps its explicit board-length × height preview
       // (unchanged); a plain lineal run reads scaled, pitch-corrected length.
@@ -417,7 +428,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         : round2(calculateLinealLengthScaled(draftPoints, wx, wy, pitchFactor))
     }
     return draftPoints.length
-  }, [mode, tool, manualQty, draftPoints, linHasHeight, linealLength, wallHeight, worldScale, pitchFactor])
+  }, [mode, tool, manualQty, draftPoints, arcCurve, linHasHeight, linealLength, wallHeight, worldScale, pitchFactor])
 
   // Clear the in-progress draft via the machine while staying on the draw
   // surface (CANCEL drops points and lands in idle; START_DRAW re-enters
@@ -451,6 +462,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     // a fresh draft point.
     if (selectedId) sdispatch({ type: 'CLEAR_SELECTION' })
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
+    if (tool === 'arc' && draftPoints.length >= 3) return // arc = exactly 3 control points
     const local = screenToBoardPoint(svg, e.clientX, e.clientY)
     if (!local) return
     // Snap to existing committed geometry (+ ortho) before committing the
@@ -462,7 +474,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     })
   }
 
-  const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
+  const minPoints = tool === 'polygon' ? 3 : tool === 'arc' ? 3 : tool === 'lineal' ? 2 : 1
   const canSave =
     !create.isPending &&
     Boolean(serviceItemCode) &&
@@ -507,6 +519,15 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
             ...worldScaleStamp(worldScale, appliesScale),
             ...pitchStamp(activePitch, pitchAppliesToTool),
           }
+        }
+      } else if (tool === 'arc') {
+        // ARC tessellates its 3 control points into a lineal polyline (same
+        // geometry kind, no new model) carrying the scale + pitch stamps.
+        geometry = {
+          kind: 'lineal',
+          points: arcCurve ?? draftPoints,
+          ...worldScaleStamp(worldScale, appliesScale),
+          ...pitchStamp(activePitch, pitchAppliesToTool),
         }
       } else {
         geometry = { kind: 'count', points: draftPoints }
@@ -1223,6 +1244,7 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                       onEditPoint={(idx, p) =>
                         sdispatch({ type: 'DRAG_VERTEX', index: idx, point: { x: p.x, y: p.y } })
                       }
+                      arcPreview={tool === 'arc' ? arcCurve : null}
                     />
                     {/* Bulk selection footer (msg23). */}
                     {bulkMode && bulkSelected.length > 0 ? (

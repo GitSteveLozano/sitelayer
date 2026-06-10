@@ -29,7 +29,7 @@ export type SheetCallout = {
   targetPageIdx: number
 }
 
-export type MobileTool = 'polygon' | 'lineal' | 'count'
+export type MobileTool = 'polygon' | 'lineal' | 'count' | 'arc'
 //   manual — type a quantity per scope item, no drawn geometry.
 //   draw   — tap to add points to a draft measurement.
 //   scale  — calibrate the sheet scale from a two-tap reference line.
@@ -58,6 +58,9 @@ export interface MobileCanvasSurfaceProps {
   /** SCALE mode: the 0–2 board-space calibration reference points to render as a
    *  measured line over the sheet. Empty / undefined ⇒ not calibrating. */
   scalePoints?: TakeoffPoint[]
+  /** ARC tool: the tessellated curve through the 3 control points, rendered as a
+   *  preview polyline while the control points show as dots. */
+  arcPreview?: TakeoffPoint[] | null
 }
 
 // MobileScopeTotal removed — the mobile body now uses the canonical ScopeTotal

@@ -150,22 +150,21 @@ get thumb-friendly mobile surfaces wired to the *same* machine actions.
   `ConditionPicker` (pick/create the typed/named/colored template the next draw
   is tagged against) in the mobile scope-entry section, wired to `useConditions`
   / `useCreateCondition`, and stamp `condition_id` on save — parity with desktop.
-- ⏳ **Deferred — true arc tool on mobile** (currently arc→lineal). Unlike the
-  reuse-based drop-ins above, arc is invasive (the `MobileTool` type drives
-  exhaustive `polygon|lineal|count` switches across the body, plus the tool
-  toolbar and `MobileCanvasSurface` need new tessellated-arc rendering + a
-  3-control-point drawing interaction) and it's the lowest-value tool for the
-  exterior-envelope anchor (curved edges are niche; the workload is straight
-  area/linear/count + pitch, all now at parity). It's new canvas-interaction
-  code that warrants device verification, so it's deferred to a device-review
-  pass rather than shipped blind.
+- ✅ **True arc tool on mobile.** Added `arc` to `MobileTool`, an ARC chip to the
+  tool toolbar, a 3-control-point drawing flow that tessellates via the shared
+  `arcPolyline` into a lineal curve (preview rendered on `MobileCanvasSurface`),
+  scaled + pitch-corrected length, and the same scale/pitch geometry stamps as
+  the other sloped tools. Full parity with desktop's arc.
 
-**Phase 2 status:** the high-value mobile parity is done — world-scale, pitch,
-sheet calibration, conditions, assemblies (on top of the pre-existing manual-qty,
-draw, deduct, bulk-select, copy/array/mirror, edit-geom, snapping, wall-height,
-CSV import). Arc is the one deferred tool; the UX-polish sub-bullets below
-(collapse `CopyPanel`/`MobileCopyPanel` duplication, document the `mode`↔machine
-mapping, dead-code removal) remain as tidy-ups.
+**Phase 2 status:** ✅ **complete.** Mobile is now at full capability parity with
+desktop — world-scale, pitch, sheet calibration, conditions, assemblies, and the
+arc tool, on top of the pre-existing manual-qty, draw, deduct, bulk-select,
+copy/array/mirror, edit-geom, snapping, wall-height, CSV import. The UX-polish
+sub-bullets below (collapse `CopyPanel`/`MobileCopyPanel` duplication, document
+the `mode`↔machine mapping, dead-code removal) remain as optional tidy-ups.
+**Note:** the parity UI was verified by typecheck/lint/unit suites only — the
+interaction surfaces (calibration two-tap, arc 3-point draw, pickers) want a
+device-review pass before pilot use.
 - Since both bodies already share the machine + geometry, the remaining parity
   work is mostly surfacing existing capabilities in mobile-body, not
   reimplementing logic.

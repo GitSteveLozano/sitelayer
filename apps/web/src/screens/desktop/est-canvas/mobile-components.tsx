@@ -419,6 +419,7 @@ export function MobileCanvasSurface({
   editDragIdxRef,
   onEditPoint,
   scalePoints,
+  arcPreview,
 }: MobileCanvasSurfaceProps) {
   // Map a touch/pointer position to 0–100 board space (same CTM the tap path
   // uses). Used by the vertex-drag handles.
@@ -582,6 +583,16 @@ export function MobileCanvasSurface({
             stroke={deduct && tool === 'polygon' ? 'var(--m-red)' : 'var(--m-amber)'}
             strokeWidth={0.5}
             strokeDasharray="0.8 0.8"
+          />
+        ) : null}
+        {/* ARC tool: the smooth tessellated curve through the 3 control points
+            (the control points themselves render as dots below). */}
+        {tool === 'arc' && arcPreview && arcPreview.length >= 2 ? (
+          <polyline
+            points={arcPreview.map((p) => `${p.x},${p.y}`).join(' ')}
+            fill="none"
+            stroke="var(--m-amber)"
+            strokeWidth={0.5}
           />
         ) : null}
         {draftPoints.map((p, i) => (
