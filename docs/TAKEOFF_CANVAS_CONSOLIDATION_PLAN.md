@@ -198,16 +198,30 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
   `elevation` on the primary save (neither body did before, despite the machine
   owning the `draft.elevation` slice + `SET_ELEVATION`). Tags the next draw with
   a building face (N/S/E/W/roof) so the per-elevation rollup works.
-- ✅ **Multi-condition tag sheet on mobile.** Dropped in the self-contained
-  `TakeoffTagSheet` (its own `useTakeoffTags` / `useAddTakeoffTag` hooks),
-  triggered by a "Tags / conditions" affordance under the selected-measurement
-  action bar — parity with v1's long-press → tag sheet.
-- ⏳ **Remaining to migrate:** capture pipelines (`useCaptureTakeoffDraft` + the
-  4 pipe-* invokers) + AI quantity-review panel (`AgentSuggestionsPanel`) — the
-  large, mostly dry-run/stub block that is the on-ramp to the AI-first north star
-  (§5); multi-page page-strip + per-page calibration overlay (est-canvas already
-  has page switching + the calibration UI, so this is incremental); revision
-  compare (stub on v1); photo-measure cross-link (the de-fork already routes it).
+- ✅ **Capture-pipeline entry migrated.** Added a reusable `CapturePanel`
+  (RoomPlan / photogrammetry / drone JSON upload + dry-run blueprint_vision) to
+  the mobile body, wiring `useCaptureTakeoffDraft` exactly as v1 did. These three
+  scan-upload pipelines were the last v1-unique *entry* not covered by
+  `takeoff-ai/*`. **Combined with the elevation relocation, NOTHING imports code
+  from `screens/projects/takeoff-canvas.tsx` anymore** — only its App.tsx route
+  keeps it reachable.
+- ⛔ **Retirement blocker found — the capture→REVIEW flow differs.** v1 reviews a
+  server-captured draft's *proposals* via `useTakeoffDraftResult` +
+  `AgentSuggestionsPanel` + the `/takeoff-drafts/:id/promote` endpoint.
+  est-canvas's review (`AiReviewOverlay`) is a separate **machine-driven** path
+  (`START_CAPTURE → … → reviewing`, reading `sctx.capture.result`) that
+  `CapturePanel`'s server mutation does NOT feed. So a capture run in est-canvas
+  lands un-promoted proposals it can't yet surface for review/promote. Migrating
+  that review/promote surface is the remaining work — it's the dry-run,
+  north-star AI block, and v1 **must not be deleted** until it lands AND a full
+  `npm run verify` + e2e + device-review pass confirms equivalence.
+- ⏳ Low-value remainder: page-strip (est-canvas already switches pages), revision
+  compare (stub on v1), photo-measure cross-link (the de-fork already routes it).
+
+**Phase 3 status:** all *safely migratable* features are in est-canvas and v1 is
+fully **code-decoupled**, but its retirement is gated on the capture→review/promote
+migration (north-star AI work) + a device/e2e verification pass this environment
+can't run. v1 stays mounted at its route until then.
 - ⏳ Then: re-point the rest of the `projects/*` cluster, retire
   `screens/projects/takeoff-canvas.tsx`, remove its route (App.tsx:352).
 - **Verify:** typecheck + lint + unit suites per increment; full
