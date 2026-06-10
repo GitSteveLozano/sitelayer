@@ -16,7 +16,7 @@ import {
   type TakeoffMeasurement,
   type TakeoffToBidPayload,
 } from '@/lib/api'
-import { readElevation } from './takeoff-canvas'
+import { readElevation } from '@/lib/takeoff/elevation'
 import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
 /**

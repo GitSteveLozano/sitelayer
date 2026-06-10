@@ -11,7 +11,7 @@ import {
   useTakeoffTags,
   type TakeoffMeasurement,
 } from '@/lib/api'
-import { readElevation } from './takeoff-canvas'
+import { readElevation } from '@/lib/takeoff/elevation'
 import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 import { TakeoffTagSheet } from './takeoff-tag-sheet'
 import { EstimateLineAssembly } from './estimate-line-assembly'

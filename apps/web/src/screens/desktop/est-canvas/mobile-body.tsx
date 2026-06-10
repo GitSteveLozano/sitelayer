@@ -54,6 +54,7 @@ import { MEmptyState, MSkeletonList } from '@/components/m-states'
 import { TakeoffImportSheet } from '../../mobile/takeoff-import-sheet'
 import { AssemblyAttachPanel } from './assembly-panel'
 import { ConditionPicker } from './condition-picker'
+import { ElevationPicker } from './elevation-picker'
 import { useConditions, useCreateCondition, type ConditionMeasurementKind } from '@/lib/api/conditions'
 
 import { type MobileTool, type MobileMode } from './types'
@@ -545,6 +546,8 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
         draft_id: activeDraftId,
         // Tag the active condition when one is picked (null = legacy flow).
         condition_id: activeConditionId,
+        // Tag the building face (N/S/E/W/roof) from the machine draft slice.
+        elevation: sctx.draft.elevation,
       })
       // COMMIT-equivalent UI reset through the machine (persistence already
       // happened above via the existing create hook — hybrid dep wiring).
@@ -1463,6 +1466,12 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                         setNewConditionKind={setNewConditionKind}
                         onCreateCondition={() => void onCreateCondition()}
                         createPending={createCondition.isPending}
+                      />
+                      {/* Elevation tag (parity with v1) — tags the next draw with
+                          a building face for the per-elevation rollup. */}
+                      <ElevationPicker
+                        value={sctx.draft.elevation}
+                        onChange={(next) => sdispatch({ type: 'SET_ELEVATION', elevation: next })}
                       />
                       <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
                         {items.length === 0 ? <option value="">Loading…</option> : null}

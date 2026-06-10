@@ -187,17 +187,26 @@ the estimator reviews on the canvas." Folding them into the single est-canvas
 engine is exactly the surface the north-star AI pipeline lands on — so this is
 deferrable but not throwaway. Owner confirmed it can wait.
 
-- Bring into the shared layer (so both bodies can surface appropriately):
-  capture pipelines (`useCaptureTakeoffDraft` + the 4 pipe-* invokers), AI
-  quantity-review panel (`AgentSuggestionsPanel`), multi-page page-strip +
-  per-page calibration overlay, elevation tags, multi-condition tag sheet,
-  revision compare, photo-measure cross-link.
-- Re-point the `screens/projects/takeoff-*` cluster (list/detail/summary/preview)
-  at the est-canvas routes.
-- Retire `screens/projects/takeoff-canvas.tsx` and remove its route (App.tsx:352).
-- Address the v1-side defects from Phase 1 as the features land.
-- **Verify:** full `npm run verify`; e2e takeoff flows on both viewports; confirm
-  no orphaned routes/links.
+Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
+
+- ✅ **Elevation tags + helper relocation.** Moved `ELEVATION_TAGS` /
+  `ElevationTag` / `readElevation` / `prettyElevation` out of v1
+  `takeoff-canvas.tsx` into the shared, unit-tested `lib/takeoff/elevation.ts`,
+  and repointed the `projects/*` cluster (detail/list/summary) at it — **a real
+  step toward retiring v1** (those three screens no longer import code from it).
+  Added a shared `ElevationPicker` to BOTH est-canvas bodies and now stamp
+  `elevation` on the primary save (neither body did before, despite the machine
+  owning the `draft.elevation` slice + `SET_ELEVATION`). Tags the next draw with
+  a building face (N/S/E/W/roof) so the per-elevation rollup works.
+- ⏳ **Remaining to migrate:** capture pipelines (`useCaptureTakeoffDraft` + the
+  4 pipe-* invokers), AI quantity-review panel (`AgentSuggestionsPanel`),
+  multi-page page-strip + per-page calibration overlay, multi-condition tag
+  sheet, revision compare, photo-measure cross-link. Several are dry-run/stub on
+  v1 and are the on-ramp to the AI-first north star (§5).
+- ⏳ Then: re-point the rest of the `projects/*` cluster, retire
+  `screens/projects/takeoff-canvas.tsx`, remove its route (App.tsx:352).
+- **Verify:** typecheck + lint + unit suites per increment; full
+  `npm run verify` + e2e before the final v1 deletion.
 
 ---
 

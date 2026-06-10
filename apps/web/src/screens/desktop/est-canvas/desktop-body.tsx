@@ -74,6 +74,7 @@ import { ScaleOverlay } from './scale-overlay'
 import { ItemPalette } from './item-palette'
 import { CopyPanel } from './copy-panel'
 import { ConditionPicker } from './condition-picker'
+import { ElevationPicker } from './elevation-picker'
 import { DraftHud } from './draft-hud'
 import { RunningTotals } from './running-totals'
 import { SingleSelectBar, BulkSelectToolbar } from './select-toolbars'
@@ -909,6 +910,8 @@ export function EstCanvasDesktopBody() {
         // Condition layer (Deep Dive H1): stamp the active condition when one
         // is picked. NULL keeps the legacy shape-first behavior unchanged.
         condition_id: activeConditionId,
+        // Elevation tag (building face) from the machine draft slice.
+        elevation: sctx.draft.elevation,
       })
       // COMMIT-equivalent UI reset through the machine: persistence already
       // happened above via the existing create hook (hybrid dep wiring). The
@@ -2032,6 +2035,13 @@ export function EstCanvasDesktopBody() {
             setNewConditionKind={setNewConditionKind}
             onCreateCondition={onCreateCondition}
             createPending={createCondition.isPending}
+          />
+
+          {/* Elevation tag (building face) — tags the next draw for the
+              per-elevation rollup. Stamped on save from the machine draft slice. */}
+          <ElevationPicker
+            value={sctx.draft.elevation}
+            onChange={(next) => sdispatch({ type: 'SET_ELEVATION', elevation: next })}
           />
 
           {/* Scope item selector */}

@@ -5,7 +5,7 @@ import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { useProjectMeasurements, useServiceItems, type MeasurementGeometry, type TakeoffMeasurement } from '@/lib/api'
-import { readElevation, type ElevationTag } from './takeoff-canvas'
+import { prettyElevation, readElevation, type ElevationTag } from '@/lib/takeoff/elevation'
 import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
 /**
@@ -278,14 +278,4 @@ function quantityFor(m: TakeoffMeasurement): number {
     return geo.length * geo.width * geo.height
   }
   return 0
-}
-
-function prettyElevation(t: ElevationTag): string {
-  if (t === 'east') return 'East elevation'
-  if (t === 'south') return 'South elevation'
-  if (t === 'west') return 'West elevation'
-  if (t === 'north') return 'North elevation'
-  if (t === 'roof') return 'Roof'
-  if (t === 'other') return 'Other'
-  return 'Untagged'
 }
