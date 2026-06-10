@@ -123,7 +123,21 @@ function resolveTokenAudience(req: http.IncomingMessage, tokens: Map<string, str
 
 /** Canonical app base URL the artifact refs are minted against. */
 export function agentFeedBaseUrl(): string {
-  return (process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz').replace(/\/+$/, '')
+  const explicit = process.env.APP_PUBLIC_URL?.trim()
+  if (explicit) return explicit.replace(/\/+$/, '')
+  // Tier-aware fallback: a hardcoded prod fallback mints refs a non-prod
+  // analyzer can never fetch (caught live 2026-06-10: dev finalize minted
+  // prod artifact URLs -> 401). APP_PUBLIC_URL stays the explicit override.
+  switch (process.env.APP_TIER?.trim().toLowerCase()) {
+    case 'dev':
+      return 'https://dev.sitelayer.sandolab.xyz'
+    case 'demo':
+      return 'https://demo.preview.sitelayer.sandolab.xyz'
+    case 'prod':
+      return 'https://sitelayer.sandolab.xyz'
+    default:
+      return 'http://localhost:3001'
+  }
 }
 
 export type CaptureArtifactSummaryRow = {

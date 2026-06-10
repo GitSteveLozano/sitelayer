@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
@@ -6,6 +6,7 @@ import { attachMutationTx } from '../mutation-tx.js'
 import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../storage.js'
 import type { Readable } from 'node:stream'
 import {
+  agentFeedBaseUrl,
   handleAgentFeedRoutes,
   mapCaptureArtifactsToConcernRefs,
   parseAgentFeedTokens,
@@ -650,5 +651,37 @@ describe('GET /api/agent-feed/artifacts/:artifactId', () => {
     const { deps, responses } = makeDeps(pool)
     await handleAgentFeedRoutes(req('GET', bearer('tok-steve')), url('/api/agent-feed/artifacts/not-a-uuid'), deps)
     expect(responses[0]?.status).toBe(400)
+  })
+})
+
+describe('agentFeedBaseUrl', () => {
+  const saved: Record<string, string | undefined> = {}
+  const setEnv = (k: string, v: string | undefined) => {
+    if (!(k in saved)) saved[k] = process.env[k]
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+
+  it('explicit APP_PUBLIC_URL wins and is trimmed of trailing slashes', () => {
+    setEnv('APP_PUBLIC_URL', 'https://example.test///')
+    expect(agentFeedBaseUrl()).toBe('https://example.test')
+  })
+
+  it('falls back per tier so non-prod tiers never mint prod refs', () => {
+    setEnv('APP_PUBLIC_URL', undefined)
+    setEnv('APP_TIER', 'dev')
+    expect(agentFeedBaseUrl()).toBe('https://dev.sitelayer.sandolab.xyz')
+    setEnv('APP_TIER', 'demo')
+    expect(agentFeedBaseUrl()).toBe('https://demo.preview.sitelayer.sandolab.xyz')
+    setEnv('APP_TIER', 'prod')
+    expect(agentFeedBaseUrl()).toBe('https://sitelayer.sandolab.xyz')
+    setEnv('APP_TIER', 'local')
+    expect(agentFeedBaseUrl()).toBe('http://localhost:3001')
   })
 })
