@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
-import { handleFeedbackInviteRoutes, type FeedbackInviteRouteCtx } from './feedback-invites.js'
+import {
+  feedbackInviteCaptureMetadata,
+  handleFeedbackInviteRoutes,
+  type FeedbackInviteRouteCtx,
+} from './feedback-invites.js'
 
 type Response = { status: number; body: unknown }
 
@@ -100,6 +104,40 @@ function makeCtx(pool: FakePool, body: Record<string, unknown> = {}) {
 }
 
 describe('handleFeedbackInviteRoutes', () => {
+  it('allowlists onsite correlation metadata for portal capture actors', () => {
+    const metadata = feedbackInviteCaptureMetadata({
+      id: 'invite-1',
+      reviewer_ref: 'onsite-worker',
+      source: 'mobile_ops_leavebehind',
+      target_route: '/ops',
+      allowed_capture_modes: ['text', 'state', 'screen'],
+      metadata: {
+        created_from: 'mobile_ops',
+        company_slug: 'la-ops',
+        ops_diagnostic_session_id: 'diag-session-9',
+        ops_diagnostic_control_level: 'route',
+        ops_diagnostic_state: 'active',
+        control_token: 'do-not-copy',
+        arbitrary_note: 'do-not-route',
+      },
+    })
+
+    expect(metadata).toMatchObject({
+      feedback_invite_id: 'invite-1',
+      reviewer_ref: 'onsite-worker',
+      source: 'mobile_ops_leavebehind',
+      target_route: '/ops',
+      allowed_capture_modes: ['text', 'state', 'screen'],
+      created_from: 'mobile_ops',
+      company_slug: 'la-ops',
+      ops_diagnostic_session_id: 'diag-session-9',
+      ops_diagnostic_control_level: 'route',
+      ops_diagnostic_state: 'active',
+    })
+    expect(metadata).not.toHaveProperty('control_token')
+    expect(metadata).not.toHaveProperty('arbitrary_note')
+  })
+
   it('ignores unrelated routes', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)

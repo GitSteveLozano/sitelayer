@@ -261,7 +261,7 @@ describe('MobileOps leave-behind capture invite', () => {
       source: 'mobile_ops_leavebehind',
       target_route: '/ops',
       expires_in_days: 7,
-      allowed_capture_modes: ['text', 'state', 'screen'],
+      allowed_capture_modes: ['text', 'audio', 'state', 'screen'],
       metadata: {
         created_from: 'mobile_ops',
         company_slug: 'acme',

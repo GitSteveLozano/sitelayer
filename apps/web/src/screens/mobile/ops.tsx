@@ -729,7 +729,7 @@ export function buildLeaveBehindCaptureInviteInput({
     source: 'mobile_ops_leavebehind',
     target_route: '/ops',
     expires_in_days: 7,
-    allowed_capture_modes: ['text', 'state', 'screen'],
+    allowed_capture_modes: ['text', 'audio', 'state', 'screen'],
     metadata: {
       created_from: 'mobile_ops',
       company_slug: companySlug,
@@ -754,7 +754,7 @@ function formatLeaveBehindCaptureSummary({
   if (pending) return 'Creating a signed guest capture link.'
   if (error) return error instanceof Error ? error.message : 'Could not create the link.'
   if (copied) return hasSession ? 'Guest capture is tied to this onsite session.' : 'Guest capture is tied to Ops.'
-  return hasSession ? 'Guest can send text, state, or screen evidence.' : 'Works without starting control.'
+  return hasSession ? 'Guest can send text, audio, state, or screen evidence.' : 'Works without starting control.'
 }
 
 function countStatus(items: readonly ContextWorkItem[], status: WorkItemStatus): number {
