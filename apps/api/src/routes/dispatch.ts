@@ -332,6 +332,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleOpsDiagnosticsRoutes(req, url, {
         requireCapability: ctx.requireCapability,
         sendJson,
+        company,
         readBody,
         getCurrentUserId: () => currentUserId,
       }),

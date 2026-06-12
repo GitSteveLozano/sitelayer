@@ -1,6 +1,9 @@
 import type http from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import type { Capability } from '@sitelayer/domain'
+import type { ActiveCompany } from '../auth-types.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -92,6 +95,7 @@ export type OpsDiagnosticsResponse = {
 export type OpsDiagnosticsRouteCtx = {
   requireCapability: (capability: Capability) => Promise<boolean>
   sendJson: (status: number, body: unknown) => void
+  company?: ActiveCompany
   readBody?: () => Promise<Record<string, unknown>>
   getCurrentUserId?: () => string
   fetchImpl?: typeof fetch
@@ -112,7 +116,8 @@ const APP_ISSUE_VIEW: Capability = 'app_issue.view'
 const APP_ISSUE_CAPTURE: Capability = 'app_issue.capture'
 
 type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
-  control_token: string
+  control_token?: string
+  control_token_hash?: string
 }
 
 const onsiteDiagnosticSessions = new Map<string, StoredOnsiteDiagnosticSession>()
@@ -137,10 +142,10 @@ export async function handleOpsDiagnosticsRoutes(
   if (url.pathname === '/api/ops/diagnostics/sessions') {
     if (req.method === 'GET') {
       if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
-      pruneExpiredSessions()
+      const sessions = await listOnsiteDiagnosticSessions(ctx)
       ctx.sendJson(200, {
         schema: 'sitelayer.ops_diagnostic_sessions.v1',
-        sessions: Array.from(onsiteDiagnosticSessions.values()).map(publicSession),
+        sessions,
       })
       return true
     }
@@ -152,15 +157,15 @@ export async function handleOpsDiagnosticsRoutes(
         return true
       }
       const diagnostics = await buildOpsDiagnostics(diagnosticsOptions(ctx))
-      const session = createOnsiteDiagnosticSession({
+      const created = await createOnsiteDiagnosticSession(ctx, {
         body: body.value,
         plan: diagnostics.onsite_session,
         actorUserId: ctx.getCurrentUserId?.() ?? null,
       })
       ctx.sendJson(201, {
         schema: 'sitelayer.ops_diagnostic_session.v1',
-        session: publicSession(session),
-        control_token: session.control_token,
+        session: publicSession(created.session),
+        control_token: created.controlToken,
       } satisfies OpsOnsiteDiagnosticSessionCreateResponse)
       return true
     }
@@ -175,7 +180,7 @@ export async function handleOpsDiagnosticsRoutes(
       return true
     }
     if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return true
-    const session = lookupSession(sessionActionMatch[1] ?? '')
+    const session = await lookupSession(ctx, sessionActionMatch[1] ?? '')
     if (!session.ok) {
       ctx.sendJson(session.status, { error: session.error })
       return true
@@ -185,7 +190,12 @@ export async function handleOpsDiagnosticsRoutes(
       ctx.sendJson(400, { error: body.error })
       return true
     }
-    const actionResult = recordOnsiteDiagnosticAction(session.value, body.value, ctx.getCurrentUserId?.() ?? null)
+    const actionResult = await recordOnsiteDiagnosticAction(
+      ctx,
+      session.value,
+      body.value,
+      ctx.getCurrentUserId?.() ?? null,
+    )
     if (!actionResult.ok) {
       ctx.sendJson(
         actionResult.status,
@@ -206,7 +216,7 @@ export async function handleOpsDiagnosticsRoutes(
       return true
     }
     if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
-    const session = lookupSession(sessionMatch[1] ?? '')
+    const session = await lookupSession(ctx, sessionMatch[1] ?? '')
     if (!session.ok) {
       ctx.sendJson(session.status, { error: session.error })
       return true
@@ -276,7 +286,27 @@ export async function buildOpsDiagnostics(
   }
 }
 
-function createOnsiteDiagnosticSession(opts: {
+async function listOnsiteDiagnosticSessions(ctx: OpsDiagnosticsRouteCtx): Promise<OpsOnsiteDiagnosticSessionRecord[]> {
+  if (ctx.company) return listPersistentOnsiteDiagnosticSessions(ctx.company.id)
+  pruneExpiredSessions()
+  return Array.from(onsiteDiagnosticSessions.values()).map(publicSession)
+}
+
+async function createOnsiteDiagnosticSession(
+  ctx: OpsDiagnosticsRouteCtx,
+  opts: {
+    body: Record<string, unknown>
+    plan: OpsOnsiteDiagnosticSessionPlan
+    actorUserId: string | null
+  },
+): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken: string }> {
+  if (ctx.company) return createPersistentOnsiteDiagnosticSession(ctx.company.id, opts)
+  const session = createMemoryOnsiteDiagnosticSession(opts)
+  if (!session.control_token) throw new Error('memory diagnostic session missing control token')
+  return { session, controlToken: session.control_token }
+}
+
+function createMemoryOnsiteDiagnosticSession(opts: {
   body: Record<string, unknown>
   plan: OpsOnsiteDiagnosticSessionPlan
   actorUserId: string | null
@@ -314,15 +344,84 @@ function createOnsiteDiagnosticSession(opts: {
   return session
 }
 
-function recordOnsiteDiagnosticAction(
+async function createPersistentOnsiteDiagnosticSession(
+  companyId: string,
+  opts: {
+    body: Record<string, unknown>
+    plan: OpsOnsiteDiagnosticSessionPlan
+    actorUserId: string | null
+  },
+): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken: string }> {
+  const createdAt = new Date()
+  const expiresAt = new Date(createdAt.getTime() + SESSION_TTL_MS)
+  const requestedIntent = actionKeyValue(opts.body.intent)
+  const intent =
+    requestedIntent && actionEnabled(opts.plan, requestedIntent) ? requestedIntent : opts.plan.recommended_entry
+  const label = boundedString(opts.body.label, 80)
+  const controlToken = randomUUID()
+  const controlTokenHash = hashControlToken(controlToken)
+  const sessionId = randomUUID()
+  const eventId = randomUUID()
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: eventId,
+    at: createdAt.toISOString(),
+    actor_user_id: opts.actorUserId,
+    type: 'session.started',
+    effect: 'audit_only',
+    summary: `Started onsite diagnostic session with ${opts.plan.control_level} control.`,
+  }
+
+  const session = await withMutationTx(companyId, async (client: PoolClient) => {
+    await client.query(
+      `insert into ops_diagnostic_sessions (
+         id, company_id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at, updated_at
+       ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, 'active', $8, $9, $9)`,
+      [
+        sessionId,
+        companyId,
+        opts.actorUserId,
+        label,
+        intent,
+        JSON.stringify(opts.plan),
+        controlTokenHash,
+        expiresAt.toISOString(),
+        createdAt.toISOString(),
+      ],
+    )
+    await client.query(
+      `insert into ops_diagnostic_session_events (
+         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
+       ) values ($1, $2, $3, $4, $5, null, 'audit_only', $6, $7)`,
+      [eventId, companyId, sessionId, opts.actorUserId, event.type, event.summary, createdAt.toISOString()],
+    )
+    return {
+      id: sessionId,
+      state: 'active' as const,
+      created_at: createdAt.toISOString(),
+      expires_at: expiresAt.toISOString(),
+      operator_user_id: opts.actorUserId,
+      label,
+      intent,
+      plan: opts.plan,
+      audit_events: [event],
+      control_token_hash: controlTokenHash,
+    }
+  })
+
+  return { session, controlToken }
+}
+
+async function recordOnsiteDiagnosticAction(
+  ctx: OpsDiagnosticsRouteCtx,
   session: StoredOnsiteDiagnosticSession,
   body: Record<string, unknown>,
   actorUserId: string | null,
-):
+): Promise<
   | { ok: true; value: OpsOnsiteDiagnosticSessionActionResponse }
-  | { ok: false; status: number; error: string; reason?: string } {
+  | { ok: false; status: number; error: string; reason?: string }
+> {
   const token = boundedString(body.control_token, 200)
-  if (!token || token !== session.control_token) return { ok: false, status: 403, error: 'invalid control token' }
+  if (!token || !controlTokenMatches(session, token)) return { ok: false, status: 403, error: 'invalid control token' }
 
   const actionKey = actionKeyValue(body.action_key)
   if (!actionKey) return { ok: false, status: 400, error: 'action_key is required' }
@@ -330,16 +429,26 @@ function recordOnsiteDiagnosticAction(
   if (!action) return { ok: false, status: 400, error: 'unknown action_key' }
   if (!action.enabled) return { ok: false, status: 409, error: 'action is not available', reason: action.reason }
 
-  const at = new Date().toISOString()
-  session.audit_events.push({
-    id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
-    at,
-    actor_user_id: actorUserId,
-    type: 'action.requested',
-    action_key: actionKey,
-    effect: 'audit_only',
-    summary: `Requested ${action.label}.`,
-  })
+  if (ctx.company) {
+    const persisted = await recordPersistentOnsiteDiagnosticAction(
+      ctx.company.id,
+      session,
+      actionKey,
+      action.label,
+      actorUserId,
+    )
+    if (!persisted) return { ok: false, status: 404, error: 'diagnostic session not found' }
+    return {
+      ok: true,
+      value: {
+        schema: 'sitelayer.ops_diagnostic_session_action.v1',
+        session: publicSession(persisted),
+        accepted_action: { key: actionKey, effect: 'audit_only' },
+      },
+    }
+  }
+
+  recordMemoryOnsiteDiagnosticAction(session, actionKey, action.label, actorUserId)
   return {
     ok: true,
     value: {
@@ -350,17 +459,181 @@ function recordOnsiteDiagnosticAction(
   }
 }
 
-function lookupSession(
+function recordMemoryOnsiteDiagnosticAction(
+  session: StoredOnsiteDiagnosticSession,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  actionLabel: string,
+  actorUserId: string | null,
+): void {
+  const at = new Date().toISOString()
+  session.audit_events.push({
+    id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+    at,
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    action_key: actionKey,
+    effect: 'audit_only',
+    summary: `Requested ${actionLabel}.`,
+  })
+}
+
+async function recordPersistentOnsiteDiagnosticAction(
+  companyId: string,
+  session: StoredOnsiteDiagnosticSession,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  actionLabel: string,
+  actorUserId: string | null,
+): Promise<StoredOnsiteDiagnosticSession | null> {
+  const at = new Date().toISOString()
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: randomUUID(),
+    at,
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    action_key: actionKey,
+    effect: 'audit_only',
+    summary: `Requested ${actionLabel}.`,
+  }
+  const updated = await withMutationTx(companyId, async (client: PoolClient) => {
+    const update = await client.query(
+      `update ops_diagnostic_sessions
+          set updated_at = $3
+        where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3`,
+      [companyId, session.id, at],
+    )
+    if (update.rowCount !== 1) return false
+    await client.query(
+      `insert into ops_diagnostic_session_events (
+         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
+       ) values ($1, $2, $3, $4, $5, $6, 'audit_only', $7, $8)`,
+      [event.id, companyId, session.id, actorUserId, event.type, actionKey, event.summary, at],
+    )
+    return true
+  })
+  if (!updated) return null
+  return { ...session, audit_events: [...session.audit_events, event] }
+}
+
+async function lookupSession(
+  ctx: OpsDiagnosticsRouteCtx,
   id: string,
-): { ok: true; value: StoredOnsiteDiagnosticSession } | { ok: false; status: number; error: string } {
+): Promise<{ ok: true; value: StoredOnsiteDiagnosticSession } | { ok: false; status: number; error: string }> {
+  if (ctx.company) return lookupPersistentSession(ctx.company.id, id)
   pruneExpiredSessions()
   const session = onsiteDiagnosticSessions.get(id)
   if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
   return { ok: true, value: session }
 }
 
+async function lookupPersistentSession(
+  companyId: string,
+  id: string,
+): Promise<{ ok: true; value: StoredOnsiteDiagnosticSession } | { ok: false; status: number; error: string }> {
+  if (!isUuid(id)) return { ok: false, status: 404, error: 'diagnostic session not found' }
+  const session = await withCompanyClient(companyId, async (client: PoolClient) => {
+    const result = await client.query<PersistentSessionRow>(
+      `select id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at
+         from ops_diagnostic_sessions
+        where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > now()
+        limit 1`,
+      [companyId, id],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    const events = await listPersistentEvents(client, companyId, row.id)
+    return persistentSessionFromRow(row, events)
+  })
+  if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
+  return { ok: true, value: session }
+}
+
+async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promise<OpsOnsiteDiagnosticSessionRecord[]> {
+  return withCompanyClient(companyId, async (client: PoolClient) => {
+    const result = await client.query<PersistentSessionRow>(
+      `select id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at
+         from ops_diagnostic_sessions
+        where company_id = $1 and state = 'active' and expires_at > now()
+        order by created_at desc
+        limit 20`,
+      [companyId],
+    )
+    const sessions: OpsOnsiteDiagnosticSessionRecord[] = []
+    for (const row of result.rows) {
+      const events = await listPersistentEvents(client, companyId, row.id)
+      sessions.push(publicSession(persistentSessionFromRow(row, events)))
+    }
+    return sessions
+  })
+}
+
+type PersistentSessionRow = {
+  id: string
+  operator_user_id: string | null
+  label: string | null
+  intent: string | null
+  plan: unknown
+  control_token_hash: string
+  state: string
+  expires_at: string | Date
+  created_at: string | Date
+}
+
+type PersistentEventRow = {
+  id: string
+  actor_user_id: string | null
+  event_type: string
+  action_key: string | null
+  effect: string
+  summary: string
+  created_at: string | Date
+}
+
+async function listPersistentEvents(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+): Promise<OpsOnsiteDiagnosticAuditEvent[]> {
+  const result = await client.query<PersistentEventRow>(
+    `select id, actor_user_id, event_type, action_key, effect, summary, created_at
+       from ops_diagnostic_session_events
+      where company_id = $1 and session_id = $2::uuid
+      order by created_at asc`,
+    [companyId, sessionId],
+  )
+  return result.rows.map((row) => {
+    const actionKey = actionKeyValue(row.action_key)
+    return {
+      id: row.id,
+      at: isoString(row.created_at),
+      actor_user_id: row.actor_user_id,
+      type: row.event_type === 'action.requested' ? 'action.requested' : 'session.started',
+      ...(actionKey ? { action_key: actionKey } : {}),
+      effect: 'audit_only',
+      summary: row.summary,
+    }
+  })
+}
+
+function persistentSessionFromRow(
+  row: PersistentSessionRow,
+  events: OpsOnsiteDiagnosticAuditEvent[],
+): StoredOnsiteDiagnosticSession {
+  return {
+    id: row.id,
+    state: 'active',
+    created_at: isoString(row.created_at),
+    expires_at: isoString(row.expires_at),
+    operator_user_id: row.operator_user_id,
+    label: row.label,
+    intent: actionKeyValue(row.intent),
+    plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
+    audit_events: events,
+    control_token_hash: row.control_token_hash,
+  }
+}
+
 function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnosticSessionRecord {
-  const { control_token: _controlToken, ...rest } = session
+  const { control_token: _controlToken, control_token_hash: _controlTokenHash, ...rest } = session
   return rest
 }
 
@@ -394,6 +667,24 @@ function boundedString(value: unknown, maxLength: number): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
   return trimmed.slice(0, maxLength)
+}
+
+function hashControlToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex')
+}
+
+function controlTokenMatches(session: StoredOnsiteDiagnosticSession, token: string): boolean {
+  if (session.control_token) return token === session.control_token
+  if (session.control_token_hash) return hashControlToken(token) === session.control_token_hash
+  return false
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function isoString(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString()
 }
 
 function pruneExpiredSessions(nowMs = Date.now()): void {
