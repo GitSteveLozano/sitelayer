@@ -506,16 +506,13 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
 
   // Estimate-share delivery emails — drains send_estimate_share outbox rows
   // (enqueued by POST /api/projects/:id/estimate/share) and emails the
-  // recipient their portal link. Gated under the seeded 'notifications' lane
-  // (it is an outbound-comms send and that is the operator kill-switch for
-  // outbound comms); split into a dedicated 'send_estimate_share' lane once a
-  // seed migration lands (precedent: 008_rental_invoice_push_lane.sql).
+  // recipient their portal link. Dedicated lane seeded by migration 017.
   // NOTE: pausing the lane is SAFE under the inverted outbox contract — the
   // rows stay pending for this runner; the generic drain can never eat them.
   const estimateShareEmailSummary = await runIfLaneActive(
     pool,
     logger,
-    'notifications',
+    'send_estimate_share',
     () =>
       estimateShareEmailRunner(companyId).catch((error) => {
         logger.error({ err: error }, '[worker] send_estimate_share drain failed')

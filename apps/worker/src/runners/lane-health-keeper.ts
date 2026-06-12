@@ -38,6 +38,7 @@ const ALL_LANES = [
   'voice_to_log',
   'companycam_poll',
   'welcome_email',
+  'send_estimate_share',
   'blueprint_storage_gc',
   'capture_artifact_retention_gc',
   'capture_artifact_analysis',
