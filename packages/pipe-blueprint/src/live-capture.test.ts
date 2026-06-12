@@ -70,9 +70,7 @@ describe('geminiLiveTakeoffRows', () => {
 
   it('THROWS a typed provider error on HTTP failure — no stub fallback', async () => {
     const fetchImpl = vi.fn(async () => geminiResponse({ error: { message: 'quota exceeded' } }, { status: 429 }))
-    await expect(geminiLiveTakeoffRows(IMAGE, { apiKey: 'k', fetchImpl })).rejects.toThrow(
-      BlueprintVisionProviderError,
-    )
+    await expect(geminiLiveTakeoffRows(IMAGE, { apiKey: 'k', fetchImpl })).rejects.toThrow(BlueprintVisionProviderError)
     await expect(geminiLiveTakeoffRows(IMAGE, { apiKey: 'k', fetchImpl })).rejects.toThrow(/HTTP 429/)
   })
 

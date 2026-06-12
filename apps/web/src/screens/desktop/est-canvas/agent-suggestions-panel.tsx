@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
 import { Card, MobileButton } from '@/components/mobile'
 import {
+  confidenceBucket,
+  confidenceBucketLabel,
+  confidenceSparkState,
+  TAKEOFF_REJECT_REASONS,
+  type ConfidenceBucket,
+} from '@/machines/takeoff-confidence'
+import {
   draftResultStatus,
   usePromoteCapturedQuantities,
   useTakeoffDraftResult,
@@ -49,43 +56,19 @@ interface AgentSuggestionsPanelProps {
   draft: TakeoffDraft
 }
 
-/** Ordinal confidence buckets — keep these in sync with the `Spark` states
- * mapped in `confidenceState` below. Hard rule from `AI Layer.html`:
- * confidence is **ordinal**, never a percentage. */
-type ConfidenceBucket = 'high' | 'medium' | 'low'
-
-function confidenceBucket(confidence: number): ConfidenceBucket {
-  if (confidence >= 0.85) return 'high'
-  if (confidence >= 0.6) return 'medium'
-  return 'low'
-}
+// Ordinal confidence buckets + rejection reasons come from the SHARED
+// `@/machines/takeoff-confidence` module (wave-3 convergence) so this panel,
+// the on-canvas AiReviewOverlay, and the mobile review lanes read the SAME
+// thresholds. Hard rule from `AI Layer.html` still holds: confidence is
+// **ordinal**, never a percentage.
 
 function confidenceState(bucket: ConfidenceBucket): SparkState {
-  switch (bucket) {
-    case 'high':
-      return 'strong'
-    case 'medium':
-      return 'accent'
-    case 'low':
-      return 'muted'
-  }
+  return confidenceSparkState(bucket)
 }
 
 function confidenceLabel(bucket: ConfidenceBucket): string {
-  switch (bucket) {
-    case 'high':
-      return 'High confidence'
-    case 'medium':
-      return 'Medium confidence'
-    case 'low':
-      return 'Low confidence'
-  }
+  return confidenceBucketLabel(bucket)
 }
-
-/** Four canonical rejection reasons, matching the spec. `RejectSheet`
- * renders these as equal-weight chips per the AI-layer anti-pattern rule
- * against free-text rejections. */
-const TAKEOFF_REJECT_REASONS = ['wrong_code', 'wrong_quantity', 'not_in_scope', 'other'] as const
 
 /** Pretty-print a capture source / provenance kind for the eyebrow line.
  * Matches the design intent ("Blueprint vision · captured 2m ago") rather

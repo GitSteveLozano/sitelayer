@@ -1,6 +1,13 @@
 import { useMemo } from 'react'
 import { Spark } from '@/components/m'
 import type { CaptureDecision, TakeoffSessionEvent } from '@/machines/takeoff-session'
+import {
+  confidenceBadge,
+  confidenceBucket,
+  confidenceSparkState,
+  TAKEOFF_REJECT_REASONS,
+  type ConfidenceBucket,
+} from '@/machines/takeoff-confidence'
 import { floatBox, floatHead } from './desktop-body-styles'
 
 /**
@@ -27,42 +34,16 @@ import { floatBox, floatHead } from './desktop-body-styles'
  * keeps the overlay strictly gated to the reviewing state by its caller.
  */
 
-// ─── Confidence bucketing (REUSED from screens/projects/takeoff-canvas.tsx) ──
-// Same ordinal thresholds the standalone review panel uses, kept in lockstep so
-// a proposal reads identically on the canvas and on the route.
-export type ConfidenceBucket = 'high' | 'medium' | 'low'
+// ─── Confidence bucketing — SHARED single source (wave-3 convergence) ────────
+// The ordinal thresholds live in `@/machines/takeoff-confidence` so every
+// review surface (this overlay, AgentSuggestionsPanel, the mobile review
+// lanes) reads the SAME numbers. Re-exported for existing importers.
+export { confidenceBucket, confidenceBadge, type ConfidenceBucket } from '@/machines/takeoff-confidence'
 
-export function confidenceBucket(confidence: number): ConfidenceBucket {
-  if (confidence >= 0.85) return 'high'
-  if (confidence >= 0.6) return 'medium'
-  return 'low'
-}
-
-export function confidenceBadge(bucket: ConfidenceBucket): string {
-  switch (bucket) {
-    case 'high':
-      return 'HIGH'
-    case 'medium':
-      return 'MED'
-    case 'low':
-      return 'LOW'
-  }
-}
-
-function confidenceSparkState(bucket: ConfidenceBucket): 'strong' | 'accent' | 'muted' {
-  switch (bucket) {
-    case 'high':
-      return 'strong'
-    case 'medium':
-      return 'accent'
-    case 'low':
-      return 'muted'
-  }
-}
-
-/** Four canonical rejection reasons — REUSED from the standalone review panel
- *  (`TAKEOFF_REJECT_REASONS`). Equal-weight chips, never free text. */
-export const AI_REVIEW_REJECT_REASONS = ['wrong_code', 'wrong_quantity', 'not_in_scope', 'other'] as const
+/** Four canonical rejection reasons — the shared `TAKEOFF_REJECT_REASONS`.
+ *  Equal-weight chips, never free text. Re-exported under the overlay's
+ *  historical name for existing importers. */
+export const AI_REVIEW_REJECT_REASONS = TAKEOFF_REJECT_REASONS
 
 // ─── The proposal shape carried in `capture.result.quantities` ───────────────
 // The `ai-reviewing` seed (and the dry-run capture stub) load a deliberately

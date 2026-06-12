@@ -68,6 +68,7 @@ import {
   type PromoteResponse,
 } from '../../lib/api/takeoff-drafts.js'
 import { useProjectBlueprints } from '../../lib/api/takeoff.js'
+import { reviewFloorLabel, statusForConfidence, type ReviewFloorStatus } from '../../machines/takeoff-confidence.js'
 
 // ---------------------------------------------------------------------------
 // Demo-data notice (C1, takeoff deep-dive 2026-06-01).
@@ -654,27 +655,14 @@ export function TakeoffAiTakeoffSetup({ companySlug }: { companySlug: string }) 
 // Review — accept/adjust AI-detected quantities (from the real captured
 // TakeoffResult), then promote the kept ones to committed measurements.
 // ---------------------------------------------------------------------------
-type ReviewStatus = 'ok' | 'review' | 'flag'
+// Review-floor thresholds come from the SHARED `machines/takeoff-confidence`
+// module (wave-3 convergence) — it mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR
+// (0.7) in @sitelayer/capture-schema, the API's review_required gate. (The old
+// mobile twin had drifted to a private 0.8 floor — exactly why the single
+// module exists.)
+type ReviewStatus = ReviewFloorStatus
 
-// Mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR (0.7) in @sitelayer/capture-schema:
-// the API flags any captured quantity below this as review_required. Keep in sync.
-// (We adopt the desktop twin's 0.7 floor; the old mobile twin used 0.8 — the 0.7
-// floor is the one that matches the API gate.)
-const REVIEW_CONFIDENCE_FLOOR = 0.7
-
-/** Rows at/above the API review floor are safe to keep by default; below it the
- * estimator must review before accepting. <0.5 is flagged as low-confidence. */
-function statusForConfidence(confidence: number): ReviewStatus {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'ok'
-  if (confidence >= 0.5) return 'review'
-  return 'flag'
-}
-
-function confidenceLabel(confidence: number): 'HIGH' | 'MED' | 'LOW' {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'HIGH'
-  if (confidence >= 0.5) return 'MED'
-  return 'LOW'
-}
+const confidenceLabel = reviewFloorLabel
 
 function statusColor(status: ReviewStatus): string {
   return status === 'ok' ? 'var(--m-green)' : status === 'review' ? 'var(--m-amber)' : 'var(--m-red)'
