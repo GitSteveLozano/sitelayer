@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
+import type { Readable } from 'node:stream'
+import type { PoolClient } from 'pg'
+import type { ActiveCompany } from '../auth-types.js'
+import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../storage.js'
 import {
+  __captureOnsiteDesktopEvidenceForTests,
   __agentFeedDeliveryFromRowForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
@@ -19,6 +24,36 @@ const AGENT_FEED_TOKENS_ENV = 'AGENT_FEED_TOKENS'
 const READY_AGENT_FEED_OPTIONS = {
   diagnosticAgentAudience: 'onsite-diagnostics',
   agentFeedTokensEnv: JSON.stringify({ 'onsite-diagnostics': 'ready-test-token' }),
+}
+
+class MemoryStorage implements BlueprintStorage {
+  backend = 'local-fs' as const
+  bucket = null
+  writes: Array<{ key: string; contents: Buffer; contentType: string | undefined }> = []
+
+  async put(key: string, contents: Buffer, contentType?: string): Promise<void> {
+    this.writes.push({ key, contents, contentType })
+  }
+
+  async putStream(_key: string, _body: Readable, _options?: PutStreamOptions): Promise<void> {
+    throw new Error('not implemented')
+  }
+
+  async get(_key: string): Promise<Buffer> {
+    throw new Error('not implemented')
+  }
+
+  async copy(_sourceKey: string, _destKey: string): Promise<void> {
+    throw new Error('not implemented')
+  }
+
+  async deleteObject(_storagePath: string): Promise<void> {
+    throw new Error('not implemented')
+  }
+
+  async getDownloadUrl(_key: string, _options?: DownloadUrlOptions): Promise<string | null> {
+    return null
+  }
 }
 
 async function withReadyOpsAgentFeed<T>(fn: () => Promise<T>): Promise<T> {
@@ -464,6 +499,100 @@ describe('ops diagnostics', () => {
       })
       expect(routedEnvelopes).toHaveLength(1)
     })
+  })
+
+  it('stores operator-triggered desktop evidence as a tenant-scoped capture artifact', async () => {
+    const storage = new MemoryStorage()
+    const queries: Array<{ sql: string; params: unknown[] | undefined }> = []
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input)
+      expect(url).toContain('http://screen.local/api/screen/clip/file')
+      expect(url).toContain('since=20')
+      expect(url).toContain('format=mp4')
+      return new Response(Buffer.from('fake mp4 bytes'), { headers: { 'content-type': 'video/mp4' } })
+    }
+    const runTx = async <T>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+      expect(companyId).toBe('company-1')
+      const client = {
+        query: async (sql: string, params?: unknown[]) => {
+          queries.push({ sql, params })
+          if (sql.includes('insert into capture_artifacts')) return { rows: [{ id: 'artifact-1' }], rowCount: 1 }
+          return { rows: [], rowCount: 1 }
+        },
+      } as unknown as PoolClient
+      return fn(client)
+    }
+
+    const result = await __captureOnsiteDesktopEvidenceForTests(
+      {
+        requireCapability: async () => true,
+        sendJson: () => undefined,
+        company: { id: 'company-1' } as ActiveCompany,
+        storage,
+        buildSha: 'build-test',
+        fetchImpl,
+      },
+      { screenCaptureUrl: 'http://screen.local', fetchImpl, timeoutMs: 250 },
+      {
+        session: {
+          id: '11111111-1111-4111-8111-111111111111',
+          state: 'active',
+          created_at: '2026-06-12T12:00:00.000Z',
+          expires_at: '2026-06-12T13:00:00.000Z',
+          operator_user_id: 'user_42',
+          label: null,
+          intent: 'capture_desktop_context',
+          plan: {
+            status: 'ready',
+            control_level: 'capture',
+            recommended_entry: 'capture_desktop_context',
+            can_capture_desktop: true,
+            can_route_work: false,
+            can_dispatch_agent_review: false,
+            blockers: [],
+            actions: [],
+          },
+          audit_events: [],
+        },
+        event: {
+          id: '22222222-2222-4222-8222-222222222222',
+          at: '2026-06-12T12:05:00.000Z',
+          actor_user_id: 'user_99',
+          type: 'action.requested',
+          action_key: 'capture_desktop_context',
+          effect: 'audit_only',
+          summary: 'Requested Attach desktop evidence.',
+        },
+        actionKey: 'capture_desktop_context',
+        actorUserId: 'user_99',
+      },
+      runTx,
+    )
+
+    expect(result).toMatchObject({
+      status: 'attached',
+      artifact_id: 'artifact-1',
+      content_type: 'video/mp4',
+      byte_size: Buffer.byteLength('fake mp4 bytes'),
+      error: null,
+    })
+    expect(result?.storage_key).toMatch(/^company-1\/capture-sessions\/.+\/ops-diagnostic-desktop-/)
+    expect(storage.writes).toHaveLength(1)
+    expect(storage.writes[0]).toMatchObject({
+      key: result?.storage_key,
+      contentType: 'video/mp4',
+    })
+    expect(storage.writes[0]?.contents.toString()).toBe('fake mp4 bytes')
+
+    const sessionInsert = queries.find((query) => query.sql.includes('insert into capture_sessions'))
+    const artifactInsert = queries.find((query) => query.sql.includes('insert into capture_artifacts'))
+    const consentScope = JSON.parse(String(sessionInsert?.params?.[8] ?? '{}')) as Record<string, unknown>
+    expect(sessionInsert?.params).toContain('ops-diagnostic-desktop-v1')
+    expect(consentScope).toMatchObject({ mode: 'desktop', route_path: '/ops', screen_video: true })
+    expect(artifactInsert?.params).toContain(result?.storage_key)
+    expect(JSON.stringify(artifactInsert?.params)).toContain('ops_diagnostic_desktop_capture')
+    expect(JSON.stringify(queries)).not.toContain('/tmp/')
+    expect(JSON.stringify(queries)).not.toContain('/mnt/')
   })
 
   it('maps onsite agent-feed delivery rows into phone-safe session state', () => {

@@ -30,6 +30,7 @@ import {
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsOnsiteDiagnosticCaptureRouteResult,
+  type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticSessionActionResponse,
@@ -230,6 +231,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         null)
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
+  const latestDesktopEvidence = lastDiagnosticAction?.accepted_action.desktop_evidence ?? null
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
   const fieldReadinessItems = buildFieldReadinessItems({
@@ -339,6 +341,14 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
               headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
               supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
+            />
+          ) : null}
+          {latestDesktopEvidence ? (
+            <MListRow
+              leading={<MI.Camera size={18} />}
+              leadingTone={desktopEvidenceTone(latestDesktopEvidence)}
+              headline="Desktop evidence"
+              supporting={formatDesktopEvidenceSummary(latestDesktopEvidence)}
             />
           ) : null}
           {latestCaptureRoute && latestCaptureRouteAction ? (
@@ -859,6 +869,22 @@ function formatDiagnosticActionSummary(action: { enabled: boolean; reason: strin
   return action.reason
 }
 
+export function desktopEvidenceTone(
+  evidence: OpsOnsiteDiagnosticDesktopEvidenceResult,
+): 'amber' | 'blue' | 'green' | 'red' {
+  if (evidence.status === 'attached') return 'green'
+  if (evidence.status === 'not_configured') return 'amber'
+  return 'red'
+}
+
+export function formatDesktopEvidenceSummary(evidence: OpsOnsiteDiagnosticDesktopEvidenceResult): string {
+  if (evidence.status === 'attached') {
+    return evidence.byte_size ? `Attached ${formatBytes(evidence.byte_size)} clip.` : 'Attached desktop clip.'
+  }
+  if (evidence.status === 'not_configured') return 'Desktop evidence storage is not configured.'
+  return evidence.error ? `Attach failed: ${evidence.error}` : 'Desktop evidence did not attach.'
+}
+
 function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {
   if (route.status === 'accepted') return 'green'
   if (route.status === 'not_configured') return 'amber'
@@ -943,6 +969,15 @@ function formatClock(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'soon'
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const kib = bytes / 1024
+  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`
+  const mib = kib / 1024
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`
 }
 
 function lowerFirst(value: string): string {

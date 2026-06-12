@@ -155,6 +155,7 @@ export {
   type OpsOnsiteDiagnosticAgentFeedResult,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticCaptureRouteResult,
+  type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionCreateInput,
   type OpsOnsiteDiagnosticSessionCreateResponse,

@@ -333,6 +333,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         requireCapability: ctx.requireCapability,
         sendJson,
         company,
+        storage: ctx.storage,
+        buildSha: getBuildSha(),
         readBody,
         getCurrentUserId: () => currentUserId,
       }),

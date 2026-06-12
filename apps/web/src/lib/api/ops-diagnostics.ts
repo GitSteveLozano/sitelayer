@@ -104,6 +104,16 @@ export type OpsOnsiteDiagnosticCaptureRouteResult = {
   error: string | null
 }
 
+export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
+  capture_session_id: string | null
+  artifact_id: string | null
+  storage_key: string | null
+  status: 'attached' | 'failed' | 'not_configured'
+  content_type: string | null
+  byte_size: number | null
+  error: string | null
+}
+
 export type OpsOnsiteDiagnosticActionRequestInput = {
   action_key: OpsOnsiteDiagnosticActionKey
   control_token: string
@@ -115,6 +125,7 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult
     capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }

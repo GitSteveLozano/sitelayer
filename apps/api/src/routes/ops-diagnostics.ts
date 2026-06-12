@@ -13,6 +13,7 @@ import {
 } from '@operator/projectkit'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
 import { AGENT_FEED_TOKENS_ENV, insertAgentFeedConcernTx, parseAgentFeedTokens } from './agent-feed.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
@@ -85,6 +86,7 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult
     capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
@@ -105,6 +107,16 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   concern_ref: string
   queued: boolean
   id: string | null
+}
+
+export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
+  capture_session_id: string | null
+  artifact_id: string | null
+  storage_key: string | null
+  status: 'attached' | 'failed' | 'not_configured'
+  content_type: string | null
+  byte_size: number | null
+  error: string | null
 }
 
 export type OpsOnsiteDiagnosticAgentFeedDelivery = {
@@ -139,6 +151,8 @@ export type OpsDiagnosticsRouteCtx = {
   requireCapability: (capability: Capability) => Promise<boolean>
   sendJson: (status: number, body: unknown) => void
   company?: ActiveCompany
+  storage?: BlueprintStorage
+  buildSha?: string
   readBody?: () => Promise<Record<string, unknown>>
   getCurrentUserId?: () => string
   fetchImpl?: typeof fetch
@@ -169,8 +183,12 @@ const APP_ISSUE_VIEW: Capability = 'app_issue.view'
 const APP_ISSUE_CAPTURE: Capability = 'app_issue.capture'
 // Optional agent-feed lane for routed onsite actions. Unset means audit-only.
 const OPS_DIAGNOSTIC_AGENT_AUDIENCE_ENV = 'SITELAYER_OPS_DIAGNOSTIC_AGENT_AUDIENCE'
+const OPS_DESKTOP_EVIDENCE_CONSENT_VERSION = 'ops-diagnostic-desktop-v1'
+const OPS_DESKTOP_EVIDENCE_DEFAULT_SECONDS = 20
+const OPS_DESKTOP_EVIDENCE_DEFAULT_TIMEOUT_MS = 7500
+const OPS_DESKTOP_EVIDENCE_RETENTION_DAYS = 14
 
-type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
+export type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
   control_token?: string
   control_token_hash?: string
 }
@@ -489,13 +507,22 @@ async function recordOnsiteDiagnosticAction(
       actorUserId,
     )
     if (!persisted) return { ok: false, status: 404, error: 'diagnostic session not found' }
-    const captureRoute = await deliverOnsiteDiagnosticCaptureRoute(diagnosticsOptions(ctx), {
-      session: persisted.session,
-      event: persisted.event,
-      actionKey,
-      actionLabel: action.label,
-      actorUserId,
-    })
+    const options = diagnosticsOptions(ctx)
+    const [desktopEvidence, captureRoute] = await Promise.all([
+      captureOnsiteDesktopEvidence(ctx, options, {
+        session: persisted.session,
+        event: persisted.event,
+        actionKey,
+        actorUserId,
+      }),
+      deliverOnsiteDiagnosticCaptureRoute(options, {
+        session: persisted.session,
+        event: persisted.event,
+        actionKey,
+        actionLabel: action.label,
+        actorUserId,
+      }),
+    ])
     return {
       ok: true,
       value: {
@@ -504,6 +531,7 @@ async function recordOnsiteDiagnosticAction(
         accepted_action: {
           key: actionKey,
           effect: 'audit_only',
+          ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
           ...(captureRoute ? { capture_route: captureRoute } : {}),
           ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
         },
@@ -771,6 +799,252 @@ async function deliverOnsiteDiagnosticCaptureRoute(
   } finally {
     clearTimeout(timer)
   }
+}
+
+type OpsDiagnosticsTxRunner = <T>(companyId: string, fn: (client: PoolClient) => Promise<T>) => Promise<T>
+
+async function captureOnsiteDesktopEvidence(
+  ctx: OpsDiagnosticsRouteCtx,
+  opts: OpsDiagnosticsBuildOptions,
+  args: {
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actorUserId: string | null
+  },
+  runTx: OpsDiagnosticsTxRunner = withMutationTx,
+): Promise<OpsOnsiteDiagnosticDesktopEvidenceResult | null> {
+  if (args.actionKey !== 'capture_desktop_context') return null
+  const companyId = ctx.company?.id
+  if (!companyId || !ctx.storage) {
+    return desktopEvidenceResult('not_configured', 'company storage is not available')
+  }
+  const screenCaptureUrl = trimTrailingSlash(opts.screenCaptureUrl ?? '')
+  if (!screenCaptureUrl) return desktopEvidenceResult('not_configured', 'screen capture is not configured')
+
+  const captureSeconds = readBoundedIntegerEnv(
+    'SITELAYER_OPS_DESKTOP_EVIDENCE_SECONDS',
+    OPS_DESKTOP_EVIDENCE_DEFAULT_SECONDS,
+    5,
+    120,
+  )
+  const downloaded = await downloadDesktopEvidenceClip(screenCaptureUrl, {
+    fetchImpl: opts.fetchImpl ?? fetch,
+    timeoutMs: readBoundedIntegerEnv(
+      'SITELAYER_OPS_DESKTOP_EVIDENCE_TIMEOUT_MS',
+      OPS_DESKTOP_EVIDENCE_DEFAULT_TIMEOUT_MS,
+      1000,
+      30000,
+    ),
+    captureSeconds,
+  })
+  if (!downloaded.ok) return desktopEvidenceResult('failed', downloaded.error)
+
+  const captureSessionId = randomUUID()
+  const fileName = `ops-diagnostic-desktop-${args.event.id}.mp4`
+  const storageKey = buildCaptureArtifactStorageKey(companyId, captureSessionId, fileName)
+  const contentHash = createHash('sha256').update(downloaded.bytes).digest('hex')
+  const now = new Date()
+  const retentionExpiresAt = new Date(now.getTime() + OPS_DESKTOP_EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000)
+
+  try {
+    await ctx.storage.put(storageKey, downloaded.bytes, downloaded.contentType)
+    const artifactId = await runTx(companyId, async (client) => {
+      await insertOpsDesktopCaptureSessionTx(client, {
+        companyId,
+        captureSessionId,
+        actorUserId: args.actorUserId,
+        buildSha: ctx.buildSha ?? null,
+        now,
+        retentionExpiresAt,
+        session: args.session,
+        event: args.event,
+        captureSeconds,
+      })
+      const artifact = await client.query<{ id: string }>(
+        `insert into capture_artifacts (
+           company_id, capture_session_id, kind, storage_key, uri, content_type,
+           byte_size, content_hash, duration_ms, pii_level, access_policy,
+           metadata, retention_expires_at, redaction_version
+         ) values (
+           $1, $2::uuid, 'video', $3, null, $4,
+           $5, $6, $7, 'private', 'support_only',
+           $8::jsonb, $9::timestamptz, 'capture-session-v1'
+         )
+         returning id::text as id`,
+        [
+          companyId,
+          captureSessionId,
+          storageKey,
+          downloaded.contentType,
+          downloaded.bytes.length,
+          contentHash,
+          captureSeconds * 1000,
+          JSON.stringify({
+            source: 'ops_diagnostic_desktop_capture',
+            ops_diagnostic_session_id: args.session.id,
+            action_event_id: args.event.id,
+            requested_action: args.actionKey,
+            requested_by: args.actorUserId,
+            capture_seconds: captureSeconds,
+            screen_capture_endpoint: '/api/screen/clip/file',
+          }),
+          retentionExpiresAt.toISOString(),
+        ],
+      )
+      await client.query(`update capture_sessions set last_seen_at = now() where id = $1::uuid and company_id = $2`, [
+        captureSessionId,
+        companyId,
+      ])
+      return artifact.rows[0]?.id ?? null
+    })
+    return {
+      capture_session_id: captureSessionId,
+      artifact_id: artifactId,
+      storage_key: storageKey,
+      status: 'attached',
+      content_type: downloaded.contentType,
+      byte_size: downloaded.bytes.length,
+      error: null,
+    }
+  } catch (err) {
+    return desktopEvidenceResult('failed', err instanceof Error ? err.message : 'desktop evidence attach failed')
+  }
+}
+
+async function insertOpsDesktopCaptureSessionTx(
+  client: PoolClient,
+  args: {
+    companyId: string
+    captureSessionId: string
+    actorUserId: string | null
+    buildSha: string | null
+    now: Date
+    retentionExpiresAt: Date
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    captureSeconds: number
+  },
+): Promise<void> {
+  await client.query(
+    `insert into capture_sessions (
+       id, company_id, actor_user_id, mode, status, route_path, device_kind,
+       platform, viewport, app_build_sha, consent_version,
+       consent_actor_kind, consent_actor_ref, consent_authority, consent_scope,
+       consented_at, metadata, started_at, last_seen_at, stopped_at,
+       retention_expires_at
+     ) values (
+       $1::uuid, $2, $3, 'desktop', 'stopped', '/ops', 'desktop',
+       'screen-capture', null, $4, $5,
+       $6, $7, $8, $9::jsonb,
+       $10::timestamptz, $11::jsonb, $10::timestamptz, $10::timestamptz, $10::timestamptz,
+       $12::timestamptz
+     )`,
+    [
+      args.captureSessionId,
+      args.companyId,
+      args.actorUserId,
+      args.buildSha,
+      OPS_DESKTOP_EVIDENCE_CONSENT_VERSION,
+      args.actorUserId ? 'user' : null,
+      args.actorUserId,
+      'authenticated_company_user',
+      JSON.stringify({
+        mode: 'desktop',
+        route_path: '/ops',
+        screen_video: true,
+        streams: ['screen_video'],
+        artifacts: { video: true },
+      }),
+      args.now.toISOString(),
+      JSON.stringify({
+        source: 'ops_diagnostic_desktop_capture',
+        ops_diagnostic_session_id: args.session.id,
+        action_event_id: args.event.id,
+        capture_seconds: args.captureSeconds,
+      }),
+      args.retentionExpiresAt.toISOString(),
+    ],
+  )
+}
+
+type DownloadedDesktopEvidenceClip = { ok: true; bytes: Buffer; contentType: string } | { ok: false; error: string }
+
+async function downloadDesktopEvidenceClip(
+  screenCaptureUrl: string,
+  opts: { fetchImpl: typeof fetch; timeoutMs: number; captureSeconds: number },
+): Promise<DownloadedDesktopEvidenceClip> {
+  let clipUrl: URL
+  try {
+    clipUrl = new URL(`${screenCaptureUrl}/api/screen/clip/file`)
+  } catch {
+    return { ok: false, error: 'screen capture URL is invalid' }
+  }
+  clipUrl.searchParams.set('since', String(opts.captureSeconds))
+  clipUrl.searchParams.set('format', 'mp4')
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs)
+  try {
+    const response = await opts.fetchImpl(clipUrl, {
+      headers: { accept: 'video/mp4, application/octet-stream' },
+      signal: controller.signal,
+    })
+    if (!response.ok) return { ok: false, error: `screen capture HTTP ${response.status}` }
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length <= 0) return { ok: false, error: 'screen capture returned an empty clip' }
+    return { ok: true, bytes, contentType: normalizedContentType(response.headers.get('content-type'), 'video/mp4') }
+  } catch (err) {
+    const error =
+      err instanceof Error && err.name === 'AbortError'
+        ? 'screen capture timeout'
+        : err instanceof Error
+          ? err.message
+          : 'screen capture fetch failed'
+    return { ok: false, error }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function desktopEvidenceResult(
+  status: OpsOnsiteDiagnosticDesktopEvidenceResult['status'],
+  error: string | null,
+): OpsOnsiteDiagnosticDesktopEvidenceResult {
+  return {
+    capture_session_id: null,
+    artifact_id: null,
+    storage_key: null,
+    status,
+    content_type: null,
+    byte_size: null,
+    error,
+  }
+}
+
+function normalizedContentType(value: string | null, fallback: string): string {
+  const clean = value?.split(';')[0]?.trim().toLowerCase()
+  return clean || fallback
+}
+
+function readBoundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name])
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(parsed)))
+}
+
+export async function __captureOnsiteDesktopEvidenceForTests(
+  ctx: OpsDiagnosticsRouteCtx,
+  opts: OpsDiagnosticsBuildOptions,
+  args: {
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actorUserId: string | null
+  },
+  runTx: OpsDiagnosticsTxRunner,
+): Promise<OpsOnsiteDiagnosticDesktopEvidenceResult | null> {
+  return captureOnsiteDesktopEvidence(ctx, opts, args, runTx)
 }
 
 function buildOnsiteDiagnosticCaptureEnvelope(args: {

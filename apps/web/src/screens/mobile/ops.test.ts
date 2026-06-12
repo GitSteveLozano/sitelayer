@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
+  desktopEvidenceTone,
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
+  formatDesktopEvidenceSummary,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
   OpsOnsiteDiagnosticAgentFeedDelivery,
+  OpsOnsiteDiagnosticDesktopEvidenceResult,
   OpsOnsiteDiagnosticSessionPlan,
 } from '@/lib/api'
 
@@ -35,6 +38,21 @@ function component(overrides: Partial<OpsDiagnosticComponent> = {}): OpsDiagnost
     detail: 'Ready.',
     latency_ms: null,
     facts: {},
+    ...overrides,
+  }
+}
+
+function desktopEvidence(
+  overrides: Partial<OpsOnsiteDiagnosticDesktopEvidenceResult> = {},
+): OpsOnsiteDiagnosticDesktopEvidenceResult {
+  return {
+    capture_session_id: 'capture-session-1',
+    artifact_id: 'artifact-1',
+    storage_key: 'company-1/capture-sessions/capture-session-1/clip.mp4',
+    status: 'attached',
+    content_type: 'video/mp4',
+    byte_size: 1_572_864,
+    error: null,
     ...overrides,
   }
 }
@@ -81,6 +99,19 @@ describe('MobileOps agent-feed delivery copy', () => {
     expect(formatAgentFeedDeliveryHeadline(state)).toBe('Support packet delivery')
     expect(formatAgentFeedDeliverySummary(state, Date.parse('2026-06-12T12:12:00.000Z'))).toBe(
       'Failed 2m ago · callback error recorded',
+    )
+  })
+})
+
+describe('MobileOps desktop evidence copy', () => {
+  it('shows whether a desktop evidence clip attached', () => {
+    const attached = desktopEvidence()
+    expect(desktopEvidenceTone(attached)).toBe('green')
+    expect(formatDesktopEvidenceSummary(attached)).toBe('Attached 1.5 MB clip.')
+
+    expect(desktopEvidenceTone(desktopEvidence({ status: 'not_configured', byte_size: null }))).toBe('amber')
+    expect(formatDesktopEvidenceSummary(desktopEvidence({ status: 'failed', error: 'screen capture timeout' }))).toBe(
+      'Attach failed: screen capture timeout',
     )
   })
 })
