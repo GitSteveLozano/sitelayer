@@ -2,7 +2,8 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordAudit } from '../audit.js'
-import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import {
   parseShipmentEventRequest,
@@ -362,103 +363,105 @@ export async function handleShipmentRoutes(
     const payload = body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : {}
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<ShipmentRow>(
-          `select ${SHIPMENT_COLUMNS} from shipments
-            where company_id = $1 and id = $2 and deleted_at is null
-            for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        // Post-lock version check: two concurrent POSTs with the same
-        // stateVersion serialize on the row lock above; the second arrival
-        // sees the bumped state_version and returns 409 instead of
-        // re-running the reducer. Same pattern as rental-billing-state.
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, row: current }
-        }
-
-        const reducerEvent = buildShipmentReducerEvent(eventType, payload, ctx.currentUserId)
-        let nextSnapshot: ShipmentWorkflowSnapshot
-        try {
-          nextSnapshot = transitionShipmentWorkflow(shipmentRowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            row: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<ShipmentRow>(
-          `update shipments
-             set status = $3, state_version = $4,
-                 shipped_at = $5, delivered_at = $6, confirmed_by = $7,
-                 driver = $8, ticket_number = $9,
-                 version = version + 1, updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${SHIPMENT_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.shipped_at ?? null,
-            nextSnapshot.delivered_at ?? null,
-            nextSnapshot.confirmed_by ?? null,
-            nextSnapshot.driver ?? null,
-            nextSnapshot.ticket_number ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new Error('shipment update returned no row')
-
-        // shipment_events keeps the human-readable per-shipment audit
-        // trail (state_before/state_after); workflow_event_log is the
-        // cross-workflow replay corpus. Both write inside the same tx as
-        // the state update so a crash between them is impossible.
-        await client.query(
-          `insert into shipment_events (
-            company_id, shipment_id, event_type, payload, state_before, state_after, state_version, produced_by
-          ) values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
-          [
-            ctx.company.id,
-            id,
-            eventType,
-            JSON.stringify(payload),
-            current.status,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            ctx.currentUserId,
-          ],
-        )
-        await recordWorkflowEvent(client, {
+      // Captured by loadSnapshot (pre-transition status for the
+      // shipment_events trail row) and by sideEffects (the fresh lines +
+      // events the 200 snapshot carries) — the primitive's ok result only
+      // holds the updated row.
+      let lockedRow: ShipmentRow | undefined
+      let linesRows: ShipmentLineRow[] = []
+      let eventsRows: ShipmentEventRow[] = []
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<ShipmentRow, ShipmentWorkflowSnapshot, ShipmentWorkflowEvent>(client, {
+          definition: {
+            name: SHIPMENT_WORKFLOW_NAME,
+            schemaVersion: SHIPMENT_WORKFLOW_SCHEMA_VERSION,
+            reduce: transitionShipmentWorkflow,
+          },
           companyId: ctx.company.id,
-          workflowName: SHIPMENT_WORKFLOW_NAME,
-          schemaVersion: SHIPMENT_WORKFLOW_SCHEMA_VERSION,
           entityType: 'shipment',
           entityId: id,
-          // state_version BEFORE the transition — matches the unique
+          // state_version BEFORE the transition — the primitive keys the
+          // workflow_event_log row on this, matching the unique
           // (entity_id, state_version) convention enforced on
-          // workflow_event_log (see 020_workflow_event_log).
-          stateVersion: stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
+          // workflow_event_log (see 020_workflow_event_log). Post-lock
+          // version check: two concurrent POSTs with the same
+          // stateVersion serialize on the row lock; the second arrival
+          // sees the bumped state_version and returns 409 instead of
+          // re-running the reducer. Same pattern as rental-billing-state.
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
-
-        const lines = await client.query<ShipmentLineRow>(
-          `select ${LINE_COLUMNS} from shipment_lines where company_id = $1 and shipment_id = $2 order by created_at asc`,
-          [ctx.company.id, id],
-        )
-        const eventsRows = await client.query<ShipmentEventRow>(
-          `select ${EVENT_COLUMNS} from shipment_events where company_id = $1 and shipment_id = $2 order by created_at asc`,
-          [ctx.company.id, id],
-        )
-        return { kind: 'ok' as const, row: updated, lines: lines.rows, events: eventsRows.rows }
-      })
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<ShipmentRow>(
+              `select ${SHIPMENT_COLUMNS} from shipments
+                where company_id = $1 and id = $2 and deleted_at is null
+                for update`,
+              [ctx.company.id, id],
+            )
+            const current = lockedResult.rows[0]
+            if (!current) return null
+            lockedRow = current
+            return { row: current, snapshot: shipmentRowToSnapshot(current) }
+          },
+          buildEvent: () => buildShipmentReducerEvent(eventType, payload, ctx.currentUserId),
+          persist: async (c, next) => {
+            const updateResult = await c.query<ShipmentRow>(
+              `update shipments
+                 set status = $3, state_version = $4,
+                     shipped_at = $5, delivered_at = $6, confirmed_by = $7,
+                     driver = $8, ticket_number = $9,
+                     version = version + 1, updated_at = now()
+               where company_id = $1 and id = $2
+               returning ${SHIPMENT_COLUMNS}`,
+              [
+                ctx.company.id,
+                id,
+                next.state,
+                next.state_version,
+                next.shipped_at ?? null,
+                next.delivered_at ?? null,
+                next.confirmed_by ?? null,
+                next.driver ?? null,
+                next.ticket_number ?? null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new Error('shipment update returned no row')
+            return updated
+          },
+          sideEffects: async (c, next) => {
+            // shipment_events keeps the human-readable per-shipment audit
+            // trail (state_before/state_after); workflow_event_log is the
+            // cross-workflow replay corpus (appended by the primitive).
+            // Both write inside the same tx as the state update so a
+            // crash between them is impossible.
+            await c.query(
+              `insert into shipment_events (
+                company_id, shipment_id, event_type, payload, state_before, state_after, state_version, produced_by
+              ) values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+              [
+                ctx.company.id,
+                id,
+                eventType,
+                JSON.stringify(payload),
+                lockedRow!.status,
+                next.state,
+                next.state_version,
+                ctx.currentUserId,
+              ],
+            )
+            const lines = await c.query<ShipmentLineRow>(
+              `select ${LINE_COLUMNS} from shipment_lines where company_id = $1 and shipment_id = $2 order by created_at asc`,
+              [ctx.company.id, id],
+            )
+            const eventsResult = await c.query<ShipmentEventRow>(
+              `select ${EVENT_COLUMNS} from shipment_events where company_id = $1 and shipment_id = $2 order by created_at asc`,
+              [ctx.company.id, id],
+            )
+            linesRows = lines.rows
+            eventsRows = eventsResult.rows
+          },
+        }),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'shipment not found' })
@@ -490,7 +493,7 @@ export async function handleShipmentRoutes(
       observeAudit('shipment', `event:${eventType.toLowerCase()}`)
       const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(SHIPMENT_WORKFLOW_NAME, outcome)
-      ctx.sendJson(200, shipmentWorkflowSnapshotResponse(result.row, result.lines, result.events))
+      ctx.sendJson(200, shipmentWorkflowSnapshotResponse(result.row, linesRows, eventsRows))
       return true
     } catch (err) {
       ctx.sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })
@@ -511,159 +514,131 @@ export async function handleShipmentRoutes(
       ctx.sendJson(400, { error: parsed.error })
       return true
     }
-    const result = await withMutationTx(async (client: PoolClient) => {
-      const current = await client.query<{
-        status: ShipmentWorkflowState
-        state_version: number
-        scheduled_for: string | null
-        shipped_at: string | null
-        delivered_at: string | null
-        confirmed_by: string | null
-        driver: string | null
-        ticket_number: string | null
-      }>(
-        `select status, state_version,
-                to_char(scheduled_for, 'YYYY-MM-DD') as scheduled_for,
-                shipped_at, delivered_at, confirmed_by, driver, ticket_number
-           from shipments
-          where company_id = $1 and id = $2 and deleted_at is null
-          for update`,
-        [ctx.company.id, id],
-      )
-      if (!current.rows[0]) {
-        return { error: 'shipment not found' as const, code: 404 }
-      }
-      const snapshot: ShipmentWorkflowSnapshot = {
-        state: current.rows[0].status,
-        state_version: current.rows[0].state_version,
-        scheduled_for: current.rows[0].scheduled_for,
-        shipped_at: current.rows[0].shipped_at,
-        delivered_at: current.rows[0].delivered_at,
-        confirmed_by: current.rows[0].confirmed_by,
-        driver: current.rows[0].driver,
-        ticket_number: current.rows[0].ticket_number,
-      }
-      if (current.rows[0].state_version !== parsed.value.state_version) {
-        return {
-          error: 'state_version mismatch — reload and retry' as const,
-          code: 409,
-          snapshot,
-        }
-      }
-      // Synthesize the event variant from the parsed type — the reducer
-      // wants fully-typed events, the wire format only carries `event`
-      // + optional payload.
-      const now = new Date().toISOString()
-      const payload = body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : {}
-      let event: ShipmentWorkflowEvent
-      switch (parsed.value.event) {
-        case 'START_PICKING':
-          event = { type: 'START_PICKING' }
-          break
-        case 'SHIP':
-          event = {
-            type: 'SHIP',
-            shipped_at: typeof payload.shipped_at === 'string' ? payload.shipped_at : now,
-            ...(typeof payload.driver === 'string' ? { driver: payload.driver } : {}),
-            ...(typeof payload.ticket_number === 'string' ? { ticket_number: payload.ticket_number } : {}),
-          }
-          break
-        case 'CONFIRM_DELIVERY':
-          event = {
-            type: 'CONFIRM_DELIVERY',
-            delivered_at: typeof payload.delivered_at === 'string' ? payload.delivered_at : now,
-            confirmed_by: typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
-          }
-          break
-        case 'OPEN_RETURN':
-          event = { type: 'OPEN_RETURN' }
-          break
-        case 'CLOSE':
-          event = {
-            type: 'CLOSE',
-            confirmed_by: typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
-          }
-          break
-        case 'VOID':
-          event = { type: 'VOID' }
-          break
-      }
-      let nextSnapshot: ShipmentWorkflowSnapshot
-      try {
-        nextSnapshot = transitionShipmentWorkflow(snapshot, event)
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : ('illegal transition' as const), code: 400 }
-      }
-      const updated = await client.query(
-        `update shipments
-           set status = $3, state_version = $4,
-               shipped_at = $5, delivered_at = $6, confirmed_by = $7,
-               driver = $8, ticket_number = $9,
-               version = version + 1, updated_at = now()
-         where company_id = $1 and id = $2
-         returning ${SHIPMENT_COLUMNS}`,
-        [
-          ctx.company.id,
-          id,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.shipped_at ?? null,
-          nextSnapshot.delivered_at ?? null,
-          nextSnapshot.confirmed_by ?? null,
-          nextSnapshot.driver ?? null,
-          nextSnapshot.ticket_number ?? null,
-        ],
-      )
-      // shipment_events keeps the human-readable per-shipment audit
-      // trail (state_before/state_after); workflow_event_log is the
-      // cross-workflow replay corpus consumed by scripts/replay-workflow.ts
-      // and the periodic sweep. Both write inside the same tx as the
-      // state update, so a crash between them is impossible.
-      await client.query(
-        `insert into shipment_events (
-          company_id, shipment_id, event_type, payload, state_before, state_after, state_version, produced_by
-        ) values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
-        [
-          ctx.company.id,
-          id,
-          parsed.value.event,
-          JSON.stringify(payload),
-          snapshot.state,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          ctx.currentUserId,
-        ],
-      )
-      await recordWorkflowEvent(client, {
+    const payload = body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : {}
+    // Pre-transition state for the shipment_events trail row — captured by
+    // loadSnapshot (sideEffects only sees the updated row).
+    let beforeState: ShipmentWorkflowState | undefined
+    const result = await withMutationTx((client: PoolClient) =>
+      dispatchWorkflowEvent<Record<string, unknown>, ShipmentWorkflowSnapshot, ShipmentWorkflowEvent>(client, {
+        definition: {
+          name: SHIPMENT_WORKFLOW_NAME,
+          schemaVersion: SHIPMENT_WORKFLOW_SCHEMA_VERSION,
+          reduce: transitionShipmentWorkflow,
+        },
         companyId: ctx.company.id,
-        workflowName: SHIPMENT_WORKFLOW_NAME,
-        schemaVersion: SHIPMENT_WORKFLOW_SCHEMA_VERSION,
         entityType: 'shipment',
         entityId: id,
-        // state_version BEFORE the transition — matches the convention
-        // used by rental_billing_state (see comment on the unique
+        // state_version BEFORE the transition — the primitive keys the
+        // workflow_event_log row on this, matching the convention used by
+        // rental_billing_state (see comment on the unique
         // (entity_id, workflow_name, state_version) constraint — added in
         // 020_workflow_event_log, widened in 106).
-        stateVersion: snapshot.state_version,
-        eventType: parsed.value.event,
-        eventPayload: event,
-        snapshotAfter: nextSnapshot,
+        expectedStateVersion: parsed.value.state_version,
         actorUserId: ctx.currentUserId,
-      })
-      const outcome = workflowEventOutcome(parsed.value.event)
-      if (outcome) observeWorkflowEvent(SHIPMENT_WORKFLOW_NAME, outcome)
-      return { shipment: updated.rows[0], snapshot: nextSnapshot }
-    })
-    if ('error' in result) {
-      const body: Record<string, unknown> = { error: result.error }
-      if ('snapshot' in result && result.snapshot) {
-        body.snapshot = result.snapshot
-      }
-      ctx.sendJson(result.code ?? 400, body)
+        loadSnapshot: async (c) => {
+          const current = await c.query<{
+            status: ShipmentWorkflowState
+            state_version: number
+            scheduled_for: string | null
+            shipped_at: string | null
+            delivered_at: string | null
+            confirmed_by: string | null
+            driver: string | null
+            ticket_number: string | null
+          }>(
+            `select status, state_version,
+                    to_char(scheduled_for, 'YYYY-MM-DD') as scheduled_for,
+                    shipped_at, delivered_at, confirmed_by, driver, ticket_number
+               from shipments
+              where company_id = $1 and id = $2 and deleted_at is null
+              for update`,
+            [ctx.company.id, id],
+          )
+          const row = current.rows[0]
+          if (!row) return null
+          beforeState = row.status
+          return {
+            row: row as Record<string, unknown>,
+            snapshot: {
+              state: row.status,
+              state_version: row.state_version,
+              scheduled_for: row.scheduled_for,
+              shipped_at: row.shipped_at,
+              delivered_at: row.delivered_at,
+              confirmed_by: row.confirmed_by,
+              driver: row.driver,
+              ticket_number: row.ticket_number,
+            },
+          }
+        },
+        // Synthesize the event variant from the parsed type — the reducer
+        // wants fully-typed events, the wire format only carries `event`
+        // + optional payload.
+        buildEvent: () => buildShipmentReducerEvent(parsed.value.event, payload, ctx.currentUserId),
+        persist: async (c, next) => {
+          const updated = await c.query(
+            `update shipments
+               set status = $3, state_version = $4,
+                   shipped_at = $5, delivered_at = $6, confirmed_by = $7,
+                   driver = $8, ticket_number = $9,
+                   version = version + 1, updated_at = now()
+             where company_id = $1 and id = $2
+             returning ${SHIPMENT_COLUMNS}`,
+            [
+              ctx.company.id,
+              id,
+              next.state,
+              next.state_version,
+              next.shipped_at ?? null,
+              next.delivered_at ?? null,
+              next.confirmed_by ?? null,
+              next.driver ?? null,
+              next.ticket_number ?? null,
+            ],
+          )
+          return updated.rows[0] as Record<string, unknown>
+        },
+        sideEffects: async (c, next) => {
+          // shipment_events keeps the human-readable per-shipment audit
+          // trail (state_before/state_after); workflow_event_log is the
+          // cross-workflow replay corpus consumed by scripts/replay-workflow.ts
+          // and the periodic sweep (appended by the primitive). Both write
+          // inside the same tx as the state update, so a crash between
+          // them is impossible.
+          await c.query(
+            `insert into shipment_events (
+              company_id, shipment_id, event_type, payload, state_before, state_after, state_version, produced_by
+            ) values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+            [
+              ctx.company.id,
+              id,
+              parsed.value.event,
+              JSON.stringify(payload),
+              beforeState!,
+              next.state,
+              next.state_version,
+              ctx.currentUserId,
+            ],
+          )
+          const outcome = workflowEventOutcome(parsed.value.event)
+          if (outcome) observeWorkflowEvent(SHIPMENT_WORKFLOW_NAME, outcome)
+        },
+      }),
+    )
+    if (result.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'shipment not found' })
+      return true
+    }
+    if (result.kind === 'version_conflict') {
+      ctx.sendJson(409, { error: 'state_version mismatch — reload and retry', snapshot: result.snapshot })
+      return true
+    }
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(400, { error: result.message })
       return true
     }
     ctx.sendJson(200, {
-      ...result.shipment,
+      ...result.row,
       next_events: nextShipmentEvents(result.snapshot.state),
     })
     return true

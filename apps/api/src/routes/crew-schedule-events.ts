@@ -2,10 +2,9 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import {
   CREW_SCHEDULE_WORKFLOW_NAME,
-  CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+  crewScheduleWorkflow,
   nextCrewScheduleEvents,
   parseCrewScheduleEventRequest,
-  transitionCrewScheduleWorkflow,
   type CrewScheduleHumanEventType,
   type CrewScheduleLaborEntryInput,
   type CrewScheduleWorkflowEvent,
@@ -15,7 +14,8 @@ import {
 import type { PermissionAction } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { z } from 'zod'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
@@ -228,135 +228,116 @@ export async function handleCrewScheduleEventRoutes(
     if (eventType === 'CONFIRM' && !ctx.requirePermission('brief_crew')) return true
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<CrewScheduleRow>(
-          `select ${CREW_SCHEDULE_COLUMNS}
-           from crew_schedules
-           where company_id = $1 and id = $2 and deleted_at is null
-           for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, row: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType as CrewScheduleHumanEventType, ctx.currentUserId, body)
-        let nextSnapshot: CrewScheduleWorkflowSnapshot
-        try {
-          nextSnapshot = transitionCrewScheduleWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          // Treat already-confirmed retries as a no-op success — matches
-          // the legacy /confirm route's idempotent-on-replay behavior.
-          if (current.status === 'confirmed') {
-            return { kind: 'ok' as const, row: current, eventType, noop: true }
-          }
-          return {
-            kind: 'illegal_transition' as const,
-            row: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<CrewScheduleRow>(
-          `update crew_schedules
-             set status = $3,
-                 state_version = $4,
-                 confirmed_at = $5,
-                 confirmed_by = $6,
-                 declined_at = $7,
-                 declined_by = $8,
-                 decline_reason = $9,
-                 version = version + 1
-           where company_id = $1 and id = $2
-           returning ${CREW_SCHEDULE_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.confirmed_at ?? null,
-            nextSnapshot.confirmed_by ?? null,
-            nextSnapshot.declined_at ?? null,
-            nextSnapshot.declined_by ?? null,
-            nextSnapshot.decline_reason ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'crew schedule update returned no row')
-
-        await recordWorkflowEvent(client, {
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<CrewScheduleRow, CrewScheduleWorkflowSnapshot, CrewScheduleWorkflowEvent>(client, {
+          definition: crewScheduleWorkflow,
           companyId: ctx.company.id,
-          workflowName: CREW_SCHEDULE_WORKFLOW_NAME,
-          schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
           entityType: 'crew_schedule',
-          entityId: updated.id,
-          stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
+          entityId: id,
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'crew_schedule',
-          entityId: updated.id,
-          action: `event:${eventType.toLowerCase()}`,
-          row: updated,
-          syncPayload: { action: eventType.toLowerCase(), schedule: updated },
-          idempotencyKey: `crew_schedule:event:${updated.id}:${updated.state_version}`,
-        })
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<CrewScheduleRow>(
+              `select ${CREW_SCHEDULE_COLUMNS}
+               from crew_schedules
+               where company_id = $1 and id = $2 and deleted_at is null
+               for update`,
+              [ctx.company.id, id],
+            )
+            const row = lockedResult.rows[0]
+            if (!row) return null
+            return { row, snapshot: rowToSnapshot(row) }
+          },
+          buildEvent: () => buildReducerEvent(eventType as CrewScheduleHumanEventType, ctx.currentUserId, body),
+          persist: async (c, next) => {
+            const updateResult = await c.query<CrewScheduleRow>(
+              `update crew_schedules
+                 set status = $3,
+                     state_version = $4,
+                     confirmed_at = $5,
+                     confirmed_by = $6,
+                     declined_at = $7,
+                     declined_by = $8,
+                     decline_reason = $9,
+                     version = version + 1
+               where company_id = $1 and id = $2
+               returning ${CREW_SCHEDULE_COLUMNS}`,
+              [
+                ctx.company.id,
+                id,
+                next.state,
+                next.state_version,
+                next.confirmed_at ?? null,
+                next.confirmed_by ?? null,
+                next.declined_at ?? null,
+                next.declined_by ?? null,
+                next.decline_reason ?? null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new HttpError(500, 'crew schedule update returned no row')
+            return updated
+          },
+          sideEffects: async (c, next, updated) => {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'crew_schedule',
+              entityId: updated.id,
+              action: `event:${eventType.toLowerCase()}`,
+              row: updated,
+              syncPayload: { action: eventType.toLowerCase(), schedule: updated },
+              idempotencyKey: `crew_schedule:event:${updated.id}:${updated.state_version}`,
+            })
 
-        // Declared outbox side effects (mirrors rental-billing-state.ts).
-        if (eventType === 'CONFIRM') {
-          // Gap 1 — labor-entry materialization + project version bump move
-          // out of the legacy /confirm route body and behind the CONFIRM
-          // event as a declared, worker-drained side effect so BOTH confirm
-          // paths produce identical labor_entries. Per-entity idempotency key
-          // (NOT per-state_version) so a replay/retry upserts the same row.
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'crew_schedule',
-            entityId: updated.id,
-            action: 'materialize_labor_entries',
-            mutationType: 'materialize_labor_entries',
-            row: updated,
-            outboxPayload: {
-              schedule_id: updated.id,
-              project_id: updated.project_id,
-              scheduled_for: updated.scheduled_for,
-              crew: updated.crew,
-              confirmed_by: nextSnapshot.confirmed_by ?? ctx.currentUserId,
-              entries: parseConfirmEntries(body),
-            },
-            idempotencyKey: `crew_schedule:materialize_labor:${updated.id}`,
-          })
-        } else if (eventType === 'DECLINE') {
-          // Gap 5 — notify the project foreman in-band (replaces the old
-          // /api/worker-issues note). Per-transition key so a re-decline
-          // after REASSIGN is a genuinely new notification.
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'crew_schedule',
-            entityId: updated.id,
-            action: 'notify_foreman_decline',
-            mutationType: 'notify_foreman_decline',
-            row: updated,
-            outboxPayload: {
-              schedule_id: updated.id,
-              project_id: updated.project_id,
-              scheduled_for: updated.scheduled_for,
-              declined_by: nextSnapshot.declined_by ?? ctx.currentUserId,
-              reason: nextSnapshot.decline_reason ?? '',
-              state_version: updated.state_version,
-            },
-            idempotencyKey: `crew_schedule:notify_decline:${updated.id}:${updated.state_version}`,
-          })
-        }
-
-        return { kind: 'ok' as const, row: updated, eventType, noop: false }
-      })
+            // Declared outbox side effects (mirrors rental-billing-state.ts).
+            if (eventType === 'CONFIRM') {
+              // Gap 1 — labor-entry materialization + project version bump move
+              // out of the legacy /confirm route body and behind the CONFIRM
+              // event as a declared, worker-drained side effect so BOTH confirm
+              // paths produce identical labor_entries. Per-entity idempotency key
+              // (NOT per-state_version) so a replay/retry upserts the same row.
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'crew_schedule',
+                entityId: updated.id,
+                action: 'materialize_labor_entries',
+                mutationType: 'materialize_labor_entries',
+                row: updated,
+                outboxPayload: {
+                  schedule_id: updated.id,
+                  project_id: updated.project_id,
+                  scheduled_for: updated.scheduled_for,
+                  crew: updated.crew,
+                  confirmed_by: next.confirmed_by ?? ctx.currentUserId,
+                  entries: parseConfirmEntries(body),
+                },
+                idempotencyKey: `crew_schedule:materialize_labor:${updated.id}`,
+              })
+            } else if (eventType === 'DECLINE') {
+              // Gap 5 — notify the project foreman in-band (replaces the old
+              // /api/worker-issues note). Per-transition key so a re-decline
+              // after REASSIGN is a genuinely new notification.
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'crew_schedule',
+                entityId: updated.id,
+                action: 'notify_foreman_decline',
+                mutationType: 'notify_foreman_decline',
+                row: updated,
+                outboxPayload: {
+                  schedule_id: updated.id,
+                  project_id: updated.project_id,
+                  scheduled_for: updated.scheduled_for,
+                  declined_by: next.declined_by ?? ctx.currentUserId,
+                  reason: next.decline_reason ?? '',
+                  state_version: updated.state_version,
+                },
+                idempotencyKey: `crew_schedule:notify_decline:${updated.id}:${updated.state_version}`,
+              })
+            }
+          },
+        }),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'schedule not found' })
@@ -370,6 +351,14 @@ export async function handleCrewScheduleEventRoutes(
         return true
       }
       if (result.kind === 'illegal_transition') {
+        // Treat already-confirmed retries as a no-op success — matches
+        // the legacy /confirm route's idempotent-on-replay behavior. The
+        // reducer threw before persist, so nothing was written: no
+        // workflow_event_log row, no ledger/outbox rows, no audit row.
+        if (result.row.status === 'confirmed') {
+          ctx.sendJson(200, snapshotResponse(result.row))
+          return true
+        }
         ctx.sendJson(409, {
           error: result.message,
           snapshot: snapshotResponse(result.row),
@@ -377,19 +366,17 @@ export async function handleCrewScheduleEventRoutes(
         return true
       }
 
-      if (!result.noop) {
-        await recordAudit(ctx.pool, {
-          companyId: ctx.company.id,
-          actorUserId: ctx.currentUserId,
-          entityType: 'crew_schedule',
-          entityId: result.row.id,
-          action: `event:${result.eventType.toLowerCase()}`,
-          after: result.row,
-        })
-        observeAudit('crew_schedule', `event:${result.eventType.toLowerCase()}`)
-        const outcome = workflowEventOutcome(result.eventType)
-        if (outcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, outcome)
-      }
+      await recordAudit(ctx.pool, {
+        companyId: ctx.company.id,
+        actorUserId: ctx.currentUserId,
+        entityType: 'crew_schedule',
+        entityId: result.row.id,
+        action: `event:${eventType.toLowerCase()}`,
+        after: result.row,
+      })
+      observeAudit('crew_schedule', `event:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
+      if (outcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.row))
       return true
     } catch (err) {

@@ -3,8 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import {
   parseTimeReviewEventRequest,
   TIME_REVIEW_WORKFLOW_NAME,
-  TIME_REVIEW_WORKFLOW_SCHEMA_VERSION,
-  transitionTimeReviewWorkflow,
+  timeReviewWorkflow,
   type TimeReviewHumanEventType,
   type TimeReviewWorkflowEvent,
   type TimeReviewWorkflowSnapshot,
@@ -13,7 +12,8 @@ import {
 import type { PermissionAction } from '@sitelayer/domain'
 import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
@@ -485,34 +485,39 @@ export async function handleTimeReviewRunRoutes(
     if (eventType === 'APPROVE' && !ctx.requirePermission('approve_time')) return true
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<TimeReviewRunRow>(
-          `select ${TIME_REVIEW_RUN_COLUMNS}
+      // The event-log row historically recorded the DB-canonical run id
+      // (`updated.id`); the path param can legally arrive uppercase
+      // (isValidUuid is case-insensitive) while uuid columns normalize to
+      // lowercase. Resolve entityId from the locked row so the logged
+      // bytes stay identical.
+      let resolvedEntityId = id
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<TimeReviewRunRow, TimeReviewWorkflowSnapshot, TimeReviewWorkflowEvent>(client, {
+          definition: timeReviewWorkflow,
+          companyId: ctx.company.id,
+          entityType: 'time_review_run',
+          get entityId() {
+            return resolvedEntityId
+          },
+          expectedStateVersion: stateVersion,
+          actorUserId: ctx.currentUserId,
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<TimeReviewRunRow>(
+              `select ${TIME_REVIEW_RUN_COLUMNS}
            from time_review_runs
            where company_id = $1 and id = $2
            for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, run: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType as TimeReviewHumanEventType, ctx.currentUserId, reason)
-        let nextSnapshot: TimeReviewWorkflowSnapshot
-        try {
-          nextSnapshot = transitionTimeReviewWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            run: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<TimeReviewRunRow>(
-          `update time_review_runs
+              [ctx.company.id, id],
+            )
+            const current = lockedResult.rows[0]
+            if (!current) return null
+            resolvedEntityId = current.id
+            return { row: current, snapshot: rowToSnapshot(current) }
+          },
+          buildEvent: () => buildReducerEvent(eventType as TimeReviewHumanEventType, ctx.currentUserId, reason),
+          persist: async (c, nextSnapshot) => {
+            const updateResult = await c.query<TimeReviewRunRow>(
+              `update time_review_runs
              set state = $3,
                  state_version = $4,
                  reviewer_user_id = $5,
@@ -523,69 +528,59 @@ export async function handleTimeReviewRunRoutes(
                  updated_at = now()
            where company_id = $1 and id = $2
            returning ${TIME_REVIEW_RUN_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.reviewer_user_id ?? null,
-            nextSnapshot.approved_at ?? null,
-            nextSnapshot.rejected_at ?? null,
-            nextSnapshot.rejection_reason ?? null,
-            nextSnapshot.reopened_at ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'time review run update returned no row')
+              [
+                ctx.company.id,
+                id,
+                nextSnapshot.state,
+                nextSnapshot.state_version,
+                nextSnapshot.reviewer_user_id ?? null,
+                nextSnapshot.approved_at ?? null,
+                nextSnapshot.rejected_at ?? null,
+                nextSnapshot.rejection_reason ?? null,
+                nextSnapshot.reopened_at ?? null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new HttpError(500, 'time review run update returned no row')
+            return updated
+          },
+          sideEffects: async (c, _next, updated) => {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'time_review_run',
+              entityId: updated.id,
+              action: `event:${eventType.toLowerCase()}`,
+              row: updated,
+              idempotencyKey: `time_review_run:event:${updated.id}:${updated.state_version}`,
+            })
 
-        await recordWorkflowEvent(client, {
-          companyId: ctx.company.id,
-          workflowName: TIME_REVIEW_WORKFLOW_NAME,
-          schemaVersion: TIME_REVIEW_WORKFLOW_SCHEMA_VERSION,
-          entityType: 'time_review_run',
-          entityId: updated.id,
-          stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
-          actorUserId: ctx.currentUserId,
-        })
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'time_review_run',
-          entityId: updated.id,
-          action: `event:${eventType.toLowerCase()}`,
-          row: updated,
-          idempotencyKey: `time_review_run:event:${updated.id}:${updated.state_version}`,
-        })
-
-        // APPROVE: enqueue lock_labor_entries side-effect.
-        // REOPEN: enqueue unlock so the entries become editable again.
-        // REJECT: nothing — the entries were never locked.
-        if (eventType === 'APPROVE' || eventType === 'REOPEN') {
-          const action: 'lock' | 'unlock' = eventType === 'APPROVE' ? 'lock' : 'unlock'
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'time_review_run',
-            entityId: updated.id,
-            action: `${action}_labor_entries`,
-            mutationType: 'lock_labor_entries',
-            row: updated,
-            outboxPayload: {
-              action,
-              run_id: updated.id,
-              covered_entry_ids: updated.covered_entry_ids,
-              approved_at: updated.approved_at,
-              state_version: updated.state_version,
-            },
-            // Per-state_version key so APPROVE → REOPEN → APPROVE
-            // generates three distinct outbox rows.
-            idempotencyKey: `time_review:lock:${updated.id}:${updated.state_version}`,
-          })
-        }
-
-        return { kind: 'ok' as const, run: updated, eventType }
-      })
+            // APPROVE: enqueue lock_labor_entries side-effect.
+            // REOPEN: enqueue unlock so the entries become editable again.
+            // REJECT: nothing — the entries were never locked.
+            if (eventType === 'APPROVE' || eventType === 'REOPEN') {
+              const action: 'lock' | 'unlock' = eventType === 'APPROVE' ? 'lock' : 'unlock'
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'time_review_run',
+                entityId: updated.id,
+                action: `${action}_labor_entries`,
+                mutationType: 'lock_labor_entries',
+                row: updated,
+                outboxPayload: {
+                  action,
+                  run_id: updated.id,
+                  covered_entry_ids: updated.covered_entry_ids,
+                  approved_at: updated.approved_at,
+                  state_version: updated.state_version,
+                },
+                // Per-state_version key so APPROVE → REOPEN → APPROVE
+                // generates three distinct outbox rows.
+                idempotencyKey: `time_review:lock:${updated.id}:${updated.state_version}`,
+              })
+            }
+          },
+        }),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'time review run not found' })
@@ -594,14 +589,14 @@ export async function handleTimeReviewRunRoutes(
       if (result.kind === 'version_conflict') {
         ctx.sendJson(409, {
           error: 'state_version mismatch — reload and retry',
-          snapshot: snapshotResponse(result.run),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
       if (result.kind === 'illegal_transition') {
         ctx.sendJson(409, {
           error: result.message,
-          snapshot: snapshotResponse(result.run),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
@@ -610,14 +605,14 @@ export async function handleTimeReviewRunRoutes(
         companyId: ctx.company.id,
         actorUserId: ctx.currentUserId,
         entityType: 'time_review_run',
-        entityId: result.run.id,
-        action: `event:${result.eventType.toLowerCase()}`,
-        after: result.run,
+        entityId: result.row.id,
+        action: `event:${eventType.toLowerCase()}`,
+        after: result.row,
       })
-      observeAudit('time_review_run', `event:${result.eventType.toLowerCase()}`)
-      const outcome = workflowEventOutcome(result.eventType)
+      observeAudit('time_review_run', `event:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(TIME_REVIEW_WORKFLOW_NAME, outcome)
-      ctx.sendJson(200, snapshotResponse(result.run))
+      ctx.sendJson(200, snapshotResponse(result.row))
       return true
     } catch (err) {
       ctx.sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })

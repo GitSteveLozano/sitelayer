@@ -14,9 +14,10 @@ import {
   type NotificationWorkflowSnapshot,
   type NotificationWorkflowState,
 } from '@sitelayer/workflows'
-import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { buildPaginationMeta, isValidUuid, parsePagination } from '../http-utils.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 export type NotificationRouteCtx = {
   pool: Pool
@@ -272,6 +273,15 @@ function notificationSnapshotResponse(row: NotificationQueueDbRow): {
   }
 }
 
+/**
+ * The events UPDATE is keyed on the same (company_id, id) pair the FOR UPDATE
+ * lock just matched, so an empty RETURNING is theoretically unreachable — but
+ * the legacy hand-rolled path mapped it to a 404 rather than a 500. This
+ * sentinel preserves that exact contract through the primitive's `persist`
+ * callback (which can only return a row or throw).
+ */
+class NotificationUpdateMissingError extends Error {}
+
 function buildNotificationReducerEvent(
   eventType: 'RETRY' | 'VOID',
   reason: string | null,
@@ -380,85 +390,83 @@ export async function handleNotificationRoutes(
 
     try {
       const outcome = await withMutationTx(ctx.company.id, async (client: PoolClient) => {
-        const lockedResult = await client.query<NotificationQueueDbRow>(
-          `select ${QUEUE_SELECT}
-           ${QUEUE_FROM}
-           where n.company_id = $1 and n.id = $2
-           for update of n`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        // Post-lock optimistic check: concurrent POSTs with the same
-        // state_version serialize on the row lock; the second sees the bumped
-        // version and 409s. Same pattern as rental-billing-state.ts.
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, row: current }
-        }
-
-        const snapshot = rowToSnapshot(current)
-        const reducerEvent = buildNotificationReducerEvent(eventType, reason, new Date().toISOString())
-        let next: NotificationWorkflowSnapshot
         try {
-          next = transitionNotificationWorkflow(snapshot, reducerEvent)
+          return await dispatchWorkflowEvent<
+            NotificationQueueDbRow,
+            NotificationWorkflowSnapshot,
+            NotificationWorkflowEvent
+          >(client, {
+            definition: {
+              name: NOTIFICATION_WORKFLOW_NAME,
+              schemaVersion: NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+              reduce: transitionNotificationWorkflow,
+            },
+            companyId: ctx.company.id,
+            entityType: 'notification',
+            entityId: id,
+            // Post-lock optimistic check: concurrent POSTs with the same
+            // state_version serialize on the row lock; the second sees the
+            // bumped version and 409s. Same pattern as rental-billing-state.ts.
+            expectedStateVersion: stateVersion,
+            actorUserId: ctx.currentUserId,
+            loadSnapshot: async (c) => {
+              const lockedResult = await c.query<NotificationQueueDbRow>(
+                `select ${QUEUE_SELECT}
+                 ${QUEUE_FROM}
+                 where n.company_id = $1 and n.id = $2
+                 for update of n`,
+                [ctx.company.id, id],
+              )
+              const current = lockedResult.rows[0]
+              if (!current) return null
+              return { row: current, snapshot: rowToSnapshot(current) }
+            },
+            buildEvent: () => buildNotificationReducerEvent(eventType, reason, new Date().toISOString()),
+            persist: async (c, next) => {
+              const nextStatus = notificationStateToLegacyStatus(next.state)
+              // RETRY re-enters `pending` — the worker claim query is
+              // `where status = 'pending' and next_attempt_at <= now()`
+              // (apps/worker/src/notifications.ts), so reset next_attempt_at to
+              // now() for immediate re-claim and clear the stale error. VOID is
+              // terminal; stash the reason in `error` and leave scheduling alone.
+              const updateSql =
+                eventType === 'RETRY'
+                  ? `update notifications
+                       set status = $3,
+                           state_version = $4,
+                           next_attempt_at = now(),
+                           error = null,
+                           last_delivery_error = null
+                     where company_id = $1 and id = $2
+                     returning ${QUEUE_RETURNING}`
+                  : `update notifications
+                       set status = $3,
+                           state_version = $4,
+                           error = $5
+                     where company_id = $1 and id = $2
+                     returning ${QUEUE_RETURNING}`
+              // The RETURNING projection can't reach the lateral join, so we
+              // re-attach the reducer's fresh snapshot to the returned row below.
+              const updateParams =
+                eventType === 'RETRY'
+                  ? [ctx.company.id, id, nextStatus, next.state_version]
+                  : [ctx.company.id, id, nextStatus, next.state_version, next.error ?? null]
+              const updateResult = await c.query<NotificationQueueDbRow>(updateSql, updateParams)
+              const updated = updateResult.rows[0]
+              if (!updated) throw new NotificationUpdateMissingError()
+              // Stamp the fresh reducer snapshot onto the returned row so the
+              // response context carries the new canonical state / failure_kind /
+              // channel rather than the pre-update event-log snapshot.
+              updated.snapshot_after = next
+              return updated
+            },
+          })
         } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            row: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
+          // Legacy contract: an empty UPDATE RETURNING (unreachable in
+          // practice — the row is locked) responded 404, not 500.
+          if (err instanceof NotificationUpdateMissingError) return { kind: 'not_found' as const }
+          throw err
         }
-
-        const nextStatus = notificationStateToLegacyStatus(next.state)
-        // RETRY re-enters `pending` — the worker claim query is
-        // `where status = 'pending' and next_attempt_at <= now()`
-        // (apps/worker/src/notifications.ts), so reset next_attempt_at to
-        // now() for immediate re-claim and clear the stale error. VOID is
-        // terminal; stash the reason in `error` and leave scheduling alone.
-        const updateSql =
-          eventType === 'RETRY'
-            ? `update notifications
-                 set status = $3,
-                     state_version = $4,
-                     next_attempt_at = now(),
-                     error = null,
-                     last_delivery_error = null
-               where company_id = $1 and id = $2
-               returning ${QUEUE_RETURNING}`
-            : `update notifications
-                 set status = $3,
-                     state_version = $4,
-                     error = $5
-               where company_id = $1 and id = $2
-               returning ${QUEUE_RETURNING}`
-        // The RETURNING projection can't reach the lateral join, so we
-        // re-attach the reducer's fresh snapshot to the returned row below.
-        const updateParams =
-          eventType === 'RETRY'
-            ? [ctx.company.id, id, nextStatus, next.state_version]
-            : [ctx.company.id, id, nextStatus, next.state_version, next.error ?? null]
-        const updateResult = await client.query<NotificationQueueDbRow>(updateSql, updateParams)
-        const updated = updateResult.rows[0]
-        if (!updated) return { kind: 'not_found' as const }
-        // Stamp the fresh reducer snapshot onto the returned row so the
-        // response context carries the new canonical state / failure_kind /
-        // channel rather than the pre-update event-log snapshot.
-        updated.snapshot_after = next
-
-        await recordWorkflowEvent(client, {
-          companyId: ctx.company.id,
-          workflowName: NOTIFICATION_WORKFLOW_NAME,
-          schemaVersion: NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
-          entityType: 'notification',
-          entityId: updated.id,
-          stateVersion: stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: next,
-          actorUserId: ctx.currentUserId,
-        })
-
-        return { kind: 'ok' as const, row: updated }
       })
 
       if (outcome.kind === 'not_found') {

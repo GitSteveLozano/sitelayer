@@ -5,9 +5,10 @@ import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withCompanyClient } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, withCompanyClient } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
 import { withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
 import {
   parseWorkerIssueAttachmentMultipart,
@@ -15,10 +16,9 @@ import {
 } from '../worker-issue-attachment-upload.js'
 import {
   FIELD_EVENT_WORKFLOW_NAME,
-  FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
+  fieldEventWorkflow,
   nextFieldEventEvents,
   parseFieldEventEventRequest,
-  transitionFieldEventWorkflow,
   type FieldEventResolutionAction,
   type FieldEventWorkflowEvent,
   type FieldEventWorkflowSnapshot,
@@ -573,70 +573,71 @@ export async function handleWorkerIssueRoutes(
       ctx.sendJson(400, { error: parsed.error })
       return true
     }
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const existing = await client.query<WorkflowIssueRow>(
-        `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues
+    const updated = await withMutationTx((client: PoolClient) =>
+      dispatchWorkflowEvent<WorkflowIssueRow, FieldEventWorkflowSnapshot, FieldEventWorkflowEvent>(client, {
+        definition: fieldEventWorkflow,
+        companyId: ctx.company.id,
+        entityType: 'worker_issue',
+        entityId: issueId,
+        expectedStateVersion: parsed.value.state_version,
+        actorUserId: ctx.currentUserId,
+        loadSnapshot: async (c) => {
+          const existing = await c.query<WorkflowIssueRow>(
+            `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues
          where company_id = $1 and id = $2
          for update
          limit 1`,
-        [ctx.company.id, issueId],
-      )
-      const row = existing.rows[0]
-      if (!row) return { kind: 'not_found' as const }
-      if (row.state_version !== parsed.value.state_version) {
-        return { kind: 'version_conflict' as const, current: row }
-      }
-      const beforeSnapshot = rowToSnapshot(row)
-      let event: FieldEventWorkflowEvent
-      const now = new Date().toISOString()
-      if (parsed.value.event === 'RESOLVE') {
-        event = {
-          type: 'RESOLVE',
-          resolved_at: now,
-          resolved_by_user_id: ctx.currentUserId,
-          action: parsed.value.action,
-          message_to_worker: parsed.value.message_to_worker,
-        }
-      } else if (parsed.value.event === 'ESCALATE') {
-        event = {
-          type: 'ESCALATE',
-          escalated_at: now,
-          escalator_user_id: ctx.currentUserId,
-          reason: parsed.value.reason,
-        }
-      } else if (parsed.value.event === 'DISMISS') {
-        event = {
-          type: 'DISMISS',
-          dismissed_at: now,
-          dismissed_by_user_id: ctx.currentUserId,
-        }
-      } else {
-        event = {
-          type: 'REOPEN',
-          reopened_at: now,
-          reopener_user_id: ctx.currentUserId,
-        }
-      }
-      let nextSnapshot: FieldEventWorkflowSnapshot
-      try {
-        nextSnapshot = transitionFieldEventWorkflow(beforeSnapshot, event)
-      } catch (err) {
-        return {
-          kind: 'illegal_transition' as const,
-          message: err instanceof Error ? err.message : 'illegal transition',
-          current: row,
-        }
-      }
-      // Persist the FULL reducer output in one snapshot-driven UPDATE for
-      // every event type. The reducer already field-cleared every per-state
-      // column (RESOLVE/ESCALATE/DISMISS/REOPEN each null the columns the
-      // other branches own), so binding straight from `nextSnapshot` makes
-      // the SQL provably honor the reducer and collapses the four divergent
-      // per-event UPDATE branches that used to drift (e.g. the old DISMISS
-      // branch never cleared escalated_to_estimator_at). `state` is now a
-      // persisted column rather than a derived sentinel.
-      await client.query(
-        `update worker_issues set
+            [ctx.company.id, issueId],
+          )
+          const row = existing.rows[0]
+          if (!row) return null
+          return { row, snapshot: rowToSnapshot(row) }
+        },
+        buildEvent: () => {
+          const now = new Date().toISOString()
+          if (parsed.value.event === 'RESOLVE') {
+            return {
+              type: 'RESOLVE',
+              resolved_at: now,
+              resolved_by_user_id: ctx.currentUserId,
+              action: parsed.value.action,
+              message_to_worker: parsed.value.message_to_worker,
+            }
+          }
+          if (parsed.value.event === 'ESCALATE') {
+            return {
+              type: 'ESCALATE',
+              escalated_at: now,
+              escalator_user_id: ctx.currentUserId,
+              reason: parsed.value.reason,
+            }
+          }
+          if (parsed.value.event === 'DISMISS') {
+            return {
+              type: 'DISMISS',
+              dismissed_at: now,
+              dismissed_by_user_id: ctx.currentUserId,
+            }
+          }
+          return {
+            type: 'REOPEN',
+            reopened_at: now,
+            reopener_user_id: ctx.currentUserId,
+          }
+        },
+        // Persist the FULL reducer output in one snapshot-driven UPDATE for
+        // every event type. The reducer already field-cleared every per-state
+        // column (RESOLVE/ESCALATE/DISMISS/REOPEN each null the columns the
+        // other branches own), so binding straight from `nextSnapshot` makes
+        // the SQL provably honor the reducer and collapses the four divergent
+        // per-event UPDATE branches that used to drift (e.g. the old DISMISS
+        // branch never cleared escalated_to_estimator_at). `state` is now a
+        // persisted column rather than a derived sentinel. The UPDATE carries
+        // no RETURNING, so the post-transition row is refetched here — the
+        // refetched row is what the response and ledger side effects render.
+        persist: async (c, nextSnapshot) => {
+          await c.query(
+            `update worker_issues set
            state = $1,
            state_version = $2,
            resolved_at = $3,
@@ -648,92 +649,83 @@ export async function handleWorkerIssueRoutes(
            dismissed_at = $9,
            dismissed_by_clerk_user_id = $10
          where id = $11 and company_id = $12`,
-        [
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.resolved_at ?? null,
-          nextSnapshot.resolved_by_user_id ?? null,
-          nextSnapshot.resolved_action ?? null,
-          nextSnapshot.resolution_message ?? null,
-          nextSnapshot.escalated_to_estimator_at ?? null,
-          nextSnapshot.escalation_reason ?? null,
-          nextSnapshot.dismissed_at ?? null,
-          nextSnapshot.dismissed_by_user_id ?? null,
-          issueId,
-          ctx.company.id,
-        ],
-      )
-      // Workflow event log
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: FIELD_EVENT_WORKFLOW_NAME,
-        schemaVersion: FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'worker_issue',
-        entityId: issueId,
-        stateVersion: row.state_version,
-        eventType: event.type,
-        eventPayload: { ...event },
-        snapshotAfter: { ...nextSnapshot },
-        actorUserId: ctx.currentUserId,
-      })
-      // Side effects via outbox
-      const fresh = await client.query<WorkflowIssueRow>(
-        `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where id = $1 and company_id = $2 limit 1`,
-        [issueId, ctx.company.id],
-      )
-      const freshRow = fresh.rows[0]
-      if (!freshRow) throw new HttpError(500, 'worker issue refetch returned no row')
-      if (event.type === 'RESOLVE') {
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'worker_issue',
-          entityId: issueId,
-          action: 'notify_worker_resolution',
-          row: freshRow,
-          syncPayload: {
-            worker_issue_id: issueId,
-            project_id: freshRow.project_id,
-            reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
-            worker_id: freshRow.worker_id,
-            action: event.action,
-            message_to_worker: event.message_to_worker,
-          },
-          outboxPayload: {
-            worker_issue_id: issueId,
-            project_id: freshRow.project_id,
-            reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
-            worker_id: freshRow.worker_id,
-            action: event.action,
-            message_to_worker: event.message_to_worker,
-          },
-          mutationType: 'notify_worker_resolution',
-          idempotencyKey: `worker_issue:resolve:${issueId}:${nextSnapshot.state_version}`,
-        })
-      } else if (event.type === 'ESCALATE') {
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'worker_issue',
-          entityId: issueId,
-          action: 'notify_estimator_escalation',
-          row: freshRow,
-          syncPayload: {
-            worker_issue_id: issueId,
-            project_id: freshRow.project_id,
-            reason: event.reason,
-            escalator_user_id: event.escalator_user_id,
-          },
-          outboxPayload: {
-            worker_issue_id: issueId,
-            project_id: freshRow.project_id,
-            reason: event.reason,
-            escalator_user_id: event.escalator_user_id,
-          },
-          mutationType: 'notify_estimator_escalation',
-          idempotencyKey: `worker_issue:escalate:${issueId}:${nextSnapshot.state_version}`,
-        })
-      }
-      return { kind: 'ok' as const, row: freshRow, eventType: event.type }
-    })
+            [
+              nextSnapshot.state,
+              nextSnapshot.state_version,
+              nextSnapshot.resolved_at ?? null,
+              nextSnapshot.resolved_by_user_id ?? null,
+              nextSnapshot.resolved_action ?? null,
+              nextSnapshot.resolution_message ?? null,
+              nextSnapshot.escalated_to_estimator_at ?? null,
+              nextSnapshot.escalation_reason ?? null,
+              nextSnapshot.dismissed_at ?? null,
+              nextSnapshot.dismissed_by_user_id ?? null,
+              issueId,
+              ctx.company.id,
+            ],
+          )
+          const fresh = await c.query<WorkflowIssueRow>(
+            `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where id = $1 and company_id = $2 limit 1`,
+            [issueId, ctx.company.id],
+          )
+          const freshRow = fresh.rows[0]
+          if (!freshRow) throw new HttpError(500, 'worker issue refetch returned no row')
+          return freshRow
+        },
+        // Side effects via outbox
+        sideEffects: async (c, nextSnapshot, freshRow, event) => {
+          if (event.type === 'RESOLVE') {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'worker_issue',
+              entityId: issueId,
+              action: 'notify_worker_resolution',
+              row: freshRow,
+              syncPayload: {
+                worker_issue_id: issueId,
+                project_id: freshRow.project_id,
+                reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
+                worker_id: freshRow.worker_id,
+                action: event.action,
+                message_to_worker: event.message_to_worker,
+              },
+              outboxPayload: {
+                worker_issue_id: issueId,
+                project_id: freshRow.project_id,
+                reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
+                worker_id: freshRow.worker_id,
+                action: event.action,
+                message_to_worker: event.message_to_worker,
+              },
+              mutationType: 'notify_worker_resolution',
+              idempotencyKey: `worker_issue:resolve:${issueId}:${nextSnapshot.state_version}`,
+            })
+          } else if (event.type === 'ESCALATE') {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'worker_issue',
+              entityId: issueId,
+              action: 'notify_estimator_escalation',
+              row: freshRow,
+              syncPayload: {
+                worker_issue_id: issueId,
+                project_id: freshRow.project_id,
+                reason: event.reason,
+                escalator_user_id: event.escalator_user_id,
+              },
+              outboxPayload: {
+                worker_issue_id: issueId,
+                project_id: freshRow.project_id,
+                reason: event.reason,
+                escalator_user_id: event.escalator_user_id,
+              },
+              mutationType: 'notify_estimator_escalation',
+              idempotencyKey: `worker_issue:escalate:${issueId}:${nextSnapshot.state_version}`,
+            })
+          }
+        },
+      }),
+    )
     if (updated.kind === 'not_found') {
       ctx.sendJson(404, { error: 'worker_issue not found' })
       return true
@@ -741,18 +733,18 @@ export async function handleWorkerIssueRoutes(
     if (updated.kind === 'version_conflict') {
       ctx.sendJson(409, {
         error: 'state_version mismatch — reload and retry',
-        snapshot: buildWorkflowResponse(updated.current),
+        snapshot: buildWorkflowResponse(updated.row),
       })
       return true
     }
     if (updated.kind === 'illegal_transition') {
       ctx.sendJson(409, {
         error: updated.message,
-        snapshot: buildWorkflowResponse(updated.current),
+        snapshot: buildWorkflowResponse(updated.row),
       })
       return true
     }
-    const outcome = workflowEventOutcome(updated.eventType)
+    const outcome = workflowEventOutcome(parsed.value.event)
     if (outcome) observeWorkflowEvent(FIELD_EVENT_WORKFLOW_NAME, outcome)
     ctx.sendJson(200, buildWorkflowResponse(updated.row))
     return true

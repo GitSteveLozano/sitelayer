@@ -181,7 +181,8 @@ function catalogPartRole(attrs: unknown): ScaffoldMemberRole | null {
     : null
 }
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -265,15 +266,21 @@ type DispatchBomEventResult =
 
 /**
  * Apply one human event (`APPROVE` | `SUPERSEDE`) to a `boms` row through
- * the registered `scaffold_ops_approval` reducer, in one tx, with a
- * post-lock optimistic `state_version` check. Mirrors the rental-billing
- * `/events` route. The `superseded_by` FK + the supersede audit columns
- * are set in the SAME tx as the status flip; APPROVE leaves them null.
+ * the registered `scaffold_ops_approval` reducer via the generic
+ * `dispatchWorkflowEvent` primitive: FOR UPDATE lock + post-lock
+ * optimistic `state_version` check + pure reduce + the single UPDATE +
+ * the always-appended workflow_event_log row, in one tx. Mirrors the
+ * rental-billing `/events` route. The `superseded_by` FK + the supersede
+ * audit columns are set in the SAME tx as the status flip; APPROVE
+ * leaves them null.
  *
  * `expectedStateVersion` is the wire-level optimistic guard the
  * reducer's contract is built around; pass `null` only for the legacy
  * `/approve` alias whose client sends no body (it relies on the row lock
- * + reducer guard instead).
+ * + reducer guard instead). For that null path we capture the locked
+ * row's state_version and feed it back as the "expected" version so the
+ * primitive's post-lock compare is a no-op (the resolvedExpected
+ * pattern from daily-logs.ts).
  */
 async function dispatchBomEvent(
   ctx: ScaffoldOpsRouteCtx,
@@ -284,87 +291,105 @@ async function dispatchBomEvent(
     supersededByBomId?: string | null
   },
 ): Promise<DispatchBomEventResult> {
-  return withMutationTx(async (client: PoolClient) => {
-    const locked = await client.query<BomWorkflowRow>(
-      `select id, status, state_version, approved_at, approved_by,
-              superseded_by, superseded_at, superseded_by_user, version
-         from boms
-         where company_id = $1 and id = $2 and deleted_at is null
-         for update`,
-      [ctx.company.id, args.bomId],
-    )
-    const current = locked.rows[0]
-    if (!current) return { kind: 'not_found' as const }
-    const currentVersion = current.state_version ?? 1
-    if (args.expectedStateVersion !== null && currentVersion !== args.expectedStateVersion) {
-      return { kind: 'version_conflict' as const, current }
-    }
-    const currentSnapshot: ScaffoldOpsApprovalWorkflowSnapshot = {
-      state: (current.status as ScaffoldOpsApprovalWorkflowState) ?? 'draft',
-      state_version: currentVersion,
-      approved_at: current.approved_at ?? null,
-      approved_by: current.approved_by ?? null,
-      superseded_at: current.superseded_at ?? null,
-      superseded_by: current.superseded_by_user ?? null,
-      superseded_by_bom_id: current.superseded_by ?? null,
-    }
-    const nowIso = new Date().toISOString()
-    const event: ScaffoldOpsApprovalWorkflowEvent =
-      args.eventType === 'APPROVE'
-        ? { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
-        : {
-            type: 'SUPERSEDE',
-            superseded_at: nowIso,
-            superseded_by: ctx.currentUserId,
-            superseded_by_bom_id: args.supersededByBomId ?? null,
-          }
-    let nextSnapshot: ScaffoldOpsApprovalWorkflowSnapshot
-    try {
-      nextSnapshot = transitionScaffoldOpsApprovalWorkflow(currentSnapshot, event)
-    } catch (err) {
-      return { kind: 'illegal_transition' as const, message: err instanceof Error ? err.message : String(err) }
-    }
-    const updated = await client.query(
-      `update boms
-         set status = $3,
-             state_version = $4,
-             approved_at = $5,
-             approved_by = $6,
-             superseded_by = $7,
-             superseded_at = $8,
-             superseded_by_user = $9,
-             version = version + 1,
-             updated_at = now()
-       where company_id = $1 and id = $2 and deleted_at is null
-       returning ${BOM_COLUMNS}`,
-      [
-        ctx.company.id,
-        args.bomId,
-        nextSnapshot.state,
-        nextSnapshot.state_version,
-        nextSnapshot.approved_at ?? null,
-        nextSnapshot.approved_by ?? null,
-        nextSnapshot.superseded_by_bom_id ?? null,
-        nextSnapshot.superseded_at ?? null,
-        nextSnapshot.superseded_by ?? null,
-      ],
-    )
-    await recordWorkflowEvent(client, {
+  let resolvedExpected = args.expectedStateVersion ?? -1
+  // Captured by loadSnapshot so the version-conflict arm can return the
+  // typed locked row (the primitive's row slot is the loosely-typed
+  // persist return shape).
+  let lockedRow: BomWorkflowRow | undefined
+  const result = await withMutationTx((client: PoolClient) =>
+    dispatchWorkflowEvent<
+      Record<string, unknown>,
+      ScaffoldOpsApprovalWorkflowSnapshot,
+      ScaffoldOpsApprovalWorkflowEvent
+    >(client, {
+      definition: {
+        name: SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME,
+        schemaVersion: SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+        reduce: transitionScaffoldOpsApprovalWorkflow,
+      },
       companyId: ctx.company.id,
-      workflowName: SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME,
-      schemaVersion: SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION,
       entityType: 'bom',
       entityId: args.bomId,
-      stateVersion: currentSnapshot.state_version,
-      eventType: event.type,
-      eventPayload: event,
-      snapshotAfter: nextSnapshot,
+      get expectedStateVersion() {
+        return resolvedExpected
+      },
       actorUserId: ctx.currentUserId,
-    })
-    const outcome = workflowEventOutcome(event.type)
-    if (outcome) observeWorkflowEvent(SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME, outcome)
-    return { kind: 'ok' as const, row: updated.rows[0] as Record<string, unknown> }
-  })
+      loadSnapshot: async (c) => {
+        const locked = await c.query<BomWorkflowRow>(
+          `select id, status, state_version, approved_at, approved_by,
+                    superseded_by, superseded_at, superseded_by_user, version
+               from boms
+               where company_id = $1 and id = $2 and deleted_at is null
+               for update`,
+          [ctx.company.id, args.bomId],
+        )
+        const current = locked.rows[0]
+        if (!current) return null
+        lockedRow = current
+        const currentVersion = current.state_version ?? 1
+        if (args.expectedStateVersion === null) resolvedExpected = currentVersion
+        return {
+          row: current as Record<string, unknown>,
+          snapshot: {
+            state: (current.status as ScaffoldOpsApprovalWorkflowState) ?? 'draft',
+            state_version: currentVersion,
+            approved_at: current.approved_at ?? null,
+            approved_by: current.approved_by ?? null,
+            superseded_at: current.superseded_at ?? null,
+            superseded_by: current.superseded_by_user ?? null,
+            superseded_by_bom_id: current.superseded_by ?? null,
+          },
+        }
+      },
+      buildEvent: () => {
+        const nowIso = new Date().toISOString()
+        return args.eventType === 'APPROVE'
+          ? { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
+          : {
+              type: 'SUPERSEDE',
+              superseded_at: nowIso,
+              superseded_by: ctx.currentUserId,
+              superseded_by_bom_id: args.supersededByBomId ?? null,
+            }
+      },
+      persist: async (c, next) => {
+        const updated = await c.query(
+          `update boms
+               set status = $3,
+                   state_version = $4,
+                   approved_at = $5,
+                   approved_by = $6,
+                   superseded_by = $7,
+                   superseded_at = $8,
+                   superseded_by_user = $9,
+                   version = version + 1,
+                   updated_at = now()
+             where company_id = $1 and id = $2 and deleted_at is null
+             returning ${BOM_COLUMNS}`,
+          [
+            ctx.company.id,
+            args.bomId,
+            next.state,
+            next.state_version,
+            next.approved_at ?? null,
+            next.approved_by ?? null,
+            next.superseded_by_bom_id ?? null,
+            next.superseded_at ?? null,
+            next.superseded_by ?? null,
+          ],
+        )
+        return updated.rows[0] as Record<string, unknown>
+      },
+      sideEffects: async (_c, _next, _row, event) => {
+        const outcome = workflowEventOutcome(event.type)
+        if (outcome) observeWorkflowEvent(SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME, outcome)
+      },
+    }),
+  )
+  if (result.kind === 'not_found') return { kind: 'not_found' }
+  if (result.kind === 'version_conflict') return { kind: 'version_conflict', current: lockedRow! }
+  if (result.kind === 'illegal_transition') return { kind: 'illegal_transition', message: result.message }
+  return { kind: 'ok', row: result.row }
 }
 
 export async function handleScaffoldOpsRoutes(

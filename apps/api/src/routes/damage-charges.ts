@@ -2,10 +2,9 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import {
   DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME,
-  DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_SCHEMA_VERSION,
+  damageChargeSettlementWorkflow,
   nextDamageChargeSettlementEvents,
   parseDamageChargeSettlementEventRequest,
-  transitionDamageChargeSettlementWorkflow,
   type DamageChargeSettlementHumanEventType,
   type DamageChargeSettlementWorkflowEvent,
   type DamageChargeSettlementWorkflowSnapshot,
@@ -45,7 +44,8 @@ const DamageChargeWaiveBodySchema = z
   })
   .loose()
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { recordMutationOutbox, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -184,101 +184,109 @@ function buildDamageChargeReducerEvent(
   return { type: 'WAIVE', waived_at: nowIso, waived_by: actorUserId, waive_reason: waiveReason }
 }
 
+function rowToSettlementSnapshot(row: DamageChargeRow): DamageChargeSettlementWorkflowSnapshot {
+  return {
+    state: (row.status as DamageChargeSettlementWorkflowState) ?? 'open',
+    state_version: row.state_version ?? 1,
+    invoiced_at: row.invoiced_at ?? null,
+    invoiced_by: row.invoiced_by ?? null,
+    waived_at: row.waived_at ?? null,
+    waived_by: row.waived_by ?? null,
+    waive_reason: row.waive_reason ?? null,
+  }
+}
+
 /**
  * Dispatch a damage_charge_settlement workflow event in the same tx as
- * the row mutation. Mirrors the rentals.ts pattern (Phase 2 wiring):
- *   1. Lock the damage_charges row.
- *   2. Run the pure reducer against the persisted snapshot.
- *   3. UPDATE the row with the reducer output, including state_version.
- *   4. Append workflow_event_log row keyed on (entity_id, prior_state_version).
+ * the row mutation, through the generic `dispatchWorkflowEvent`
+ * primitive: FOR UPDATE lock + post-lock state_version check + pure
+ * reduce + the single UPDATE + the always-appended workflow_event_log
+ * row keyed on (entity_id, prior_state_version). Shared by the
+ * canonical `/events` route and the legacy `/invoice` / `/waive`
+ * aliases so the surfaces cannot drift.
  *
  * Replaces the direct `status='invoiced' / 'waived'` writes that
  * previously bypassed the reducer (the original PR #325 left these
  * untouched — caught in the 2026-05-16 verification audit).
  */
-async function applyDamageChargeSettlementTransition(
+function dispatchDamageChargeSettlementEvent(
   client: PoolClient,
-  args: {
-    companyId: string
-    chargeId: string
-    event: DamageChargeSettlementWorkflowEvent
-    eventType: string
-    actorUserId: string
-  },
-): Promise<
-  | { kind: 'ok'; row: DamageChargeRow; nextSnapshot: DamageChargeSettlementWorkflowSnapshot }
-  | { kind: 'not_found' }
-  | { kind: 'illegal_transition'; message: string }
-> {
-  const locked = await client.query<DamageChargeRow>(
-    `select ${COLUMNS}
-       from damage_charges
-       where company_id = $1 and id = $2 and deleted_at is null
-       for update`,
-    [args.companyId, args.chargeId],
-  )
-  const current = locked.rows[0]
-  if (!current) return { kind: 'not_found' as const }
-  const currentSnapshot: DamageChargeSettlementWorkflowSnapshot = {
-    state: (current.status as DamageChargeSettlementWorkflowState) ?? 'open',
-    state_version: current.state_version ?? 1,
-    invoiced_at: current.invoiced_at ?? null,
-    invoiced_by: current.invoiced_by ?? null,
-    waived_at: current.waived_at ?? null,
-    waived_by: current.waived_by ?? null,
-    waive_reason: current.waive_reason ?? null,
-  }
-  let nextSnapshot: DamageChargeSettlementWorkflowSnapshot
-  try {
-    nextSnapshot = transitionDamageChargeSettlementWorkflow(currentSnapshot, args.event)
-  } catch (err) {
-    return {
-      kind: 'illegal_transition' as const,
-      message: err instanceof Error ? err.message : String(err),
-    }
-  }
-  const updated = await client.query<DamageChargeRow>(
-    `update damage_charges
-       set status = $3,
-           state_version = $4,
-           invoiced_at = $5,
-           invoiced_by = $6,
-           waived_at = $7,
-           waived_by = $8,
-           waive_reason = $9,
-           version = version + 1,
-           updated_at = now()
-     where company_id = $1 and id = $2
-     returning ${COLUMNS}`,
-    [
-      args.companyId,
-      args.chargeId,
-      nextSnapshot.state,
-      nextSnapshot.state_version,
-      nextSnapshot.invoiced_at ?? null,
-      nextSnapshot.invoiced_by ?? null,
-      nextSnapshot.waived_at ?? null,
-      nextSnapshot.waived_by ?? null,
-      nextSnapshot.waive_reason ?? null,
-    ],
-  )
-  await recordWorkflowEvent(client, {
-    companyId: args.companyId,
-    workflowName: DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME,
-    schemaVersion: DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_SCHEMA_VERSION,
+  ctx: DamageChargeRouteCtx,
+  chargeId: string,
+  buildEvent: () => DamageChargeSettlementWorkflowEvent,
+  /**
+   * The workflow state_version the caller is acting on. `null` disables
+   * the optimistic check (the legacy /invoice and /waive aliases, which
+   * never carried one). We capture the resolved value so the primitive's
+   * post-lock compare is satisfied with the row's own state_version when
+   * the caller opts out.
+   */
+  expectedStateVersion: number | null,
+) {
+  let resolvedExpected = expectedStateVersion ?? -1
+  return dispatchWorkflowEvent<
+    DamageChargeRow,
+    DamageChargeSettlementWorkflowSnapshot,
+    DamageChargeSettlementWorkflowEvent
+  >(client, {
+    definition: damageChargeSettlementWorkflow,
+    companyId: ctx.company.id,
     entityType: 'damage_charge',
-    entityId: args.chargeId,
-    stateVersion: currentSnapshot.state_version,
-    eventType: args.eventType,
-    eventPayload: args.event,
-    snapshotAfter: nextSnapshot,
-    actorUserId: args.actorUserId,
+    entityId: chargeId,
+    get expectedStateVersion() {
+      return resolvedExpected
+    },
+    actorUserId: ctx.currentUserId,
+    loadSnapshot: async (c) => {
+      const locked = await c.query<DamageChargeRow>(
+        `select ${COLUMNS}
+             from damage_charges
+             where company_id = $1 and id = $2 and deleted_at is null
+             for update`,
+        [ctx.company.id, chargeId],
+      )
+      const row = locked.rows[0]
+      if (!row) return null
+      const snapshot = rowToSettlementSnapshot(row)
+      if (expectedStateVersion === null) resolvedExpected = snapshot.state_version
+      return { row, snapshot }
+    },
+    buildEvent,
+    persist: async (c, next) => {
+      const updated = await c.query<DamageChargeRow>(
+        `update damage_charges
+             set status = $3,
+                 state_version = $4,
+                 invoiced_at = $5,
+                 invoiced_by = $6,
+                 waived_at = $7,
+                 waived_by = $8,
+                 waive_reason = $9,
+                 version = version + 1,
+                 updated_at = now()
+           where company_id = $1 and id = $2
+           returning ${COLUMNS}`,
+        [
+          ctx.company.id,
+          chargeId,
+          next.state,
+          next.state_version,
+          next.invoiced_at ?? null,
+          next.invoiced_by ?? null,
+          next.waived_at ?? null,
+          next.waived_by ?? null,
+          next.waive_reason ?? null,
+        ],
+      )
+      const updatedRow = updated.rows[0]
+      if (!updatedRow) throw new HttpError(500, 'damage charge update returned no row')
+      return updatedRow
+    },
+    sideEffects: async (_c, _next, _row, event) => {
+      const outcome = workflowEventOutcome(event.type)
+      if (outcome) observeWorkflowEvent(DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME, outcome)
+    },
   })
-  const outcome = workflowEventOutcome(args.eventType)
-  if (outcome) observeWorkflowEvent(DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME, outcome)
-  const updatedRow = updated.rows[0]
-  if (!updatedRow) throw new HttpError(500, 'damage charge update returned no row')
-  return { kind: 'ok' as const, row: updatedRow, nextSnapshot }
 }
 
 export async function handleDamageChargeRoutes(
@@ -397,41 +405,26 @@ export async function handleDamageChargeRoutes(
     }
     const { event: eventType, state_version: stateVersion, waive_reason: waiveReason } = parsed.value
     const result = await withMutationTx(async (client: PoolClient) => {
-      const locked = await client.query<DamageChargeRow>(
-        `select ${COLUMNS}
-           from damage_charges
-           where company_id = $1 and id = $2 and deleted_at is null
-           for update`,
-        [ctx.company.id, id],
+      // Post-lock optimistic version check lives in the primitive —
+      // concurrent POSTs with the same state_version serialize on the
+      // row lock; the loser sees the bumped version and 409s instead of
+      // re-running the reducer.
+      const transition = await dispatchDamageChargeSettlementEvent(
+        client,
+        ctx,
+        id,
+        () =>
+          buildDamageChargeReducerEvent(
+            eventType as DamageChargeSettlementHumanEventType,
+            ctx.currentUserId,
+            waiveReason ?? null,
+          ),
+        stateVersion,
       )
-      const current = locked.rows[0]
-      if (!current) return { kind: 'not_found' as const }
-      // Post-lock optimistic version check — concurrent POSTs with the
-      // same state_version serialize on the row lock; the loser sees the
-      // bumped version and 409s instead of re-running the reducer.
-      if ((current.state_version ?? 1) !== stateVersion) {
-        return { kind: 'version_conflict' as const, row: current }
-      }
-      const reducerEvent = buildDamageChargeReducerEvent(
-        eventType as DamageChargeSettlementHumanEventType,
-        ctx.currentUserId,
-        waiveReason ?? null,
-      )
-      const transition = await applyDamageChargeSettlementTransition(client, {
-        companyId: ctx.company.id,
-        chargeId: id,
-        event: reducerEvent,
-        eventType,
-        actorUserId: ctx.currentUserId,
-      })
-      if (transition.kind === 'not_found') return { kind: 'not_found' as const }
-      if (transition.kind === 'illegal_transition') {
-        return { kind: 'illegal_transition' as const, row: current, message: transition.message }
-      }
       // INVOICE side effect: enqueue the existing QBO push outbox row with
       // the stable per-charge idempotency key — same key as the legacy
       // /invoice route so retries collapse onto one outbox row.
-      if (eventType === 'INVOICE') {
+      if (transition.kind === 'ok' && eventType === 'INVOICE') {
         await recordMutationOutbox(
           ctx.company.id,
           'damage_charge',
@@ -444,7 +437,7 @@ export async function handleDamageChargeRoutes(
           client,
         )
       }
-      return { kind: 'ok' as const, row: transition.row }
+      return transition
     })
     if (result.kind === 'not_found') {
       ctx.sendJson(404, { error: 'charge not found' })
@@ -478,14 +471,13 @@ export async function handleDamageChargeRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = invoiceMatch[1]!
     const result = await withMutationTx(async (client: PoolClient) => {
-      const nowIso = new Date().toISOString()
-      const transition = await applyDamageChargeSettlementTransition(client, {
-        companyId: ctx.company.id,
-        chargeId: id,
-        event: { type: 'INVOICE', invoiced_at: nowIso, invoiced_by: ctx.currentUserId },
-        eventType: 'INVOICE',
-        actorUserId: ctx.currentUserId,
-      })
+      const transition = await dispatchDamageChargeSettlementEvent(
+        client,
+        ctx,
+        id,
+        () => ({ type: 'INVOICE', invoiced_at: new Date().toISOString(), invoiced_by: ctx.currentUserId }),
+        null,
+      )
       if (transition.kind === 'not_found') return { error: 'charge not found' as const, code: 404 as const }
       if (transition.kind === 'illegal_transition') {
         return { error: transition.message, code: 409 as const }
@@ -523,19 +515,18 @@ export async function handleDamageChargeRoutes(
     }
     const waiveReason = s(parsedWaive.value.waive_reason)
     const result = await withMutationTx(async (client: PoolClient) => {
-      const nowIso = new Date().toISOString()
-      const transition = await applyDamageChargeSettlementTransition(client, {
-        companyId: ctx.company.id,
-        chargeId: id,
-        event: {
+      const transition = await dispatchDamageChargeSettlementEvent(
+        client,
+        ctx,
+        id,
+        () => ({
           type: 'WAIVE',
-          waived_at: nowIso,
+          waived_at: new Date().toISOString(),
           waived_by: ctx.currentUserId,
           waive_reason: waiveReason,
-        },
-        eventType: 'WAIVE',
-        actorUserId: ctx.currentUserId,
-      })
+        }),
+        null,
+      )
       return transition
     })
     if (result.kind === 'not_found') {

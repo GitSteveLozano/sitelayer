@@ -7,8 +7,7 @@ import {
   nextRentalRequestApprovalEvents,
   parseRentalRequestApprovalEventRequest,
   RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
-  RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
-  transitionRentalRequestApprovalWorkflow,
+  rentalRequestApprovalWorkflow,
   type RentalRequestApprovalWorkflowEvent,
   type RentalRequestApprovalWorkflowSnapshot,
   type RentalRequestApprovalWorkflowState,
@@ -16,13 +15,8 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import {
-  recordMutationLedger,
-  recordMutationOutbox,
-  recordWorkflowEvent,
-  withCompanyClient,
-  withMutationTx,
-} from '../mutation-tx.js'
+import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 /**
  * Operator-side approval queue for rental requests submitted by customers
@@ -133,6 +127,20 @@ type RentalRequestRow = {
 }
 
 const MAX_LIMIT = 100
+
+/**
+ * Sentinel thrown from the dispatch `persist` callback when an APPROVE has no
+ * convertible line items. Caught around `dispatchWorkflowEvent` inside the
+ * same `withMutationTx` callback so the tx still commits normally (no writes
+ * happened — the conversion loop only inserts for convertible lines), exactly
+ * like the legacy early-return it replaces. Thrown BEFORE the UPDATE /
+ * workflow_event_log append, so neither is written.
+ */
+class NoConvertibleItemsError extends Error {
+  constructor(readonly kind: 'no_items' | 'no_convertible_items') {
+    super('no convertible line items on the request')
+  }
+}
 
 function normalizeItems(raw: RentalRequestItem[] | string | null | undefined): RentalRequestItem[] {
   if (!raw) return []
@@ -292,180 +300,165 @@ export async function handleRentalRequestRoutes(
     }
     const { event: eventType, state_version: stateVersion, decline_reason: declineReason } = parsed.value
 
+    // dispatchWorkflowEvent codifies the lock → version check → reduce →
+    // persist → workflow_event_log → side-effects pipeline this route used
+    // to hand-roll. The APPROVE no-items early exits live in `persist`
+    // (after the reducer ran, matching the legacy ordering) and surface via
+    // the NoConvertibleItemsError sentinel caught below.
     const result = await withMutationTx(async (client: PoolClient) => {
-      const fetched = await client.query<RentalRequestRow>(
-        `
-        select ${RENTAL_REQUEST_SELECT_COLUMNS}
-        from rental_requests
-        where id = $1 and company_id = $2
-        for update
-        `,
-        [requestId, ctx.company.id],
-      )
-      const row = fetched.rows[0]
-      if (!row) return { kind: 'not_found' as const }
-      // Post-lock optimistic version check.
-      if ((row.state_version ?? 1) !== stateVersion) {
-        return { kind: 'version_conflict' as const, row: shapeRow(row) }
-      }
-
-      const currentSnapshot = rowToSnapshot(row)
-      const nowIso = new Date().toISOString()
-      const reducerEvent: RentalRequestApprovalWorkflowEvent =
-        eventType === 'APPROVE'
-          ? { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
-          : {
-              type: 'DECLINE',
-              declined_at: nowIso,
-              declined_by: ctx.currentUserId,
-              decline_reason: declineReason ?? null,
-            }
-      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
+      let createdRentals: RentalRow[] = []
+      let eventNowIso = ''
       try {
-        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, reducerEvent)
+        return await dispatchWorkflowEvent<
+          RentalRequestRow,
+          RentalRequestApprovalWorkflowSnapshot,
+          RentalRequestApprovalWorkflowEvent
+        >(client, {
+          definition: rentalRequestApprovalWorkflow,
+          companyId: ctx.company.id,
+          entityType: 'rental_request',
+          entityId: requestId,
+          expectedStateVersion: stateVersion,
+          actorUserId: ctx.currentUserId,
+          loadSnapshot: async (c) => {
+            const fetched = await c.query<RentalRequestRow>(
+              `
+              select ${RENTAL_REQUEST_SELECT_COLUMNS}
+              from rental_requests
+              where id = $1 and company_id = $2
+              for update
+              `,
+              [requestId, ctx.company.id],
+            )
+            const row = fetched.rows[0]
+            if (!row) return null
+            return { row, snapshot: rowToSnapshot(row) }
+          },
+          buildEvent: () => {
+            const nowIso = new Date().toISOString()
+            eventNowIso = nowIso
+            return eventType === 'APPROVE'
+              ? { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
+              : {
+                  type: 'DECLINE',
+                  declined_at: nowIso,
+                  declined_by: ctx.currentUserId,
+                  decline_reason: declineReason ?? null,
+                }
+          },
+          persist: async (c, nextSnapshot, row) => {
+            if (eventType === 'APPROVE') {
+              const items = normalizeItems(row.items)
+              if (items.length === 0) throw new NoConvertibleItemsError('no_items')
+              createdRentals = await createRentalsForRequest(c, ctx, row, items)
+              if (createdRentals.length === 0) throw new NoConvertibleItemsError('no_items')
+              const primaryRentalId = createdRentals[0]!.id
+              const updated = await c.query<RentalRequestRow>(
+                `
+                update rental_requests
+                set status = $5,
+                    state_version = $6,
+                    approved_at = $7,
+                    approved_by = $3,
+                    approved_by_user_id = $3,
+                    converted_rental_id = $4,
+                    updated_at = now()
+                where id = $1 and company_id = $2
+                returning ${RENTAL_REQUEST_SELECT_COLUMNS}
+                `,
+                [
+                  requestId,
+                  ctx.company.id,
+                  ctx.currentUserId,
+                  primaryRentalId,
+                  nextSnapshot.state,
+                  nextSnapshot.state_version,
+                  nextSnapshot.approved_at ?? eventNowIso,
+                ],
+              )
+              const updatedRow = updated.rows[0]
+              if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
+              return updatedRow
+            }
+            // DECLINE
+            const reason = declineReason ?? null
+            const updated = await c.query<RentalRequestRow>(
+              `
+              update rental_requests
+              set status = $4,
+                  state_version = $5,
+                  declined_at = $6,
+                  decline_reason = $3,
+                  updated_at = now()
+              where id = $1 and company_id = $2
+              returning ${RENTAL_REQUEST_SELECT_COLUMNS}
+              `,
+              [
+                requestId,
+                ctx.company.id,
+                reason,
+                nextSnapshot.state,
+                nextSnapshot.state_version,
+                nextSnapshot.declined_at ?? eventNowIso,
+              ],
+            )
+            const updatedRow = updated.rows[0]
+            if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
+            return updatedRow
+          },
+          sideEffects: async (c, _next, updatedRow, event) => {
+            if (event.type === 'APPROVE') {
+              const approveOutcome = workflowEventOutcome('APPROVE')
+              if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
+              await recordMutationOutbox(
+                ctx.company.id,
+                'rental_request',
+                requestId,
+                'create_rental_from_request',
+                { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
+                `rental_request:create_rental_from_request:${requestId}`,
+                'server',
+                ctx.currentUserId,
+                c,
+              )
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'rental_request',
+                entityId: requestId,
+                action: 'approve',
+                row: updatedRow,
+                syncPayload: {
+                  action: 'approve',
+                  rental_request_id: requestId,
+                  rental_ids: createdRentals.map((r) => r.id),
+                },
+                outboxPayload: {
+                  rental_request_id: requestId,
+                  rental_ids: createdRentals.map((r) => r.id),
+                },
+                actorUserId: ctx.currentUserId,
+                idempotencyKey: `rental_request:approve:${requestId}`,
+              })
+              return
+            }
+            // DECLINE
+            const declineOutcome = workflowEventOutcome('DECLINE')
+            if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'rental_request',
+              entityId: requestId,
+              action: 'decline',
+              row: updatedRow,
+              syncPayload: { action: 'decline', rental_request_id: requestId, decline_reason: declineReason ?? null },
+              actorUserId: ctx.currentUserId,
+              idempotencyKey: `rental_request:decline:${requestId}`,
+            })
+          },
+        })
       } catch (err) {
-        return {
-          kind: 'illegal_transition' as const,
-          row: shapeRow(row),
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
-
-      if (reducerEvent.type === 'APPROVE') {
-        const items = normalizeItems(row.items)
-        if (items.length === 0) return { kind: 'no_items' as const }
-        const createdRentals = await createRentalsForRequest(client, ctx, row, items)
-        if (createdRentals.length === 0) return { kind: 'no_items' as const }
-        const primaryRentalId = createdRentals[0]!.id
-        const updated = await client.query<RentalRequestRow>(
-          `
-          update rental_requests
-          set status = $5,
-              state_version = $6,
-              approved_at = $7,
-              approved_by = $3,
-              approved_by_user_id = $3,
-              converted_rental_id = $4,
-              updated_at = now()
-          where id = $1 and company_id = $2
-          returning ${RENTAL_REQUEST_SELECT_COLUMNS}
-          `,
-          [
-            requestId,
-            ctx.company.id,
-            ctx.currentUserId,
-            primaryRentalId,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.approved_at ?? nowIso,
-          ],
-        )
-        const updatedRow = updated.rows[0]
-        if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
-        await recordWorkflowEvent(client, {
-          companyId: ctx.company.id,
-          workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
-          schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
-          entityType: 'rental_request',
-          entityId: requestId,
-          stateVersion: currentSnapshot.state_version,
-          eventType: 'APPROVE',
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
-          actorUserId: ctx.currentUserId,
-        })
-        const approveOutcome = workflowEventOutcome('APPROVE')
-        if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
-        await recordMutationOutbox(
-          ctx.company.id,
-          'rental_request',
-          requestId,
-          'create_rental_from_request',
-          { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
-          `rental_request:create_rental_from_request:${requestId}`,
-          'server',
-          ctx.currentUserId,
-          client,
-        )
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'rental_request',
-          entityId: requestId,
-          action: 'approve',
-          row: updatedRow,
-          syncPayload: {
-            action: 'approve',
-            rental_request_id: requestId,
-            rental_ids: createdRentals.map((r) => r.id),
-          },
-          outboxPayload: {
-            rental_request_id: requestId,
-            rental_ids: createdRentals.map((r) => r.id),
-          },
-          actorUserId: ctx.currentUserId,
-          idempotencyKey: `rental_request:approve:${requestId}`,
-        })
-        return {
-          kind: 'ok' as const,
-          row: shapeRow(updatedRow),
-          created: createdRentals,
-          eventType: 'APPROVE' as const,
-        }
-      }
-
-      // DECLINE
-      const reason = reducerEvent.decline_reason ?? null
-      const updated = await client.query<RentalRequestRow>(
-        `
-        update rental_requests
-        set status = $4,
-            state_version = $5,
-            declined_at = $6,
-            decline_reason = $3,
-            updated_at = now()
-        where id = $1 and company_id = $2
-        returning ${RENTAL_REQUEST_SELECT_COLUMNS}
-        `,
-        [
-          requestId,
-          ctx.company.id,
-          reason,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.declined_at ?? nowIso,
-        ],
-      )
-      const updatedRow = updated.rows[0]
-      if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
-        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'rental_request',
-        entityId: requestId,
-        stateVersion: currentSnapshot.state_version,
-        eventType: 'DECLINE',
-        eventPayload: reducerEvent,
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const declineOutcome = workflowEventOutcome('DECLINE')
-      if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'rental_request',
-        entityId: requestId,
-        action: 'decline',
-        row: updatedRow,
-        syncPayload: { action: 'decline', rental_request_id: requestId, decline_reason: reason },
-        actorUserId: ctx.currentUserId,
-        idempotencyKey: `rental_request:decline:${requestId}`,
-      })
-      return {
-        kind: 'ok' as const,
-        row: shapeRow(updatedRow),
-        created: [] as RentalRow[],
-        eventType: 'DECLINE' as const,
+        if (err instanceof NoConvertibleItemsError) return { kind: 'no_items' as const }
+        throw err
       }
     })
 
@@ -480,15 +473,15 @@ export async function handleRentalRequestRoutes(
     if (result.kind === 'version_conflict') {
       ctx.sendJson(409, {
         error: 'state_version mismatch — reload and retry',
-        snapshot: snapshotResponse(result.row),
+        snapshot: snapshotResponse(shapeRow(result.row)),
       })
       return true
     }
     if (result.kind === 'illegal_transition') {
-      ctx.sendJson(409, { error: result.message, snapshot: snapshotResponse(result.row) })
+      ctx.sendJson(409, { error: result.message, snapshot: snapshotResponse(shapeRow(result.row)) })
       return true
     }
-    ctx.sendJson(200, snapshotResponse(result.row))
+    ctx.sendJson(200, snapshotResponse(shapeRow(result.row)))
     return true
   }
 
@@ -590,7 +583,15 @@ export async function handleRentalRequestRoutes(
     const overrides =
       parsed.data.items && parsed.data.items.length > 0 ? (parsed.data.items as RentalRequestItem[]) : null
 
-    const result = await withMutationTx(async (client: PoolClient) => {
+    type ApproveTxResult =
+      | { error: 'not_found' }
+      | { error: 'already_declined'; row: RentalRequestRow }
+      | { idempotent: true; row: RentalRequestRow }
+      | { error: 'illegal_transition'; message: string }
+      | { error: 'no_items' }
+      | { error: 'no_convertible_items' }
+      | { created: RentalRow[]; row: RentalRequestRow }
+    const result = await withMutationTx(async (client: PoolClient): Promise<ApproveTxResult> => {
       // Lock the request row so concurrent approve/decline don't race.
       const fetched = await client.query<RentalRequestRow>(
         `
@@ -616,78 +617,76 @@ export async function handleRentalRequestRoutes(
       if (row.status === 'approved' && row.converted_rental_id) {
         return { idempotent: true as const, row: shapeRow(row) }
       }
-      // Dispatch APPROVE through the rental_request_approval reducer.
-      // Reducer asserts pending → approved; the idempotent short-
-      // circuit above already handled the re-approve case, and any
-      // other terminal state (declined) was handled above. Replaces
-      // the direct status='approved' UPDATE the original #325 left
-      // untouched (caught in the 2026-05-16 verification audit).
-      const currentSnapshot: RentalRequestApprovalWorkflowSnapshot = {
-        state: (row.status as RentalRequestApprovalWorkflowState) ?? 'pending',
-        state_version: row.state_version ?? 1,
-        approved_at: row.approved_at ?? null,
-        approved_by: row.approved_by ?? null,
-        declined_at: row.declined_at ?? null,
-        declined_by: null,
-        decline_reason: row.decline_reason ?? null,
-      }
-      const nowIso = new Date().toISOString()
-      const approveEvent: RentalRequestApprovalWorkflowEvent = {
-        type: 'APPROVE',
-        approved_at: nowIso,
-        approved_by: ctx.currentUserId,
-      }
-      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
+      // Dispatch APPROVE through the rental_request_approval reducer via
+      // the generic dispatch primitive. Reducer asserts pending → approved;
+      // the idempotent short-circuit above already handled the re-approve
+      // case, and any other terminal state (declined) was handled above.
+      // This legacy route carries no client state_version, so the
+      // optimistic check is satisfied with the locked row's own version,
+      // and loadSnapshot hands back the row we already locked above (no
+      // second SELECT). The rental conversion happens in `persist` BEFORE
+      // the rental_requests UPDATE — same within-tx order as before.
+      let createdRentals: RentalRow[] = []
+      let eventNowIso = ''
       try {
-        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, approveEvent)
-      } catch (err) {
-        return {
-          error: 'illegal_transition' as const,
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
+        const dispatched = await dispatchWorkflowEvent<
+          RentalRequestRow,
+          RentalRequestApprovalWorkflowSnapshot,
+          RentalRequestApprovalWorkflowEvent
+        >(client, {
+          definition: rentalRequestApprovalWorkflow,
+          companyId: ctx.company.id,
+          entityType: 'rental_request',
+          entityId: requestId,
+          expectedStateVersion: row.state_version ?? 1,
+          actorUserId: ctx.currentUserId,
+          loadSnapshot: async () => ({ row, snapshot: rowToSnapshot(row) }),
+          buildEvent: () => {
+            const nowIso = new Date().toISOString()
+            eventNowIso = nowIso
+            return { type: 'APPROVE', approved_at: nowIso, approved_by: ctx.currentUserId }
+          },
+          persist: async (c, nextSnapshot) => {
+            const items = overrides && overrides.length > 0 ? overrides : normalizeItems(row.items)
+            if (items.length === 0) {
+              throw new NoConvertibleItemsError('no_items')
+            }
 
-      const items = overrides && overrides.length > 0 ? overrides : normalizeItems(row.items)
-      if (items.length === 0) {
-        return { error: 'no_items' as const }
-      }
-
-      // Resolve catalog rows for inventory_item_ids the customer picked
-      // so we can pull description + daily_rate when the operator didn't
-      // override them. Anything outside this company is dropped.
-      const inventoryIds = items
-        .map((i) => i.inventory_item_id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0)
-      const catalog = inventoryIds.length
-        ? await client.query<{ id: string; description: string; default_rental_rate: string }>(
-            `
+            // Resolve catalog rows for inventory_item_ids the customer picked
+            // so we can pull description + daily_rate when the operator didn't
+            // override them. Anything outside this company is dropped.
+            const inventoryIds = items
+              .map((i) => i.inventory_item_id)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0)
+            const catalog = inventoryIds.length
+              ? await c.query<{ id: string; description: string; default_rental_rate: string }>(
+                  `
             select id, description, default_rental_rate
             from inventory_items
             where company_id = $1 and id = any($2::uuid[])
             `,
-            [ctx.company.id, inventoryIds],
-          )
-        : { rows: [] }
-      const catalogById = new Map(catalog.rows.map((r) => [r.id, r] as const))
+                  [ctx.company.id, inventoryIds],
+                )
+              : { rows: [] }
+            const catalogById = new Map(catalog.rows.map((r) => [r.id, r] as const))
 
-      const today = new Date().toISOString().slice(0, 10)
-      const createdRentals: RentalRow[] = []
+            const today = new Date().toISOString().slice(0, 10)
 
-      for (const item of items) {
-        const catalogRow = item.inventory_item_id ? catalogById.get(item.inventory_item_id) : undefined
-        const description = (item.description ?? catalogRow?.description ?? '').toString().trim()
-        if (!description) {
-          // Skip lines we can't describe — operator override or catalog
-          // lookup is required. The remaining lines still convert.
-          continue
-        }
-        const dailyRate = Number(item.daily_rate ?? catalogRow?.default_rental_rate ?? 0)
-        if (!Number.isFinite(dailyRate) || dailyRate < 0) continue
-        const deliveredOn = (item.start ?? row.requested_start ?? today).toString()
-        const cadence = 7
-        const nextInvoiceAt = initialRentalNextInvoiceAt(deliveredOn, cadence)
-        const inserted = await client.query<RentalRow>(
-          `
+            for (const item of items) {
+              const catalogRow = item.inventory_item_id ? catalogById.get(item.inventory_item_id) : undefined
+              const description = (item.description ?? catalogRow?.description ?? '').toString().trim()
+              if (!description) {
+                // Skip lines we can't describe — operator override or catalog
+                // lookup is required. The remaining lines still convert.
+                continue
+              }
+              const dailyRate = Number(item.daily_rate ?? catalogRow?.default_rental_rate ?? 0)
+              if (!Number.isFinite(dailyRate) || dailyRate < 0) continue
+              const deliveredOn = (item.start ?? row.requested_start ?? today).toString()
+              const cadence = 7
+              const nextInvoiceAt = initialRentalNextInvoiceAt(deliveredOn, cadence)
+              const inserted = await c.query<RentalRow>(
+                `
           insert into rentals (
             company_id, project_id, customer_id, item_description, daily_rate,
             delivered_on, returned_on, invoice_cadence_days, next_invoice_at, status, notes
@@ -695,35 +694,44 @@ export async function handleRentalRequestRoutes(
           values ($1, null, $2, $3, $4, $5::date, null, $6, $7, 'active', $8)
           returning ${RENTAL_SELECT_COLUMNS}
           `,
-          [ctx.company.id, row.customer_id, description, dailyRate, deliveredOn, cadence, nextInvoiceAt, row.notes],
-        )
-        const rentalRow = inserted.rows[0]
-        if (!rentalRow) throw new HttpError(500, 'rental insert returned no row')
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'rental',
-          entityId: rentalRow.id,
-          action: 'create',
-          row: rentalRow,
-          syncPayload: {
-            action: 'create',
-            rental: rentalRow,
-            source: 'rental_request',
-            rental_request_id: requestId,
-          },
-          actorUserId: ctx.currentUserId,
-          idempotencyKey: `rental_request:approve:${requestId}:${rentalRow.id}`,
-        })
-        createdRentals.push(rentalRow)
-      }
+                [
+                  ctx.company.id,
+                  row.customer_id,
+                  description,
+                  dailyRate,
+                  deliveredOn,
+                  cadence,
+                  nextInvoiceAt,
+                  row.notes,
+                ],
+              )
+              const rentalRow = inserted.rows[0]
+              if (!rentalRow) throw new HttpError(500, 'rental insert returned no row')
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'rental',
+                entityId: rentalRow.id,
+                action: 'create',
+                row: rentalRow,
+                syncPayload: {
+                  action: 'create',
+                  rental: rentalRow,
+                  source: 'rental_request',
+                  rental_request_id: requestId,
+                },
+                actorUserId: ctx.currentUserId,
+                idempotencyKey: `rental_request:approve:${requestId}:${rentalRow.id}`,
+              })
+              createdRentals.push(rentalRow)
+            }
 
-      if (createdRentals.length === 0) {
-        return { error: 'no_convertible_items' as const }
-      }
+            if (createdRentals.length === 0) {
+              throw new NoConvertibleItemsError('no_convertible_items')
+            }
 
-      const primaryRentalId = createdRentals[0]!.id
-      const updated = await client.query<RentalRequestRow>(
-        `
+            const primaryRentalId = createdRentals[0]!.id
+            const updated = await c.query<RentalRequestRow>(
+              `
         update rental_requests
         set status = $5,
             state_version = $6,
@@ -741,69 +749,78 @@ export async function handleRentalRequestRoutes(
                   rejected_at, declined_at, decline_reason,
                   converted_rental_id, created_at, updated_at
         `,
-        [
-          requestId,
-          ctx.company.id,
-          ctx.currentUserId,
-          primaryRentalId,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.approved_at ?? nowIso,
-        ],
-      )
-      const updatedRow = updated.rows[0]
-      if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
-      // Append workflow_event_log row keyed on the PRIOR state_version
-      // so the unique (entity_id, state_version) constraint naturally
-      // rejects duplicate writes for the same transition.
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
-        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'rental_request',
-        entityId: requestId,
-        stateVersion: currentSnapshot.state_version,
-        eventType: 'APPROVE',
-        eventPayload: approveEvent,
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const approveOutcome = workflowEventOutcome('APPROVE')
-      if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
-      // Emit the create_rental_from_request side-effect outbox row as
-      // declared by the reducer's sideEffectTypes — provides the audit
-      // anchor "this APPROVE → these rentals" even though the route
-      // already created them inline.
-      await recordMutationOutbox(
-        ctx.company.id,
-        'rental_request',
-        requestId,
-        'create_rental_from_request',
-        { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
-        `rental_request:create_rental_from_request:${requestId}`,
-        'server',
-        ctx.currentUserId,
-        client,
-      )
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'rental_request',
-        entityId: requestId,
-        action: 'approve',
-        row: updatedRow,
-        syncPayload: {
-          action: 'approve',
-          rental_request_id: requestId,
-          rental_ids: createdRentals.map((r) => r.id),
-        },
-        outboxPayload: {
-          rental_request_id: requestId,
-          rental_ids: createdRentals.map((r) => r.id),
-        },
-        actorUserId: ctx.currentUserId,
-        idempotencyKey: `rental_request:approve:${requestId}`,
-      })
-      return { created: createdRentals, row: shapeRow(updatedRow) }
+              [
+                requestId,
+                ctx.company.id,
+                ctx.currentUserId,
+                primaryRentalId,
+                nextSnapshot.state,
+                nextSnapshot.state_version,
+                nextSnapshot.approved_at ?? eventNowIso,
+              ],
+            )
+            const updatedRow = updated.rows[0]
+            if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
+            return updatedRow
+          },
+          // The workflow_event_log row (keyed on the PRIOR state_version so
+          // the unique (entity_id, state_version) constraint naturally
+          // rejects duplicate writes) is appended by the primitive between
+          // persist and these side effects — same order as before.
+          sideEffects: async (c, _next, updatedRow) => {
+            const approveOutcome = workflowEventOutcome('APPROVE')
+            if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
+            // Emit the create_rental_from_request side-effect outbox row as
+            // declared by the reducer's sideEffectTypes — provides the audit
+            // anchor "this APPROVE → these rentals" even though the route
+            // already created them inline.
+            await recordMutationOutbox(
+              ctx.company.id,
+              'rental_request',
+              requestId,
+              'create_rental_from_request',
+              { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
+              `rental_request:create_rental_from_request:${requestId}`,
+              'server',
+              ctx.currentUserId,
+              c,
+            )
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'rental_request',
+              entityId: requestId,
+              action: 'approve',
+              row: updatedRow,
+              syncPayload: {
+                action: 'approve',
+                rental_request_id: requestId,
+                rental_ids: createdRentals.map((r) => r.id),
+              },
+              outboxPayload: {
+                rental_request_id: requestId,
+                rental_ids: createdRentals.map((r) => r.id),
+              },
+              actorUserId: ctx.currentUserId,
+              idempotencyKey: `rental_request:approve:${requestId}`,
+            })
+          },
+        })
+        if (dispatched.kind === 'illegal_transition') {
+          return { error: 'illegal_transition' as const, message: dispatched.message }
+        }
+        if (dispatched.kind !== 'ok') {
+          // not_found / version_conflict are unreachable: loadSnapshot
+          // returns the prefetched locked row and expectedStateVersion is
+          // that row's own state_version.
+          throw new HttpError(500, 'unexpected rental request approve dispatch result')
+        }
+        return { created: createdRentals, row: shapeRow(dispatched.row) }
+      } catch (err) {
+        if (err instanceof NoConvertibleItemsError) {
+          return err.kind === 'no_items' ? { error: 'no_items' as const } : { error: 'no_convertible_items' as const }
+        }
+        throw err
+      }
     })
 
     if ('error' in result) {
@@ -881,34 +898,39 @@ export async function handleRentalRequestRoutes(
         // Idempotent: keep the original reason + timestamp.
         return { idempotent: true as const, row: shapeRow(row) }
       }
-      // Dispatch DECLINE through the rental_request_approval reducer.
-      const currentSnapshot: RentalRequestApprovalWorkflowSnapshot = {
-        state: (row.status as RentalRequestApprovalWorkflowState) ?? 'pending',
-        state_version: row.state_version ?? 1,
-        approved_at: row.approved_at ?? null,
-        approved_by: row.approved_by ?? null,
-        declined_at: row.declined_at ?? null,
-        declined_by: null,
-        decline_reason: row.decline_reason ?? null,
-      }
-      const nowIso = new Date().toISOString()
-      const declineEvent: RentalRequestApprovalWorkflowEvent = {
-        type: 'DECLINE',
-        declined_at: nowIso,
-        declined_by: ctx.currentUserId,
-        decline_reason: reason,
-      }
-      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
-      try {
-        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, declineEvent)
-      } catch (err) {
-        return {
-          error: 'illegal_transition' as const,
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
-      const updated = await client.query<RentalRequestRow>(
-        `
+      // Dispatch DECLINE through the rental_request_approval reducer via
+      // the generic dispatch primitive. This legacy route carries no client
+      // state_version, so the optimistic check is satisfied with the locked
+      // row's own version, and loadSnapshot hands back the row we already
+      // locked above (no second SELECT). The workflow_event_log row is
+      // appended by the primitive between persist and sideEffects — same
+      // within-tx order as before.
+      let eventNowIso = ''
+      const dispatched = await dispatchWorkflowEvent<
+        RentalRequestRow,
+        RentalRequestApprovalWorkflowSnapshot,
+        RentalRequestApprovalWorkflowEvent
+      >(client, {
+        definition: rentalRequestApprovalWorkflow,
+        companyId: ctx.company.id,
+        entityType: 'rental_request',
+        entityId: requestId,
+        expectedStateVersion: row.state_version ?? 1,
+        actorUserId: ctx.currentUserId,
+        loadSnapshot: async () => ({ row, snapshot: rowToSnapshot(row) }),
+        buildEvent: () => {
+          const nowIso = new Date().toISOString()
+          eventNowIso = nowIso
+          return {
+            type: 'DECLINE',
+            declined_at: nowIso,
+            declined_by: ctx.currentUserId,
+            decline_reason: reason,
+          }
+        },
+        persist: async (c, nextSnapshot) => {
+          const updated = await c.query<RentalRequestRow>(
+            `
         update rental_requests
         set status = $4,
             state_version = $5,
@@ -924,46 +946,48 @@ export async function handleRentalRequestRoutes(
                   rejected_at, declined_at, decline_reason,
                   converted_rental_id, created_at, updated_at
         `,
-        [
-          requestId,
-          ctx.company.id,
-          reason,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.declined_at ?? nowIso,
-        ],
-      )
-      const updatedRow = updated.rows[0]
-      if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
-        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'rental_request',
-        entityId: requestId,
-        stateVersion: currentSnapshot.state_version,
-        eventType: 'DECLINE',
-        eventPayload: declineEvent,
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const declineOutcome = workflowEventOutcome('DECLINE')
-      if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'rental_request',
-        entityId: requestId,
-        action: 'decline',
-        row: updatedRow,
-        syncPayload: {
-          action: 'decline',
-          rental_request_id: requestId,
-          decline_reason: reason,
+            [
+              requestId,
+              ctx.company.id,
+              reason,
+              nextSnapshot.state,
+              nextSnapshot.state_version,
+              nextSnapshot.declined_at ?? eventNowIso,
+            ],
+          )
+          const updatedRow = updated.rows[0]
+          if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
+          return updatedRow
         },
-        actorUserId: ctx.currentUserId,
-        idempotencyKey: `rental_request:decline:${requestId}`,
+        sideEffects: async (c, _next, updatedRow) => {
+          const declineOutcome = workflowEventOutcome('DECLINE')
+          if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
+          await recordMutationLedger(c, {
+            companyId: ctx.company.id,
+            entityType: 'rental_request',
+            entityId: requestId,
+            action: 'decline',
+            row: updatedRow,
+            syncPayload: {
+              action: 'decline',
+              rental_request_id: requestId,
+              decline_reason: reason,
+            },
+            actorUserId: ctx.currentUserId,
+            idempotencyKey: `rental_request:decline:${requestId}`,
+          })
+        },
       })
-      return { row: shapeRow(updatedRow) }
+      if (dispatched.kind === 'illegal_transition') {
+        return { error: 'illegal_transition' as const, message: dispatched.message }
+      }
+      if (dispatched.kind !== 'ok') {
+        // not_found / version_conflict are unreachable: loadSnapshot
+        // returns the prefetched locked row and expectedStateVersion is
+        // that row's own state_version.
+        throw new HttpError(500, 'unexpected rental request decline dispatch result')
+      }
+      return { row: shapeRow(dispatched.row) }
     })
 
     if ('error' in result) {
