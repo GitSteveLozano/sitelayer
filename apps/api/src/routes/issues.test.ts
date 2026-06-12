@@ -37,7 +37,17 @@ function workItem(id: string, domain: 'app_issue' | 'field_request'): Row {
     reversed_at: null,
     reversibility_window_seconds: 86400,
     expires_at: null,
-    metadata: {},
+    metadata:
+      domain === 'app_issue'
+        ? {
+            capture_artifact_analysis: {
+              status: 'ready',
+              eligible_artifact_count: 1,
+              processed_artifact_count: 1,
+              pending_artifact_count: 0,
+            },
+          }
+        : {},
   }
 }
 
@@ -96,7 +106,30 @@ class FakeIssuePool {
     if (normalized.includes('from context_work_items w') && normalized.includes('left join support_debug_packets')) {
       const id = params[1] as string
       const row = this.rows.find((r) => r.id === id)
-      return { rows: row ? [{ ...row, support_packet: null }] : [], rowCount: row ? 1 : 0 }
+      return {
+        rows: row
+          ? [
+              {
+                ...row,
+                support_packet:
+                  row.domain === 'app_issue'
+                    ? {
+                        id: row.support_packet_id,
+                        route: row.route,
+                        capture_session_id: row.capture_session_id,
+                        problem: row.title,
+                        request_id: 'req-1',
+                        build_sha: 'test-sha',
+                        created_at: row.created_at,
+                        expires_at: null,
+                        redaction_version: 'support-packet-v1',
+                      }
+                    : null,
+              },
+            ]
+          : [],
+        rowCount: row ? 1 : 0,
+      }
     }
     if (normalized.includes('from context_handoff_events') && normalized.includes('count(*)')) {
       return { rows: [{ count: '0' }], rowCount: 1 }
@@ -215,9 +248,31 @@ describe('internal app-issue surface (/api/issues)', () => {
     const { ctx, responses } = makeCtx(pool, true)
     await handleIssueRoutes(buildReq('GET'), buildUrl(`/api/issues/${APP_ISSUE_ID}`), ctx)
     expect(responses[0]?.status).toBe(200)
-    const body = responses[0]?.body as { issue: { id: string; domain: string } }
+    const body = responses[0]?.body as {
+      issue: { id: string; domain: string }
+      diagnostic_manifest: {
+        schema: string
+        subject: { kind: string; issue_id: string; capture_session_id: string | null }
+        capture_readiness: { support_packet: string; capture_session: string; artifact_analysis: string }
+        operator_next_step: string
+      }
+    }
     expect(body.issue.id).toBe(APP_ISSUE_ID)
     expect(body.issue.domain).toBe('app_issue')
+    expect(body.diagnostic_manifest).toMatchObject({
+      schema: 'sitelayer.diagnostic_manifest.v1',
+      subject: {
+        kind: 'app_issue',
+        issue_id: APP_ISSUE_ID,
+        capture_session_id: '44444444-4444-4444-8444-444444444444',
+      },
+      capture_readiness: {
+        support_packet: 'ready',
+        capture_session: 'ready',
+        artifact_analysis: 'ready',
+      },
+      operator_next_step: 'triage_capture_context',
+    })
   })
 
   it('GET /api/issues/:id 404s a field_request id (domains cannot bleed)', async () => {
