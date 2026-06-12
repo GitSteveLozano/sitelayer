@@ -321,11 +321,13 @@ as a non-`BYPASSRLS` role to prove RLS policies actually scope rows; it
 skips cleanly when `CONSTRAINED_DB_URL` is unset.
 
 The `sitelayer_constrained` role is provisioned automatically by
-migration `087_constrained_role_for_rls_probe.sql` in local Docker and CI.
-Preview deployments skip that migration because the managed preview database
-app role cannot create roles, and the preview app does not need the runtime
-probe login role. Once your local stack is up, the runtime probe can be
-exercised with:
+migration `016_restore_constrained_role.sql` in local Docker and in the
+verify gate's throwaway integration Postgres. (It restores the role the
+2026-06-02 baseline squash dropped along with the original migration 087.)
+Preview/dev/demo deployments filter that migration out because the managed
+database app role cannot create roles, and the deployed app does not need
+the runtime probe login role. Once your local stack is up, the runtime
+probe can be exercised with:
 
 ```bash
 CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer \
@@ -338,9 +340,11 @@ intentionally never created against the prod database (the migration's
 DO block checks `current_database() ~ '^sitelayer_prod'`), so this
 credential is not a leak risk if it ends up in a developer shell history.
 
-CI wires the same variable into the `test-integration` job; if you see
-the probe go red in CI but green locally, the difference is almost
-always a missed `withCompanyClient` / `withMutationTx` on a freshly
+The verify gate (`scripts/verify-local.sh`, integration stage) wires the
+same variable automatically against its throwaway Postgres — there is no
+CI; the local gate is the verification authority. If you see the probe go
+red in the gate but green in a bare `npm run test`, the difference is
+almost always a missed `withCompanyClient` / `withMutationTx` on a freshly
 added route — see `docs/SECURITY_RLS.md` for the audit's per-route
 heuristics.
 

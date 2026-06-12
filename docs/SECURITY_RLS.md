@@ -182,11 +182,27 @@ DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
 `apps/api/src/routes/rls-phase3-audit.test.ts` is a second test that
 audits every high-impact route's source for `withCompanyClient` /
 `withMutationTx` usage (static) and exercises a non-`BYPASSRLS` role
-against the `projects` table (runtime). The runtime probe needs a role
-that does NOT bypass RLS; migration `087_constrained_role_for_rls_probe.sql`
-provisions `sitelayer_constrained` for that purpose in every non-prod
-database (the DO block tier-gates on `current_database() ~
-'^sitelayer_prod'` and is a no-op there).
+against the `projects` table (runtime). Two sibling probes share the same
+gating: `rls-force-close-gaps.test.ts` (per-table isolation across the
+migration-146-era forced tables) and `company-settings.test.ts`
+(company_settings isolation).
+
+The runtime probes need a role that does NOT bypass RLS; migration
+`016_restore_constrained_role.sql` provisions `sitelayer_constrained` for
+that purpose in every non-prod database (the DO block tier-gates on
+`current_database() ~ '^sitelayer_prod'` and is a no-op there, and skips
+cleanly with a NOTICE when the migrator lacks CREATEROLE, e.g. on managed
+Postgres).
+
+> History: the role originally came from migration
+> `087_constrained_role_for_rls_probe.sql`. The 2026-06-02 baseline squash
+> (152 → `000_baseline.sql`) deleted that file without folding the role DDL
+> into the baseline (pg_dump does not emit roles), and the same-day GitHub
+> Actions removal deleted the `quality.yml` step that exported
+> `CONSTRAINED_DB_URL` — so for ten days the runtime probes were silently
+> skipped everywhere and cross-tenant enforcement had zero runtime
+> verification. Migration 016 + the verify-local.sh wiring below restored
+> the gate on 2026-06-12.
 
 Local:
 
@@ -195,15 +211,22 @@ CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localh
   npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
 ```
 
-Local gate: `scripts/verify-local.sh`'s docker-compose integration check
-exports the same URL automatically once the migration has run against the
-ephemeral Postgres service.
+Local gate: `scripts/verify-local.sh`'s integration stage applies the
+migrations to its throwaway Postgres (whose `sitelayer` user is the
+superuser, so the CREATE ROLE always succeeds), verifies the role exists
+with `NOBYPASSRLS`, and exports
+`CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:<port>/sitelayer`
+into the api vitest run. A missing/misconfigured role FAILS the stage; a
+probe violation fails the gate like any other test.
 
-Preview deploys intentionally skip the constrained-role migration. The
-preview stack connects to the managed preview database as the app role, which
-does not have `CREATEROLE`; the preview app does not need the runtime probe
-login role. Local Docker and the local integration gate still run the
-migration and exercise the probe.
+Preview/dev/demo deploys intentionally filter the constrained-role
+migration out of `MIGRATION_FILES` (`scripts/deploy-preview.sh`,
+`scripts/reset-tier-db.sh`, the demo-seed path in `scripts/deploy.sh`).
+The preview stack connects to the managed database as the app role, which
+does not have `CREATEROLE`; the deployed app does not need the runtime
+probe login role. (The migration would also self-skip there — the filter
+is belt-and-suspenders.) Local Docker and the local integration gate still
+run the migration and exercise the probes.
 
 ## The RLS audit is a blocking gate
 
@@ -306,7 +329,9 @@ reasoning.
   `company_id` predicate) is, and `rls-route-lint.test.ts` is what enforces it
   across the whole route directory. Removing the IS-NULL branch is the durable
   fix; the lint is the interim ratchet.
-- Provision a non-superuser app role in the integration gate so the
-  runtime probe (`CONSTRAINED_DB_URL`) runs by default (currently
-  `sitelayer` is BYPASSRLS in the docker-compose integration check, so the
-  probe tests skip).
+- ~~Provision a non-superuser app role in the integration gate so the
+  runtime probe (`CONSTRAINED_DB_URL`) runs by default.~~ **DONE
+  2026-06-12:** migration `016_restore_constrained_role.sql` provisions
+  `sitelayer_constrained`, and `scripts/verify-local.sh`'s integration
+  stage verifies the role and exports `CONSTRAINED_DB_URL`, so the runtime
+  probes run on every standard verify.

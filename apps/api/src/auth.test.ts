@@ -67,9 +67,57 @@ describe('loadAuthConfig', () => {
     const config = loadAuthConfig({
       APP_TIER: 'prod',
       CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      CLERK_ISSUER: 'https://clerk.sandolab.xyz',
       AUTH_ALLOW_HEADER_FALLBACK: '0',
     })
     expect(config.allowHeaderFallback).toBe(false)
+  })
+
+  // --- issuer is mandatory in prod once Clerk verification is configured ---
+  it('refuses prod Clerk auth without CLERK_ISSUER (issuer check must not be skippable)', () => {
+    expect(() =>
+      loadAuthConfig({
+        APP_TIER: 'prod',
+        CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+        AUTH_ALLOW_HEADER_FALLBACK: '0',
+      }),
+    ).toThrow(/CLERK_ISSUER/)
+  })
+
+  it('non-prod tiers warn (not throw) when CLERK_ISSUER is missing alongside a Clerk key', () => {
+    const warn = vi.fn()
+    const config = loadAuthConfig(
+      {
+        APP_TIER: 'dev',
+        CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      },
+      warn,
+    )
+    expect(config.clerkIssuer).toBeNull()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('CLERK_ISSUER'), expect.anything())
+  })
+
+  it('parses CLERK_AUTHORIZED_PARTIES as a trimmed CSV, dropping empty entries', () => {
+    const config = loadAuthConfig({
+      APP_TIER: 'dev',
+      CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      CLERK_AUTHORIZED_PARTIES: ' https://sitelayer.sandolab.xyz , http://localhost:3000 ,,',
+    })
+    expect(config.clerkAuthorizedParties).toEqual(['https://sitelayer.sandolab.xyz', 'http://localhost:3000'])
+  })
+
+  it('warns when a Clerk key is configured without CLERK_AUTHORIZED_PARTIES (azp/aud checks disabled)', () => {
+    const warn = vi.fn()
+    const config = loadAuthConfig(
+      {
+        APP_TIER: 'dev',
+        CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+        CLERK_ISSUER: 'https://clerk.example.com',
+      },
+      warn,
+    )
+    expect(config.clerkAuthorizedParties).toBeNull()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('CLERK_AUTHORIZED_PARTIES'), expect.anything())
   })
 
   // --- Fail-closed default once an auth provider is configured (sec fix) ---
@@ -241,5 +289,104 @@ describe('resolveIdentity — Clerk JWT + impersonation act claim', () => {
     }
     expect(thrown).toBeInstanceOf(AuthError)
     expect((thrown as AuthError).status).toBe(401)
+  })
+})
+
+describe('resolveIdentity — Clerk azp/aud authorized-parties hardening', () => {
+  const PARTIES = ['https://sitelayer.sandolab.xyz', 'http://localhost:3000']
+  const hardenedConfig = loadAuthConfig(
+    {
+      APP_TIER: 'preview',
+      CLERK_JWT_KEY: CLERK_PUBLIC_KEY,
+      CLERK_AUTHORIZED_PARTIES: PARTIES.join(','),
+      AUTH_ALLOW_HEADER_FALLBACK: '0',
+    },
+    vi.fn(),
+  )
+
+  function expectRejected(payload: Record<string, unknown>, messagePattern: RegExp) {
+    let thrown: unknown
+    try {
+      resolveIdentity(clerkReq(payload), hardenedConfig)
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown, `payload ${JSON.stringify(payload)} must throw`).toBeInstanceOf(AuthError)
+    expect((thrown as AuthError).status).toBe(401)
+    expect((thrown as AuthError).message).toMatch(messagePattern)
+  }
+
+  it('accepts a token with an allowlisted azp', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_1', azp: PARTIES[0] }), hardenedConfig)
+    expect(identity.userId).toBe('user_1')
+  })
+
+  it('accepts a token with NO azp (Clerk omits it for non-browser sessions)', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_2' }), hardenedConfig)
+    expect(identity.userId).toBe('user_2')
+  })
+
+  it('rejects a forged/non-allowlisted azp', () => {
+    expectRejected({ sub: 'user_3', azp: 'https://evil.example.com' }, /unauthorized party/)
+  })
+
+  it('rejects a forged aud (string form)', () => {
+    expectRejected({ sub: 'user_4', aud: 'https://evil.example.com' }, /unauthorized audience/)
+  })
+
+  it('rejects a forged aud (array form, no intersection)', () => {
+    expectRejected(
+      { sub: 'user_5', aud: ['https://evil.example.com', 'https://also-evil.example.com'] },
+      /unauthorized audience/,
+    )
+  })
+
+  it('accepts an aud array that intersects the allowlist', () => {
+    const identity = resolveIdentity(
+      clerkReq({ sub: 'user_6', aud: ['https://evil.example.com', PARTIES[1]] }),
+      hardenedConfig,
+    )
+    expect(identity.userId).toBe('user_6')
+  })
+
+  it('accepts a string aud that matches the allowlist', () => {
+    const identity = resolveIdentity(clerkReq({ sub: 'user_7', aud: PARTIES[0] }), hardenedConfig)
+    expect(identity.userId).toBe('user_7')
+  })
+
+  it('rejects a non-string aud (e.g. numeric) as unauthorized', () => {
+    expectRejected({ sub: 'user_8', aud: 42 }, /unauthorized audience/)
+  })
+
+  it('skips azp/aud checks entirely when no allowlist is configured (legacy compat)', () => {
+    // clerkConfig (top of file) has no CLERK_AUTHORIZED_PARTIES — a foreign azp
+    // must still be ACCEPTED there so deployments without the new var keep
+    // working (they get the loud startup warning instead).
+    const identity = resolveIdentity(clerkReq({ sub: 'user_9', azp: 'https://evil.example.com' }), clerkConfig)
+    expect(identity.userId).toBe('user_9')
+  })
+
+  it('still enforces issuer mismatch alongside the azp check', () => {
+    const issuerConfig = loadAuthConfig(
+      {
+        APP_TIER: 'preview',
+        CLERK_JWT_KEY: CLERK_PUBLIC_KEY,
+        CLERK_ISSUER: 'https://clerk.sandolab.xyz',
+        CLERK_AUTHORIZED_PARTIES: PARTIES.join(','),
+        AUTH_ALLOW_HEADER_FALLBACK: '0',
+      },
+      vi.fn(),
+    )
+    let thrown: unknown
+    try {
+      resolveIdentity(
+        clerkReq({ sub: 'user_10', iss: 'https://other-instance.clerk.accounts.dev', azp: PARTIES[0] }),
+        issuerConfig,
+      )
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(AuthError)
+    expect((thrown as AuthError).message).toBe('unexpected issuer')
   })
 })

@@ -148,7 +148,13 @@ describe('C5 prod-safety: act-as bypass impossible in prod', () => {
       loadAuthConfig({ APP_TIER: 'prod', CLERK_JWT_KEY: clerkKey, AUTH_ALLOW_HEADER_FALLBACK: '1' }),
     ).toThrow(AuthConfigError)
     // Prod with Clerk configured and no header fallback → boots, fallback off.
-    const ok = loadAuthConfig({ APP_TIER: 'prod', CLERK_JWT_KEY: clerkKey, AUTH_ALLOW_HEADER_FALLBACK: '0' })
+    // (CLERK_ISSUER is mandatory in prod since the 2026-06-12 JWT hardening.)
+    const ok = loadAuthConfig({
+      APP_TIER: 'prod',
+      CLERK_JWT_KEY: clerkKey,
+      CLERK_ISSUER: 'https://clerk.sandolab.xyz',
+      AUTH_ALLOW_HEADER_FALLBACK: '0',
+    })
     expect(ok.allowHeaderFallback).toBe(false)
   })
 

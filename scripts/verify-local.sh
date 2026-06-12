@@ -382,6 +382,28 @@ stage_integration() {
   echo "  -> applying migrations"
   DATABASE_URL="$db_url" bash scripts/migrate-db.sh || return 1
 
+  # --- RLS runtime probe plumbing (restored 2026-06-12) ---------------------
+  # Migration 016_restore_constrained_role.sql provisions the NOBYPASSRLS
+  # login role `sitelayer_constrained` (the throwaway pg's `sitelayer` user is
+  # the superuser, so CREATE ROLE always succeeds here). Verify it landed with
+  # the attributes the probes depend on, then export CONSTRAINED_DB_URL into
+  # the api vitest run so the runtime RLS probes
+  # (rls-phase3-audit.test.ts / rls-force-close-gaps.test.ts /
+  # company-settings.test.ts) RUN instead of describe.skip-ing. This restores
+  # the gate the removed quality.yml:326 used to provide — without it,
+  # cross-tenant RLS enforcement has ZERO runtime verification.
+  echo "  -> verifying sitelayer_constrained role (RLS runtime probe prerequisite)"
+  local role_attrs
+  role_attrs="$("$DOCKER" exec "$container" psql -U sitelayer -d sitelayer -tAc \
+    "select rolcanlogin || '|' || rolbypassrls || '|' || rolsuper from pg_roles where rolname = 'sitelayer_constrained'")" || return 1
+  if [ "$role_attrs" != "true|false|false" ]; then
+    echo "  ERROR: sitelayer_constrained role is missing or misconfigured (got '${role_attrs:-<absent>}', want 'true|false|false' = LOGIN, NOBYPASSRLS, NOSUPERUSER)." >&2
+    echo "  The RLS runtime probes cannot run without it. Check docker/postgres/init/016_restore_constrained_role.sql." >&2
+    return 1
+  fi
+  local constrained_db_url="postgres://sitelayer_constrained:sitelayer_constrained@localhost:${VERIFY_PG_PORT}/sitelayer"
+  echo "  -> CONSTRAINED_DB_URL exported (runtime RLS probes ACTIVE)"
+
   # The integration suite needs the package dist outputs on disk (same as
   # CI). If the build stage already ran this is a near no-op; run it
   # defensively so integration works even when invoked standalone.
@@ -437,10 +459,14 @@ stage_integration() {
   # forced-coverage audit (rls-force-audit.ts) fails when a company_id table
   # ships without FORCE ROW LEVEL SECURITY and isn't allowlisted — the
   # asset_deployments-style gap the deploy gate must catch.
+  # CONSTRAINED_DB_URL un-skips the runtime RLS probes (non-BYPASSRLS role
+  # proving the policies actually scope rows) — a probe violation FAILS the
+  # gate like any other test failure.
   local int_rc=0
   DATABASE_URL="$db_url" \
   RUN_API_INTEGRATION=1 \
   RLS_PHASE3_FAIL_ON_LEAK=1 \
+  CONSTRAINED_DB_URL="$constrained_db_url" \
   APP_TIER=local \
   ACTIVE_COMPANY_SLUG=la-operations \
   ACTIVE_USER_ID=demo-user \

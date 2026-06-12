@@ -124,8 +124,10 @@ if [ "$backend" = "local" ]; then
 
   net="${project}_app"
   echo "Applying migrations against the fresh container…"
+  # 016_restore_constrained_role.sql replaced the squash-deleted 087; it is
+  # local/verify-gate-only (and self-skips without CREATEROLE anyway).
   migration_files="$(find docker/postgres/init -maxdepth 1 -type f -name '*.sql' \
-    ! -name '087_constrained_role_for_rls_probe.sql' | sort | tr '\n' ' ')"
+    ! -name '016_restore_constrained_role.sql' | sort | tr '\n' ' ')"
   env PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" \
     PSQL_DOCKER_NETWORK="$net" DATABASE_URL="$LOCAL_DB_URL" \
     MIGRATION_FILES="$migration_files" "$SCRIPT_DIR/migrate-db.sh"
@@ -171,8 +173,10 @@ case "$tier" in
     ;;
 esac
 
+# 016_restore_constrained_role.sql replaced the squash-deleted 087; managed
+# tiers can't CREATE ROLE (and the migration self-skips there anyway).
 migration_files="$(find docker/postgres/init -maxdepth 1 -type f -name '*.sql' \
-  ! -name '087_constrained_role_for_rls_probe.sql' | sort | tr '\n' ' ')"
+  ! -name '016_restore_constrained_role.sql' | sort | tr '\n' ' ')"
 env "${psql_env[@]}" MIGRATION_FILES="$migration_files" "$SCRIPT_DIR/migrate-db.sh"
 env "${psql_env[@]}" "$SCRIPT_DIR/check-db-schema.sh"
 echo "Done. $tier ($project) managed database reset + re-migrated."

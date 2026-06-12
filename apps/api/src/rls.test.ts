@@ -3,11 +3,11 @@ import { Pool, type PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
 
 /**
- * Proves the row-level-security policies created by migration 066 actually
- * scope rows to `app.company_id`. The migration leaves RLS DISABLED on each
- * table (shadow mode); these tests temporarily enable+force it on `projects`
- * to verify the policy works, then disable it again so the rest of the suite
- * (and the dev DB) keeps the permissive default.
+ * Proves the row-level-security policies (originally migration 066, now baked
+ * into 000_baseline.sql) actually scope rows to `app.company_id`. The baseline
+ * ships `projects` ENABLE+FORCE'd; these tests re-assert that posture, verify
+ * the policy works, and leave the table in the same baseline state on
+ * teardown.
  *
  * GATED separately from RUN_API_INTEGRATION because the CI postgres role
  * (`sitelayer`) is a SUPERUSER by default in the postgres:18-alpine image,
@@ -68,8 +68,12 @@ describeIntegration('row-level security (migration 066)', () => {
         // best-effort
       }
     }
-    await swallow('alter table projects no force row level security')
-    await swallow('alter table projects disable row level security')
+    // Restore the BASELINE posture: 000_baseline.sql ships projects
+    // ENABLE+FORCE'd, so leave it that way (the pre-squash version of this
+    // test disabled RLS here, which drifted the DB from baseline and failed
+    // any later forced-coverage audit against the same database).
+    await swallow('alter table projects enable row level security')
+    await swallow('alter table projects force row level security')
     // Drop the bootstrap-state rows our fixtures created so the projects
     // DELETE trigger doesn't fail FK if companies are wiped by an
     // adjacent test before our cleanup runs.

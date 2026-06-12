@@ -51,6 +51,16 @@ function defaultWarn(msg: string, ctx: Record<string, unknown>): void {
 export type AuthConfig = {
   clerkJwtKey?: string | null
   clerkIssuer?: string | null
+  /**
+   * Allowlist of authorized parties for Clerk's `azp` claim (and, when a JWT
+   * template adds one, the `aud` claim). Parsed from the comma-separated
+   * `CLERK_AUTHORIZED_PARTIES` env var — typically the SPA origins that are
+   * allowed to mint sessions against this API (e.g.
+   * `https://sitelayer.sandolab.xyz`). When null/empty, azp/aud are NOT
+   * enforced (legacy deployments without the var keep working; a loud
+   * startup warning fires instead).
+   */
+  clerkAuthorizedParties?: readonly string[] | null
   internalAuthToken?: string | null
   defaultUserId: string
   allowHeaderFallback: boolean
@@ -73,7 +83,10 @@ export class AuthConfigError extends Error {
   }
 }
 
-export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
+export function loadAuthConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (msg: string, ctx: Record<string, unknown>) => void = defaultWarn,
+): AuthConfig {
   const tier = env.APP_TIER ?? 'local'
   // Accept a single-line PEM with literal `\n` escapes — required so the key
   // survives env-file transports that can't carry multi-line values (the
@@ -110,9 +123,46 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
     )
   }
 
+  const clerkIssuer = env.CLERK_ISSUER?.trim() || null
+  // Comma-separated allowlist of authorized parties (azp / aud). Empty
+  // entries are dropped so a trailing comma can't allowlist "".
+  const clerkAuthorizedParties =
+    env.CLERK_AUTHORIZED_PARTIES?.split(',')
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0) ?? []
+
+  // Issuer is MANDATORY in prod once Clerk verification is configured: a
+  // signature-valid token minted by a DIFFERENT Clerk instance (same alg,
+  // attacker-controlled key would still fail the signature — but a leaked /
+  // reused PEM across instances would not) must never be accepted because
+  // the issuer check was silently skipped. The prod env manifest
+  // (ops/env/production.env.json) already marks CLERK_ISSUER required, so
+  // this fail-closed startup error only fires on a genuinely misrendered
+  // prod env. Non-prod tiers keep the gated behavior (enforced only when
+  // set) so a key-only demo/dev droplet doesn't brick — but warn LOUDLY.
+  if (tier === 'prod' && clerkJwtKey && !clerkIssuer) {
+    throw new AuthConfigError(
+      'APP_TIER=prod requires CLERK_ISSUER when CLERK_JWT_KEY is set (issuer verification must not be skippable in prod). ' +
+        'Set CLERK_ISSUER to the Clerk Frontend API origin, e.g. https://clerk.sandolab.xyz.',
+    )
+  }
+  if (clerkJwtKey && !clerkIssuer) {
+    warn('[auth] CLERK_ISSUER is unset — Clerk JWT issuer verification is DISABLED on this tier. Set CLERK_ISSUER.', {
+      tier,
+    })
+  }
+  if (clerkJwtKey && clerkAuthorizedParties.length === 0) {
+    warn(
+      '[auth] CLERK_AUTHORIZED_PARTIES is unset — Clerk JWT azp/aud verification is DISABLED. ' +
+        'Set it to the comma-separated SPA origin(s) allowed to mint sessions (e.g. https://sitelayer.sandolab.xyz).',
+      { tier },
+    )
+  }
+
   return {
     clerkJwtKey,
-    clerkIssuer: env.CLERK_ISSUER?.trim() || null,
+    clerkIssuer,
+    clerkAuthorizedParties: clerkAuthorizedParties.length > 0 ? clerkAuthorizedParties : null,
     internalAuthToken,
     defaultUserId: env.ACTIVE_USER_ID?.trim() || 'demo-user',
     allowHeaderFallback,
@@ -193,6 +243,32 @@ function verifyClerkJwt(token: string, config: AuthConfig): Identity {
   }
   if (config.clerkIssuer && payload.iss !== config.clerkIssuer) {
     throw new AuthError(401, 'unexpected issuer')
+  }
+  // Authorized-party verification, per the Clerk model: `azp` carries the
+  // origin that minted the session. When an allowlist is configured
+  // (CLERK_AUTHORIZED_PARTIES), a token whose azp is present but NOT
+  // allowlisted is rejected — this is the cross-instance / cross-app token
+  // reuse defence the 2026-05-28 audit flagged. A token WITHOUT azp is
+  // accepted (Clerk omits it for non-browser sessions, e.g. Backend-API
+  // minted sign-in tokens before first handshake), matching Clerk's own
+  // authorizedParties semantics. `aud` is absent from standard Clerk session
+  // tokens but can be added by a JWT template; when present it must also
+  // intersect the allowlist.
+  const authorizedParties = config.clerkAuthorizedParties
+  if (authorizedParties && authorizedParties.length > 0) {
+    const azp = typeof payload.azp === 'string' ? payload.azp.trim() : null
+    if (azp && !authorizedParties.includes(azp)) {
+      throw new AuthError(401, 'unauthorized party (azp)')
+    }
+    const audRaw = payload.aud
+    if (audRaw !== undefined && audRaw !== null) {
+      const audiences = (Array.isArray(audRaw) ? audRaw : [audRaw]).filter(
+        (a): a is string => typeof a === 'string' && a.trim().length > 0,
+      )
+      if (audiences.length === 0 || !audiences.some((a) => authorizedParties.includes(a.trim()))) {
+        throw new AuthError(401, 'unauthorized audience (aud)')
+      }
+    }
   }
   const sub = typeof payload.sub === 'string' ? payload.sub : null
   if (!sub) throw new AuthError(401, 'token missing sub')
