@@ -39,6 +39,7 @@ import {
   type WorkItemStatus,
   type WorkRequestQueueHealthResponse,
 } from '@/lib/api'
+import { fetchCaptureArtifactBlob } from '@/lib/api/capture-sessions'
 import { ApiError, getBuildSha } from '@/lib/api/client'
 import { useOnlineStatus } from '@/lib/offline/online-status'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
@@ -202,6 +203,19 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       }
     },
   })
+  const openDesktopEvidence = useMutation({
+    mutationFn: async (evidence: OpsOnsiteDiagnosticDesktopEvidenceResult) => {
+      if (!evidence.capture_session_id || !evidence.artifact_id) {
+        throw new Error('desktop evidence artifact is not available')
+      }
+      const blob = await fetchCaptureArtifactBlob(evidence.capture_session_id, evidence.artifact_id)
+      return URL.createObjectURL(blob)
+    },
+    onSuccess: (objectUrl) => {
+      window.open(objectUrl, '_blank', 'noopener,noreferrer')
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+    },
+  })
   const latestCaptured = findLatestCaptured(workItems)
   const onsiteAction = buildOnsiteAction({
     onsiteSession,
@@ -346,9 +360,25 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           {latestDesktopEvidence ? (
             <MListRow
               leading={<MI.Camera size={18} />}
-              leadingTone={desktopEvidenceTone(latestDesktopEvidence)}
-              headline="Desktop evidence"
-              supporting={formatDesktopEvidenceSummary(latestDesktopEvidence)}
+              leadingTone={
+                openDesktopEvidence.isError
+                  ? 'red'
+                  : openDesktopEvidence.isPending
+                    ? 'blue'
+                    : desktopEvidenceTone(latestDesktopEvidence)
+              }
+              headline={openDesktopEvidence.isPending ? 'Opening desktop clip' : 'Desktop evidence'}
+              supporting={
+                openDesktopEvidence.isError
+                  ? 'Clip could not open from this device.'
+                  : formatDesktopEvidenceSummary(latestDesktopEvidence)
+              }
+              onTap={
+                canOpenDesktopEvidence(latestDesktopEvidence) && !openDesktopEvidence.isPending
+                  ? () => openDesktopEvidence.mutate(latestDesktopEvidence)
+                  : undefined
+              }
+              chev={canOpenDesktopEvidence(latestDesktopEvidence)}
             />
           ) : null}
           {latestCaptureRoute && latestCaptureRouteAction ? (
@@ -879,10 +909,15 @@ export function desktopEvidenceTone(
 
 export function formatDesktopEvidenceSummary(evidence: OpsOnsiteDiagnosticDesktopEvidenceResult): string {
   if (evidence.status === 'attached') {
-    return evidence.byte_size ? `Attached ${formatBytes(evidence.byte_size)} clip.` : 'Attached desktop clip.'
+    const prefix = evidence.byte_size ? `Attached ${formatBytes(evidence.byte_size)} clip.` : 'Attached desktop clip.'
+    return canOpenDesktopEvidence(evidence) ? `${prefix} Tap to open.` : prefix
   }
   if (evidence.status === 'not_configured') return 'Desktop evidence storage is not configured.'
   return evidence.error ? `Attach failed: ${evidence.error}` : 'Desktop evidence did not attach.'
+}
+
+export function canOpenDesktopEvidence(evidence: OpsOnsiteDiagnosticDesktopEvidenceResult): boolean {
+  return Boolean(evidence.capture_session_id && evidence.artifact_id && evidence.file_path && evidence.status === 'attached')
 }
 
 function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {

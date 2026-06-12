@@ -108,6 +108,7 @@ export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
   capture_session_id: string | null
   artifact_id: string | null
   storage_key: string | null
+  file_path: string | null
   status: 'attached' | 'failed' | 'not_configured'
   content_type: string | null
   byte_size: number | null

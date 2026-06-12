@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
+  canOpenDesktopEvidence,
   desktopEvidenceTone,
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
@@ -49,6 +50,7 @@ function desktopEvidence(
     capture_session_id: 'capture-session-1',
     artifact_id: 'artifact-1',
     storage_key: 'company-1/capture-sessions/capture-session-1/clip.mp4',
+    file_path: '/api/capture-sessions/capture-session-1/artifacts/artifact-1/file',
     status: 'attached',
     content_type: 'video/mp4',
     byte_size: 1_572_864,
@@ -107,9 +109,12 @@ describe('MobileOps desktop evidence copy', () => {
   it('shows whether a desktop evidence clip attached', () => {
     const attached = desktopEvidence()
     expect(desktopEvidenceTone(attached)).toBe('green')
-    expect(formatDesktopEvidenceSummary(attached)).toBe('Attached 1.5 MB clip.')
+    expect(canOpenDesktopEvidence(attached)).toBe(true)
+    expect(formatDesktopEvidenceSummary(attached)).toBe('Attached 1.5 MB clip. Tap to open.')
 
-    expect(desktopEvidenceTone(desktopEvidence({ status: 'not_configured', byte_size: null }))).toBe('amber')
+    const notConfigured = desktopEvidence({ status: 'not_configured', byte_size: null, file_path: null })
+    expect(canOpenDesktopEvidence(notConfigured)).toBe(false)
+    expect(desktopEvidenceTone(notConfigured)).toBe('amber')
     expect(formatDesktopEvidenceSummary(desktopEvidence({ status: 'failed', error: 'screen capture timeout' }))).toBe(
       'Attach failed: screen capture timeout',
     )

@@ -113,6 +113,7 @@ export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
   capture_session_id: string | null
   artifact_id: string | null
   storage_key: string | null
+  file_path: string | null
   status: 'attached' | 'failed' | 'not_configured'
   content_type: string | null
   byte_size: number | null
@@ -902,6 +903,7 @@ async function captureOnsiteDesktopEvidence(
       capture_session_id: captureSessionId,
       artifact_id: artifactId,
       storage_key: storageKey,
+      file_path: artifactId ? captureArtifactFilePath(captureSessionId, artifactId) : null,
       status: 'attached',
       content_type: downloaded.contentType,
       byte_size: downloaded.bytes.length,
@@ -1015,11 +1017,16 @@ function desktopEvidenceResult(
     capture_session_id: null,
     artifact_id: null,
     storage_key: null,
+    file_path: null,
     status,
     content_type: null,
     byte_size: null,
     error,
   }
+}
+
+function captureArtifactFilePath(captureSessionId: string, artifactId: string): string {
+  return `/api/capture-sessions/${encodeURIComponent(captureSessionId)}/artifacts/${encodeURIComponent(artifactId)}/file`
 }
 
 function normalizedContentType(value: string | null, fallback: string): string {

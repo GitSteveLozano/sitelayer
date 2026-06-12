@@ -572,6 +572,7 @@ describe('ops diagnostics', () => {
     expect(result).toMatchObject({
       status: 'attached',
       artifact_id: 'artifact-1',
+      file_path: expect.stringMatching(/^\/api\/capture-sessions\/.+\/artifacts\/artifact-1\/file$/),
       content_type: 'video/mp4',
       byte_size: Buffer.byteLength('fake mp4 bytes'),
       error: null,
