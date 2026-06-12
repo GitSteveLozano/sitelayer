@@ -323,16 +323,10 @@ export type DatabaseSslConfig =
  *      store; the caller decides whether to attach `ssl` at all based on
  *      sslmode in the connection string).
  *
- * NOTE: the pg `Pool` is currently constructed in apps/api/src/server.ts
- * (`getPoolConfig`) and apps/worker/src/worker.ts, which read
- * `DATABASE_SSL_REJECT_UNAUTHORIZED` directly. To finish wiring the CA-bundle
- * path, those builders should call `resolveDatabaseSslConfig(process.env)` and
- * spread the resulting `{ ca, rejectUnauthorized }` into the pg `ssl` option
- * instead of hand-rolling `{ rejectUnauthorized: false }`.
- * TODO(pool-wiring): replace the inline ssl construction in server.ts /
- * worker.ts with this helper (those files are owned by other agents in the
- * current split; this helper + manifest + docs + .env.example are the
- * config-side contract).
+ * Both pg `Pool` builders (apps/api/src/server.ts `getPoolConfig` and
+ * apps/worker/src/db-pool.ts `buildPool`) consume this via
+ * `resolveDatabasePoolSsl` below, so setting `DATABASE_CA_CERT` flips the
+ * fleet to verified TLS without touching either app.
  */
 export function resolveDatabaseSslConfig(env: NodeJS.ProcessEnv = process.env): DatabaseSslConfig {
   const ca = env.DATABASE_CA_CERT?.trim()
@@ -345,6 +339,72 @@ export function resolveDatabaseSslConfig(env: NodeJS.ProcessEnv = process.env): 
     return { mode: 'no-verify', rejectUnauthorized: false }
   }
   return { mode: 'reject-unauthorized', rejectUnauthorized: true }
+}
+
+/** The `{ connectionString, ssl }` slice of a pg PoolConfig produced by
+ *  `resolveDatabasePoolSsl`. `ssl` is absent when the connection string should
+ *  pass through untouched (no TLS requested, or default verified TLS where pg
+ *  handles `sslmode` itself). */
+export type DatabasePoolSsl = {
+  connectionString: string
+  ssl?: { ca: string; rejectUnauthorized: true } | { rejectUnauthorized: false }
+}
+
+/**
+ * Resolve the pg Pool `connectionString` + `ssl` pair for a database URL,
+ * honoring the env contract of `resolveDatabaseSslConfig`. This is the ONE
+ * place the api/worker pool builders get their TLS shape from.
+ *
+ * Behavior (preserves the historical hand-rolled logic when the new env vars
+ * are unset, so dev/preview keep working unchanged):
+ *   - TLS handling only activates when the connection string carries an
+ *     `sslmode` other than `disable` (i.e. the URL itself asks for TLS —
+ *     local docker Postgres without sslmode is never touched).
+ *   - `DATABASE_CA_CERT` set      -> strip `sslmode` from the URL and attach
+ *     `ssl: { ca, rejectUnauthorized: true }` (verified TLS against the
+ *     managed-PG CA bundle). Wins over the no-verify flag.
+ *   - no-verify (env flag `DATABASE_SSL_REJECT_UNAUTHORIZED=false`, or the
+ *     explicit `rejectUnauthorized: false` option) -> strip `sslmode` and
+ *     attach `ssl: { rejectUnauthorized: false }` (legacy escape hatch).
+ *   - default -> pass the URL through unchanged; pg derives TLS from
+ *     `sslmode` and verifies against the system trust store.
+ *
+ * `opts.rejectUnauthorized` exists for callers (the worker) that already
+ * resolved the legacy flag themselves; it overrides the env flag but NEVER
+ * the CA-bundle path.
+ */
+export function resolveDatabasePoolSsl(
+  connectionString: string,
+  opts: { env?: NodeJS.ProcessEnv; rejectUnauthorized?: boolean } = {},
+): DatabasePoolSsl {
+  const env = opts.env ?? process.env
+  const resolved = resolveDatabaseSslConfig(env)
+
+  let mode: 'verify-ca' | 'no-verify' | 'passthrough'
+  if (resolved.mode === 'verify-ca') {
+    mode = 'verify-ca'
+  } else if (opts.rejectUnauthorized !== undefined) {
+    mode = opts.rejectUnauthorized ? 'passthrough' : 'no-verify'
+  } else {
+    mode = resolved.mode === 'no-verify' ? 'no-verify' : 'passthrough'
+  }
+  if (mode === 'passthrough') return { connectionString }
+
+  let url: URL
+  try {
+    url = new URL(connectionString)
+  } catch {
+    return { connectionString }
+  }
+  const sslMode = url.searchParams.get('sslmode')
+  if (!sslMode || sslMode === 'disable') return { connectionString }
+  // Strip sslmode so the explicit ssl object below is authoritative (pg's
+  // connection-string sslmode parsing would otherwise fight it).
+  url.searchParams.delete('sslmode')
+  if (mode === 'verify-ca' && resolved.mode === 'verify-ca') {
+    return { connectionString: url.toString(), ssl: { ca: resolved.ca, rejectUnauthorized: true } }
+  }
+  return { connectionString: url.toString(), ssl: { rejectUnauthorized: false } }
 }
 
 export function postgresOptionsForTier(tier: AppTier, currentOptions?: string): string {

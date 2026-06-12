@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
+import { resolveDatabasePoolSsl } from '@sitelayer/config'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
 import { companyRoleToBuiltin, type BuiltinRole, type PermissionAction, type PermissionGrant } from '@sitelayer/domain'
@@ -123,7 +124,6 @@ logger.info(
 
 const port = Number(process.env.PORT ?? 3001)
 const databaseUrl = appConfig.databaseUrl
-const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const activeUserId = process.env.ACTIVE_USER_ID ?? 'demo-user'
 let authConfig: ReturnType<typeof loadAuthConfig>
@@ -307,21 +307,13 @@ function withTierOptions(config: PoolConfig): PoolConfig {
 }
 
 function getPoolConfig(connectionString: string): PoolConfig {
-  try {
-    const url = new URL(connectionString)
-    const sslMode = url.searchParams.get('sslmode')
-    if (!databaseSslRejectUnauthorized && sslMode && sslMode !== 'disable') {
-      url.searchParams.delete('sslmode')
-      return withTierOptions({
-        connectionString: url.toString(),
-        ssl: { rejectUnauthorized: false },
-      })
-    }
-  } catch {
-    return withTierOptions({ connectionString })
-  }
-
-  return withTierOptions({ connectionString })
+  // TLS shape comes from @sitelayer/config: DATABASE_CA_CERT -> verified TLS
+  // against the managed-PG CA bundle; DATABASE_SSL_REJECT_UNAUTHORIZED=false
+  // -> legacy no-verify; default -> pass through (pg owns sslmode).
+  const { connectionString: resolvedConnectionString, ssl } = resolveDatabasePoolSsl(connectionString)
+  return withTierOptions(
+    ssl ? { connectionString: resolvedConnectionString, ssl } : { connectionString: resolvedConnectionString },
+  )
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))

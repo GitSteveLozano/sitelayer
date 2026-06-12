@@ -21,8 +21,8 @@
 #   scripts/verify-local.sh --keep-going    # run all stages, don't fail-fast
 #
 # Levels (also via VERIFY_LEVEL env; flag wins over env):
-#   fast      -> static, build, unit                            (quick iteration)
-#   standard  -> static, build, unit, integration               (DEFAULT; the deploy/merge gate — deterministic + reliable)
+#   fast      -> static, audit, build, unit                     (quick iteration)
+#   standard  -> static, audit, build, unit, integration        (DEFAULT; the deploy/merge gate — deterministic + reliable)
 #   full      -> standard + e2e (docker-compose stack + Playwright)
 #
 # Why e2e is NOT in the default gate: the e2e stage stands up the full app
@@ -270,6 +270,26 @@ stage_static() {
 
   echo "  -> typecheck (all workspaces)"
   npm run typecheck || return 1
+}
+
+# ============================================================================
+# Stage: audit — npm audit over PRODUCTION dependencies only.
+#
+# The install paths everywhere else run --no-audit (deliberately: hermetic,
+# fast), which means NOTHING scans the dependency tree for known vulns. This
+# stage is that scan, as its own named gate: high/critical advisories in the
+# prod dependency graph (--omit=dev) FAIL the gate. Dev-only advisories do
+# not block (the shipped image carries only prod deps — the Dockerfile runs
+# npm ci --omit=dev).
+#
+# Needs registry network access (like the lockfile-sync check / docker pulls
+# elsewhere in this gate). VERIFY_AUDIT_LEVEL is overridable for a temporary,
+# explicit loosening — never silently.
+# ============================================================================
+stage_audit() {
+  local audit_level="${VERIFY_AUDIT_LEVEL:-high}"
+  echo "  -> npm audit --omit=dev --audit-level=$audit_level"
+  npm audit --omit=dev --audit-level="$audit_level" || return 1
 }
 
 # ============================================================================
@@ -683,8 +703,9 @@ main() {
   log "repo=$REPO_ROOT sha=$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
   local run_start; run_start="$(date +%s)"
 
-  # Always: static, build, unit, conformance (the projectkit contract gate).
+  # Always: static, audit, build, unit, conformance (the projectkit contract gate).
   run_stage "static" stage_static || true
+  run_stage "audit" stage_audit || true
   run_stage "build" stage_build || true
   run_stage "unit" stage_unit || true
   run_stage "conformance" stage_conformance || true

@@ -8,6 +8,7 @@ import {
   loadLocalEnv,
   parseEnvLine,
   postgresOptionsForTier,
+  resolveDatabasePoolSsl,
   resolveDatabaseSslConfig,
   TierConfigError,
   warnIfProdPointedAtQboSandbox,
@@ -206,6 +207,66 @@ describe('resolveDatabaseSslConfig', () => {
 
   it('defaults to rejectUnauthorized:true', () => {
     expect(resolveDatabaseSslConfig({})).toEqual({ mode: 'reject-unauthorized', rejectUnauthorized: true })
+  })
+})
+
+describe('resolveDatabasePoolSsl', () => {
+  const CA = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
+  const TLS_URL = 'postgres://app:pw@db.example.com:25060/sitelayer_prod?sslmode=require'
+  const PLAIN_URL = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+
+  it('attaches verified TLS (ca + rejectUnauthorized:true) and strips sslmode when DATABASE_CA_CERT is set', () => {
+    const result = resolveDatabasePoolSsl(TLS_URL, { env: { DATABASE_CA_CERT: CA } })
+    expect(result.ssl).toEqual({ ca: CA, rejectUnauthorized: true })
+    expect(result.connectionString).not.toContain('sslmode')
+  })
+
+  it('CA bundle wins over the no-verify flag AND over an explicit rejectUnauthorized:false option', () => {
+    const result = resolveDatabasePoolSsl(TLS_URL, {
+      env: { DATABASE_CA_CERT: CA, DATABASE_SSL_REJECT_UNAUTHORIZED: 'false' },
+      rejectUnauthorized: false,
+    })
+    expect(result.ssl).toEqual({ ca: CA, rejectUnauthorized: true })
+  })
+
+  it('keeps the legacy no-verify escape hatch when the env flag is false and no CA is set', () => {
+    const result = resolveDatabasePoolSsl(TLS_URL, { env: { DATABASE_SSL_REJECT_UNAUTHORIZED: 'false' } })
+    expect(result.ssl).toEqual({ rejectUnauthorized: false })
+    expect(result.connectionString).not.toContain('sslmode')
+  })
+
+  it('honors the caller-resolved rejectUnauthorized:false option (worker contract)', () => {
+    const result = resolveDatabasePoolSsl(TLS_URL, { env: {}, rejectUnauthorized: false })
+    expect(result.ssl).toEqual({ rejectUnauthorized: false })
+  })
+
+  it('an explicit rejectUnauthorized:true option passes the URL through untouched', () => {
+    const result = resolveDatabasePoolSsl(TLS_URL, {
+      env: { DATABASE_SSL_REJECT_UNAUTHORIZED: 'false' },
+      rejectUnauthorized: true,
+    })
+    expect(result).toEqual({ connectionString: TLS_URL })
+  })
+
+  it('default env passes the URL through unchanged (pg owns sslmode)', () => {
+    expect(resolveDatabasePoolSsl(TLS_URL, { env: {} })).toEqual({ connectionString: TLS_URL })
+  })
+
+  it('never touches a URL without sslmode (local docker Postgres), even with a CA set', () => {
+    expect(resolveDatabasePoolSsl(PLAIN_URL, { env: { DATABASE_CA_CERT: CA } })).toEqual({
+      connectionString: PLAIN_URL,
+    })
+  })
+
+  it('never touches a URL with sslmode=disable', () => {
+    const url = `${PLAIN_URL}?sslmode=disable`
+    expect(resolveDatabasePoolSsl(url, { env: { DATABASE_CA_CERT: CA } })).toEqual({ connectionString: url })
+  })
+
+  it('passes an unparseable connection string through unchanged', () => {
+    expect(resolveDatabasePoolSsl('not a url', { env: { DATABASE_CA_CERT: CA } })).toEqual({
+      connectionString: 'not a url',
+    })
   })
 })
 
