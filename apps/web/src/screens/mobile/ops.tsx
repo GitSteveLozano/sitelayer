@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -35,10 +35,15 @@ import {
   type WorkItemStatus,
   type WorkRequestQueueHealthResponse,
 } from '@/lib/api'
-import { getBuildSha } from '@/lib/api/client'
+import { ApiError, getBuildSha } from '@/lib/api/client'
 import { useOnlineStatus } from '@/lib/offline/online-status'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
+import {
+  clearOpsDiagnosticControl,
+  persistOpsDiagnosticControl,
+  readOpsDiagnosticControl,
+} from './ops-diagnostic-control'
 
 const OPEN_WORK_STATUSES = new Set<WorkItemStatus>([
   'new',
@@ -128,10 +133,26 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const gateway = componentByKey(systemComponents, 'gateway')
   const screenCapture = componentByKey(systemComponents, 'screen_capture')
   const captureRouter = componentByKey(systemComponents, 'capture_router')
+  const agentFeed = componentByKey(systemComponents, 'agent_feed')
   const onsiteSession = opsDiagnostics.data?.onsite_session
   const observedDiagnosticSession = diagnosticSessions.data?.sessions[0] ?? null
   const displayedDiagnosticSession = activeDiagnosticSession ?? observedDiagnosticSession
   const hasDiagnosticControl = Boolean(activeDiagnosticSession && diagnosticControlToken)
+  useEffect(() => {
+    setActiveDiagnosticSession(null)
+    setDiagnosticControlToken(null)
+  }, [companySlug])
+  useEffect(() => {
+    if (!canCaptureAppIssues) return
+    const storedControl = readOpsDiagnosticControl(companySlug)
+    if (!storedControl) return
+    const restoredSession = (diagnosticSessions.data?.sessions ?? []).find(
+      (session) => session.id === storedControl.session_id,
+    )
+    if (!restoredSession) return
+    setActiveDiagnosticSession(restoredSession)
+    setDiagnosticControlToken(storedControl.control_token)
+  }, [canCaptureAppIssues, companySlug, diagnosticSessions.data?.sessions])
   const startDiagnosticSession = useMutation({
     mutationFn: () => {
       const input = onsiteSession?.recommended_entry
@@ -142,6 +163,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     onSuccess: (response) => {
       setActiveDiagnosticSession(response.session)
       setDiagnosticControlToken(response.control_token)
+      persistOpsDiagnosticControl(companySlug, response.session, response.control_token)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
     },
@@ -159,7 +181,15 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     },
     onSuccess: (response) => {
       setActiveDiagnosticSession(response.session)
+      if (diagnosticControlToken) persistOpsDiagnosticControl(companySlug, response.session, diagnosticControlToken)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 403) {
+        clearOpsDiagnosticControl(companySlug)
+        setActiveDiagnosticSession(null)
+        setDiagnosticControlToken(null)
+      }
     },
   })
   const latestCaptured = findLatestCaptured(workItems)
@@ -326,6 +356,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               <SystemRow component={gateway} fallbackLabel="Console Gateway" pending={opsDiagnostics.isPending} />
               <SystemRow component={screenCapture} fallbackLabel="Screen capture" pending={opsDiagnostics.isPending} />
               <SystemRow component={captureRouter} fallbackLabel="Capture router" pending={opsDiagnostics.isPending} />
+              <SystemRow component={agentFeed} fallbackLabel="Agent feed" pending={opsDiagnostics.isPending} />
             </>
           ) : (
             <MListRow
@@ -515,7 +546,7 @@ function formatOpsDiagnosticsSummary(
   summary: { ok: number; total: number; degraded: number; unavailable: number; error: number } | undefined,
   pending: boolean,
 ): string {
-  if (pending) return 'Checking gateway, screen, and capture router.'
+  if (pending) return 'Checking gateway, screen, capture router, and agent feed.'
   if (!summary) return 'No diagnostics returned.'
   const attention = summary.degraded + summary.unavailable + summary.error
   return `${summary.ok}/${summary.total} green${attention > 0 ? ` · ${attention} need attention` : ''}`
