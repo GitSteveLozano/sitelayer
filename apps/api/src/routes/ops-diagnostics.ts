@@ -12,6 +12,30 @@ export type OpsDiagnosticComponent = {
   facts: Record<string, string | number | boolean | null>
 }
 
+export type OpsOnsiteDiagnosticActionKey =
+  | 'capture_field_context'
+  | 'capture_desktop_context'
+  | 'route_support_packet'
+  | 'dispatch_agent_review'
+
+export type OpsOnsiteDiagnosticAction = {
+  key: OpsOnsiteDiagnosticActionKey
+  label: string
+  enabled: boolean
+  reason: string
+}
+
+export type OpsOnsiteDiagnosticSessionPlan = {
+  status: 'ready' | 'limited' | 'blocked'
+  control_level: 'observe' | 'capture' | 'route'
+  recommended_entry: OpsOnsiteDiagnosticActionKey
+  can_capture_desktop: boolean
+  can_route_work: boolean
+  can_dispatch_agent_review: boolean
+  blockers: string[]
+  actions: OpsOnsiteDiagnosticAction[]
+}
+
 export type OpsDiagnosticsResponse = {
   schema: 'sitelayer.ops_diagnostics.v1'
   generated_at: string
@@ -24,6 +48,7 @@ export type OpsDiagnosticsResponse = {
     error: number
   }
   components: OpsDiagnosticComponent[]
+  onsite_session: OpsOnsiteDiagnosticSessionPlan
 }
 
 export type OpsDiagnosticsRouteCtx = {
@@ -109,6 +134,7 @@ export async function buildOpsDiagnostics(
     status: summary.error > 0 || summary.unavailable > 0 ? 'degraded' : summary.degraded > 0 ? 'degraded' : 'ok',
     summary,
     components,
+    onsite_session: buildOnsiteDiagnosticSessionPlan(components),
   }
 }
 
@@ -213,6 +239,92 @@ function baseComponent(key: string, label: string, probe: ProbeResult, detail: s
       http_status: probe.http_status,
     },
   }
+}
+
+function buildOnsiteDiagnosticSessionPlan(
+  components: readonly OpsDiagnosticComponent[],
+): OpsOnsiteDiagnosticSessionPlan {
+  const gateway = componentByKey(components, 'gateway')
+  const screenCapture = componentByKey(components, 'screen_capture')
+  const captureRouter = componentByKey(components, 'capture_router')
+  const gatewayOk = gateway?.status === 'ok'
+  const screenOk = screenCapture?.status === 'ok' && screenCapture.facts.recording === true
+  const routerOk = captureRouter?.status === 'ok'
+  const routerHasSink = typeof captureRouter?.facts.sinks === 'string' && captureRouter.facts.sinks.length > 0
+  const canRouteWork = routerOk && routerHasSink
+  const canDispatchAgentReview = gatewayOk && canRouteWork
+  const blockers = [
+    ...componentBlockers(gateway),
+    ...componentBlockers(screenCapture),
+    ...componentBlockers(captureRouter),
+    ...(routerOk && !routerHasSink ? ['Capture router is healthy but has no active sink.'] : []),
+  ]
+
+  const actions: OpsOnsiteDiagnosticAction[] = [
+    {
+      key: 'capture_field_context',
+      label: 'Capture field context',
+      enabled: true,
+      reason: 'Phone capture can still create a work item.',
+    },
+    {
+      key: 'capture_desktop_context',
+      label: 'Attach desktop evidence',
+      enabled: screenOk,
+      reason: screenOk ? 'Screen capture is recording.' : 'Screen capture is not ready.',
+    },
+    {
+      key: 'route_support_packet',
+      label: 'Route support packet',
+      enabled: canRouteWork,
+      reason: canRouteWork ? 'Capture router has an active sink.' : 'Capture router cannot accept routed work.',
+    },
+    {
+      key: 'dispatch_agent_review',
+      label: 'Dispatch agent review',
+      enabled: canDispatchAgentReview,
+      reason: canDispatchAgentReview ? 'Gateway and routing are ready.' : 'Gateway and routing are not both ready.',
+    },
+  ]
+
+  const controlLevel: OpsOnsiteDiagnosticSessionPlan['control_level'] = canDispatchAgentReview
+    ? 'route'
+    : screenOk || canRouteWork
+      ? 'capture'
+      : 'observe'
+  const status: OpsOnsiteDiagnosticSessionPlan['status'] =
+    canDispatchAgentReview && screenOk ? 'ready' : blockers.length >= 2 ? 'blocked' : 'limited'
+  const recommendedEntry: OpsOnsiteDiagnosticActionKey =
+    canDispatchAgentReview && screenOk
+      ? 'dispatch_agent_review'
+      : screenOk
+        ? 'capture_desktop_context'
+        : canRouteWork
+          ? 'route_support_packet'
+          : 'capture_field_context'
+
+  return {
+    status,
+    control_level: controlLevel,
+    recommended_entry: recommendedEntry,
+    can_capture_desktop: screenOk,
+    can_route_work: canRouteWork,
+    can_dispatch_agent_review: canDispatchAgentReview,
+    blockers,
+    actions,
+  }
+}
+
+function componentByKey(
+  components: readonly OpsDiagnosticComponent[],
+  key: string,
+): OpsDiagnosticComponent | undefined {
+  return components.find((component) => component.key === key)
+}
+
+function componentBlockers(component: OpsDiagnosticComponent | undefined): string[] {
+  if (!component || component.status === 'ok') return []
+  return [`${component.label}: ${component.detail}`]
 }
 
 async function probeJson(url: string, opts: { fetchImpl: typeof fetch; timeoutMs: number }): Promise<ProbeResult> {

@@ -26,6 +26,7 @@ import {
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticSessionPlan,
   type WorkItemStatus,
   type WorkRequestQueueHealthResponse,
 } from '@/lib/api'
@@ -112,8 +113,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const gateway = componentByKey(systemComponents, 'gateway')
   const screenCapture = componentByKey(systemComponents, 'screen_capture')
   const captureRouter = componentByKey(systemComponents, 'capture_router')
+  const onsiteSession = opsDiagnostics.data?.onsite_session
   const latestCaptured = findLatestCaptured(workItems)
   const onsiteAction = buildOnsiteAction({
+    onsiteSession,
     health: health.data,
     latestCaptured,
     reviewReady,
@@ -162,6 +165,24 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
             headline={online ? 'Phone online' : 'Phone offline'}
             supporting={online ? 'Live API reads are available.' : 'Mutable control needs the network.'}
           />
+          {canViewAppIssues ? (
+            <MListRow
+              leading={
+                onsiteSession?.status === 'ready' ? (
+                  <MI.Check size={18} />
+                ) : onsiteSession?.status === 'blocked' ? (
+                  <MI.ShieldAlert size={18} />
+                ) : (
+                  <MI.Clock size={18} />
+                )
+              }
+              leadingTone={onsiteSessionTone(onsiteSession, opsDiagnostics.isPending)}
+              headline="Diagnostic session"
+              supporting={formatOnsiteSessionSummary(onsiteSession, opsDiagnostics.isPending)}
+              onTap={onsiteSession ? () => navigate(onsiteSessionRoute(onsiteSession)) : undefined}
+              chev={Boolean(onsiteSession)}
+            />
+          ) : null}
           <MListRow
             leading={<MI.Clock size={18} />}
             leadingTone={dispatchFailed > 0 ? 'red' : dispatchActive > 0 ? 'amber' : 'green'}
@@ -390,6 +411,7 @@ function formatSystemComponent(component: OpsDiagnosticComponent): string {
 }
 
 type OnsiteActionInput = {
+  onsiteSession: OpsOnsiteDiagnosticSessionPlan | undefined
   health: WorkRequestQueueHealthResponse | undefined
   latestCaptured: ContextWorkItem | null
   reviewReady: number
@@ -399,6 +421,7 @@ type OnsiteActionInput = {
 }
 
 function buildOnsiteAction({
+  onsiteSession,
   health,
   latestCaptured,
   reviewReady,
@@ -412,6 +435,15 @@ function buildOnsiteAction({
   supporting: string
   to: string
 } {
+  if (onsiteSession?.status === 'blocked') {
+    return {
+      Icon: MI.ShieldAlert,
+      tone: 'amber',
+      headline: 'Fix onsite diagnostics',
+      supporting: `${onsiteSession.blockers.length} blocker${onsiteSession.blockers.length === 1 ? '' : 's'} before routed diagnostics`,
+      to: '/issues',
+    }
+  }
   const capture = health?.capture
   if (capture && (capture.analysis_failed > 0 || capture.analysis_missing > 0)) {
     return {
@@ -465,4 +497,37 @@ function buildOnsiteAction({
     supporting: 'Start with note, photo, voice, or onsite triage.',
     to: '/issue',
   }
+}
+
+function onsiteSessionTone(
+  plan: OpsOnsiteDiagnosticSessionPlan | undefined,
+  pending: boolean,
+): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
+  if (pending) return 'blue'
+  if (plan?.status === 'ready') return 'green'
+  if (plan?.status === 'limited') return 'amber'
+  if (plan?.status === 'blocked') return 'red'
+  return 'accent'
+}
+
+function formatOnsiteSessionSummary(plan: OpsOnsiteDiagnosticSessionPlan | undefined, pending: boolean): string {
+  if (pending) return 'Checking capture, routing, and agent review.'
+  if (!plan) return 'No session plan reported.'
+  const enabled = plan.actions.filter((action) => action.enabled).length
+  const blockers = plan.blockers.length
+  const level =
+    plan.control_level === 'route'
+      ? 'Routing ready'
+      : plan.control_level === 'capture'
+        ? 'Capture only'
+        : 'Observe only'
+  return `${level} · ${enabled}/${plan.actions.length} actions ready${blockers > 0 ? ` · ${blockers} blocker${blockers === 1 ? '' : 's'}` : ''}`
+}
+
+function onsiteSessionRoute(plan: OpsOnsiteDiagnosticSessionPlan): string {
+  if (plan.recommended_entry === 'dispatch_agent_review' || plan.recommended_entry === 'route_support_packet') {
+    return '/work'
+  }
+  if (plan.recommended_entry === 'capture_desktop_context') return '/work/board'
+  return '/issue'
 }

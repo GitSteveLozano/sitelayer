@@ -148,6 +148,7 @@ export {
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsDiagnosticsResponse,
+  type OpsOnsiteDiagnosticSessionPlan,
 } from './ops-diagnostics'
 
 export {
