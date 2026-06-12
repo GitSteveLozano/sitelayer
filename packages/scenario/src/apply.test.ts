@@ -80,6 +80,12 @@ describe('applyScenario (fake client)', () => {
     // a context work item + handoff events were produced from the capture session.
     expect(client.count(/insert into context_work_items/i)).toBe(1)
     expect(client.count(/insert into context_handoff_events/i)).toBeGreaterThanOrEqual(2)
+    // capture-born work items are app feedback: the insert must stamp the
+    // app_issue domain (migration 009 defaults to field_request, which would
+    // put the seeded fixture on the wrong board).
+    const workItemInsert = client.calls.find((c) => /insert into context_work_items/i.test(c.text))
+    expect(workItemInsert?.text).toMatch(/\bdomain\b/)
+    expect(workItemInsert?.values).toContain('app_issue')
   })
 })
 
