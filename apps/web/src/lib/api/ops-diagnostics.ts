@@ -1,4 +1,4 @@
-import { apiGet } from './client'
+import { apiGet, apiPost } from './client'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -35,6 +35,53 @@ export type OpsOnsiteDiagnosticSessionPlan = {
   actions: OpsOnsiteDiagnosticAction[]
 }
 
+export type OpsOnsiteDiagnosticAuditEvent = {
+  id: string
+  at: string
+  actor_user_id: string | null
+  type: 'session.started' | 'action.requested'
+  action_key?: OpsOnsiteDiagnosticActionKey
+  effect: 'audit_only'
+  summary: string
+}
+
+export type OpsOnsiteDiagnosticSessionRecord = {
+  id: string
+  state: 'active'
+  created_at: string
+  expires_at: string
+  operator_user_id: string | null
+  label: string | null
+  intent: OpsOnsiteDiagnosticActionKey | null
+  plan: OpsOnsiteDiagnosticSessionPlan
+  audit_events: OpsOnsiteDiagnosticAuditEvent[]
+}
+
+export type OpsOnsiteDiagnosticSessionCreateInput = {
+  label?: string
+  intent?: OpsOnsiteDiagnosticActionKey
+}
+
+export type OpsOnsiteDiagnosticSessionCreateResponse = {
+  schema: 'sitelayer.ops_diagnostic_session.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  control_token: string
+}
+
+export type OpsOnsiteDiagnosticActionRequestInput = {
+  action_key: OpsOnsiteDiagnosticActionKey
+  control_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionActionResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_action.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  accepted_action: {
+    key: OpsOnsiteDiagnosticActionKey
+    effect: 'audit_only'
+  }
+}
+
 export type OpsDiagnosticsResponse = {
   schema: 'sitelayer.ops_diagnostics.v1'
   generated_at: string
@@ -52,4 +99,23 @@ export type OpsDiagnosticsResponse = {
 
 export function fetchOpsDiagnostics(companySlug?: string): Promise<OpsDiagnosticsResponse> {
   return apiGet<OpsDiagnosticsResponse>('/api/ops/diagnostics', companySlug)
+}
+
+export function createOpsDiagnosticSession(
+  companySlug?: string,
+  input: OpsOnsiteDiagnosticSessionCreateInput = {},
+): Promise<OpsOnsiteDiagnosticSessionCreateResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionCreateResponse>('/api/ops/diagnostics/sessions', input, companySlug)
+}
+
+export function requestOpsDiagnosticSessionAction(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticActionRequestInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticSessionActionResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionActionResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions`,
+    input,
+    companySlug,
+  )
 }

@@ -332,6 +332,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleOpsDiagnosticsRoutes(req, url, {
         requireCapability: ctx.requireCapability,
         sendJson,
+        readBody,
+        getCurrentUserId: () => currentUserId,
       }),
 
     // Agent-tools discovery — self-describing catalog of the deterministic

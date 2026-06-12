@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { randomUUID } from 'node:crypto'
 import type { Capability } from '@sitelayer/domain'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
@@ -36,6 +37,43 @@ export type OpsOnsiteDiagnosticSessionPlan = {
   actions: OpsOnsiteDiagnosticAction[]
 }
 
+export type OpsOnsiteDiagnosticAuditEvent = {
+  id: string
+  at: string
+  actor_user_id: string | null
+  type: 'session.started' | 'action.requested'
+  action_key?: OpsOnsiteDiagnosticActionKey
+  effect: 'audit_only'
+  summary: string
+}
+
+export type OpsOnsiteDiagnosticSessionRecord = {
+  id: string
+  state: 'active'
+  created_at: string
+  expires_at: string
+  operator_user_id: string | null
+  label: string | null
+  intent: OpsOnsiteDiagnosticActionKey | null
+  plan: OpsOnsiteDiagnosticSessionPlan
+  audit_events: OpsOnsiteDiagnosticAuditEvent[]
+}
+
+export type OpsOnsiteDiagnosticSessionCreateResponse = {
+  schema: 'sitelayer.ops_diagnostic_session.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  control_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionActionResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_action.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  accepted_action: {
+    key: OpsOnsiteDiagnosticActionKey
+    effect: 'audit_only'
+  }
+}
+
 export type OpsDiagnosticsResponse = {
   schema: 'sitelayer.ops_diagnostics.v1'
   generated_at: string
@@ -54,6 +92,8 @@ export type OpsDiagnosticsResponse = {
 export type OpsDiagnosticsRouteCtx = {
   requireCapability: (capability: Capability) => Promise<boolean>
   sendJson: (status: number, body: unknown) => void
+  readBody?: () => Promise<Record<string, unknown>>
+  getCurrentUserId?: () => string
   fetchImpl?: typeof fetch
 }
 
@@ -66,20 +106,120 @@ type ProbeResult = {
 }
 
 const DEFAULT_TIMEOUT_MS = 900
+const SESSION_TTL_MS = 60 * 60 * 1000
+const MAX_ACTIVE_SESSIONS = 100
+const APP_ISSUE_VIEW: Capability = 'app_issue.view'
+const APP_ISSUE_CAPTURE: Capability = 'app_issue.capture'
+
+type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
+  control_token: string
+}
+
+const onsiteDiagnosticSessions = new Map<string, StoredOnsiteDiagnosticSession>()
 
 export async function handleOpsDiagnosticsRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: OpsDiagnosticsRouteCtx,
 ): Promise<boolean> {
-  if (url.pathname !== '/api/ops/diagnostics') return false
-  if (req.method !== 'GET') {
+  if (url.pathname === '/api/ops/diagnostics') {
+    if (req.method !== 'GET') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
+
+    const response = await buildOpsDiagnostics(diagnosticsOptions(ctx))
+    ctx.sendJson(200, response)
+    return true
+  }
+
+  if (url.pathname === '/api/ops/diagnostics/sessions') {
+    if (req.method === 'GET') {
+      if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
+      pruneExpiredSessions()
+      ctx.sendJson(200, {
+        schema: 'sitelayer.ops_diagnostic_sessions.v1',
+        sessions: Array.from(onsiteDiagnosticSessions.values()).map(publicSession),
+      })
+      return true
+    }
+    if (req.method === 'POST') {
+      if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return true
+      const body = await readRequestBody(ctx)
+      if (!body.ok) {
+        ctx.sendJson(400, { error: body.error })
+        return true
+      }
+      const diagnostics = await buildOpsDiagnostics(diagnosticsOptions(ctx))
+      const session = createOnsiteDiagnosticSession({
+        body: body.value,
+        plan: diagnostics.onsite_session,
+        actorUserId: ctx.getCurrentUserId?.() ?? null,
+      })
+      ctx.sendJson(201, {
+        schema: 'sitelayer.ops_diagnostic_session.v1',
+        session: publicSession(session),
+        control_token: session.control_token,
+      } satisfies OpsOnsiteDiagnosticSessionCreateResponse)
+      return true
+    }
     ctx.sendJson(405, { error: 'method not allowed' })
     return true
   }
-  if (!(await ctx.requireCapability('app_issue.view'))) return true
 
-  const diagnosticsOptions: Parameters<typeof buildOpsDiagnostics>[0] = {
+  const sessionActionMatch = url.pathname.match(/^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/actions$/)
+  if (sessionActionMatch) {
+    if (req.method !== 'POST') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return true
+    const session = lookupSession(sessionActionMatch[1] ?? '')
+    if (!session.ok) {
+      ctx.sendJson(session.status, { error: session.error })
+      return true
+    }
+    const body = await readRequestBody(ctx)
+    if (!body.ok) {
+      ctx.sendJson(400, { error: body.error })
+      return true
+    }
+    const actionResult = recordOnsiteDiagnosticAction(session.value, body.value, ctx.getCurrentUserId?.() ?? null)
+    if (!actionResult.ok) {
+      ctx.sendJson(
+        actionResult.status,
+        actionResult.reason
+          ? { error: actionResult.error, reason: actionResult.reason }
+          : { error: actionResult.error },
+      )
+      return true
+    }
+    ctx.sendJson(202, actionResult.value)
+    return true
+  }
+
+  const sessionMatch = url.pathname.match(/^\/api\/ops\/diagnostics\/sessions\/([^/]+)$/)
+  if (sessionMatch) {
+    if (req.method !== 'GET') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
+    const session = lookupSession(sessionMatch[1] ?? '')
+    if (!session.ok) {
+      ctx.sendJson(session.status, { error: session.error })
+      return true
+    }
+    ctx.sendJson(200, { schema: 'sitelayer.ops_diagnostic_session.v1', session: publicSession(session.value) })
+    return true
+  }
+
+  return false
+}
+
+function diagnosticsOptions(ctx: OpsDiagnosticsRouteCtx): Parameters<typeof buildOpsDiagnostics>[0] {
+  const options: Parameters<typeof buildOpsDiagnostics>[0] = {
     timeoutMs: readTimeoutMs(),
     gatewayDiagnosticsUrl: firstNonEmpty(
       process.env.SITELAYER_OPS_GATEWAY_DIAGNOSTICS_URL,
@@ -89,10 +229,8 @@ export async function handleOpsDiagnosticsRoutes(
     screenCaptureUrl: firstNonEmpty(process.env.SITELAYER_OPS_SCREEN_CAPTURE_URL, 'http://127.0.0.1:4357'),
     captureRouterUrl: firstNonEmpty(process.env.SITELAYER_OPS_CAPTURE_ROUTER_URL, 'http://127.0.0.1:8814'),
   }
-  if (ctx.fetchImpl) diagnosticsOptions.fetchImpl = ctx.fetchImpl
-  const response = await buildOpsDiagnostics(diagnosticsOptions)
-  ctx.sendJson(200, response)
-  return true
+  if (ctx.fetchImpl) options.fetchImpl = ctx.fetchImpl
+  return options
 }
 
 export async function buildOpsDiagnostics(
@@ -136,6 +274,146 @@ export async function buildOpsDiagnostics(
     components,
     onsite_session: buildOnsiteDiagnosticSessionPlan(components),
   }
+}
+
+function createOnsiteDiagnosticSession(opts: {
+  body: Record<string, unknown>
+  plan: OpsOnsiteDiagnosticSessionPlan
+  actorUserId: string | null
+}): StoredOnsiteDiagnosticSession {
+  pruneExpiredSessions()
+  const createdAt = new Date()
+  const expiresAt = new Date(createdAt.getTime() + SESSION_TTL_MS)
+  const requestedIntent = actionKeyValue(opts.body.intent)
+  const intent =
+    requestedIntent && actionEnabled(opts.plan, requestedIntent) ? requestedIntent : opts.plan.recommended_entry
+  const id = `opsdiag_${randomUUID().replace(/-/g, '').slice(0, 18)}`
+  const session: StoredOnsiteDiagnosticSession = {
+    id,
+    state: 'active',
+    created_at: createdAt.toISOString(),
+    expires_at: expiresAt.toISOString(),
+    operator_user_id: opts.actorUserId,
+    label: boundedString(opts.body.label, 80),
+    intent,
+    plan: opts.plan,
+    audit_events: [
+      {
+        id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+        at: createdAt.toISOString(),
+        actor_user_id: opts.actorUserId,
+        type: 'session.started',
+        effect: 'audit_only',
+        summary: `Started onsite diagnostic session with ${opts.plan.control_level} control.`,
+      },
+    ],
+    control_token: randomUUID(),
+  }
+  onsiteDiagnosticSessions.set(id, session)
+  pruneOldestSessions()
+  return session
+}
+
+function recordOnsiteDiagnosticAction(
+  session: StoredOnsiteDiagnosticSession,
+  body: Record<string, unknown>,
+  actorUserId: string | null,
+):
+  | { ok: true; value: OpsOnsiteDiagnosticSessionActionResponse }
+  | { ok: false; status: number; error: string; reason?: string } {
+  const token = boundedString(body.control_token, 200)
+  if (!token || token !== session.control_token) return { ok: false, status: 403, error: 'invalid control token' }
+
+  const actionKey = actionKeyValue(body.action_key)
+  if (!actionKey) return { ok: false, status: 400, error: 'action_key is required' }
+  const action = session.plan.actions.find((candidate) => candidate.key === actionKey)
+  if (!action) return { ok: false, status: 400, error: 'unknown action_key' }
+  if (!action.enabled) return { ok: false, status: 409, error: 'action is not available', reason: action.reason }
+
+  const at = new Date().toISOString()
+  session.audit_events.push({
+    id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+    at,
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    action_key: actionKey,
+    effect: 'audit_only',
+    summary: `Requested ${action.label}.`,
+  })
+  return {
+    ok: true,
+    value: {
+      schema: 'sitelayer.ops_diagnostic_session_action.v1',
+      session: publicSession(session),
+      accepted_action: { key: actionKey, effect: 'audit_only' },
+    },
+  }
+}
+
+function lookupSession(
+  id: string,
+): { ok: true; value: StoredOnsiteDiagnosticSession } | { ok: false; status: number; error: string } {
+  pruneExpiredSessions()
+  const session = onsiteDiagnosticSessions.get(id)
+  if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
+  return { ok: true, value: session }
+}
+
+function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnosticSessionRecord {
+  const { control_token: _controlToken, ...rest } = session
+  return rest
+}
+
+async function readRequestBody(
+  ctx: OpsDiagnosticsRouteCtx,
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  if (!ctx.readBody) return { ok: true, value: {} }
+  try {
+    const body = await ctx.readBody()
+    return { ok: true, value: objectValue(body) ?? {} }
+  } catch {
+    return { ok: false, error: 'invalid request body' }
+  }
+}
+
+function actionEnabled(plan: OpsOnsiteDiagnosticSessionPlan, key: OpsOnsiteDiagnosticActionKey): boolean {
+  return plan.actions.some((action) => action.key === key && action.enabled)
+}
+
+function actionKeyValue(value: unknown): OpsOnsiteDiagnosticActionKey | null {
+  return value === 'capture_field_context' ||
+    value === 'capture_desktop_context' ||
+    value === 'route_support_packet' ||
+    value === 'dispatch_agent_review'
+    ? value
+    : null
+}
+
+function boundedString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, maxLength)
+}
+
+function pruneExpiredSessions(nowMs = Date.now()): void {
+  for (const [id, session] of onsiteDiagnosticSessions) {
+    if (Date.parse(session.expires_at) <= nowMs) onsiteDiagnosticSessions.delete(id)
+  }
+}
+
+function pruneOldestSessions(): void {
+  if (onsiteDiagnosticSessions.size <= MAX_ACTIVE_SESSIONS) return
+  const ordered = Array.from(onsiteDiagnosticSessions.values()).sort(
+    (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+  )
+  for (const session of ordered.slice(0, onsiteDiagnosticSessions.size - MAX_ACTIVE_SESSIONS)) {
+    onsiteDiagnosticSessions.delete(session.id)
+  }
+}
+
+export function __resetOpsDiagnosticSessionsForTests(): void {
+  onsiteDiagnosticSessions.clear()
 }
 
 function summarizeGatewayDiagnostics(probe: ProbeResult): OpsDiagnosticComponent {

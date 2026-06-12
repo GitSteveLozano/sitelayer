@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
-import { buildOpsDiagnostics, handleOpsDiagnosticsRoutes } from './ops-diagnostics.js'
+import {
+  __resetOpsDiagnosticSessionsForTests,
+  buildOpsDiagnostics,
+  handleOpsDiagnosticsRoutes,
+} from './ops-diagnostics.js'
 
 function json(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -9,23 +13,61 @@ function json(body: unknown, init?: ResponseInit): Response {
   })
 }
 
+function greenFetch(): typeof fetch {
+  return async (input) => {
+    const url = String(input)
+    if (url.endsWith('/api/diagnostics')) {
+      return json({
+        status: 'ok',
+        summary: { total: 7, ok: 7 },
+        components: {
+          mesh: { status: 'ok' },
+          browser_bridge: { status: 'ok' },
+          voice: { status: 'ok' },
+          capture_router: { status: 'ok' },
+        },
+      })
+    }
+    if (url.endsWith('/api/screen/status')) {
+      return json({
+        recording: true,
+        local_storage_only: true,
+        monitors: [{ name: 'HDMI-0', retention_minutes: 720 }],
+      })
+    }
+    if (url.endsWith('/health')) {
+      return json({ ok: true, sinks: ['inbox'], durableSideEffectClaims: 2 })
+    }
+    return json({ error: 'not found' }, { status: 404 })
+  }
+}
+
+function blockedFetch(): typeof fetch {
+  return async (input) => {
+    const url = String(input)
+    if (url.endsWith('/api/diagnostics')) {
+      return json({
+        status: 'ok',
+        summary: { total: 4, ok: 4 },
+        components: {
+          mesh: { status: 'ok' },
+          browser_bridge: { status: 'ok' },
+          voice: { status: 'ok' },
+          capture_router: { status: 'ok' },
+        },
+      })
+    }
+    if (url.endsWith('/api/screen/status')) return json({ recording: false, monitors: [] })
+    if (url.endsWith('/health')) return json({ ok: false, sinks: [] })
+    return json({ error: 'not found' }, { status: 404 })
+  }
+}
+
 describe('ops diagnostics', () => {
   it('summarizes local control-plane primitives without returning raw details', async () => {
     const fetchImpl: typeof fetch = async (input) => {
-      const url = String(input)
-      if (url.endsWith('/api/diagnostics')) {
-        return json({
-          status: 'ok',
-          summary: { total: 7, ok: 7 },
-          components: {
-            mesh: { status: 'ok' },
-            browser_bridge: { status: 'ok' },
-            voice: { status: 'ok' },
-            capture_router: { status: 'ok' },
-          },
-        })
-      }
-      if (url.endsWith('/api/screen/status')) {
+      const response = await greenFetch()(input)
+      if (String(input).endsWith('/api/screen/status')) {
         return json({
           recording: true,
           local_storage_only: true,
@@ -36,7 +78,7 @@ describe('ops diagnostics', () => {
           ],
         })
       }
-      if (url.endsWith('/health')) {
+      if (String(input).endsWith('/health')) {
         return json({
           ok: true,
           sinks: ['inbox'],
@@ -44,7 +86,7 @@ describe('ops diagnostics', () => {
           durableSideEffectClaims: 2,
         })
       }
-      return json({ error: 'not found' }, { status: 404 })
+      return response
     }
 
     const response = await buildOpsDiagnostics({
@@ -83,31 +125,8 @@ describe('ops diagnostics', () => {
   })
 
   it('marks onsite sessions blocked when capture and routing are not usable', async () => {
-    const fetchImpl: typeof fetch = async (input) => {
-      const url = String(input)
-      if (url.endsWith('/api/diagnostics')) {
-        return json({
-          status: 'ok',
-          summary: { total: 4, ok: 4 },
-          components: {
-            mesh: { status: 'ok' },
-            browser_bridge: { status: 'ok' },
-            voice: { status: 'ok' },
-            capture_router: { status: 'ok' },
-          },
-        })
-      }
-      if (url.endsWith('/api/screen/status')) {
-        return json({ recording: false, monitors: [] })
-      }
-      if (url.endsWith('/health')) {
-        return json({ ok: false, sinks: [] })
-      }
-      return json({ error: 'not found' }, { status: 404 })
-    }
-
     const response = await buildOpsDiagnostics({
-      fetchImpl,
+      fetchImpl: blockedFetch(),
       gatewayDiagnosticsUrl: 'http://gateway.local/api/diagnostics',
       screenCaptureUrl: 'http://screen.local',
       captureRouterUrl: 'http://router.local',
@@ -130,6 +149,170 @@ describe('ops diagnostics', () => {
       expect.objectContaining({ key: 'capture_desktop_context', enabled: false }),
     )
     expect(response.onsite_session.blockers.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('starts an expiring onsite diagnostic session without exposing the control token in later reads', async () => {
+    __resetOpsDiagnosticSessionsForTests()
+    const responses: Array<{ status: number; body: unknown }> = []
+    const capabilities: string[] = []
+    const handled = await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL('http://localhost/api/ops/diagnostics/sessions'),
+      {
+        requireCapability: async (capability) => {
+          capabilities.push(capability)
+          return true
+        },
+        sendJson: (status, body) => responses.push({ status, body }),
+        readBody: async () => ({ label: 'Plant walkdown', intent: 'dispatch_agent_review' }),
+        getCurrentUserId: () => 'user_42',
+        fetchImpl: greenFetch(),
+      },
+    )
+
+    expect(handled).toBe(true)
+    expect(capabilities).toEqual(['app_issue.capture'])
+    expect(responses[0]?.status).toBe(201)
+    const created = responses[0]?.body as {
+      control_token?: string
+      session?: {
+        id?: string
+        operator_user_id?: string | null
+        label?: string | null
+        plan?: { control_level?: string; recommended_entry?: string }
+        audit_events?: Array<{ type: string; effect: string }>
+      }
+    }
+    expect(created.control_token).toEqual(expect.any(String))
+    expect(created.session).toMatchObject({
+      operator_user_id: 'user_42',
+      label: 'Plant walkdown',
+      plan: { control_level: 'route', recommended_entry: 'dispatch_agent_review' },
+    })
+    expect(created.session?.audit_events).toEqual([
+      expect.objectContaining({ type: 'session.started', effect: 'audit_only' }),
+    ])
+    expect(JSON.stringify(created.session)).not.toContain(String(created.control_token))
+
+    const reads: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'GET' } as http.IncomingMessage,
+      new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session?.id}`),
+      {
+        requireCapability: async (capability) => {
+          expect(capability).toBe('app_issue.view')
+          return true
+        },
+        sendJson: (status, body) => reads.push({ status, body }),
+      },
+    )
+    expect(reads[0]?.status).toBe(200)
+    expect(JSON.stringify(reads[0]?.body)).not.toContain(String(created.control_token))
+  })
+
+  it('records token-gated onsite diagnostic action requests as audit-only events', async () => {
+    __resetOpsDiagnosticSessionsForTests()
+    const createdResponses: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL('http://localhost/api/ops/diagnostics/sessions'),
+      {
+        requireCapability: async () => true,
+        sendJson: (status, body) => createdResponses.push({ status, body }),
+        readBody: async () => ({}),
+        getCurrentUserId: () => 'user_42',
+        fetchImpl: greenFetch(),
+      },
+    )
+    const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
+
+    const actionResponses: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+      {
+        requireCapability: async (capability) => {
+          expect(capability).toBe('app_issue.capture')
+          return true
+        },
+        sendJson: (status, body) => actionResponses.push({ status, body }),
+        readBody: async () => ({
+          control_token: created.control_token,
+          action_key: 'dispatch_agent_review',
+        }),
+        getCurrentUserId: () => 'user_99',
+      },
+    )
+
+    expect(actionResponses[0]?.status).toBe(202)
+    expect(actionResponses[0]?.body).toMatchObject({
+      schema: 'sitelayer.ops_diagnostic_session_action.v1',
+      accepted_action: { key: 'dispatch_agent_review', effect: 'audit_only' },
+      session: {
+        audit_events: [
+          expect.objectContaining({ type: 'session.started' }),
+          expect.objectContaining({
+            type: 'action.requested',
+            action_key: 'dispatch_agent_review',
+            actor_user_id: 'user_99',
+            effect: 'audit_only',
+          }),
+        ],
+      },
+    })
+
+    const deniedResponses: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+      {
+        requireCapability: async () => true,
+        sendJson: (status, body) => deniedResponses.push({ status, body }),
+        readBody: async () => ({
+          control_token: 'wrong',
+          action_key: 'dispatch_agent_review',
+        }),
+      },
+    )
+    expect(deniedResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+  })
+
+  it('rejects onsite diagnostic actions that were unavailable when the session started', async () => {
+    __resetOpsDiagnosticSessionsForTests()
+    const createdResponses: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL('http://localhost/api/ops/diagnostics/sessions'),
+      {
+        requireCapability: async () => true,
+        sendJson: (status, body) => createdResponses.push({ status, body }),
+        readBody: async () => ({}),
+        fetchImpl: blockedFetch(),
+      },
+    )
+    const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
+
+    const responses: Array<{ status: number; body: unknown }> = []
+    await handleOpsDiagnosticsRoutes(
+      { method: 'POST' } as http.IncomingMessage,
+      new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+      {
+        requireCapability: async () => true,
+        sendJson: (status, body) => responses.push({ status, body }),
+        readBody: async () => ({
+          control_token: created.control_token,
+          action_key: 'dispatch_agent_review',
+        }),
+      },
+    )
+
+    expect(responses[0]).toMatchObject({
+      status: 409,
+      body: {
+        error: 'action is not available',
+        reason: 'Gateway and routing are not both ready.',
+      },
+    })
   })
 
   it('uses app_issue.view as the route gate', async () => {

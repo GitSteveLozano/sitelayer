@@ -144,11 +144,18 @@ export {
 } from './app-issues'
 
 export {
+  createOpsDiagnosticSession,
   fetchOpsDiagnostics,
+  requestOpsDiagnosticSessionAction,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsDiagnosticsResponse,
+  type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticSessionActionResponse,
+  type OpsOnsiteDiagnosticSessionCreateInput,
+  type OpsOnsiteDiagnosticSessionCreateResponse,
   type OpsOnsiteDiagnosticSessionPlan,
+  type OpsOnsiteDiagnosticSessionRecord,
 } from './ops-diagnostics'
 
 export {

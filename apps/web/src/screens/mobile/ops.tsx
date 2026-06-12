@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   MBanner,
@@ -17,16 +17,20 @@ import {
 } from '../../components/m/index.js'
 import {
   apiGet,
+  createOpsDiagnosticSession,
   fetchAppIssueBoard,
   fetchOpsDiagnostics,
   fetchWorkRequestQueueHealth,
   fetchWorkRequests,
   queryKeys,
+  requestOpsDiagnosticSessionAction,
   useAppIssueCapabilities,
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticSessionPlan,
+  type OpsOnsiteDiagnosticSessionRecord,
   type WorkItemStatus,
   type WorkRequestQueueHealthResponse,
 } from '@/lib/api'
@@ -61,9 +65,12 @@ interface WorkerIssuesResponse {
 
 export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRole; companySlug: string }) {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const online = useOnlineStatus()
   const canTriage = canTriageWorkRequests(companyRole)
   const buildSha = getBuildSha()
+  const [activeDiagnosticSession, setActiveDiagnosticSession] = useState<OpsOnsiteDiagnosticSessionRecord | null>(null)
+  const [diagnosticControlToken, setDiagnosticControlToken] = useState<string | null>(null)
 
   const work = useQuery({
     queryKey: queryKeys.workRequests.list({ limit: 75 }),
@@ -83,6 +90,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   })
   const appIssueCaps = useAppIssueCapabilities()
   const canViewAppIssues = Boolean(appIssueCaps.data?.includes('app_issue.view'))
+  const canCaptureAppIssues = Boolean(appIssueCaps.data?.includes('app_issue.capture'))
   const appIssues = useQuery({
     queryKey: ['app-issues', 'ops-summary', canViewAppIssues],
     queryFn: () => fetchAppIssueBoard({ groupBy: 'status_group', limit: 50 }),
@@ -114,6 +122,32 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const screenCapture = componentByKey(systemComponents, 'screen_capture')
   const captureRouter = componentByKey(systemComponents, 'capture_router')
   const onsiteSession = opsDiagnostics.data?.onsite_session
+  const startDiagnosticSession = useMutation({
+    mutationFn: () => {
+      const input = onsiteSession?.recommended_entry
+        ? { label: 'Mobile ops', intent: onsiteSession.recommended_entry }
+        : { label: 'Mobile ops' }
+      return createOpsDiagnosticSession(companySlug, input)
+    },
+    onSuccess: (response) => {
+      setActiveDiagnosticSession(response.session)
+      setDiagnosticControlToken(response.control_token)
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
+    },
+  })
+  const requestDiagnosticAction = useMutation({
+    mutationFn: (actionKey: OpsOnsiteDiagnosticActionKey) => {
+      if (!activeDiagnosticSession || !diagnosticControlToken) {
+        return Promise.reject(new Error('diagnostic session is not active'))
+      }
+      return requestOpsDiagnosticSessionAction(
+        activeDiagnosticSession.id,
+        { action_key: actionKey, control_token: diagnosticControlToken },
+        companySlug,
+      )
+    },
+    onSuccess: (response) => setActiveDiagnosticSession(response.session),
+  })
   const latestCaptured = findLatestCaptured(workItems)
   const onsiteAction = buildOnsiteAction({
     onsiteSession,
@@ -125,8 +159,21 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     openFieldIssues: openFieldIssues.length,
   })
   const hasLoadError = Boolean(
-    work.error || health.error || workerIssues.error || appIssues.error || opsDiagnostics.error,
+    work.error ||
+    health.error ||
+    workerIssues.error ||
+    appIssues.error ||
+    opsDiagnostics.error ||
+    startDiagnosticSession.error ||
+    requestDiagnosticAction.error,
   )
+  const activeDiagnosticAction = activeDiagnosticSession
+    ? (activeDiagnosticSession.plan.actions.find(
+        (action) => action.key === (activeDiagnosticSession.intent ?? activeDiagnosticSession.plan.recommended_entry),
+      ) ??
+      activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
+      null)
+    : null
 
   return (
     <>
@@ -177,10 +224,42 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 )
               }
               leadingTone={onsiteSessionTone(onsiteSession, opsDiagnostics.isPending)}
-              headline="Diagnostic session"
+              headline="Diagnostic readiness"
               supporting={formatOnsiteSessionSummary(onsiteSession, opsDiagnostics.isPending)}
               onTap={onsiteSession ? () => navigate(onsiteSessionRoute(onsiteSession)) : undefined}
               chev={Boolean(onsiteSession)}
+            />
+          ) : null}
+          {canCaptureAppIssues ? (
+            <MListRow
+              leading={
+                activeDiagnosticSession ? (
+                  <MI.Check size={18} />
+                ) : startDiagnosticSession.isPending ? (
+                  <MI.Clock size={18} />
+                ) : (
+                  <MI.Camera size={18} />
+                )
+              }
+              leadingTone={diagnosticSessionTone(
+                activeDiagnosticSession,
+                startDiagnosticSession.isPending,
+                requestDiagnosticAction.isPending,
+              )}
+              headline={activeDiagnosticSession ? 'Onsite session active' : 'Start onsite session'}
+              supporting={formatDiagnosticSessionControl(
+                activeDiagnosticSession,
+                startDiagnosticSession.isPending,
+                requestDiagnosticAction.isPending,
+              )}
+              onTap={
+                activeDiagnosticSession
+                  ? () => navigate(onsiteSessionRoute(activeDiagnosticSession.plan))
+                  : startDiagnosticSession.isPending
+                    ? undefined
+                    : () => startDiagnosticSession.mutate()
+              }
+              chev={Boolean(activeDiagnosticSession)}
             />
           ) : null}
           <MListRow
@@ -277,6 +356,23 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
 
         <MSectionH>Next actions</MSectionH>
         <MListInset>
+          {activeDiagnosticAction ? (
+            <MListRow
+              leading={<MI.Camera size={18} />}
+              leadingTone={activeDiagnosticAction.enabled ? 'blue' : 'amber'}
+              headline={
+                requestDiagnosticAction.isPending
+                  ? 'Recording action'
+                  : `Record ${lowerFirst(activeDiagnosticAction.label)}`
+              }
+              supporting={formatDiagnosticActionSummary(activeDiagnosticAction, requestDiagnosticAction.isPending)}
+              onTap={
+                activeDiagnosticAction.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
+                  ? () => requestDiagnosticAction.mutate(activeDiagnosticAction.key)
+                  : undefined
+              }
+            />
+          ) : null}
           <MListRow
             leading={<onsiteAction.Icon size={18} />}
             leadingTone={onsiteAction.tone}
@@ -522,6 +618,41 @@ function formatOnsiteSessionSummary(plan: OpsOnsiteDiagnosticSessionPlan | undef
         ? 'Capture only'
         : 'Observe only'
   return `${level} · ${enabled}/${plan.actions.length} actions ready${blockers > 0 ? ` · ${blockers} blocker${blockers === 1 ? '' : 's'}` : ''}`
+}
+
+function diagnosticSessionTone(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+  pending: boolean,
+  actionPending: boolean,
+): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
+  if (pending || actionPending) return 'blue'
+  return session ? 'green' : 'accent'
+}
+
+function formatDiagnosticSessionControl(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+  pending: boolean,
+  actionPending: boolean,
+): string {
+  if (pending) return 'Starting a 60m diagnostic window.'
+  if (actionPending) return 'Recording the requested action.'
+  if (!session) return 'No active diagnostic window.'
+  return `Expires ${formatClock(session.expires_at)} · ${session.audit_events.length} event${session.audit_events.length === 1 ? '' : 's'}`
+}
+
+function formatDiagnosticActionSummary(action: { enabled: boolean; reason: string }, pending: boolean): string {
+  if (pending) return 'Audit event pending.'
+  return action.reason
+}
+
+function formatClock(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'soon'
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function lowerFirst(value: string): string {
+  return value ? `${value[0]?.toLocaleLowerCase()}${value.slice(1)}` : value
 }
 
 function onsiteSessionRoute(plan: OpsOnsiteDiagnosticSessionPlan): string {
