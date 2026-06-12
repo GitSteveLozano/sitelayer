@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http'
-import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
+import { buildConcernSnapshot } from '@sitelayer/projectkit-bridge'
 import type { Identity } from '../auth.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { buildPaginationMeta, isValidUuid, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
@@ -238,18 +238,22 @@ async function handleDispatchToAgent(deps: AdminWorkRequestRouteDeps, workItemId
   }
 
   const concernRef = `wi:${workItem.id}:${audience}`
-  const concern: Concern = {
-    schema_version: CONTRACT_VERSION,
-    project_key: 'sitelayer',
-    dispatched_at: new Date().toISOString(),
-    concern_ref: concernRef,
-    kind: 'execute',
+  // Built through the validated @sitelayer/projectkit-bridge builder (the
+  // single place the published contract is enforced) — never a hand-rolled
+  // snapshot literal (ratchet: apps/api/src/projectkit-concern.test.ts).
+  const concern = buildConcernSnapshot({
+    workItemId: workItem.id,
+    concernRef,
     title: workItem.title,
-    ...(workItem.summary ? { summary: workItem.summary } : {}),
+    summary: workItem.summary,
+    severity: workItem.severity,
+    route: workItem.route,
+    captureSessionId: workItem.capture_session_id,
+    supportPacketId: workItem.support_packet_id,
+    sourceEventRef: workItem.support_packet_id,
     audience,
     assignee: audience,
     acceptance: acceptanceFromMetadata(workItem.metadata),
-    source_event_ref: workItem.support_packet_id,
     inputs: {
       work_item_id: workItem.id,
       support_packet_id: workItem.support_packet_id,
@@ -257,7 +261,7 @@ async function handleDispatchToAgent(deps: AdminWorkRequestRouteDeps, workItemId
       agent_prompt: agentPrompt,
       artifacts,
     },
-  }
+  })
 
   const insertedId = await insertAgentFeedConcernTx(deps.pool as Parameters<typeof insertAgentFeedConcernTx>[0], {
     companyId: workItem.company_id,

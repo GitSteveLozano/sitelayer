@@ -1,8 +1,8 @@
 // Elevation tags — the building-face axis exterior takeoff is organized by
-// (N/S/E/W walls, roof, other). Relocated out of
-// screens/projects/takeoff-canvas.tsx so the est-canvas editor and the
-// projects/* summary cluster share ONE definition (and so v1 takeoff-canvas can
-// eventually be retired without these helpers going with it).
+// (N/S/E/W walls, roof, other). Relocated out of the (since-retired,
+// 2026-06-12) v1 screens/projects/takeoff-canvas.tsx so the est-canvas editor
+// and the projects/* summary cluster share ONE definition — which is exactly
+// what let the v1 canvas be deleted without these helpers going with it.
 //
 // `ElevationTag` includes 'none' — the untagged sentinel the pickers + summary
 // rollup use. The machine's `TakeoffElevation` (machines/takeoff-session) is the

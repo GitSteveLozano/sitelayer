@@ -1,10 +1,11 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { getActiveCompanySlug } from '@/lib/api'
 import { isSteveCollabMode } from '@/lib/steve-collab'
+import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 import { useSitelayerWebMcpTools } from '@/lib/webmcp/use-webmcp-tools'
 // Lazy: the feedback-capture dock pulls in the rrweb recorder (vendor-rrweb),
 // so a static import would drag that heavy machinery onto the eager critical
@@ -73,9 +74,6 @@ const NotificationsPrimeRoute = lazy(() => import('@/routes/permissions-notifica
 // mobile shell's `projects/:projectId/*` catch-all.
 const ProjectSetupScreen = lazy(() =>
   import('@/screens/projects/setup').then((m) => ({ default: m.ProjectSetupScreen })),
-)
-const TakeoffCanvasScreen = lazy(() =>
-  import('@/screens/projects/takeoff-canvas').then((m) => ({ default: m.TakeoffCanvasScreen })),
 )
 const TakeoffSummaryScreen = lazy(() =>
   import('@/screens/projects/takeoff-summary').then((m) => ({ default: m.TakeoffSummaryScreen })),
@@ -349,7 +347,15 @@ function AppShellRoutes() {
       {/* Project deep routes that need the full viewport. */}
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-      <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      {/* RETIRED v1 takeoff canvas (2026-06-12, consolidation Phase 3 close-out).
+          `screens/projects/takeoff-canvas.tsx` is deleted; the consolidated
+          est-canvas editor is the single takeoff surface. Saved deep links
+          (bookmarks, capture replays, share links) still resolve: redirect to
+          the canonical per-viewport est-canvas route via the same
+          `takeoffCanvasPath` seam every in-app entry point already uses,
+          preserving query params (`blueprint`/`draft`/`page` are honored by
+          the est-canvas bodies). See docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md. */}
+      <Route path="/projects/:id/takeoff-canvas" element={<LegacyTakeoffCanvasRedirect />} />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
@@ -425,6 +431,17 @@ function AppShellRoutes() {
       <Route path="/*" element={<AppShellRoute />} />
     </Routes>
   )
+}
+
+// `/projects/:id/takeoff-canvas` → est-canvas back-compat redirect. The v1
+// canvas was retired in the takeoff consolidation (Phase 3); any saved URL
+// lands on the canonical editor for the current viewport instead of 404ing.
+function LegacyTakeoffCanvasRedirect() {
+  const { id } = useParams<{ id: string }>()
+  const location = useLocation()
+  const toCanvasPath = useTakeoffCanvasPath()
+  if (!id) return <Navigate to="/" replace />
+  return <Navigate to={`${toCanvasPath(id)}${location.search}${location.hash}`} replace />
 }
 
 // `/m/<rest>` → `/<rest>` back-compat redirect. The mobile shell used to mount

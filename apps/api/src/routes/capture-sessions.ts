@@ -38,7 +38,7 @@ import {
   supportJsonRecord,
   type JsonRecord,
 } from './support-packets.js'
-import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
+import { buildConcernSnapshot } from '@sitelayer/projectkit-bridge'
 import {
   CAPTURE_ANALYZER_AUDIENCE,
   agentFeedBaseUrl,
@@ -1282,17 +1282,19 @@ async function enqueueCaptureAnalyzerConcernTx(
     [args.companyId, args.captureSessionId],
   )
   const artifacts = mapCaptureArtifactsToConcernRefs(artifactRows.rows, agentFeedBaseUrl())
-  const concern: Concern = {
-    schema_version: CONTRACT_VERSION,
-    project_key: 'sitelayer',
-    dispatched_at: new Date().toISOString(),
-    concern_ref: `capan:${args.captureSessionId}`,
-    kind: 'execute',
+  // Built through the validated @sitelayer/projectkit-bridge builder (the
+  // single place the published contract is enforced) — never a hand-rolled
+  // snapshot literal (ratchet: apps/api/src/projectkit-concern.test.ts).
+  const concern = buildConcernSnapshot({
+    workItemId: args.workItem.id,
+    concernRef: `capan:${args.captureSessionId}`,
     title: `Analyze capture for ${args.workItem.title}`,
     summary: args.summary,
     audience: CAPTURE_ANALYZER_AUDIENCE,
     assignee: CAPTURE_ANALYZER_AUDIENCE,
-    source_event_ref: `capture_session:${args.captureSessionId}`,
+    route: args.route,
+    captureSessionId: args.captureSessionId,
+    sourceEventRef: `capture_session:${args.captureSessionId}`,
     inputs: {
       capture_session_id: args.captureSessionId,
       work_item_id: args.workItem.id,
@@ -1301,7 +1303,7 @@ async function enqueueCaptureAnalyzerConcernTx(
       summary: args.summary,
       artifacts,
     },
-  }
+  })
   await insertAgentFeedConcernTx(c, {
     companyId: args.companyId,
     audience: CAPTURE_ANALYZER_AUDIENCE,

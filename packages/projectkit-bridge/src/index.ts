@@ -108,6 +108,20 @@ function cleanText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+/**
+ * CONTRACT ENFORCEMENT: every builder validates its own output against the
+ * published projectkit validators before returning it. The builders are the
+ * SINGLE place the contract is enforced for sitelayer emit sites (the
+ * conformance ratchet in apps/api/src/projectkit-concern.test.ts bans
+ * hand-rolled snapshot literals), so an invalid snapshot must fail loudly at
+ * the builder, never travel to a subscriber.
+ */
+function assertContractValid(label: string, problems: string[]): void {
+  if (problems.length > 0) {
+    throw new Error(`projectkit-bridge: ${label} snapshot failed contract validation: ${problems.join('; ')}`)
+  }
+}
+
 export const CONCERN_KIND_DEFAULT = 'execute' as const
 
 export interface BuildConcernInput {
@@ -130,6 +144,24 @@ export interface BuildConcernInput {
   projectKey?: string
   /** ISO-8601; defaults to now(). */
   dispatchedAt?: string
+  /**
+   * Producer-stable idempotency key override. Defaults to `workItemId`
+   * (concern_ref = work_item_id), but an addressed/derived dispatch may key on
+   * its own ref (e.g. `capan:<capture_session_id>`, `wi:<id>:<audience>`).
+   * The work-item linkage survives in `inputs.work_item_id` either way.
+   */
+  concernRef?: string | null
+  /** Executor pool / feed lane this Concern is addressed to (v1.4.0 `audience`). */
+  audience?: string | null
+  /** Accountable executor identity (v1.4.0 `assignee`). */
+  assignee?: string | null
+  /** Explicit success criteria the executor verifies (v1.4.0 `acceptance`). */
+  acceptance?: string[]
+  /**
+   * Extra executor-facing inputs merged OVER the derived defaults (caller keys
+   * win on collision). Keep it small + flat per the contract guidance.
+   */
+  inputs?: Record<string, unknown>
 }
 
 /**
@@ -165,11 +197,14 @@ export function buildConcernSnapshot(input: BuildConcernInput): Concern {
     schema_version: CONTRACT_VERSION,
     project_key: cleanText(input.projectKey) ?? DEFAULT_PROJECT_KEY,
     dispatched_at: input.dispatchedAt ?? new Date().toISOString(),
-    concern_ref: input.workItemId,
+    concern_ref: cleanText(input.concernRef) ?? input.workItemId,
     kind: cleanText(input.kind) ?? CONCERN_KIND_DEFAULT,
     title,
     priority,
     inputs: {
+      // The work-item linkage always travels in inputs, so a concern_ref
+      // override (addressed dispatch) never severs the join back to the item.
+      work_item_id: input.workItemId,
       work_item_status: input.status ?? null,
       callback_status: callbackStatus,
       route: cleanText(input.route),
@@ -178,16 +213,22 @@ export function buildConcernSnapshot(input: BuildConcernInput): Concern {
       capture_session_id: cleanText(input.captureSessionId),
       support_packet_id: cleanText(input.supportPacketId),
       evidence_refs: evidenceRefs,
+      // Caller-specific executor inputs win on collision.
+      ...(input.inputs ?? {}),
     },
   }
   if (summary) concern.summary = summary
   if (sourceEventRef) concern.source_event_ref = sourceEventRef
+  if (cleanText(input.audience)) concern.audience = cleanText(input.audience)!
+  if (cleanText(input.assignee)) concern.assignee = cleanText(input.assignee)!
+  if (input.acceptance && input.acceptance.length > 0) concern.acceptance = input.acceptance
   if (input.callback) {
     const target: ConcernCallbackTarget = {}
     if (cleanText(input.callback.url)) target.url = cleanText(input.callback.url)!
     if (cleanText(input.callback.mode)) target.mode = cleanText(input.callback.mode)!
     concern.callback = target
   }
+  assertContractValid('Concern', validateConcern(concern))
   return concern
 }
 
@@ -199,8 +240,8 @@ export interface BuildWorkRequestInput extends BuildConcernInput {
   intent?: string | null
   /** Sitelayer lane that produced this request (triage/human/agent/both). */
   lane?: string | null
-  /** Acceptance criteria for the requested work. */
-  acceptance?: string[]
+  // `acceptance` is inherited from BuildConcernInput (it flows onto BOTH the
+  // WorkRequest and the embedded Concern per the v1.4.0 contract mirror).
 }
 
 /**
@@ -234,6 +275,9 @@ export function buildWorkRequestSnapshot(input: BuildWorkRequestInput): WorkRequ
   if (cleanText(input.entityId)) request.entity_id = cleanText(input.entityId)!
   if (sourceEventRef) request.source_event_ref = sourceEventRef
   if (input.acceptance && input.acceptance.length > 0) request.acceptance = input.acceptance
+  if (cleanText(input.audience)) request.audience = cleanText(input.audience)!
+  if (cleanText(input.assignee)) request.assignee = cleanText(input.assignee)!
+  assertContractValid('WorkRequest', validateWorkRequest(request))
   return request
 }
 
@@ -306,6 +350,7 @@ export function buildCallbackSnapshot(input: {
   if (artifacts.length > 0) callback.artifacts = artifacts
   if (cleanText(input.error)) callback.error = cleanText(input.error)!
   if (cleanText(input.completedAt)) callback.completed_at = cleanText(input.completedAt)!
+  assertContractValid('Callback', validateCallback(callback))
   return callback
 }
 
