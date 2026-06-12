@@ -3,7 +3,9 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
-const isMergeQueueVerifier = Boolean(process.env.MERGE_QUEUE_VERIFIER_CPUSET)
+const configDir = fileURLToPath(new URL('.', import.meta.url))
+const isMergeQueueVerifier =
+  Boolean(process.env.MERGE_QUEUE_VERIFIER_CPUSET) || configDir.includes('/.cache/cp-verify-worktrees/verify-')
 
 // Test config for apps/web.
 //
@@ -28,15 +30,17 @@ export default mergeConfig(
       // per-test timeout so it's deterministic rather than load-flaky.
       testTimeout: 30000,
       // The merge verifier pins gates to a bounded CPU set while the full
-      // workspace suite is running. Keep web's jsdom-heavy tests below that
-      // ceiling so npm workspace runs do not fail from worker oversubscription.
+      // workspace suite is running. Some verifier paths do not export that
+      // cpuset marker into npm, so also key off the isolated checkout path.
+      // Keep web's jsdom-heavy tests below that ceiling so npm workspace runs
+      // do not fail from worker oversubscription.
       pool: 'forks',
       maxWorkers: isMergeQueueVerifier ? 1 : 4,
       fileParallelism: !isMergeQueueVerifier,
       // Vitest defaults to running in the workspace root. Pinning the
       // root keeps test discovery scoped to web even when invoked
       // from the monorepo root.
-      root: fileURLToPath(new URL('.', import.meta.url)),
+      root: configDir,
     },
   }),
 )
