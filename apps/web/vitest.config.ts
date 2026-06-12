@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
+const isMergeQueueVerifier = Boolean(process.env.MERGE_QUEUE_VERIFIER_CPUSET)
+
 // Test config for apps/web.
 //
 // Default environment is jsdom so component render tests (mounting
@@ -28,7 +30,9 @@ export default mergeConfig(
       // The merge verifier pins gates to a bounded CPU set while the full
       // workspace suite is running. Keep web's jsdom-heavy tests below that
       // ceiling so npm workspace runs do not fail from worker oversubscription.
-      maxWorkers: 4,
+      pool: 'forks',
+      maxWorkers: isMergeQueueVerifier ? 1 : 4,
+      fileParallelism: !isMergeQueueVerifier,
       // Vitest defaults to running in the workspace root. Pinning the
       // root keeps test discovery scoped to web even when invoked
       // from the monorepo root.
