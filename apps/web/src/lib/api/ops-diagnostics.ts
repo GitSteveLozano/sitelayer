@@ -68,6 +68,11 @@ export type OpsOnsiteDiagnosticSessionCreateResponse = {
   control_token: string
 }
 
+export type OpsOnsiteDiagnosticSessionsResponse = {
+  schema: 'sitelayer.ops_diagnostic_sessions.v1'
+  sessions: OpsOnsiteDiagnosticSessionRecord[]
+}
+
 export type OpsOnsiteDiagnosticAgentFeedResult = {
   audience: string
   concern_ref: string
@@ -107,6 +112,10 @@ export type OpsDiagnosticsResponse = {
 
 export function fetchOpsDiagnostics(companySlug?: string): Promise<OpsDiagnosticsResponse> {
   return apiGet<OpsDiagnosticsResponse>('/api/ops/diagnostics', companySlug)
+}
+
+export function fetchOpsDiagnosticSessions(companySlug?: string): Promise<OpsOnsiteDiagnosticSessionsResponse> {
+  return apiGet<OpsOnsiteDiagnosticSessionsResponse>('/api/ops/diagnostics/sessions', companySlug)
 }
 
 export function createOpsDiagnosticSession(

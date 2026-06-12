@@ -146,6 +146,7 @@ export {
 export {
   createOpsDiagnosticSession,
   fetchOpsDiagnostics,
+  fetchOpsDiagnosticSessions,
   requestOpsDiagnosticSessionAction,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
@@ -157,6 +158,7 @@ export {
   type OpsOnsiteDiagnosticSessionCreateResponse,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
+  type OpsOnsiteDiagnosticSessionsResponse,
 } from './ops-diagnostics'
 
 export {

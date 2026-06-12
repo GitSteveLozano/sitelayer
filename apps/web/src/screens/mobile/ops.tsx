@@ -20,6 +20,7 @@ import {
   createOpsDiagnosticSession,
   fetchAppIssueBoard,
   fetchOpsDiagnostics,
+  fetchOpsDiagnosticSessions,
   fetchWorkRequestQueueHealth,
   fetchWorkRequests,
   queryKeys,
@@ -103,6 +104,12 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     enabled: canViewAppIssues,
     refetchInterval: 15_000,
   })
+  const diagnosticSessions = useQuery({
+    queryKey: ['ops-diagnostic-sessions', companySlug],
+    queryFn: () => fetchOpsDiagnosticSessions(companySlug),
+    enabled: canViewAppIssues,
+    refetchInterval: 15_000,
+  })
 
   const workItems = work.data?.work_items ?? []
   const openWork = useMemo(() => workItems.filter((item) => OPEN_WORK_STATUSES.has(item.status)), [workItems])
@@ -122,6 +129,9 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const screenCapture = componentByKey(systemComponents, 'screen_capture')
   const captureRouter = componentByKey(systemComponents, 'capture_router')
   const onsiteSession = opsDiagnostics.data?.onsite_session
+  const observedDiagnosticSession = diagnosticSessions.data?.sessions[0] ?? null
+  const displayedDiagnosticSession = activeDiagnosticSession ?? observedDiagnosticSession
+  const hasDiagnosticControl = Boolean(activeDiagnosticSession && diagnosticControlToken)
   const startDiagnosticSession = useMutation({
     mutationFn: () => {
       const input = onsiteSession?.recommended_entry
@@ -133,6 +143,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       setActiveDiagnosticSession(response.session)
       setDiagnosticControlToken(response.control_token)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
     },
   })
   const requestDiagnosticAction = useMutation({
@@ -146,7 +157,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         companySlug,
       )
     },
-    onSuccess: (response) => setActiveDiagnosticSession(response.session),
+    onSuccess: (response) => {
+      setActiveDiagnosticSession(response.session)
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+    },
   })
   const latestCaptured = findLatestCaptured(workItems)
   const onsiteAction = buildOnsiteAction({
@@ -164,16 +178,18 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     workerIssues.error ||
     appIssues.error ||
     opsDiagnostics.error ||
+    diagnosticSessions.error ||
     startDiagnosticSession.error ||
     requestDiagnosticAction.error,
   )
-  const activeDiagnosticAction = activeDiagnosticSession
-    ? (activeDiagnosticSession.plan.actions.find(
-        (action) => action.key === (activeDiagnosticSession.intent ?? activeDiagnosticSession.plan.recommended_entry),
-      ) ??
-      activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
-      null)
-    : null
+  const activeDiagnosticAction =
+    hasDiagnosticControl && activeDiagnosticSession
+      ? (activeDiagnosticSession.plan.actions.find(
+          (action) => action.key === (activeDiagnosticSession.intent ?? activeDiagnosticSession.plan.recommended_entry),
+        ) ??
+        activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
+        null)
+      : null
 
   return (
     <>
@@ -233,8 +249,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           {canCaptureAppIssues ? (
             <MListRow
               leading={
-                activeDiagnosticSession ? (
+                displayedDiagnosticSession && hasDiagnosticControl ? (
                   <MI.Check size={18} />
+                ) : displayedDiagnosticSession ? (
+                  <MI.Clock size={18} />
                 ) : startDiagnosticSession.isPending ? (
                   <MI.Clock size={18} />
                 ) : (
@@ -242,24 +260,26 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 )
               }
               leadingTone={diagnosticSessionTone(
-                activeDiagnosticSession,
+                displayedDiagnosticSession,
                 startDiagnosticSession.isPending,
                 requestDiagnosticAction.isPending,
+                hasDiagnosticControl,
               )}
-              headline={activeDiagnosticSession ? 'Onsite session active' : 'Start onsite session'}
+              headline={formatDiagnosticSessionHeadline(displayedDiagnosticSession, hasDiagnosticControl)}
               supporting={formatDiagnosticSessionControl(
-                activeDiagnosticSession,
+                displayedDiagnosticSession,
                 startDiagnosticSession.isPending,
                 requestDiagnosticAction.isPending,
+                hasDiagnosticControl,
               )}
               onTap={
-                activeDiagnosticSession
+                hasDiagnosticControl && activeDiagnosticSession
                   ? () => navigate(onsiteSessionRoute(activeDiagnosticSession.plan))
                   : startDiagnosticSession.isPending
                     ? undefined
                     : () => startDiagnosticSession.mutate()
               }
-              chev={Boolean(activeDiagnosticSession)}
+              chev={hasDiagnosticControl}
             />
           ) : null}
           <MListRow
@@ -624,19 +644,31 @@ function diagnosticSessionTone(
   session: OpsOnsiteDiagnosticSessionRecord | null,
   pending: boolean,
   actionPending: boolean,
+  hasControlToken: boolean,
 ): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
   if (pending || actionPending) return 'blue'
-  return session ? 'green' : 'accent'
+  if (!session) return 'accent'
+  return hasControlToken ? 'green' : 'amber'
+}
+
+function formatDiagnosticSessionHeadline(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+  hasControlToken: boolean,
+): string {
+  if (!session) return 'Start onsite session'
+  return hasControlToken ? 'Onsite session active' : 'Onsite session observed'
 }
 
 function formatDiagnosticSessionControl(
   session: OpsOnsiteDiagnosticSessionRecord | null,
   pending: boolean,
   actionPending: boolean,
+  hasControlToken: boolean,
 ): string {
   if (pending) return 'Starting a 60m diagnostic window.'
   if (actionPending) return 'Recording the requested action.'
   if (!session) return 'No active diagnostic window.'
+  if (!hasControlToken) return `Started ${formatClock(session.created_at)} · tap to start a new control window.`
   return `Expires ${formatClock(session.expires_at)} · ${session.audit_events.length} event${session.audit_events.length === 1 ? '' : 's'}`
 }
 
