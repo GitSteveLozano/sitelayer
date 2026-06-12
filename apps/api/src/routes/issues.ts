@@ -20,16 +20,19 @@ import {
   appendContextHandoffEventTx,
   getContextWorkItemWithEvents,
   listContextWorkItems,
+  updateContextWorkItemWithEventTx,
   type ContextWorkItemDetail,
   type ContextWorkItemRow,
+  type HandoffEventType,
   type WorkItemLane,
   type WorkItemStatus,
 } from '../context-handoff.js'
 import { sanitizeSupportJson } from './support-packets.js'
 
 /**
- * The internal APP-ISSUE surface — a READ-ONLY board/list/detail over the
- * `app_issue` half of `context_work_items` (migration 009 `domain` column).
+ * The internal APP-ISSUE surface — board/list/detail plus the narrow triage
+ * write leg over the `app_issue` half of `context_work_items` (migration 009
+ * `domain` column).
  *
  * These are problems with the sitelayer SOFTWARE itself (capture-dock born,
  * PLATFORM scope, cross-tenant in spirit). Every route here gates on the
@@ -41,10 +44,12 @@ import { sanitizeSupportJson } from './support-packets.js'
  * `domain: 'app_issue'` filter is pinned on every query), and the field-request
  * work board (work-requests.ts) NEVER reads an `app_issue` row.
  *
- * Deliberately read-only: triage/resolve/dispatch of app-issues is the
- * `app_issue.triage` capability and a later surface. This is the operator's
- * window into the app-issue backlog, gated so only platform admins can see the
- * captured internal data behind it.
+ * The read surface (list/board/detail) gates on `app_issue.view`. The WRITE
+ * half is the narrow triage surface promised by the lifecycle docs ("agents
+ * can only reach review_ready — a human accepts to resolve"):
+ * POST /api/issues/:id/events with {action: accept|resolve|wont_do}, gated on
+ * the platform capability `app_issue.triage` (same boundary as escalate).
+ * Dispatch of app-issues stays elsewhere (admin-work-requests.ts).
  */
 
 export type IssueRouteCtx = {
@@ -79,6 +84,40 @@ const IssueEscalateBodySchema = z
     tier: z.union([z.string(), z.number()]).nullish(),
   })
   .loose()
+
+// The app_issue triage write surface (POST /api/issues/:id/events). Three
+// human verbs over the existing status vocabulary — never a free-form status
+// write, so the surface cannot invent transitions:
+//   accept  — pull a fresh/bounced issue into triage (new|reopened plus the
+//             sweep bounce states review_stale|proposal_expired → triaged).
+//   resolve — the doc-promised "human accepts to resolve" leg
+//             (review_ready → resolved; also allowed from the other
+//             non-terminal states so a human can close directly).
+//   wont_do — decline (same sources as resolve → wont_do).
+// `reversed` stays exclusively on the field-request reverse endpoint; agents
+// can only ever reach review_ready (agent-feed.ts / work-requests.ts).
+const ISSUE_TRIAGE_ACTIONS = ['accept', 'resolve', 'wont_do'] as const
+type IssueTriageAction = (typeof ISSUE_TRIAGE_ACTIONS)[number]
+
+const IssueTriageBodySchema = z
+  .object({
+    action: z.enum(ISSUE_TRIAGE_ACTIONS),
+    message: z.string().trim().min(1).max(4000).optional().nullable(),
+    idempotency_key: z.string().trim().min(1).max(200).optional().nullable(),
+  })
+  .loose()
+
+const ACCEPT_FROM_STATUSES: readonly WorkItemStatus[] = ['new', 'reopened', 'review_stale', 'proposal_expired']
+const CLOSE_FROM_STATUSES: readonly WorkItemStatus[] = [
+  'new',
+  'triaged',
+  'human_assigned',
+  'reopened',
+  'agent_running',
+  'review_ready',
+  'review_stale',
+  'proposal_expired',
+]
 
 function issueResponse(row: ContextWorkItemRow) {
   return {
@@ -588,6 +627,109 @@ async function escalateIssue(ctx: IssueRouteCtx, id: string) {
   })
 }
 
+/**
+ * POST /api/issues/:workItemId/events — the app_issue TRIAGE write surface.
+ *
+ * Gated on the PLATFORM capability `app_issue.triage` (the same boundary the
+ * escalate endpoint uses — unreachable via a company role / dev act-as /
+ * header fallback) and pinned to the app_issue domain: a field_request id
+ * 404s identically to a missing row, so the two domains never bleed.
+ *
+ * Routes every transition through updateContextWorkItemWithEventTx so the
+ * status change and its context_handoff_events row land atomically — the same
+ * helper the field-request lifecycle uses, never a parallel event system.
+ */
+async function triageIssue(ctx: IssueRouteCtx, id: string) {
+  if (!(await ctx.requireCapability(APP_ISSUE_TRIAGE))) return
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid issue id' })
+    return
+  }
+  const parsed = parseJsonBody(IssueTriageBodySchema, await ctx.readBody())
+  if (!parsed.ok) {
+    ctx.sendJson(400, { error: parsed.error })
+    return
+  }
+  const action: IssueTriageAction = parsed.value.action
+  const message = parsed.value.message?.trim() ? parsed.value.message.trim() : null
+  const idempotencyKey = parsed.value.idempotency_key?.trim() ? parsed.value.idempotency_key.trim() : null
+
+  // 404 the same way for a missing row AND a field_request row: a non-app_issue
+  // id must never confirm its existence through this platform surface.
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 1 })
+  if (!detail || detail.work_item.domain !== 'app_issue') {
+    ctx.sendJson(404, { error: 'issue not found' })
+    return
+  }
+
+  const decidedAt = new Date().toISOString()
+  const result = await withMutationTx(ctx.company.id, async (c) => {
+    // Re-check under the row lock so a concurrent transition cannot slip a
+    // terminal state past the gate between read and write.
+    const locked = await c.query<{ status: WorkItemStatus; lane: WorkItemLane }>(
+      `select status, lane
+         from context_work_items
+        where company_id = $1 and id = $2
+        for update`,
+      [ctx.company.id, id],
+    )
+    const current = locked.rows[0]
+    if (!current) return { kind: 'not_found' as const }
+    const allowedFrom = action === 'accept' ? ACCEPT_FROM_STATUSES : CLOSE_FROM_STATUSES
+    if (!allowedFrom.includes(current.status)) {
+      return { kind: 'conflict' as const, status: current.status }
+    }
+    const next: {
+      eventType: HandoffEventType
+      status: WorkItemStatus
+      lane: WorkItemLane
+      resolvedAt?: string
+    } =
+      action === 'accept'
+        ? { eventType: 'work_item.status_changed', status: 'triaged', lane: 'triage' }
+        : action === 'resolve'
+          ? { eventType: 'resolution.accepted', status: 'resolved', lane: 'done', resolvedAt: decidedAt }
+          : { eventType: 'work_item.status_changed', status: 'wont_do', lane: 'done', resolvedAt: decidedAt }
+    const updated = await updateContextWorkItemWithEventTx(c, {
+      companyId: ctx.company.id,
+      workItemId: id,
+      eventType: next.eventType,
+      actorKind: 'user',
+      actorUserId: ctx.identity.userId,
+      payload: {
+        action,
+        message,
+        previous_status: current.status,
+        previous_lane: current.lane,
+        status: next.status,
+        lane: next.lane,
+      },
+      metadata: {
+        source: 'issue_triage',
+        action,
+        evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
+      },
+      status: next.status,
+      lane: next.lane,
+      ...(next.resolvedAt !== undefined ? { resolvedAt: next.resolvedAt } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    })
+    return updated ? { kind: 'ok' as const, updated } : { kind: 'not_found' as const }
+  })
+  if (result.kind === 'not_found') {
+    ctx.sendJson(404, { error: 'issue not found' })
+    return
+  }
+  if (result.kind === 'conflict') {
+    ctx.sendJson(409, { error: `issue is ${result.status} and cannot ${action}` })
+    return
+  }
+  ctx.sendJson(201, {
+    issue: issueResponse(result.updated.workItem),
+    event: result.updated.event,
+  })
+}
+
 export async function handleIssueRoutes(req: http.IncomingMessage, url: URL, ctx: IssueRouteCtx): Promise<boolean> {
   if (url.pathname === '/api/issues' && req.method === 'GET') {
     await listIssues(ctx, url)
@@ -602,6 +744,12 @@ export async function handleIssueRoutes(req: http.IncomingMessage, url: URL, ctx
   const escalateMatch = url.pathname.match(/^\/api\/issues\/([^/]+)\/escalate$/)
   if (escalateMatch && req.method === 'POST') {
     await escalateIssue(ctx, decodeURIComponent(escalateMatch[1]!))
+    return true
+  }
+
+  const triageMatch = url.pathname.match(/^\/api\/issues\/([^/]+)\/events$/)
+  if (triageMatch && req.method === 'POST') {
+    await triageIssue(ctx, decodeURIComponent(triageMatch[1]!))
     return true
   }
 

@@ -33,6 +33,7 @@ import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkDispatchReconcilerRunner } from './runners/work-dispatch-reconciler.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
+import { createAgentFeedLeaseSweepRunner } from './runners/agent-feed-lease-sweep.js'
 import { createLaneHealthKeeper } from './runners/lane-health-keeper.js'
 import { recordJobRun } from './runners/job-runs.js'
 import { runIfLaneActive } from './dispatch-lanes.js'
@@ -156,6 +157,9 @@ const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
 const workDispatchReconcilerRunner = createWorkDispatchReconcilerRunner({ pool })
 const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
+// Requeue agent-feed concerns wedged in 'claimed' by a crashed executor
+// (lease window AGENT_FEED_CLAIM_LEASE_MINUTES, default 30).
+const agentFeedLeaseSweepRunner = createAgentFeedLeaseSweepRunner({ pool })
 const laneHealthKeeper = createLaneHealthKeeper({ pool, logger })
 // Wedge 2 audit-escrow tick — hourly forward-anchor of audit_events +
 // context_handoff_events into the signed chain (migration 095). Has
@@ -700,6 +704,25 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { ran: false, updated: 0, failed: 0 },
   )
 
+  // Agent-feed claim-lease expiry — requeues concerns a crashed executor left
+  // in 'claimed'. Rides the same lane gate as the other work-request sweeps.
+  const agentFeedLeaseSweepSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'work_request_stale',
+    () =>
+      agentFeedLeaseSweepRunner.maybeSweep(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] agent_feed_lease_sweep failed')
+        captureWithEntityContext(error, {
+          scope: 'agent_feed_lease_sweep',
+          entity_type: 'agent_feed_concern',
+          company_id: companyId,
+        })
+        return { ran: false, requeued: 0, failed: 1 }
+      }),
+    { ran: false, requeued: 0, failed: 0 },
+  )
+
   // Audit-escrow tick — hourly forward-anchor of audit_events +
   // context_handoff_events into the signed chain. Cadence is gated
   // inside the runner; safe to invoke each heartbeat.
@@ -820,6 +843,9 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
     work_request_stale_sweep_updated: workRequestStaleSummary.updated,
     work_request_stale_sweep_failed: workRequestStaleSummary.failed,
+    agent_feed_lease_sweep_ran: agentFeedLeaseSweepSummary.ran,
+    agent_feed_lease_sweep_requeued: agentFeedLeaseSweepSummary.requeued,
+    agent_feed_lease_sweep_failed: agentFeedLeaseSweepSummary.failed,
     rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
     estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
     audit_escrow_ran: auditEscrowSummary.ran,
@@ -885,6 +911,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     contextWorkDispatchSummary.processed > 0 ||
     workDispatchReconcileSummary.ran ||
     workRequestStaleSummary.ran ||
+    agentFeedLeaseSweepSummary.ran ||
     auditEscrowSummary.ran
   ) {
     logger.info(

@@ -52,6 +52,31 @@ type ArtifactRow = {
   deleted_at: string | null
 }
 
+type WorkItemRow = {
+  id: string
+  company_id: string
+  support_packet_id: string
+  domain: string
+  title: string
+  summary: string | null
+  status: string
+  lane: string
+  severity: string | null
+  route: string | null
+  capture_session_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  assignee_user_id: string | null
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+  resolved_at: string | null
+  reversed_at: string | null
+  reversibility_window_seconds: number
+  metadata: JsonRecord
+  dedup_key: string | null
+}
+
 class MemoryStorage implements BlueprintStorage {
   backend = 'local-fs' as const
   bucket = null
@@ -84,7 +109,7 @@ class MemoryStorage implements BlueprintStorage {
 class FakeFeedPool {
   concerns: ConcernRow[] = []
   artifacts: ArtifactRow[] = []
-  workItems: Array<{ id: string; company_id: string; metadata: JsonRecord; updated_at: string }> = []
+  workItems: WorkItemRow[] = []
   handoffEvents: JsonRecord[] = []
   private concernCounter = 0
   private handoffCounter = 0
@@ -94,6 +119,36 @@ class FakeFeedPool {
       pool: this as unknown as Pool,
       logger: { warn: () => undefined } as unknown as pino.Logger,
     })
+  }
+
+  seedWorkItem(overrides: Partial<WorkItemRow> = {}): WorkItemRow {
+    const row: WorkItemRow = {
+      id: WORK_ITEM_ID,
+      company_id: COMPANY_ID,
+      support_packet_id: '00000000-0000-4000-8000-000000000301',
+      domain: 'app_issue',
+      title: 'Capture issue',
+      summary: null,
+      status: 'agent_running',
+      lane: 'agent',
+      severity: null,
+      route: '/x',
+      capture_session_id: null,
+      entity_type: null,
+      entity_id: null,
+      assignee_user_id: null,
+      created_by_user_id: 'user-1',
+      created_at: '2026-06-09T11:00:00.000Z',
+      updated_at: '2026-06-09T11:00:00.000Z',
+      resolved_at: null,
+      reversed_at: null,
+      reversibility_window_seconds: 86400,
+      metadata: {},
+      dedup_key: null,
+      ...overrides,
+    }
+    this.workItems.push(row)
+    return row
   }
 
   seedConcern(overrides: Partial<ConcernRow> = {}): ConcernRow {
@@ -194,6 +249,52 @@ class FakeFeedPool {
       item.metadata = { ...item.metadata, ...(JSON.parse(patchRaw) as JsonRecord) }
       item.updated_at = '2026-06-09T12:02:01.000Z'
       return { rows: [], rowCount: 1 }
+    }
+
+    // applyClaimEffects / applyTerminalCallbackEffects status pre-read.
+    if (normalized.startsWith('select status from context_work_items')) {
+      const [companyId, workItemId] = params as [string, string]
+      const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
+      return { rows: item ? [{ status: item.status }] : [], rowCount: item ? 1 : 0 }
+    }
+
+    // updateContextWorkItemWithEventTx's locked full-row read.
+    if (
+      normalized.startsWith('select id, company_id, support_packet_id, domain') &&
+      normalized.includes('for update')
+    ) {
+      const [companyId, workItemId] = params as [string, string]
+      const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
+      return { rows: item ? [{ ...item, expires_at: null }] : [], rowCount: item ? 1 : 0 }
+    }
+
+    // updateContextWorkItemWithEventTx's status/lane write.
+    if (normalized.startsWith('update context_work_items') && normalized.includes('set status = $3')) {
+      const [companyId, workItemId, status, lane, assigneeUserId, resolvedAt, reversedAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+      ]
+      const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
+      if (!item) return { rows: [], rowCount: 0 }
+      item.status = status
+      item.lane = lane
+      item.assignee_user_id = assigneeUserId
+      item.resolved_at = resolvedAt
+      item.reversed_at = reversedAt
+      item.updated_at = '2026-06-09T12:02:03.000Z'
+      return { rows: [{ ...item, expires_at: null }], rowCount: 1 }
+    }
+
+    // appendContextHandoffEventTx idempotent-replay lookup.
+    if (normalized.includes('from context_handoff_events') && normalized.includes('idempotency_key = $2')) {
+      const [companyId, idempotencyKey] = params as [string, string]
+      const row = this.handoffEvents.find((e) => e.company_id === companyId && e.idempotency_key === idempotencyKey)
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
     }
 
     if (normalized.startsWith('insert into context_handoff_events')) {
@@ -429,6 +530,58 @@ describe('POST /api/agent-feed/callbacks — claim semantics', () => {
     expect(second.responses[0]?.status).toBe(409)
   })
 
+  it('a claim acknowledges the dispatch: agent.dispatch_acknowledged + status agent_running (reconciler-visible)', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'triaged', lane: 'triage' })
+    const row = pool.seedConcern({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      work_item_id: WORK_ITEM_ID,
+    })
+    const { deps, responses } = makeDeps(pool, {
+      body: { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' },
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.concerns[0]?.status).toBe('claimed')
+    // EXACTLY the (status, event) pair the work-dispatch-reconciler's
+    // candidate query requires (status='agent_running' + a latest
+    // agent.dispatch_acknowledged event), so the L4 safety net covers
+    // agent-feed work the same as mesh dispatches.
+    expect(pool.workItems[0]?.status).toBe('agent_running')
+    expect(pool.workItems[0]?.lane).toBe('agent')
+    expect(pool.handoffEvents).toHaveLength(1)
+    expect(pool.handoffEvents[0]).toMatchObject({
+      work_item_id: WORK_ITEM_ID,
+      event_type: 'agent.dispatch_acknowledged',
+      actor_kind: 'agent',
+      actor_ref: 'agent-feed:steve',
+      idempotency_key: `agent_feed:${row.concern_ref}:claim`,
+    })
+  })
+
+  it('a claim on a work item a human already resolved keeps the resolution (event only)', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'resolved', lane: 'done', resolved_at: '2026-06-09T12:00:00.000Z' })
+    const row = pool.seedConcern({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      work_item_id: WORK_ITEM_ID,
+    })
+    const { deps, responses } = makeDeps(pool, {
+      body: { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' },
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.concerns[0]?.status).toBe('claimed')
+    expect(pool.workItems[0]?.status).toBe('resolved')
+    expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.dispatch_acknowledged' })
+  })
+
   it('404s an unknown concern_ref and 400s an invalid callback body', async () => {
     const pool = new FakeFeedPool()
     const unknown = makeDeps(pool, {
@@ -459,7 +612,7 @@ describe('POST /api/agent-feed/callbacks — claim semantics', () => {
 describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
   it('stores a succeeded analyzer callback, writes metadata.capture_analysis, and appends a handoff event', async () => {
     const pool = new FakeFeedPool()
-    pool.workItems.push({ id: WORK_ITEM_ID, company_id: COMPANY_ID, metadata: { source: 'x' }, updated_at: '' })
+    pool.seedWorkItem({ status: 'new', lane: 'triage', metadata: { source: 'x' } })
     const row = pool.seedConcern({
       status: 'claimed',
       work_item_id: WORK_ITEM_ID,
@@ -493,11 +646,13 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
       actor_ref: 'agent-feed:capture-analyzer',
       idempotency_key: `agent_feed:${row.concern_ref}:terminal`,
     })
+    // The analysis is enrichment evidence — it never advances the work item.
+    expect(pool.workItems[0]?.status).toBe('new')
   })
 
   it('caps the persisted analysis markdown at ~64KB', async () => {
     const pool = new FakeFeedPool()
-    pool.workItems.push({ id: WORK_ITEM_ID, company_id: COMPANY_ID, metadata: {}, updated_at: '' })
+    pool.seedWorkItem({ status: 'new', lane: 'triage' })
     const row = pool.seedConcern({ status: 'claimed', work_item_id: WORK_ITEM_ID })
     const { deps, responses } = makeDeps(pool, {
       body: terminalCallback(row.concern_ref, { outputs: { stdout: 'x'.repeat(100_000) } }),
@@ -510,9 +665,9 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect(analysis.markdown).toHaveLength(64 * 1024)
   })
 
-  it('appends agent.completed for a steve succeeded callback (operator sees the agent result)', async () => {
+  it('a steve succeeded callback appends agent.completed AND advances the work item to review_ready', async () => {
     const pool = new FakeFeedPool()
-    pool.workItems.push({ id: WORK_ITEM_ID, company_id: COMPANY_ID, metadata: {}, updated_at: '' })
+    pool.seedWorkItem({ status: 'agent_running', lane: 'agent' })
     const row = pool.seedConcern({
       audience: 'steve',
       concern_ref: `wi:${WORK_ITEM_ID}:steve`,
@@ -529,15 +684,20 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect(pool.concerns[0]?.status).toBe('succeeded')
     // No analyzer metadata write for the steve lane.
     expect(pool.workItems[0]?.metadata.capture_analysis).toBeUndefined()
+    // The RETURN leg: agents only ever reach review_ready — a human resolves.
+    expect(pool.workItems[0]?.status).toBe('review_ready')
+    expect(pool.workItems[0]?.lane).toBe('both')
     expect(pool.handoffEvents[0]).toMatchObject({
       event_type: 'agent.completed',
       actor_ref: 'agent-feed:steve',
+      idempotency_key: `agent_feed:${row.concern_ref}:terminal`,
     })
+    expect((pool.handoffEvents[0]?.payload as JsonRecord).status).toBe('review_ready')
   })
 
-  it('appends agent.message_received with the error detail on a failed callback', async () => {
+  it('a failed callback appends agent.message_received with the error and un-strands agent_running', async () => {
     const pool = new FakeFeedPool()
-    pool.workItems.push({ id: WORK_ITEM_ID, company_id: COMPANY_ID, metadata: {}, updated_at: '' })
+    pool.seedWorkItem({ status: 'agent_running', lane: 'agent' })
     const row = pool.seedConcern({
       audience: 'steve',
       concern_ref: `wi:${WORK_ITEM_ID}:steve`,
@@ -552,9 +712,34 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
 
     expect(responses[0]?.status).toBe(202)
     expect(pool.concerns[0]?.status).toBe('failed')
+    // Not stranded in agent_running: back to the triage-able state the
+    // reconciler/stale sweeps use for a dead agent leg.
+    expect(pool.workItems[0]?.status).toBe('proposal_expired')
+    expect(pool.workItems[0]?.lane).toBe('both')
     expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.message_received' })
     expect((pool.handoffEvents[0]?.payload as JsonRecord).error).toBe('agent blew up')
     expect((pool.handoffEvents[0]?.payload as JsonRecord).error_code).toBe('execution')
+  })
+
+  it('a late terminal callback never reverses a human decision (resolved stays resolved)', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'resolved', lane: 'done', resolved_at: '2026-06-09T12:00:00.000Z' })
+    const row = pool.seedConcern({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      status: 'claimed',
+      work_item_id: WORK_ITEM_ID,
+    })
+    const { deps, responses } = makeDeps(pool, {
+      body: terminalCallback(row.concern_ref, { outputs: { stdout: 'done late' } }),
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.workItems[0]?.status).toBe('resolved')
+    // The result still lands on the timeline.
+    expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.completed' })
   })
 
   it('409s a terminal callback for an already-terminal concern', async () => {

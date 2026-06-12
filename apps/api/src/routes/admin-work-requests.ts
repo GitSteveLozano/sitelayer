@@ -3,7 +3,16 @@ import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
 import type { Identity } from '../auth.js'
 import { authorizePlatformAdmin, parseSuperadminEnvIds, type AdminQueryExecutor } from '../admin-auth.js'
 import { buildPaginationMeta, isValidUuid, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
-import { WORK_ITEM_LANES, WORK_ITEM_STATUSES, type WorkItemLane, type WorkItemStatus } from '../context-handoff.js'
+import {
+  WORK_ITEM_DOMAINS,
+  WORK_ITEM_LANES,
+  WORK_ITEM_STATUSES,
+  appendContextHandoffEventTx,
+  type WorkItemDomain,
+  type WorkItemLane,
+  type WorkItemStatus,
+} from '../context-handoff.js'
+import { withMutationTx } from '../mutation-tx.js'
 import { buildAgentPrompt, type SupportPacketRow } from './support-packets.js'
 import {
   agentFeedBaseUrl,
@@ -46,6 +55,9 @@ type AdminWorkItemRow = {
   company_slug: string
   company_name: string
   support_packet_id: string
+  /** Which non-bleeding domain the row belongs to — the admin board is the one
+   * cross-domain READ surface, so each card must say which world it lives in. */
+  domain: WorkItemDomain
   title: string
   summary: string | null
   status: WorkItemStatus
@@ -115,6 +127,7 @@ function adminWorkItemResponse(row: AdminWorkItemRow) {
     company_name: row.company_name,
     support_packet_id: row.support_packet_id,
     capture_session_id: row.capture_session_id,
+    domain: row.domain,
     title: row.title,
     summary: row.summary,
     status: row.status,
@@ -259,12 +272,40 @@ async function handleDispatchToAgent(deps: AdminWorkRequestRouteDeps, workItemId
     },
   }
 
-  const insertedId = await insertAgentFeedConcernTx(deps.pool as Parameters<typeof insertAgentFeedConcernTx>[0], {
-    companyId: workItem.company_id,
-    audience,
-    concern,
-    workItemId: workItem.id,
-    captureSessionId: workItem.capture_session_id,
+  // Insert the concern AND stamp the dispatch on the work-item timeline in
+  // ONE company-bound tx (a dispatch used to be invisible on the work item —
+  // zero timeline events, status never changed). Idempotent end-to-end: a
+  // repeat dispatch hits the concern's ON CONFLICT (insertedId null) and
+  // appends nothing. Status intentionally does NOT change here — the item
+  // moves to agent_running when an executor actually CLAIMS the concern
+  // (agent-feed.ts applyClaimEffects appends agent.dispatch_acknowledged).
+  const insertedId = await withMutationTx(workItem.company_id, async (c) => {
+    const inserted = await insertAgentFeedConcernTx(c, {
+      companyId: workItem.company_id,
+      audience,
+      concern,
+      workItemId: workItem.id,
+      captureSessionId: workItem.capture_session_id,
+    })
+    if (inserted) {
+      await appendContextHandoffEventTx(c, {
+        companyId: workItem.company_id,
+        workItemId: workItem.id,
+        eventType: 'agent.dispatch_requested',
+        actorKind: 'user',
+        actorUserId: deps.identity.userId,
+        payload: { audience, concern_ref: concernRef, dispatch_surface: 'agent_feed' },
+        metadata: {
+          source: 'admin_dispatch_to_agent',
+          dispatch_surface: 'agent_feed',
+          audience,
+          evidence_refs: [{ type: 'support_debug_packet', id: workItem.support_packet_id }],
+        },
+        idempotencyKey: `agent_feed:${concernRef}:dispatch_requested`,
+        captureSessionId: workItem.capture_session_id,
+      })
+    }
+    return inserted
   })
 
   const rowResult = (await deps.pool.query(
@@ -347,6 +388,14 @@ export async function handleAdminWorkRequestRoutes(
     deps.sendJson(400, { error: `lane must be one of ${WORK_ITEM_LANES.join(', ')}` })
     return true
   }
+  // Optional domain filter. The admin board is the one deliberately
+  // cross-domain READ surface (app_issue + field_request together), so the
+  // filter is opt-in narrowing — never a default.
+  const domain = url.searchParams.get('domain')
+  if (domain !== null && !parseAllowed(domain, WORK_ITEM_DOMAINS)) {
+    deps.sendJson(400, { error: `domain must be one of ${WORK_ITEM_DOMAINS.join(', ')}` })
+    return true
+  }
 
   const clauses: string[] = []
   const values: unknown[] = []
@@ -360,6 +409,7 @@ export async function handleAdminWorkRequestRoutes(
   if (companySlug) pushClause('c.slug = ?', companySlug)
   if (status) pushClause('w.status = ?', status)
   if (lane) pushClause('w.lane = ?', lane)
+  if (domain) pushClause('w.domain = ?', domain)
   const assigneeUserId = optionalText(url.searchParams.get('assignee_user_id'), 200)
   if (assigneeUserId) pushClause('w.assignee_user_id = ?', assigneeUserId)
   const createdByUserId = optionalText(url.searchParams.get('created_by_user_id'), 200)
@@ -373,7 +423,7 @@ export async function handleAdminWorkRequestRoutes(
   const where = clauses.length ? `where ${clauses.join(' and ')}` : ''
   const result = (await deps.pool.query(
     `select w.id, w.company_id, c.slug as company_slug, c.name as company_name,
-            w.support_packet_id, w.title, w.summary, w.status, w.lane, w.severity,
+            w.support_packet_id, w.domain, w.title, w.summary, w.status, w.lane, w.severity,
             w.route, w.capture_session_id, w.entity_type, w.entity_id,
             w.assignee_user_id, w.created_by_user_id, w.created_at, w.updated_at,
             w.resolved_at, w.reversed_at, w.reversibility_window_seconds,
