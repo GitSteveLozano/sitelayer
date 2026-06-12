@@ -107,18 +107,17 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 > - `/app/previews/.env.demo.shared` + rendered demo `.env` — demo stack
 >   recreated, `/api/version` 200, and `POST /api/demo/sign-in-link` minted a
 >   valid `__clerk_ticket` on the new key (verified end-to-end).
-> - `/app/previews/.env.dev.shared` — swapped in the shared file only; the
->   dev stack still holds `demo2` in its running env until its next
->   deploy/restart re-renders. **Do not revoke `demo2` until dev has
->   restarted** (the fleet auto-deploy fast-follow makes this minutes, not
->   days). Timestamped `.bak-rotate-*` backups sit beside both shared files.
+> - `/app/previews/.env.dev.shared` — swapped, and the fleet auto-deploy
+>   re-rendered + restarted the dev stack on the new key the same evening
+>   (`/api/version` 200 verified). Timestamped `.bak-rotate-*` backups sit
+>   beside both shared files.
 >
-> Remaining (operator, Clerk dashboard → API keys — step-up password
-> required; a tab was left at the prompt on taylor-pc-ubuntu): (1) delete
-> `demo-tier` (never used), (2) revoke `demo2` once dev has restarted. Both
-> are now zero-coordination clicks. Note both tiers now share the instance
-> primary ("default") key; mint a dedicated named key later if per-tier
-> revocability is wanted.
+> **`demo2` is now referenced by NOTHING** — both revocations are safe
+> immediately. Remaining (operator, Clerk dashboard → API keys — step-up
+> password required; a tab was left at the prompt on taylor-pc-ubuntu):
+> (1) delete `demo-tier` (never used), (2) revoke `demo2`. Note both tiers
+> now share the instance primary ("default") key; mint a dedicated named key
+> later if per-tier revocability is wanted.
 
 ### 1a. Demo Clerk keys — OPEN actions (operator-pending, recorded 2026-06-12)
 
