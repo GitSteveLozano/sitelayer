@@ -76,6 +76,16 @@ curl -fsS \
 If this returns 503, `AGENT_FEED_TOKENS` is unset or invalid. If it returns
 401/403, the token or audience does not match.
 
+Mobile Ops Field checklist should be read before walking onsite:
+
+- Phone link: network is available for mutable session actions.
+- Control window: this browser holds the one-hour control token, or the session
+  is visible but audit-only from this phone.
+- Desktop video: screen capture reports active recording.
+- Capture route: the capture router has at least one active sink.
+- Agent lane: agent review or support-packet routing is ready; if the agent
+  feed is ready but the route is blocked, fix the router/gateway blocker first.
+
 ## Mitigation
 
 1. If Mobile Ops is blocked, use the listed blocker first; do not force an

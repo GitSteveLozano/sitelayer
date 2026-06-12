@@ -222,6 +222,15 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         null)
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
+  const fieldReadinessItems = buildFieldReadinessItems({
+    online,
+    hasDiagnosticControl,
+    displayedDiagnosticSession,
+    screenCapture,
+    captureRouter,
+    agentFeed,
+    onsiteSession,
+  })
 
   return (
     <>
@@ -353,6 +362,26 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           />
         </MListInset>
 
+        {canViewAppIssues ? (
+          <>
+            <MSectionH>Field checklist</MSectionH>
+            <MListInset>
+              {fieldReadinessItems.map((item) => {
+                const Icon = item.Icon
+                return (
+                  <MListRow
+                    key={item.key}
+                    leading={<Icon size={18} />}
+                    leadingTone={item.tone}
+                    headline={item.headline}
+                    supporting={item.supporting}
+                  />
+                )
+              })}
+            </MListInset>
+          </>
+        ) : null}
+
         <MSectionH>Systems</MSectionH>
         <MListInset>
           {canViewAppIssues ? (
@@ -470,6 +499,100 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       </MBody>
     </>
   )
+}
+
+type MobileTone = 'accent' | 'amber' | 'blue' | 'green' | 'red'
+
+type FieldReadinessItem = {
+  key: string
+  Icon: typeof MI.Camera
+  tone: MobileTone
+  headline: string
+  supporting: string
+}
+
+type FieldReadinessInput = {
+  online: boolean
+  hasDiagnosticControl: boolean
+  displayedDiagnosticSession: OpsOnsiteDiagnosticSessionRecord | null
+  screenCapture: OpsDiagnosticComponent | null
+  captureRouter: OpsDiagnosticComponent | null
+  agentFeed: OpsDiagnosticComponent | null
+  onsiteSession: OpsOnsiteDiagnosticSessionPlan | undefined
+}
+
+export function buildFieldReadinessItems({
+  online,
+  hasDiagnosticControl,
+  displayedDiagnosticSession,
+  screenCapture,
+  captureRouter,
+  agentFeed,
+  onsiteSession,
+}: FieldReadinessInput): FieldReadinessItem[] {
+  const screenReady = screenCapture?.status === 'ok' && screenCapture.facts.recording === true
+  const routeSinks =
+    typeof captureRouter?.facts.sinks === 'string' ? captureRouter.facts.sinks.split(',').filter(Boolean) : []
+  const routerReady = captureRouter?.status === 'ok' && routeSinks.length > 0
+  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_has_token === true
+  const canRouteWork = onsiteSession?.can_route_work === true
+  const canDispatchAgentReview = onsiteSession?.can_dispatch_agent_review === true
+
+  return [
+    {
+      key: 'phone-link',
+      Icon: online ? MI.Check : MI.WifiOff,
+      tone: online ? 'green' : 'amber',
+      headline: 'Phone link',
+      supporting: online ? 'Network available.' : 'No network for mutable actions.',
+    },
+    {
+      key: 'control-window',
+      Icon: hasDiagnosticControl ? MI.Check : displayedDiagnosticSession ? MI.Clock : MI.Camera,
+      tone: hasDiagnosticControl ? 'green' : displayedDiagnosticSession ? 'amber' : 'accent',
+      headline: 'Control window',
+      supporting: hasDiagnosticControl
+        ? `Token held until ${formatClock(displayedDiagnosticSession?.expires_at ?? '')}.`
+        : displayedDiagnosticSession
+          ? 'Session visible; control token not held.'
+          : 'No active control window.',
+    },
+    {
+      key: 'desktop-video',
+      Icon: screenReady ? MI.Check : MI.Camera,
+      tone: screenReady ? 'green' : statusTone(screenCapture?.status),
+      headline: 'Desktop video',
+      supporting: screenReady ? 'Recording confirmed.' : (screenCapture?.detail ?? 'Screen capture pending.'),
+    },
+    {
+      key: 'capture-route',
+      Icon: routerReady ? MI.Check : MI.Layers,
+      tone: routerReady ? 'green' : statusTone(captureRouter?.status),
+      headline: 'Capture route',
+      supporting: routerReady
+        ? `${routeSinks.length} sink${routeSinks.length === 1 ? '' : 's'} active.`
+        : (captureRouter?.detail ?? 'Capture router pending.'),
+    },
+    {
+      key: 'agent-lane',
+      Icon: canDispatchAgentReview || canRouteWork ? MI.Check : MI.ShieldAlert,
+      tone: canDispatchAgentReview
+        ? 'green'
+        : canRouteWork
+          ? 'blue'
+          : agentFeedReady
+            ? 'amber'
+            : statusTone(agentFeed?.status),
+      headline: 'Agent lane',
+      supporting: canDispatchAgentReview
+        ? 'Agent review ready.'
+        : canRouteWork
+          ? 'Support packet route ready.'
+          : agentFeedReady
+            ? 'Agent feed ready; route still blocked.'
+            : (agentFeed?.detail ?? 'Agent feed pending.'),
+    },
+  ]
 }
 
 function countStatus(items: readonly ContextWorkItem[], status: WorkItemStatus): number {
