@@ -1,5 +1,45 @@
 # QBO Sandbox End-to-End Validation — Gate-1 Blocker
 
+> ## ✅ GATE-1 PASSED — 2026-06-12 ~22:40Z
+>
+> All three acceptance criteria green the same evening (agent session,
+> after the operator's single OAuth sign-in via the new
+> `scripts/qbo-oauth-capture.mjs`):
+>
+> - **MODE A** exit 0 — refresh + companyinfo + Estimate 147/148/150.
+> - **MODE A + `RENTAL_INVOICE_TEST=1`** exit 0 — Invoice 149 with the
+>   presigned-URL line description.
+> - **MODE B** exit 0 — local stack (fresh local DB, la-operations,
+>   seeded pending bill), `POST /api/integrations/qbo/sync/material-bills`
+>   pushed 1 bill / 0 errors → sandbox **Bill 151** + auto-created
+>   **Vendor 58**, `integration_mappings` rows written.
+>
+> MODE B setup note: the company's `integration_connections` row +
+> `qbo_account/materials` mapping (sandbox Account 69) were seeded
+> directly — because of the **public-path company-resolution bug** below,
+> the in-app `GET /api/integrations/qbo/auth → callback` flow cannot
+> complete. Refresh-token custody: `.env.local` holds the latest rotated
+> token (self-persisted; the smoke script now writes every rotation to a
+> mode-600 `<log>.refresh-token` side file and honors
+> `QBO_SMOKE_ENV_FILE`).
+>
+> ### 🐛 FILED: public-path company resolution breaks the QBO OAuth
+>
+> ### callback (all tiers)
+>
+> `server.ts` binds `requestContext.actorUserId = 'qbo-oauth-redirect'`
+> for PUBLIC_PATHS **before** company resolution, and
+> `getCurrentUserId()` prefers that context value — so `getCompany()`
+> looks up a membership for the synthetic marker, finds none, and the
+> middleware 404s (`company slug … not found`) before
+> `routes/qbo.ts`'s callback handler (which is fully self-sufficient:
+> company + membership come from the signed `state`) ever runs. The
+> Clerk/QBO webhook public paths flow through the same block. Fix shape:
+> exempt PUBLIC_PATHS from the middleware company requirement (null
+> company + guarded `company.active.id` derefs); do NOT resolve a default
+> company for them. Needs its own test + full suite run — deliberately
+> not hot-patched during the Gate-1 session.
+
 **Status (2026-06-12): MODE A PASSED, then refresh token burned — needs one
 operator re-provision.** All five env vars were present in `.env.local`
 (captured ~2026-06-01; the 2026-05-20 BLOCKED status below is historical).
