@@ -10,7 +10,8 @@ phone, without SSHing into the workstation or exposing local debug ports.
 - Mobile Ops shows Diagnostic readiness as limited, blocked, or ready.
 - `GET /api/ops/diagnostics` returns component state and an
   `onsite_session` plan.
-- `GET /api/ops/diagnostics/sessions` shows active sessions and audit events.
+- `GET /api/ops/diagnostics/sessions` shows active sessions, audit events,
+  and routed agent-feed delivery state.
 
 ## Runtime Contract
 
@@ -91,9 +92,11 @@ If this returns 503, `AGENT_FEED_TOKENS` is unset or invalid. If it returns
 - Start an onsite session from Mobile Ops.
 - Request `dispatch_agent_review`.
 - The action response includes `accepted_action.agent_feed.queued=true`.
-- The executor receives one Concern whose `inputs.metadata` includes
+- The executor receives one Concern whose `inputs` includes
   `ops_diagnostic_session_id`.
-- The session detail shows a new `action.requested` audit event.
+- The session detail shows a new `action.requested` audit event and an
+  `agent_feed_deliveries[]` row moving from `pending` to `claimed` to a
+  terminal callback state.
 
 ## Post-Incident
 

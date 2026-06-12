@@ -151,6 +151,7 @@ export {
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsDiagnosticsResponse,
+  type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticAgentFeedResult,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticSessionActionResponse,

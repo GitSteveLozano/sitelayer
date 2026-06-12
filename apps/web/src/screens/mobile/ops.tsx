@@ -29,6 +29,7 @@ import {
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
@@ -220,6 +221,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
         null)
       : null
+  const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
 
   return (
     <>
@@ -310,6 +312,14 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                     : () => startDiagnosticSession.mutate()
               }
               chev={hasDiagnosticControl}
+            />
+          ) : null}
+          {latestAgentFeedDelivery ? (
+            <MListRow
+              leading={<MI.Clock size={18} />}
+              leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
+              headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
+              supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
             />
           ) : null}
           <MListRow
@@ -706,6 +716,66 @@ function formatDiagnosticSessionControl(
 function formatDiagnosticActionSummary(action: { enabled: boolean; reason: string }, pending: boolean): string {
   if (pending) return 'Audit event pending.'
   return action.reason
+}
+
+function latestDiagnosticDelivery(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): OpsOnsiteDiagnosticAgentFeedDelivery | null {
+  const deliveries = session?.agent_feed_deliveries ?? []
+  if (deliveries.length === 0) return null
+  return [...deliveries].sort((a, b) => Date.parse(b.queued_at) - Date.parse(a.queued_at))[0] ?? null
+}
+
+export function agentFeedDeliveryTone(
+  delivery: OpsOnsiteDiagnosticAgentFeedDelivery,
+): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
+  if (delivery.status === 'succeeded') return 'green'
+  if (delivery.status === 'failed' || delivery.status === 'cancelled') return 'red'
+  if (delivery.stale) return 'amber'
+  return 'blue'
+}
+
+export function formatAgentFeedDeliveryHeadline(delivery: OpsOnsiteDiagnosticAgentFeedDelivery): string {
+  return `${diagnosticActionName(delivery.action_key)} delivery`
+}
+
+export function formatAgentFeedDeliverySummary(
+  delivery: OpsOnsiteDiagnosticAgentFeedDelivery,
+  nowMs = Date.now(),
+): string {
+  if (delivery.status === 'succeeded') {
+    return `Succeeded ${formatSince(delivery.completed_at ?? delivery.queued_at, nowMs)} · ${delivery.audience}`
+  }
+  if (delivery.status === 'failed') {
+    return `Failed ${formatSince(delivery.completed_at ?? delivery.queued_at, nowMs)} · ${
+      delivery.callback_error ? 'callback error recorded' : 'callback recorded'
+    }`
+  }
+  if (delivery.status === 'cancelled') {
+    return `Cancelled ${formatSince(delivery.completed_at ?? delivery.queued_at, nowMs)} · ${delivery.audience}`
+  }
+  if (delivery.status === 'claimed') {
+    return delivery.stale
+      ? `Claimed ${formatSince(delivery.claimed_at ?? delivery.queued_at, nowMs)} · no callback`
+      : `Claimed ${formatSince(delivery.claimed_at ?? delivery.queued_at, nowMs)} · waiting for callback`
+  }
+  return delivery.stale
+    ? `Queued ${formatSince(delivery.queued_at, nowMs)} · no executor claim`
+    : `Queued ${formatSince(delivery.queued_at, nowMs)} · waiting for claim`
+}
+
+function diagnosticActionName(actionKey: OpsOnsiteDiagnosticActionKey): string {
+  if (actionKey === 'route_support_packet') return 'Support packet'
+  if (actionKey === 'dispatch_agent_review') return 'Agent review'
+  if (actionKey === 'capture_desktop_context') return 'Desktop evidence'
+  return 'Field context'
+}
+
+function formatSince(value: string, nowMs: number): string {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) return 'recently'
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - parsed) / 1000))
+  return `${formatAge(elapsedSeconds)} ago`
 }
 
 function formatClock(value: string): string {

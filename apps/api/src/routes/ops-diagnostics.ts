@@ -62,6 +62,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   intent: OpsOnsiteDiagnosticActionKey | null
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
+  agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
 }
 
 export type OpsOnsiteDiagnosticSessionCreateResponse = {
@@ -85,6 +86,19 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   concern_ref: string
   queued: boolean
   id: string | null
+}
+
+export type OpsOnsiteDiagnosticAgentFeedDelivery = {
+  action_key: OpsOnsiteDiagnosticActionKey
+  audience: string
+  concern_ref: string
+  status: 'pending' | 'claimed' | 'succeeded' | 'failed' | 'cancelled'
+  queued_at: string
+  claimed_at: string | null
+  completed_at: string | null
+  callback_status: string | null
+  callback_error: string | null
+  stale: boolean
 }
 
 export type OpsDiagnosticsResponse = {
@@ -143,6 +157,7 @@ type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
 }
 
 const onsiteDiagnosticSessions = new Map<string, StoredOnsiteDiagnosticSession>()
+const AGENT_FEED_DELIVERY_STALE_MS = 15 * 60 * 1000
 
 export async function handleOpsDiagnosticsRoutes(
   req: http.IncomingMessage,
@@ -538,10 +553,18 @@ async function recordPersistentOnsiteDiagnosticAction(
       actorUserId,
       requestedAt: at,
     })
-    return { agentFeed }
+    const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
+    return { agentFeed, deliveries }
   })
   if (!result) return null
-  return { session: { ...session, audit_events: [...session.audit_events, event] }, agentFeed: result.agentFeed }
+  return {
+    session: {
+      ...session,
+      audit_events: [...session.audit_events, event],
+      agent_feed_deliveries: result.deliveries,
+    },
+    agentFeed: result.agentFeed,
+  }
 }
 
 async function enqueueOnsiteDiagnosticConcernTx(
@@ -603,6 +626,57 @@ function routesToAgentFeed(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
   return actionKey === 'route_support_packet' || actionKey === 'dispatch_agent_review'
 }
 
+function routedAgentFeedConcernRefs(sessionId: string): string[] {
+  return (['route_support_packet', 'dispatch_agent_review'] satisfies OpsOnsiteDiagnosticActionKey[]).map(
+    (actionKey) => `opsdiag:${sessionId}:${actionKey}`,
+  )
+}
+
+function actionKeyFromConcernRef(concernRef: string): OpsOnsiteDiagnosticActionKey | null {
+  const actionKey = concernRef.split(':').at(-1)
+  return actionKeyValue(actionKey)
+}
+
+function agentFeedDeliveryFromRow(
+  row: PersistentAgentFeedDeliveryRow,
+  nowMs = Date.now(),
+): OpsOnsiteDiagnosticAgentFeedDelivery | null {
+  const actionKey = actionKeyFromConcernRef(row.concern_ref)
+  const status = agentFeedDeliveryStatus(row.status)
+  if (!actionKey || !status) return null
+  const queuedAt = isoString(row.created_at)
+  const claimedAt = row.claimed_at ? isoString(row.claimed_at) : null
+  const completedAt = row.completed_at ? isoString(row.completed_at) : null
+  const callback = objectValue(row.callback)
+  const staleBase = Date.parse(claimedAt ?? queuedAt)
+  const stale =
+    (status === 'pending' || status === 'claimed') &&
+    Number.isFinite(staleBase) &&
+    nowMs - staleBase > AGENT_FEED_DELIVERY_STALE_MS
+  return {
+    action_key: actionKey,
+    audience: row.audience,
+    concern_ref: row.concern_ref,
+    status,
+    queued_at: queuedAt,
+    claimed_at: claimedAt,
+    completed_at: completedAt,
+    callback_status: statusValue(callback?.status),
+    callback_error: statusValue(callback?.error) ?? statusValue(callback?.error_code),
+    stale,
+  }
+}
+
+function agentFeedDeliveryStatus(value: string): OpsOnsiteDiagnosticAgentFeedDelivery['status'] | null {
+  return value === 'pending' ||
+    value === 'claimed' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled'
+    ? value
+    : null
+}
+
 function opsDiagnosticAgentAudience(): string | null {
   return boundedString(process.env[OPS_DIAGNOSTIC_AGENT_AUDIENCE_ENV], 80)
 }
@@ -634,7 +708,8 @@ async function lookupPersistentSession(
     const row = result.rows[0]
     if (!row) return null
     const events = await listPersistentEvents(client, companyId, row.id)
-    return persistentSessionFromRow(row, events)
+    const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
+    return persistentSessionFromRow(row, events, deliveries)
   })
   if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
   return { ok: true, value: session }
@@ -653,7 +728,8 @@ async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promis
     const sessions: OpsOnsiteDiagnosticSessionRecord[] = []
     for (const row of result.rows) {
       const events = await listPersistentEvents(client, companyId, row.id)
-      sessions.push(publicSession(persistentSessionFromRow(row, events)))
+      const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
+      sessions.push(publicSession(persistentSessionFromRow(row, events, deliveries)))
     }
     return sessions
   })
@@ -678,6 +754,17 @@ type PersistentEventRow = {
   action_key: string | null
   effect: string
   summary: string
+  created_at: string | Date
+}
+
+type PersistentAgentFeedDeliveryRow = {
+  id: string
+  audience: string
+  concern_ref: string
+  status: string
+  callback: unknown
+  claimed_at: string | Date | null
+  completed_at: string | Date | null
   created_at: string | Date
 }
 
@@ -707,9 +794,28 @@ async function listPersistentEvents(
   })
 }
 
+async function listPersistentAgentFeedDeliveries(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+): Promise<OpsOnsiteDiagnosticAgentFeedDelivery[]> {
+  const refs = routedAgentFeedConcernRefs(sessionId)
+  const result = await client.query<PersistentAgentFeedDeliveryRow>(
+    `select id, audience, concern_ref, status, callback, claimed_at, completed_at, created_at
+       from agent_feed_concerns
+      where company_id = $1 and concern_ref = any($2::text[])
+      order by created_at asc, id asc`,
+    [companyId, refs],
+  )
+  return result.rows
+    .map((row) => agentFeedDeliveryFromRow(row))
+    .filter((delivery): delivery is OpsOnsiteDiagnosticAgentFeedDelivery => Boolean(delivery))
+}
+
 function persistentSessionFromRow(
   row: PersistentSessionRow,
   events: OpsOnsiteDiagnosticAuditEvent[],
+  deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[] = [],
 ): StoredOnsiteDiagnosticSession {
   return {
     id: row.id,
@@ -721,13 +827,14 @@ function persistentSessionFromRow(
     intent: actionKeyValue(row.intent),
     plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
     audit_events: events,
+    agent_feed_deliveries: deliveries,
     control_token_hash: row.control_token_hash,
   }
 }
 
 function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnosticSessionRecord {
   const { control_token: _controlToken, control_token_hash: _controlTokenHash, ...rest } = session
-  return rest
+  return { ...rest, agent_feed_deliveries: rest.agent_feed_deliveries ?? [] }
 }
 
 async function readRequestBody(
@@ -798,6 +905,22 @@ function pruneOldestSessions(): void {
 
 export function __resetOpsDiagnosticSessionsForTests(): void {
   onsiteDiagnosticSessions.clear()
+}
+
+export function __agentFeedDeliveryFromRowForTests(
+  row: {
+    id: string
+    audience: string
+    concern_ref: string
+    status: string
+    callback: unknown
+    claimed_at: string | Date | null
+    completed_at: string | Date | null
+    created_at: string | Date
+  },
+  nowMs = Date.now(),
+): OpsOnsiteDiagnosticAgentFeedDelivery | null {
+  return agentFeedDeliveryFromRow(row, nowMs)
 }
 
 function summarizeGatewayDiagnostics(probe: ProbeResult): OpsDiagnosticComponent {

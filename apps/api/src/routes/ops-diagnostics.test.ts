@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
 import {
+  __agentFeedDeliveryFromRowForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
@@ -359,6 +360,57 @@ describe('ops diagnostics', () => {
         },
       )
       expect(deniedResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+    })
+  })
+
+  it('maps onsite agent-feed delivery rows into phone-safe session state', () => {
+    const delivery = __agentFeedDeliveryFromRowForTests(
+      {
+        id: 'feed-1',
+        audience: 'onsite-diagnostics',
+        concern_ref: 'opsdiag:11111111-1111-4111-8111-111111111111:dispatch_agent_review',
+        status: 'claimed',
+        callback: null,
+        claimed_at: '2026-06-12T12:00:00.000Z',
+        completed_at: null,
+        created_at: '2026-06-12T11:59:00.000Z',
+      },
+      Date.parse('2026-06-12T12:20:01.000Z'),
+    )
+
+    expect(delivery).toMatchObject({
+      action_key: 'dispatch_agent_review',
+      audience: 'onsite-diagnostics',
+      concern_ref: 'opsdiag:11111111-1111-4111-8111-111111111111:dispatch_agent_review',
+      status: 'claimed',
+      queued_at: '2026-06-12T11:59:00.000Z',
+      claimed_at: '2026-06-12T12:00:00.000Z',
+      completed_at: null,
+      callback_status: null,
+      callback_error: null,
+      stale: true,
+    })
+
+    const failed = __agentFeedDeliveryFromRowForTests(
+      {
+        id: 'feed-2',
+        audience: 'onsite-diagnostics',
+        concern_ref: 'opsdiag:11111111-1111-4111-8111-111111111111:route_support_packet',
+        status: 'failed',
+        callback: { status: 'failed', error: 'executor timed out' },
+        claimed_at: '2026-06-12T12:00:00.000Z',
+        completed_at: '2026-06-12T12:01:00.000Z',
+        created_at: '2026-06-12T11:59:00.000Z',
+      },
+      Date.parse('2026-06-12T12:20:01.000Z'),
+    )
+
+    expect(failed).toMatchObject({
+      action_key: 'route_support_packet',
+      status: 'failed',
+      callback_status: 'failed',
+      callback_error: 'executor timed out',
+      stale: false,
     })
   })
 

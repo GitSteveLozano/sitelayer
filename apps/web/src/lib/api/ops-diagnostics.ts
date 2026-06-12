@@ -45,6 +45,19 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   summary: string
 }
 
+export type OpsOnsiteDiagnosticAgentFeedDelivery = {
+  action_key: OpsOnsiteDiagnosticActionKey
+  audience: string
+  concern_ref: string
+  status: 'pending' | 'claimed' | 'succeeded' | 'failed' | 'cancelled'
+  queued_at: string
+  claimed_at: string | null
+  completed_at: string | null
+  callback_status: string | null
+  callback_error: string | null
+  stale: boolean
+}
+
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
   state: 'active'
@@ -55,6 +68,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   intent: OpsOnsiteDiagnosticActionKey | null
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
+  agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
 }
 
 export type OpsOnsiteDiagnosticSessionCreateInput = {
