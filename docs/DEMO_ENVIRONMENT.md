@@ -20,13 +20,13 @@ the agent/scratch `dev` tier and the ephemeral per-PR previews:
 
 ## Hierarchy
 
-| URL                                           | Tier      | Database             | Lifecycle                                 |
-| --------------------------------------------- | --------- | -------------------- | ----------------------------------------- |
-| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.                |
-| `https://demo.preview.sitelayer.sandolab.xyz` | `demo`    | `sitelayer_demo`     | Permanent. Tracks `main` (promoted line). |
-| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` (churn line).     |
-| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`.           |
-| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.                 |
+| URL                                           | Tier      | Database             | Lifecycle                                                                                                                |
+| --------------------------------------------- | --------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.                                                                                               |
+| `https://demo.preview.sitelayer.sandolab.xyz` | `demo`    | `sitelayer_demo`     | Permanent. Tracks `main` (promoted line).                                                                                |
+| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` (churn line).                                                                                    |
+| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | RETIRED 2026-06-12 (stack torn down — ran stale pre-fail-closed build; redeploy via `deploy-preview.sh` only if needed). |
+| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.                                                                                                |
 
 † Each preview slug owns an isolated schema `sitelayer_<slug>` inside the shared DB.
 

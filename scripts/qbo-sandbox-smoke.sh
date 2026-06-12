@@ -142,7 +142,20 @@ if [[ "${MODE}" == "A" ]]; then
   NEW_REFRESH_TOKEN=$(printf '%s' "${refresh_body}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("refresh_token",""))')
   EXPIRES_IN=$(printf '%s' "${refresh_body}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("expires_in",""))')
   log "OK: refreshed; access_token expires in ${EXPIRES_IN}s; refresh_token rotated (new prefix=${NEW_REFRESH_TOKEN:0:6}…)"
-  log "NOTE: capture the new refresh_token from ${LOG_FILE} and update your env before next run"
+  # The log redacts the rotated token, so persist it to a mode-600 side
+  # file instead — Intuit invalidates the OLD token once the new one is
+  # issued, so losing this value is a self-inflicted auth outage (the
+  # 2026-06-12 run burned a token exactly this way). If
+  # QBO_SMOKE_ENV_FILE is set and contains QBO_SANDBOX_REFRESH_TOKEN=,
+  # update it in place (same trap, fully automated away).
+  TOKEN_OUT="${LOG_FILE%.log}.refresh-token"
+  (umask 077 && printf '%s\n' "${NEW_REFRESH_TOKEN}" >"${TOKEN_OUT}")
+  log "NOTE: rotated refresh_token written to ${TOKEN_OUT} (mode 600) — update your env before next run"
+  if [[ -n "${QBO_SMOKE_ENV_FILE:-}" && -f "${QBO_SMOKE_ENV_FILE}" ]] \
+    && grep -q '^QBO_SANDBOX_REFRESH_TOKEN=' "${QBO_SMOKE_ENV_FILE}"; then
+    sed -i "s|^QBO_SANDBOX_REFRESH_TOKEN=.*|QBO_SANDBOX_REFRESH_TOKEN=${NEW_REFRESH_TOKEN}|" "${QBO_SMOKE_ENV_FILE}"
+    log "NOTE: QBO_SANDBOX_REFRESH_TOKEN updated in place in ${QBO_SMOKE_ENV_FILE}"
+  fi
 
   AUTH_HDR="Authorization: Bearer ${ACCESS_TOKEN}"
   BASE="${QBO_SANDBOX_BASE_URL%/}/v3/company/${QBO_SANDBOX_REALM_ID}"

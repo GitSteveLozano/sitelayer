@@ -24,7 +24,8 @@ set -euo pipefail
 
 region="${DO_SPACES_REGION:-tor1}"
 bucket="sitelayer-blueprints-prod"
-origins=("https://sitelayer.sandolab.xyz" "https://main.preview.sitelayer.sandolab.xyz")
+# main.preview retired 2026-06-12; dev is the durable non-prod origin.
+origins=("https://sitelayer.sandolab.xyz" "https://dev.sitelayer.sandolab.xyz")
 dry_run=0
 custom_origins=()
 

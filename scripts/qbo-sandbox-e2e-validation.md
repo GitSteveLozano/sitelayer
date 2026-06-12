@@ -1,6 +1,27 @@
 # QBO Sandbox End-to-End Validation — Gate-1 Blocker
 
-**Status (2026-05-20):** BLOCKED on missing operator-only credentials. Code
+**Status (2026-06-12): MODE A PASSED, then refresh token burned — needs one
+operator re-provision.** All five env vars were present in `.env.local`
+(captured ~2026-06-01; the 2026-05-20 BLOCKED status below is historical).
+Run record:
+
+- `2026-06-12 21:57Z` — `qbo-sandbox-smoke.sh` MODE A **exit 0**: OAuth
+  refresh OK, companyinfo OK ("Sandbox Company US 71b7", realm
+  9341456936505893), Estimate posted (id=146). Log
+  `/tmp/qbo-smoke-20260612-215759.log`.
+- That run ROTATED the refresh token, and the script's log REDACTED the new
+  value while its NOTE said to capture it from the log — the new token was
+  unrecoverable and the stored one died (second run failed OAuth 400). The
+  script now writes the rotated token to a mode-600
+  `<log>.refresh-token` side file and, when `QBO_SMOKE_ENV_FILE` is set,
+  updates `QBO_SANDBOX_REFRESH_TOKEN` in place — this trap cannot recur.
+- **Remaining for Gate-1:** operator re-captures a refresh token via the
+  OAuth Playground (steps below; no live Intuit session existed on any
+  fleet browser profile), then run
+  `QBO_SMOKE_ENV_FILE=.env.local bash scripts/qbo-sandbox-smoke.sh` and the
+  `RENTAL_INVOICE_TEST=1` + MODE B legs.
+
+**Status (2026-05-20, historical):** BLOCKED on missing operator-only credentials. Code
 and harness are complete; only the sandbox refresh-token + realm-id need to
 be captured from the Intuit OAuth Playground (or in-app OAuth dance) and
 exported into the smoke environment.

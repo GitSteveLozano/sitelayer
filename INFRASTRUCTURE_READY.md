@@ -38,7 +38,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Shared env:** `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600`
 - **GitHub runner:** `sitelayer-preview`, active systemd service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service`
 - **Preview cleanup:** `sitelayer-preview-prune.timer`, daily TTL cleanup
-- **Smoke preview:** `https://main.preview.sitelayer.sandolab.xyz`
+- **Smoke preview:** RETIRED 2026-06-12 — `main.preview` stack torn down (was serving a stale pre-fail-closed build); dev/demo are the durable non-prod tiers. DO uptime check retargeted to demo `/api/version`.
 - **Off-host backup target:** `/app/offsite-backups/postgres-from-prod`
 - **Off-host blueprint backup target:** `/app/offsite-backups/blueprints-from-prod`
 

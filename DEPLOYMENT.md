@@ -300,7 +300,7 @@ Unknown flags are logged and ignored. The active tier and flags are returned by 
 
 **Non-technical collaborator rules.**
 
-- They use the `main.preview.sitelayer.sandolab.xyz` URL (or equivalent) — never prod directly.
+- They use the `dev.sitelayer.sandolab.xyz` or `demo.preview.sitelayer.sandolab.xyz` URL — never prod directly (`main.preview` was retired 2026-06-12).
 - No prod creds on their machine. If they use Claude Desktop with an MCP server, it connects to `sitelayer_dev` only.
 - The ribbon is the ground truth: if they don't see "PREVIEW" or "DEV DATA" they're in the wrong place.
 

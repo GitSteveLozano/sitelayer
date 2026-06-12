@@ -96,6 +96,13 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 
 **Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Set the build value (e.g. in `ops/env/production.build.env` on the fleet, or as a `VITE_CLERK_PUBLISHABLE_KEY` build-arg env), then re-deploy from the fleet with `scripts/deploy.sh prod` so a fresh image is built.
 
+> **2026-06-12 progress (agent session):** the `demo-tier` deletion was driven
+> through the Clerk dashboard (delete modal confirmed, "never used" verified)
+> but Clerk required step-up re-verification (account password) at the final
+> step — only the operator can complete it. A dashboard tab was left open at
+> that prompt on taylor-pc-ubuntu. `demo2` rotation not started (same step-up
+> wall). All three actions below remain OPEN.
+
 ### 1a. Demo Clerk keys — OPEN actions (operator-pending, recorded 2026-06-12)
 
 The demo tier mints prospect sign-in tokens with a Clerk **test**-instance
