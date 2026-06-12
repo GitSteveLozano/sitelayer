@@ -221,20 +221,24 @@ async function recordLaborPayrollSyncEvent(
   )
 }
 
+// status='failed' is a PARKED-TERMINAL state — no drain re-claims it; the row
+// only runs again when a human RETRY_POST re-arms the same idempotency_key.
+// See the honesty note on @sitelayer/queue markOutboxRowFailedFresh (the
+// phantom 15-min next_attempt_at retry was removed 2026-06-12 because nothing
+// ever performed it).
 async function markOutboxRowFailedFresh(
   client: QueueClient,
   companyId: string,
   outboxId: string,
   errorMessage: string,
-  retryDelayMinutes = 15,
 ): Promise<void> {
   try {
     await client.query('begin')
     await client.query(
       `update mutation_outbox
-         set status = 'failed', error = $3, next_attempt_at = now() + ($4 || ' minutes')::interval
+         set status = 'failed', error = $3, updated_at = now()
        where company_id = $1 and id = $2`,
-      [companyId, outboxId, errorMessage.slice(0, 1000), String(retryDelayMinutes)],
+      [companyId, outboxId, errorMessage.slice(0, 1000)],
     )
     await client.query('commit')
   } catch (markErr) {

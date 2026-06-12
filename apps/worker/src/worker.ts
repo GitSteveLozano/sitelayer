@@ -22,6 +22,7 @@ import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
 import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
 import { createWelcomeEmailRunner } from './runners/welcome-email.js'
+import { createEstimateShareEmailRunner } from './runners/estimate-share-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
@@ -115,6 +116,7 @@ const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
 const welcomeEmailRunner = createWelcomeEmailRunner({ pool, logger })
+const estimateShareEmailRunner = createEstimateShareEmailRunner({ pool, logger })
 const debugBundleRunner = createDebugBundleRunner({ pool, logger })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
 // Observability spectrum (T3, records-nothing): isolated, env-gated forwarder of
@@ -502,6 +504,31 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
 
+  // Estimate-share delivery emails — drains send_estimate_share outbox rows
+  // (enqueued by POST /api/projects/:id/estimate/share) and emails the
+  // recipient their portal link. Gated under the seeded 'notifications' lane
+  // (it is an outbound-comms send and that is the operator kill-switch for
+  // outbound comms); split into a dedicated 'send_estimate_share' lane once a
+  // seed migration lands (precedent: 008_rental_invoice_push_lane.sql).
+  // NOTE: pausing the lane is SAFE under the inverted outbox contract — the
+  // rows stay pending for this runner; the generic drain can never eat them.
+  const estimateShareEmailSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'notifications',
+    () =>
+      estimateShareEmailRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] send_estimate_share drain failed')
+        captureWithEntityContext(error, {
+          scope: 'send_estimate_share',
+          entity_type: 'estimate_share_link',
+          company_id: companyId,
+        })
+        return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+      }),
+    { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
+  )
+
   const voiceToLogSummary = await runIfLaneActive(
     pool,
     logger,
@@ -737,6 +764,8 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     companycam_failed: companyCamSummary.failed,
     welcome_email_processed: welcomeEmailSummary.processed,
     welcome_email_failed: welcomeEmailSummary.failed,
+    send_estimate_share_processed: estimateShareEmailSummary.processed,
+    send_estimate_share_failed: estimateShareEmailSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
     capture_artifact_retention_gc_ran: captureArtifactRetentionGcSummary.ran,
@@ -770,6 +799,24 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
 
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
+    if (processed.quarantinedOutbox > 0) {
+      // Contract violation, not normal operation: an enqueued mutation_type
+      // has NO handler (neither generic-allowlisted nor dedicated). The rows
+      // are parked at status='failed' with an instructive error instead of
+      // being silently marked applied. Surface loudly.
+      const quarantineError = new Error(
+        `outbox-contract: quarantined ${processed.quarantinedOutbox} unroutable outbox row(s): ` +
+          processed.quarantinedRows.map((r) => `${r.mutation_type} (${r.entity_type}/${r.entity_id})`).join(', '),
+      )
+      logger.error(
+        { company_slug: companySlug, quarantined: processed.quarantinedRows },
+        '[worker] outbox rows quarantined — mutation_type has no registered handler',
+      )
+      captureWithEntityContext(quarantineError, {
+        scope: 'outbox_contract_quarantine',
+        company_id: companyId,
+      })
+    }
     logger.info(
       {
         company_slug: companySlug,
@@ -777,6 +824,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
         pending_sync_events: pendingSyncEvents,
         processed_outbox: processed.processedOutbox,
         processed_sync_events: processed.processedSyncEvents,
+        quarantined_outbox: processed.quarantinedOutbox,
         ...tickSummaryFields,
       },
       '[worker] tick',
@@ -796,6 +844,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     damageChargePushSummary.processed > 0 ||
     companyCamSummary.processed > 0 ||
     welcomeEmailSummary.processed > 0 ||
+    estimateShareEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
     captureArtifactRetentionGcSummary.deleted > 0 ||
     captureArtifactAnalysisSummary.analyzed > 0 ||

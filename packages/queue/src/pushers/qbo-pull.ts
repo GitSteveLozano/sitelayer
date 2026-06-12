@@ -28,9 +28,11 @@ import { markOutboxRowFailedFresh, type QueueClient, type TraceContext } from '.
 //   - on success: write an inbound sync_events breadcrumb, stamp
 //     integration_connections (last_synced_at / sync_cursor / status), mark
 //     the outbox row applied.
-//   - on throw:   markOutboxRowFailedFresh (15-min backoff) + an inbound
-//     sync_events failure row. The pull fn is allowed to throw on any
-//     failure, same contract as the estimate push fn.
+//   - on throw:   markOutboxRowFailedFresh (parks the row at the terminal
+//     'failed' status — re-armed by the backfill re-click upsert in
+//     routes/qbo.ts, NOT by any automatic retry) + an inbound sync_events
+//     failure row. The pull fn is allowed to throw on any failure, same
+//     contract as the estimate push fn.
 // ---------------------------------------------------------------------------
 
 export type QboPullInput = {

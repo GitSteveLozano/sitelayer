@@ -55,13 +55,15 @@ describeIntegration('multi-tenant worker drain + per-company QBO-live (migration
   }
 
   async function insertGenericOutbox(companyId: string, key: string): Promise<string> {
-    // A generic mutation_type (NOT in DEDICATED_HANDLER_MUTATION_TYPES) is
-    // claimed by the generic drain and marked applied — exactly the path the
-    // worker takes for cross-tenant queue draining.
+    // A mutation_type from the GENERIC_APPLY_MUTATION_TYPES allowlist
+    // ('update' = a plain ledger anchor) is claimed by the generic drain and
+    // marked applied — exactly the path the worker takes for cross-tenant
+    // queue draining. (Inverted contract 2026-06-12: a made-up type would now
+    // be QUARANTINED as 'failed' instead of silently applied — see test (d).)
     const id = randomUUID()
     await pool.query(
       `insert into mutation_outbox (id, company_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status)
-       values ($1, $2, 'project', $3, 'generic_test_mutation', '{}'::jsonb, $4, 'pending')`,
+       values ($1, $2, 'project', $3, 'update', '{}'::jsonb, $4, 'pending')`,
       [id, companyId, randomUUID(), key],
     )
     return id
@@ -145,6 +147,24 @@ describeIntegration('multi-tenant worker drain + per-company QBO-live (migration
     // Now draining company B picks up exactly B's row, never A's (already done).
     const resultB = await drainCompanyQueue(companyB)
     expect(resultB.outbox.map((r) => r.id)).toEqual([idB])
+  })
+
+  it('(d) inverted outbox contract: an unroutable mutation_type is quarantined as failed, never applied', async () => {
+    const id = randomUUID()
+    await pool.query(
+      `insert into mutation_outbox (id, company_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status)
+       values ($1, $2, 'project', $3, 'mt_unroutable_test_mutation', '{}'::jsonb, $4, 'pending')`,
+      [id, companyA, randomUUID(), `unroutable-${randomUUID()}`],
+    )
+    const result = await drainCompanyQueue(companyA)
+    expect(result.quarantinedOutbox.map((r) => r.id)).toContain(id)
+    const row = await pool.query<{ status: string; applied_at: string | null; error: string | null }>(
+      'select status, applied_at, error from mutation_outbox where id = $1',
+      [id],
+    )
+    expect(row.rows[0]?.status).toBe('failed')
+    expect(row.rows[0]?.applied_at).toBeNull()
+    expect(row.rows[0]?.error).toContain('no handler registered for mutation_type')
   })
 
   it('(c) per-company QBO-live gate: default dry-run; live only when global-on AND company-flag-on', async () => {

@@ -22,6 +22,12 @@ export function createQueueDrainRunner(deps: { pool: Pool }) {
       return {
         processedOutbox: result.processedOutboxCount,
         processedSyncEvents: result.processedSyncEventCount,
+        // Rows parked as 'failed' because no handler (generic allowlist OR
+        // dedicated runner) claims their mutation_type. Surfaced so the
+        // worker heartbeat can log these loudly — they are contract bugs,
+        // never normal operation.
+        quarantinedOutbox: result.quarantinedOutboxCount,
+        quarantinedRows: result.quarantinedOutbox,
       }
     } catch (error) {
       await client.query('rollback')

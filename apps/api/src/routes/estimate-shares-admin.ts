@@ -218,9 +218,11 @@ export async function handleEstimateShareRoutes(
 
       // Enqueue the `send_estimate_share` side-effect (the registered workflow
       // side-effect type). Idempotency key per share row so a replayed SEND
-      // upserts the same outbox row. The worker runner that delivers the share
-      // link to the recipient is downstream (a notification channel), but the
-      // outbox row is the durable hand-off and the audit trail today.
+      // upserts the same outbox row. Delivered by the dedicated worker runner
+      // apps/worker/src/runners/estimate-share-email.ts, which emails the
+      // recipient their portal link; the mutation_type is registered in
+      // DEDICATED_HANDLER_MUTATION_TYPES (@sitelayer/queue) so the generic
+      // apply-with-no-work drain can never stamp it 'applied' without sending.
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'estimate_share_link',

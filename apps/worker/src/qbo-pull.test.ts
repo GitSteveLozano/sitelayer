@@ -562,15 +562,17 @@ describe('processQboPull (envelope)', () => {
 
 // ---------------------------------------------------------------------------
 // DEDICATED_HANDLER guard: the generic drain must NOT claim a
-// pull_qbo_reference row (risk #2). processOutboxBatch excludes the dedicated
-// mutation_types via `mutation_type <> all($3)`.
+// pull_qbo_reference row (risk #2). Under the inverted contract (2026-06-12)
+// processOutboxBatch claims ONLY the generic allowlist (`mutation_type =
+// any($3)`), so a dedicated type is structurally unclaimable rather than
+// merely excluded.
 // ---------------------------------------------------------------------------
 describe('DEDICATED_HANDLER_MUTATION_TYPES guard', () => {
   it('lists pull_qbo_reference', () => {
     expect((DEDICATED_HANDLER_MUTATION_TYPES as readonly string[]).includes('pull_qbo_reference')).toBe(true)
   })
 
-  it('processOutboxBatch skips a pull_qbo_reference row', async () => {
+  it('processOutboxBatch cannot claim a pull_qbo_reference row (allowlist-only claim)', async () => {
     let claimSql = ''
     const client: QueueClient = {
       async query<T>(
@@ -580,10 +582,12 @@ describe('DEDICATED_HANDLER_MUTATION_TYPES guard', () => {
         const s = sql.toLowerCase()
         if (s.includes('update mutation_outbox') && s.includes('returning id')) {
           claimSql = sql
-          // Assert the exclusion array (3rd param) carries our mutation_type.
-          const exclusions = params[2] as string[]
-          expect(exclusions.includes('pull_qbo_reference')).toBe(true)
-          // Simulate the SQL filter excluding our row → claim nothing.
+          // Assert the bound allowlist (3rd param) does NOT carry our
+          // dedicated mutation_type — the claim is allowlist-shaped, so the
+          // row can never be claimed by the generic drain.
+          const allowlist = params[2] as string[]
+          expect(allowlist.includes('pull_qbo_reference')).toBe(false)
+          // Simulate the SQL allowlist filter not matching our row → claim nothing.
           return { rows: [] as T[], rowCount: 0, command: '', oid: 0, fields: [] }
         }
         throw new Error(`unexpected sql: ${sql.slice(0, 80)}`)
@@ -591,7 +595,8 @@ describe('DEDICATED_HANDLER_MUTATION_TYPES guard', () => {
     }
     const result = await processOutboxBatch(client, 'company-1', 25)
     expect(result).toEqual([])
-    expect(claimSql).toContain('mutation_type <> all')
+    expect(claimSql).toContain('mutation_type = any')
+    expect(claimSql).not.toContain('<> all')
   })
 })
 
