@@ -310,6 +310,130 @@ describe('sandbox hardening (expr-eval advisory mitigations)', () => {
   })
 })
 
+describe('safe engine — expr-eval semantics preserved', () => {
+  it('^ is right-associative power: 2^3^2 = 512', () => {
+    expect(evaluateFormulaUnsafe('2 ^ 3 ^ 2', ctx()).value).toBe(512)
+  })
+
+  it('unary minus binds looser than ^: -2^2 = -4, but 2^-2 = 0.25', () => {
+    expect(evaluateFormulaUnsafe('-2^2', ctx()).value).toBe(-4)
+    expect(evaluateFormulaUnsafe('2^-2', ctx()).value).toBe(0.25)
+  })
+
+  it('ternary cond ? a : b works like if()', () => {
+    const r = evaluateFormulaUnsafe('measurement_quantity > 100 ? 2 : 1', {
+      measurement_quantity: 250,
+      measurement_unit: 'sqft',
+    })
+    expect(r.ok).toBe(true)
+    expect(r.value).toBe(2)
+  })
+
+  it('string equality against measurement_unit works inside if()', () => {
+    const r = evaluateFormulaUnsafe("if(measurement_unit == 'sqft', 3, 1)", ctx())
+    expect(r.ok).toBe(true)
+    expect(r.value).toBe(3)
+  })
+
+  it('constants PI / E / true / false are available', () => {
+    expect(evaluateFormulaUnsafe('PI', ctx()).value).toBeCloseTo(Math.PI, 12)
+    expect(evaluateFormulaUnsafe('E', ctx()).value).toBeCloseTo(Math.E, 12)
+    expect(evaluateBooleanFormulaUnsafe('true', ctx()).value).toBe(true)
+    expect(evaluateBooleanFormulaUnsafe('false', ctx()).value).toBe(false)
+  })
+
+  it('roundTo / pow / trunc / sign / sqrt keep working', () => {
+    expect(evaluateFormulaUnsafe('roundTo(2.345, 2)', ctx()).value).toBe(2.35)
+    expect(evaluateFormulaUnsafe('pow(2, 10)', ctx()).value).toBe(1024)
+    expect(evaluateFormulaUnsafe('trunc(-2.9)', ctx()).value).toBe(-2)
+    expect(evaluateFormulaUnsafe('sign(-3)', ctx()).value).toBe(-1)
+    expect(evaluateFormulaUnsafe('sqrt(16)', ctx()).value).toBe(4)
+  })
+
+  it('not / or keywords work in boolean formulas', () => {
+    const dctx = ctx({ height: 6, width: 0 })
+    expect(evaluateBooleanFormulaUnsafe('not (height > 8)', dctx).value).toBe(true)
+    expect(evaluateBooleanFormulaUnsafe('height > 8 or width == 0', dctx).value).toBe(true)
+  })
+
+  it('"+" coerces with Number() like expr-eval (no string concatenation)', () => {
+    // measurement_unit is a string; expr-eval's add() did Number(a) + Number(b)
+    // → NaN here, surfaced as INVALID_RESULT. Preserved exactly.
+    const r = evaluateFormulaUnsafe('measurement_unit + 1', ctx())
+    expect(r.ok).toBe(false)
+    expect(r.error?.code).toBe('INVALID_RESULT')
+  })
+})
+
+describe('safe engine — whitelist enforcement', () => {
+  it('unknown functions throw at parse time (SYNTAX_ERROR, never executed)', () => {
+    const r = evaluateFormulaUnsafe('mystery_fn(2)', ctx())
+    expect(r.ok).toBe(false)
+    expect(r.error?.code).toBe('SYNTAX_ERROR')
+    expect(r.error?.message).toContain('unknown function')
+    expect(validateFormula('mystery_fn(2)').valid).toBe(false)
+  })
+
+  it('a context-supplied name is still not callable (GHSA-jc85-fpwf-qm7x shape)', () => {
+    // Even if an attacker controls formula_vars AND the formula text, a call
+    // to a non-whitelisted name is a parse error — the value never executes.
+    const r = evaluateFormulaUnsafe('evil(1)', ctx({ evil: 7 }))
+    expect(r.ok).toBe(false)
+    expect(r.error?.code).toBe('SYNTAX_ERROR')
+  })
+
+  it('removed expr-eval surface is a syntax error: || concat, factorial, in, arrays, random', () => {
+    for (const formula of ['1 || 2', '5!', '1 in x', '[1, 2]', 'random()', 'fac(3)', 'map(f, x)']) {
+      const r = evaluateFormulaUnsafe(formula, ctx({ x: 1 }))
+      expect(r.ok, formula).toBe(false)
+      expect(r.error?.code, formula).toBe('SYNTAX_ERROR')
+    }
+  })
+
+  it('function arity is enforced', () => {
+    expect(evaluateFormulaUnsafe('if(1, 2)', ctx()).error?.code).toBe('SYNTAX_ERROR')
+    expect(evaluateFormulaUnsafe('abs(1, 2)', ctx()).error?.code).toBe('SYNTAX_ERROR')
+  })
+})
+
+describe('safe engine — prototype-pollution hardening (GHSA-8gw3-rxh4-v6jx PoCs are dead)', () => {
+  it('malicious payloads are inert and never pollute Object.prototype', () => {
+    const payloads = [
+      '__proto__.polluted = 1',
+      "(0)['__proto__']['polluted'] = 1",
+      'constructor.constructor("return process")()',
+      'x.__proto__.polluted = 1',
+      'x.constructor.prototype.polluted = 1',
+      '({}).__proto__.polluted = 1',
+    ]
+    for (const payload of payloads) {
+      const r = evaluateFormulaUnsafe(payload, ctx({ x: 1 }))
+      expect(r.ok, payload).toBe(false)
+      expect(r.error?.code, payload).toBe('SYNTAX_ERROR')
+    }
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+    expect(Object.prototype).not.toHaveProperty('polluted')
+  })
+
+  it('__proto__ / constructor / toString are inert identifiers (not resolved via prototype chain)', () => {
+    for (const name of ['__proto__', 'constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+      const r = evaluateFormulaUnsafe(`${name} + 1`, ctx())
+      expect(r.ok, name).toBe(false)
+      expect(r.error?.code, name).toBe('UNDEFINED_VARIABLE')
+    }
+  })
+
+  it('an own __proto__ key from untrusted JSON is plain data, and pollutes nothing', () => {
+    const hostile = JSON.parse(
+      '{"measurement_quantity": 2, "measurement_unit": "sqft", "__proto__": 5}',
+    ) as FormulaContext
+    const r = evaluateFormulaUnsafe('measurement_quantity * 2', hostile)
+    expect(r.ok).toBe(true)
+    expect(r.value).toBe(4)
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
+})
+
 describe('parseFormula / evaluateFormula (cached handle path)', () => {
   it('parses once and evaluates many times', () => {
     const parsed = parseFormula('measurement_quantity * factor')

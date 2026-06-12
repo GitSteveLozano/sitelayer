@@ -13,25 +13,30 @@ measurement_quantity * 1.1 / coverage_rate
 
 with `{ coverage_rate: 32 }` and a 500 sqft measurement → `17.1875`.
 
-## No `eval` / `Function`
+## No `eval` / `Function` — zero dependencies
 
-This package never calls `eval()` or `new Function()`. It wraps
-[`expr-eval`](https://www.npmjs.com/package/expr-eval), which has its own AST
-parser + tree-walking interpreter. We never call `.toJSFunction()`.
+This package never calls `eval()` or `new Function()`. The engine is an
+in-package tokenizer + recursive-descent parser + tree-walking interpreter
+(`src/safe-parser.ts`) with **no runtime dependencies**.
 
-### Hardening
+It previously wrapped [`expr-eval`](https://www.npmjs.com/package/expr-eval),
+which carries two HIGH advisories with **no upstream fix** (prototype
+pollution `GHSA-8gw3-rxh4-v6jx`, function injection `GHSA-jc85-fpwf-qm7x`).
+expr-eval was removed on 2026-06-12; the replacement engine keeps the exact
+same evaluation semantics for the supported syntax (the operator
+implementations are line-for-line ports) and makes both exploit classes
+structurally impossible:
 
-`expr-eval@2.0.2` ships with live advisories (prototype pollution
-`GHSA-8gw3-rxh4-v6jx`, function injection `GHSA-jc85-fpwf-qm7x`) and **no
-upstream fix**. Both exploit paths are closed here:
-
-- The `Parser` is constructed with `allowMemberAccess: false`, so
-  `x.constructor`, `(0).__proto__`, etc. fail at parse time (closes the
-  prototype-pollution / constructor-walk path).
-- `operators.assignment` and `operators.fndef` are disabled — formulas are
-  pure, read-only expressions; they cannot define or mutate state.
+- Member access is not even a token — `x.constructor`, `(0).__proto__`, etc.
+  fail at parse time (the prototype-pollution / constructor-walk path).
+- No assignment or function definition — `x = …` / `f(x) = …` are parse
+  errors; formulas are pure, read-only expressions.
+- Whitelist-only operator/function tables (built on `Object.create(null)`);
+  an unknown function name is a parse error.
+- Variable resolution is own-property-only against a null-prototype scope —
+  `__proto__` / `constructor` / `toString` are inert identifiers.
 - The evaluation scope is typed and runtime-checked to `number | string` only,
-  so no function value can reach `evaluate()` (closes the function-injection
+  so no function value can reach `evaluate()` (kills the function-injection
   path even for untrusted JSON `formula_vars`).
 
 ## API
@@ -73,12 +78,18 @@ non-throwing functions above unless you want exceptions).
 
 ## Supported syntax
 
-- Operators: `+ - * / % ^`, comparisons (`< <= > >= == !=`), logical
-  (`&& || !`).
-- Functions: `if(cond, a, b)`, `abs ceil floor round sqrt min max` and the
-  other expr-eval math builtins.
-- Numbers use a decimal point (`1.5`); comma grouping (`1,000`) is **not**
-  supported and is a syntax error.
+- Operators: `+ - * / % ^` (`^` = power, right-associative), comparisons
+  (`< <= > >= == !=`), logical keywords (`and or not`), ternary
+  (`cond ? a : b`).
+- Functions: `if(cond, a, b)`,
+  `abs ceil floor round trunc sign sqrt cbrt exp min max pow hypot roundTo`,
+  logs (`log ln lg log10 log2 expm1 log1p`), trig
+  (`sin cos tan asin acos atan sinh cosh tanh asinh acosh atanh atan2`),
+  `length(str)`. Anything else — including expr-eval's `random`, factorial,
+  and the function-taking array helpers — is a **syntax error**.
+- Constants: `PI`, `E`, `true`, `false`.
+- Numbers use a decimal point (`1.5`, `1e9`); comma grouping (`1,000`) is
+  **not** supported and is a syntax error.
 - Negative results are allowed — the caller applies the deduction sign.
 
 ## Test
