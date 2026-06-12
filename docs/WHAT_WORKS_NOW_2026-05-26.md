@@ -1,5 +1,10 @@
 # SiteLayer — What Works Right Now
 
+> **STALE (2026-06-12):** This inventory is a 2026-05-26 snapshot; many status
+> tags below no longer match the code (capture pipelines, takeoff canvas,
+> deploy model, agent feed, …). Use [`CRITICAL_PATH.md`](../CRITICAL_PATH.md)
+> and the 2026-06-12 audit (debt campaign) as the live source of truth.
+
 **As of:** 2026-05-26 · **Live URL:** https://sitelayer.sandolab.xyz (verified up, sign-in/sign-up render, DB healthy)
 
 This is a code-grounded inventory of what the platform actually does today — not the roadmap. It's meant as a checklist: read each line and mark whether it matches what you see. Where the code and reality might differ, that's exactly what we want flagged.

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
+import type { Pool } from 'pg'
+import type pino from 'pino'
 import type { Identity } from '../auth.js'
+import { attachMutationTx } from '../mutation-tx.js'
 import { handleAdminWorkRequestRoutes } from './admin-work-requests.js'
 
 type Response = { status: number; body: unknown }
@@ -50,6 +53,7 @@ function boardRow(overrides: Partial<Record<string, unknown>> = {}) {
     company_slug: 'co-a',
     company_name: 'Company A',
     support_packet_id: '00000000-0000-4000-8000-000000000301',
+    domain: 'app_issue',
     title: 'Capture issue',
     summary: 'Something broke',
     status: 'new',
@@ -160,6 +164,45 @@ describe('handleAdminWorkRequestRoutes', () => {
     expect(ok.responses[0]?.status).toBe(200)
     expect(pool.queries.at(-1)?.params).toEqual(['co-a', 'new', 'triage', 'operator', 200, 0])
   })
+
+  it('selects and returns the work-item domain on every board item (cross-domain read surface)', async () => {
+    const pool = new FakePool()
+    pool.boardRows = [
+      boardRow({ domain: 'app_issue', title: 'Software bug' }),
+      boardRow({
+        id: '00000000-0000-4000-8000-000000000202',
+        domain: 'field_request',
+        title: 'Field problem',
+        company_slug: 'co-b',
+        company_name: 'Company B',
+      }),
+    ]
+    const { deps, responses } = makeDeps(pool)
+
+    await handleAdminWorkRequestRoutes(buildReq(), buildUrl(), deps)
+
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as { work_items: Array<{ domain: string; title: string }> }
+    expect(body.work_items.map((item) => item.domain)).toEqual(['app_issue', 'field_request'])
+    // The select list must actually carry the column.
+    expect(pool.queries.at(-1)?.sql).toContain('w.domain')
+  })
+
+  it('accepts an optional domain filter and rejects unknown domains', async () => {
+    const pool = new FakePool()
+    const bad = makeDeps(pool)
+    await handleAdminWorkRequestRoutes(buildReq(), buildUrl('/api/admin/work-requests/board?domain=bogus'), bad.deps)
+    expect(bad.responses[0]).toMatchObject({
+      status: 400,
+      body: { error: 'domain must be one of app_issue, field_request' },
+    })
+
+    const ok = makeDeps(pool)
+    await handleAdminWorkRequestRoutes(buildReq(), buildUrl('/api/admin/work-requests/board?domain=app_issue'), ok.deps)
+    expect(ok.responses[0]?.status).toBe(200)
+    expect(pool.queries.at(-1)?.sql).toContain('w.domain = $1')
+    expect(pool.queries.at(-1)?.params).toEqual(['app_issue', 200, 0])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -180,12 +223,55 @@ class FakeDispatchPool {
   supportPackets: JsonRecord[] = []
   artifacts: JsonRecord[] = []
   agentFeedConcerns: JsonRecord[] = []
+  handoffEvents: JsonRecord[] = []
+
+  attach() {
+    attachMutationTx({
+      pool: this as unknown as Pool,
+      logger: { warn: () => undefined } as unknown as pino.Logger,
+    })
+  }
+
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.query(sql, params),
+      release: () => undefined,
+    }
+  }
 
   async query(sql: string, params: unknown[] = []) {
     this.queries.push({ sql, params })
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (
+      normalized.startsWith('begin') ||
+      normalized.startsWith('commit') ||
+      normalized.startsWith('rollback') ||
+      normalized.startsWith('select set_config')
+    ) {
+      return { rows: [], rowCount: 0 }
+    }
     if (normalized.includes('from platform_admins')) {
       return { rows: params[0] === 'admin-1' ? [{ '?column?': 1 }] : [], rowCount: params[0] === 'admin-1' ? 1 : 0 }
+    }
+    if (normalized.startsWith('insert into context_handoff_events')) {
+      const idempotencyKey = (params[9] as string | null) ?? null
+      const existing = idempotencyKey
+        ? this.handoffEvents.find((e) => e.company_id === params[0] && e.idempotency_key === idempotencyKey)
+        : null
+      if (existing) return { rows: [], rowCount: 0 }
+      const row = {
+        id: `00000000-0000-4000-a000-${String(this.handoffEvents.length + 1).padStart(12, '0')}`,
+        company_id: params[0] as string,
+        work_item_id: params[1] as string,
+        event_type: params[2] as string,
+        actor_kind: params[3] as string,
+        actor_user_id: (params[4] as string | null) ?? null,
+        payload: JSON.parse(params[7] as string) as JsonRecord,
+        metadata: JSON.parse(params[8] as string) as JsonRecord,
+        idempotency_key: idempotencyKey,
+      }
+      this.handoffEvents.push(row)
+      return { rows: [row], rowCount: 1 }
     }
     if (normalized.includes('from context_work_items w') && normalized.includes('w.id = $1::uuid')) {
       const row = this.workItems.find((w) => w.id === params[0])
@@ -284,6 +370,7 @@ function makeDispatchDeps(
   body: Record<string, unknown>,
   identity: Identity = { userId: 'admin-1', source: 'clerk' },
 ) {
+  pool.attach()
   const responses: Response[] = []
   return {
     responses,
@@ -353,6 +440,20 @@ describe('POST /api/admin/work-requests/:id/dispatch-to-agent', () => {
     // The SAME prompt text the support-packet agent_prompt endpoint serves.
     expect(String(inputs.agent_prompt)).toContain(`Investigate Sitelayer support packet ${SUPPORT_PACKET_ID}`)
     expect(inputs.artifacts).toEqual([])
+    // Dispatch is no longer invisible on the work item: the timeline shows it.
+    expect(pool.handoffEvents).toHaveLength(1)
+    expect(pool.handoffEvents[0]).toMatchObject({
+      work_item_id: WORK_ITEM_ID,
+      event_type: 'agent.dispatch_requested',
+      actor_kind: 'user',
+      actor_user_id: 'admin-1',
+      idempotency_key: `agent_feed:wi:${WORK_ITEM_ID}:steve:dispatch_requested`,
+    })
+    expect(pool.handoffEvents[0]?.payload).toMatchObject({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      dispatch_surface: 'agent_feed',
+    })
   })
 
   it('is idempotent on concern_ref — a repeat dispatch returns the existing row (200)', async () => {
@@ -371,6 +472,8 @@ describe('POST /api/admin/work-requests/:id/dispatch-to-agent', () => {
     expect(body.created).toBe(false)
     expect((body.concern as JsonRecord).concern_ref).toBe(`wi:${WORK_ITEM_ID}:steve`)
     expect(pool.agentFeedConcerns).toHaveLength(1)
+    // The repeat dispatch appends NO second timeline event either.
+    expect(pool.handoffEvents).toHaveLength(1)
   })
 
   it('maps the capture artifacts into the concern inputs when the work item has a capture session', async () => {

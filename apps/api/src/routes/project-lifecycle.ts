@@ -4,9 +4,8 @@ import {
   nextProjectLifecycleEvents,
   parseProjectLifecycleEventRequest,
   PROJECT_LIFECYCLE_WORKFLOW_NAME,
-  PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION,
+  projectLifecycleWorkflow,
   projectStatusToLifecycleState,
-  transitionProjectLifecycleWorkflow,
   type ProjectLifecycleHumanEventType,
   type ProjectLifecycleWorkflowEvent,
   type ProjectLifecycleWorkflowSnapshot,
@@ -14,7 +13,8 @@ import {
 } from '@sitelayer/workflows'
 import type { WorkflowNextEvent } from '@sitelayer/workflows'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
@@ -196,34 +196,32 @@ export async function handleProjectLifecycleRoutes(
     const { event: eventType, state_version: stateVersion, reason } = parsed.value
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<ProjectLifecycleRow>(
-          `select ${PROJECT_LIFECYCLE_COLUMNS}
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<ProjectLifecycleRow, ProjectLifecycleWorkflowSnapshot, ProjectLifecycleWorkflowEvent>(
+          client,
+          {
+            definition: projectLifecycleWorkflow,
+            companyId: ctx.company.id,
+            entityType: 'project',
+            entityId: id,
+            expectedStateVersion: stateVersion,
+            actorUserId: ctx.currentUserId,
+            loadSnapshot: async (c) => {
+              const lockedResult = await c.query<ProjectLifecycleRow>(
+                `select ${PROJECT_LIFECYCLE_COLUMNS}
            from projects
            where company_id = $1 and id = $2 and deleted_at is null
            for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.lifecycle_state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, project: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType as ProjectLifecycleHumanEventType, ctx.currentUserId, reason)
-        let nextSnapshot: ProjectLifecycleWorkflowSnapshot
-        try {
-          nextSnapshot = transitionProjectLifecycleWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            project: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<ProjectLifecycleRow>(
-          `update projects
+                [ctx.company.id, id],
+              )
+              const current = lockedResult.rows[0]
+              if (!current) return null
+              return { row: current, snapshot: rowToSnapshot(current) }
+            },
+            buildEvent: () => buildReducerEvent(eventType as ProjectLifecycleHumanEventType, ctx.currentUserId, reason),
+            persist: async (c, nextSnapshot) => {
+              const updateResult = await c.query<ProjectLifecycleRow>(
+                `update projects
              set lifecycle_state = $3,
                  lifecycle_state_version = $4,
                  lifecycle_sent_at = $5,
@@ -236,75 +234,69 @@ export async function handleProjectLifecycleRoutes(
                  updated_at = now()
            where company_id = $1 and id = $2
            returning ${PROJECT_LIFECYCLE_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.sent_at ?? null,
-            nextSnapshot.accepted_at ?? null,
-            nextSnapshot.declined_at ?? null,
-            nextSnapshot.decline_reason ?? null,
-            nextSnapshot.started_at ?? null,
-            nextSnapshot.completed_at ?? null,
-            nextSnapshot.archived_at ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'project lifecycle update returned no row')
-
-        await recordWorkflowEvent(client, {
-          companyId: ctx.company.id,
-          workflowName: PROJECT_LIFECYCLE_WORKFLOW_NAME,
-          schemaVersion: PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION,
-          entityType: 'project',
-          entityId: updated.id,
-          stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
-          actorUserId: ctx.currentUserId,
-        })
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'project',
-          entityId: updated.id,
-          action: `lifecycle:${eventType.toLowerCase()}`,
-          row: updated,
-          // Per-state_version key so REOPEN → COMPLETE → REOPEN cycles
-          // produce distinct outbox rows.
-          idempotencyKey: `project_lifecycle:event:${updated.id}:${updated.lifecycle_state_version}`,
-        })
-
-        // ACCEPT (sent → accepted) and START_WORK (accepted → in_progress)
-        // enqueue notify_foreman_assignment so the worker can resolve a
-        // foreman from project_assignments and insert a notifications
-        // row. Idempotency key is per-state_version so a replay (same
-        // request retried) is a no-op, but a later REOPEN → ACCEPT
-        // cycle generates a distinct row.
-        if (eventType === 'ACCEPT' || eventType === 'START_WORK') {
-          const transition: 'accepted' | 'started' = eventType === 'ACCEPT' ? 'accepted' : 'started'
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'project',
-            entityId: updated.id,
-            action: `notify_foreman_${transition}`,
-            mutationType: 'notify_foreman_assignment',
-            row: updated,
-            outboxPayload: {
-              project_id: updated.id,
-              project_name: updated.name,
-              customer_name: updated.customer_name,
-              transition,
-              actor_user_id: ctx.currentUserId,
-              occurred_at: reducerEvent.occurred_at,
+                [
+                  ctx.company.id,
+                  id,
+                  nextSnapshot.state,
+                  nextSnapshot.state_version,
+                  nextSnapshot.sent_at ?? null,
+                  nextSnapshot.accepted_at ?? null,
+                  nextSnapshot.declined_at ?? null,
+                  nextSnapshot.decline_reason ?? null,
+                  nextSnapshot.started_at ?? null,
+                  nextSnapshot.completed_at ?? null,
+                  nextSnapshot.archived_at ?? null,
+                ],
+              )
+              const updated = updateResult.rows[0]
+              if (!updated) throw new HttpError(500, 'project lifecycle update returned no row')
+              return updated
             },
-            idempotencyKey: `project_lifecycle:notify_foreman:${updated.id}:${updated.lifecycle_state_version}`,
-          })
-        }
+            // The primitive appends the workflow_event_log row (keyed on
+            // the BEFORE state_version) between persist and these side
+            // effects — same in-tx order as the hand-rolled pipeline.
+            sideEffects: async (c, _next, updated, reducerEvent) => {
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'project',
+                entityId: updated.id,
+                action: `lifecycle:${eventType.toLowerCase()}`,
+                row: updated,
+                // Per-state_version key so REOPEN → COMPLETE → REOPEN cycles
+                // produce distinct outbox rows.
+                idempotencyKey: `project_lifecycle:event:${updated.id}:${updated.lifecycle_state_version}`,
+              })
 
-        return { kind: 'ok' as const, project: updated, eventType }
-      })
+              // ACCEPT (sent → accepted) and START_WORK (accepted → in_progress)
+              // enqueue notify_foreman_assignment so the worker can resolve a
+              // foreman from project_assignments and insert a notifications
+              // row. Idempotency key is per-state_version so a replay (same
+              // request retried) is a no-op, but a later REOPEN → ACCEPT
+              // cycle generates a distinct row.
+              if (eventType === 'ACCEPT' || eventType === 'START_WORK') {
+                const transition: 'accepted' | 'started' = eventType === 'ACCEPT' ? 'accepted' : 'started'
+                await recordMutationLedger(c, {
+                  companyId: ctx.company.id,
+                  entityType: 'project',
+                  entityId: updated.id,
+                  action: `notify_foreman_${transition}`,
+                  mutationType: 'notify_foreman_assignment',
+                  row: updated,
+                  outboxPayload: {
+                    project_id: updated.id,
+                    project_name: updated.name,
+                    customer_name: updated.customer_name,
+                    transition,
+                    actor_user_id: ctx.currentUserId,
+                    occurred_at: reducerEvent.occurred_at,
+                  },
+                  idempotencyKey: `project_lifecycle:notify_foreman:${updated.id}:${updated.lifecycle_state_version}`,
+                })
+              }
+            },
+          },
+        ),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'project not found' })
@@ -313,14 +305,14 @@ export async function handleProjectLifecycleRoutes(
       if (result.kind === 'version_conflict') {
         ctx.sendJson(409, {
           error: 'state_version mismatch — reload and retry',
-          snapshot: snapshotResponse(result.project),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
       if (result.kind === 'illegal_transition') {
         ctx.sendJson(409, {
           error: result.message,
-          snapshot: snapshotResponse(result.project),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
@@ -329,14 +321,14 @@ export async function handleProjectLifecycleRoutes(
         companyId: ctx.company.id,
         actorUserId: ctx.currentUserId,
         entityType: 'project',
-        entityId: result.project.id,
-        action: `lifecycle:${result.eventType.toLowerCase()}`,
-        after: result.project,
+        entityId: result.row.id,
+        action: `lifecycle:${eventType.toLowerCase()}`,
+        after: result.row,
       })
-      observeAudit('project', `lifecycle:${result.eventType.toLowerCase()}`)
-      const outcome = workflowEventOutcome(result.eventType)
+      observeAudit('project', `lifecycle:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(PROJECT_LIFECYCLE_WORKFLOW_NAME, outcome)
-      ctx.sendJson(200, snapshotResponse(result.project))
+      ctx.sendJson(200, snapshotResponse(result.row))
       return true
     } catch (err) {
       ctx.sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })

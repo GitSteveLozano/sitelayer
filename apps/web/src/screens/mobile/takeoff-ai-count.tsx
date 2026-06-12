@@ -48,6 +48,7 @@ import {
   useTakeoffDrafts,
   type CapturedQuantity,
 } from '../../lib/api/takeoff-drafts.js'
+import { reviewFloorLabel, statusForConfidence, type ReviewFloorStatus } from '../../machines/takeoff-confidence.js'
 
 type Sensitivity = 'STRICT' | 'NORMAL' | 'LOOSE'
 
@@ -572,25 +573,12 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
 // count-marker canvas + keyboard contract (desktop). Shared decision/keptIds
 // logic over the captured quantities; both layouts promote the kept ones.
 // ---------------------------------------------------------------------------
-type CountStatus = 'ok' | 'review' | 'flag'
+// Review-floor thresholds come from the SHARED `machines/takeoff-confidence`
+// module (wave-3 convergence) — it mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR
+// (0.7) in @sitelayer/capture-schema, the API's review_required gate.
+type CountStatus = ReviewFloorStatus
 
-// Mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR (0.7) in @sitelayer/capture-schema:
-// the API flags any captured quantity below this as review_required. Keep in sync.
-const REVIEW_CONFIDENCE_FLOOR = 0.7
-
-/** Rows at/above the API review floor are safe to keep by default; below it the
- * estimator must review before accepting. <0.5 is flagged as low-confidence. */
-function statusForConfidence(confidence: number): CountStatus {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'ok'
-  if (confidence >= 0.5) return 'review'
-  return 'flag'
-}
-
-function confidenceLabel(confidence: number): 'HIGH' | 'MED' | 'LOW' {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'HIGH'
-  if (confidence >= 0.5) return 'MED'
-  return 'LOW'
-}
+const confidenceLabel = reviewFloorLabel
 
 function formatQty(value: number, unit: string): string {
   const rounded = Number.isInteger(value) ? value : Math.round(value * 100) / 100
@@ -667,8 +655,11 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
   const resultQuery = useTakeoffDraftResult(draftId)
   const promote = usePromoteCapturedQuantities(projectId, draftId)
 
+  // Count captures are always synchronous stubs today (status 'ready'), but
+  // takeoff_result is typed nullable since the async-capture split — stay
+  // null-safe so a processing/failed row can never crash this screen.
   const quantities = useMemo<CapturedQuantity[]>(
-    () => resultQuery.data?.takeoff_result.quantities ?? [],
+    () => resultQuery.data?.takeoff_result?.quantities ?? [],
     [resultQuery.data],
   )
 

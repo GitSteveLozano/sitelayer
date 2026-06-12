@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
@@ -38,6 +38,10 @@ class FakePool {
   /** (company_id|id) -> { name, deleted } backing the projects JOIN in the
    *  company-wide review feed (GET /api/takeoff-drafts). */
   projects = new Map<string, { name: string; deleted: boolean }>()
+
+  /** Latest-blueprint lookup the live gemini capture path resolves its
+   *  storage input from. */
+  blueprintDocs: Array<{ company_id: string; project_id: string; storage_path: string; file_name: string }> = []
 
   setProject(companyId: string, projectId: string, name: string, deleted = false) {
     this.projects.set(`${companyId}|${projectId}`, { name, deleted })
@@ -134,6 +138,111 @@ class FakePool {
         })
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
       return { rows, rowCount: rows.length }
+    }
+
+    // ---- projects: tenancy existence check (capture POST) ----
+    if (/^select id from projects/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const proj = this.projects.get(`${companyId}|${projectId}`)
+      const rows = proj && !proj.deleted ? [{ id: projectId }] : []
+      return { rows, rowCount: rows.length }
+    }
+
+    // ---- blueprint_documents: latest-blueprint lookup (live gemini enqueue) ----
+    if (/^select storage_path, file_name from blueprint_documents/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const rows = this.blueprintDocs.filter((b) => b.company_id === companyId && b.project_id === projectId)
+      const latest = rows[rows.length - 1]
+      return {
+        rows: latest ? [{ storage_path: latest.storage_path, file_name: latest.file_name }] : [],
+        rowCount: latest ? 1 : 0,
+      }
+    }
+
+    // ---- takeoff_drafts: capture insert (sync 'ready' + async 'processing') ----
+    if (/^insert into takeoff_drafts \([\s\S]*source, takeoff_result_json/i.test(sql)) {
+      const isLive = /'processing'/.test(sql)
+      const base = {
+        id: `draft-${this.drafts.length + 1}`,
+        type: 'measurement',
+        status: 'active',
+        takeoff_result_blob_uri: null,
+        capture_error: null,
+        capture_token_usage: null,
+        version: 1,
+        deleted_at: null,
+        created_at: '2026-06-12T00:00:00.000Z',
+        updated_at: '2026-06-12T00:00:00.000Z',
+      }
+      let row: Row
+      if (isLive) {
+        const [companyId, projectId, name, draftKind, kind] = params as [string, string, string, string, string]
+        row = {
+          ...base,
+          company_id: companyId,
+          project_id: projectId,
+          name,
+          kind: draftKind,
+          source: kind,
+          takeoff_result_json: null,
+          review_required: false,
+          pipeline_version: null,
+          count_scope_json: null,
+          capture_status: 'processing',
+          capture_provenance: null,
+        }
+      } else {
+        const [
+          companyId,
+          projectId,
+          name,
+          draftKind,
+          kind,
+          resultJson,
+          reviewRequired,
+          pipelineVersion,
+          countScope,
+          provenance,
+        ] = params as [string, string, string, string, string, string, boolean, string, string | null, string]
+        row = {
+          ...base,
+          company_id: companyId,
+          project_id: projectId,
+          name,
+          kind: draftKind,
+          source: kind,
+          takeoff_result_json: JSON.parse(resultJson),
+          review_required: reviewRequired,
+          pipeline_version: pipelineVersion,
+          count_scope_json: countScope ? JSON.parse(countScope) : null,
+          capture_status: 'ready',
+          capture_provenance: provenance,
+        }
+      }
+      this.drafts.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+
+    // ---- takeoff_drafts: result poll (GET /api/takeoff-drafts/:id/result) ----
+    if (/^select takeoff_result_json, source, review_required, pipeline_version,\s*capture_status/i.test(sql)) {
+      const [companyId, draftId] = params as [string, string]
+      const d = this.drafts.find((r) => r.company_id === companyId && r.id === draftId && r.deleted_at === null)
+      if (!d) return { rows: [], rowCount: 0 }
+      return {
+        rows: [
+          {
+            takeoff_result_json: d.takeoff_result_json ?? null,
+            source: d.source,
+            review_required: d.review_required ?? false,
+            pipeline_version: d.pipeline_version ?? null,
+            capture_status: d.capture_status ?? 'ready',
+            capture_provenance: d.capture_provenance ?? null,
+            capture_error: d.capture_error ?? null,
+            capture_token_usage: d.capture_token_usage ?? null,
+          },
+        ],
+        rowCount: 1,
+      }
     }
 
     // ---- takeoff_drafts: ownership + stored-result lookup ----
@@ -264,6 +373,19 @@ class FakePool {
       return { rows: [], rowCount: 1 }
     }
     if (/^\s*insert into mutation_outbox/i.test(sql)) {
+      // Emulate the real ON CONFLICT (company_id, idempotency_key) upsert so
+      // the capture tests can assert the stable per-draft idempotency key
+      // collapses replayed enqueues onto one row. recordMutationOutbox binds
+      // company_id at $1 and idempotency_key at $8.
+      const key = `${String(params[0])}|${String(params[7])}`
+      const existing = this.outbox.find((r) => {
+        const p = r.params as unknown[]
+        return `${String(p[0])}|${String(p[7])}` === key
+      })
+      if (existing) {
+        existing.params = params
+        return { rows: [], rowCount: 1 }
+      }
       this.outbox.push({ params })
       return { rows: [], rowCount: 1 }
     }
@@ -871,5 +993,287 @@ describe('handleTakeoffDraftRoutes — GET /api/takeoff-drafts (company feed)', 
     await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
     const body = responses[0]?.body as { drafts: FeedRow[] }
     expect(body.drafts.map((d) => d.id)).toEqual(['mine'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/projects/:id/takeoff-drafts/capture — async split (2026-06-12).
+//
+// LIVE blueprint_vision captures return a 202 'processing' draft and enqueue
+// exactly ONE dedicated takeoff_capture_pipeline outbox row (stable per-draft
+// idempotency key); the deterministic dry-run stub stays synchronous (201)
+// with honest 'stub-dry-run' provenance. The provider call itself is covered
+// by packages/pipe-blueprint/src/live-capture.test.ts and the worker runner
+// tests (apps/worker/src/runners/takeoff-capture.test.ts).
+// ---------------------------------------------------------------------------
+const CAPTURE_PATH = `/api/projects/${PROJECT_ID}/takeoff-drafts/capture`
+
+type CaptureOutboxRow = { mutationType: string; idempotencyKey: string; payload: Record<string, unknown> }
+
+function captureOutboxRows(pool: FakePool): CaptureOutboxRow[] {
+  // recordMutationOutbox binds: $1 company, $4 entity_type, $5 entity_id,
+  // $6 mutation_type, $7 payload (json string), $8 idempotency_key.
+  return pool.outbox
+    .map((r) => r.params as unknown[])
+    .map((p) => ({
+      mutationType: String(p[5]),
+      idempotencyKey: String(p[7]),
+      payload: JSON.parse(String(p[6])) as Record<string, unknown>,
+    }))
+    .filter((r) => r.mutationType === 'takeoff_capture_pipeline')
+}
+
+const captureReq = { method: 'POST', headers: {} } as never
+
+describe('handleTakeoffDraftRoutes — POST capture (async split)', () => {
+  afterEach(() => {
+    delete process.env.BLUEPRINT_VISION_MODE
+    delete process.env.GEMINI_API_KEY
+  })
+
+  it('dry-run stays synchronous: 201 ready draft, stub-dry-run provenance, NO pipeline enqueue', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    const { ctx, responses } = makeCtx(pool, { kind: 'blueprint_vision', payload: { dryRun: true } })
+
+    const handled = await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    const body = responses[0]?.body as {
+      draft: Record<string, unknown>
+      result_summary: Record<string, unknown>
+    }
+    expect(body.draft.capture_status).toBe('ready')
+    expect(body.draft.capture_provenance).toBe('stub-dry-run')
+    expect(body.result_summary.status).toBe('ready')
+    expect(body.result_summary.provenance).toBe('stub-dry-run')
+    expect(body.result_summary.mode).toBe('dry-run')
+    expect(body.result_summary.quantities_count).toBeGreaterThan(0)
+    // No dedicated pipeline row — only the generic 'create' ledger anchor.
+    expect(captureOutboxRows(pool)).toHaveLength(0)
+  })
+
+  it('no-provider env behaves like dry-run even without payload.dryRun (no keys ⇒ no live call)', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    const { ctx, responses } = makeCtx(pool, { kind: 'blueprint_vision', payload: {} })
+
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { draft: Record<string, unknown> }
+    expect(body.draft.capture_status).toBe('ready')
+    expect(body.draft.capture_provenance).toBe('stub-dry-run')
+    expect(captureOutboxRows(pool)).toHaveLength(0)
+  })
+
+  it('LIVE gemini capture: 202 processing draft + exactly one enqueue with a stable per-draft key', async () => {
+    process.env.BLUEPRINT_VISION_MODE = 'gemini'
+    process.env.GEMINI_API_KEY = 'test-key'
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    pool.blueprintDocs.push({
+      company_id: COMPANY_ID,
+      project_id: PROJECT_ID,
+      storage_path: `${COMPANY_ID}/bp-1/plan.pdf`,
+      file_name: 'plan.pdf',
+    })
+    const { ctx, responses } = makeCtx(pool, { kind: 'blueprint_vision', payload: {} })
+
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(202)
+    const body = responses[0]?.body as {
+      draft: Record<string, unknown>
+      result_summary: Record<string, unknown>
+    }
+    expect(body.draft.capture_status).toBe('processing')
+    expect(body.draft.takeoff_result_json).toBeNull()
+    expect(body.draft.capture_provenance).toBeNull()
+    expect(body.result_summary.status).toBe('processing')
+    expect(body.result_summary.provider).toBe('gemini')
+
+    const rows = captureOutboxRows(pool)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.idempotencyKey).toBe(`takeoff_capture:run:${body.draft.id as string}`)
+    expect(rows[0]!.payload).toMatchObject({
+      draft_id: body.draft.id,
+      project_id: PROJECT_ID,
+      kind: 'blueprint_vision',
+      provider: 'gemini',
+      storage_path: `${COMPANY_ID}/bp-1/plan.pdf`,
+    })
+  })
+
+  it('re-POST is a fresh draft with its own single enqueue; same-key replays collapse onto one row', async () => {
+    process.env.BLUEPRINT_VISION_MODE = 'gemini'
+    process.env.GEMINI_API_KEY = 'test-key'
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    pool.blueprintDocs.push({
+      company_id: COMPANY_ID,
+      project_id: PROJECT_ID,
+      storage_path: `${COMPANY_ID}/bp-1/plan.pdf`,
+      file_name: 'plan.pdf',
+    })
+
+    const first = makeCtx(pool, { kind: 'blueprint_vision', payload: {} })
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), first.ctx)
+    const second = makeCtx(pool, { kind: 'blueprint_vision', payload: {} })
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), second.ctx)
+
+    const rows = captureOutboxRows(pool)
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows.map((r) => r.idempotencyKey)).size).toBe(2)
+    // Each draft has exactly one pipeline row.
+    for (const draft of pool.drafts) {
+      expect(rows.filter((r) => r.payload.draft_id === draft.id)).toHaveLength(1)
+    }
+    // A replayed enqueue with the SAME key (worker crash / retry) upserts the
+    // existing row instead of creating a second unit of work.
+    const replayParams = pool.outbox.find((r) => String((r.params as unknown[])[5]) === 'takeoff_capture_pipeline')!
+      .params as unknown[]
+    await pool.query(
+      `insert into mutation_outbox (company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status) values (...) on conflict do update`,
+      replayParams,
+    )
+    expect(captureOutboxRows(pool)).toHaveLength(2)
+  })
+
+  it('LIVE gemini with no blueprint on file falls back to the synchronous stub with honest provenance', async () => {
+    process.env.BLUEPRINT_VISION_MODE = 'gemini'
+    process.env.GEMINI_API_KEY = 'test-key'
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    const { ctx, responses } = makeCtx(pool, { kind: 'blueprint_vision', payload: {} })
+
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { draft: Record<string, unknown> }
+    expect(body.draft.capture_status).toBe('ready')
+    expect(body.draft.capture_provenance).toBe('stub-dry-run')
+    expect(captureOutboxRows(pool)).toHaveLength(0)
+  })
+
+  it('count-scope captures stay synchronous even with a live provider configured', async () => {
+    process.env.BLUEPRINT_VISION_MODE = 'gemini'
+    process.env.GEMINI_API_KEY = 'test-key'
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    pool.blueprintDocs.push({
+      company_id: COMPANY_ID,
+      project_id: PROJECT_ID,
+      storage_path: `${COMPANY_ID}/bp-1/plan.pdf`,
+      file_name: 'plan.pdf',
+    })
+    const { ctx, responses } = makeCtx(pool, {
+      kind: 'blueprint_vision',
+      draft_kind: 'count',
+      payload: { count_scope: { symbol: { label: 'Outlet' }, sheets: ['M-101'], sensitivity: 'NORMAL' } },
+    })
+
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { draft: Record<string, unknown> }
+    expect(body.draft.capture_provenance).toBe('stub-dry-run')
+    expect(captureOutboxRows(pool)).toHaveLength(0)
+  })
+
+  it('non-AI pipelines (roomplan et al) report deterministic provenance', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    const { ctx, responses } = makeCtx(pool, {
+      kind: 'roomplan',
+      payload: {
+        capturedRoomJsonUri: 'scenario://room.json',
+        capturedRoomJson: {
+          version: 1,
+          identifier: 'room-1',
+          walls: [
+            {
+              identifier: 'wall-1',
+              category: 'wall',
+              confidence: 'high',
+              dimensions: [4, 2.4, 0.1],
+              transform: [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [2, 1.2, 0, 1],
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    await handleTakeoffDraftRoutes(captureReq, buildUrl(CAPTURE_PATH), ctx)
+    // 201 deterministic parse (or 422 if the fixture shape is rejected — the
+    // assertion below pins the 201 contract).
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    const body = responses[0]?.body as { draft: Record<string, unknown>; result_summary: Record<string, unknown> }
+    expect(body.draft.capture_provenance).toBe('deterministic')
+    expect(body.result_summary.provenance).toBe('deterministic')
+    expect(captureOutboxRows(pool)).toHaveLength(0)
+  })
+})
+
+describe('handleTakeoffDraftRoutes — GET /api/takeoff-drafts/:id/result (poll-until-ready)', () => {
+  it('reports processing with a null result while the worker owns the draft', async () => {
+    const pool = new FakePool()
+    seedFeedDraft(pool, {
+      id: DRAFT_ID,
+      takeoff_result_json: null,
+      capture_status: 'processing',
+      capture_provenance: null,
+    })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`/api/takeoff-drafts/${DRAFT_ID}/result`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('processing')
+    expect(body.takeoff_result).toBeNull()
+  })
+
+  it('surfaces a failed capture with the provider error and zero fabricated rows', async () => {
+    const pool = new FakePool()
+    seedFeedDraft(pool, {
+      id: DRAFT_ID,
+      takeoff_result_json: null,
+      capture_status: 'failed',
+      capture_error: 'gemini gemini-3.1-flash-lite returned HTTP 429: quota',
+      capture_provenance: null,
+    })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`/api/takeoff-drafts/${DRAFT_ID}/result`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('failed')
+    expect(body.error).toMatch(/HTTP 429/)
+    expect(body.takeoff_result).toBeNull()
+  })
+
+  it('returns the result with provenance + token usage once ready', async () => {
+    const pool = new FakePool()
+    seedFeedDraft(pool, {
+      id: DRAFT_ID,
+      capture_status: 'ready',
+      capture_provenance: 'gemini-live',
+      capture_token_usage: {
+        provider: 'gemini',
+        model: 'gemini-3.1-flash-lite',
+        input_tokens: 1234,
+        output_tokens: 88,
+      },
+    })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`/api/takeoff-drafts/${DRAFT_ID}/result`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('ready')
+    expect(body.provenance).toBe('gemini-live')
+    expect(body.token_usage).toMatchObject({ input_tokens: 1234, output_tokens: 88 })
+    expect(body.takeoff_result).toBeTruthy()
   })
 })

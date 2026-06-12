@@ -64,6 +64,7 @@ class FakeIssuePool {
   // Captured side effects so escalate tests can assert the cost-ledger writes.
   accessLogInserts: Array<{ accessType: unknown; metadata: unknown }> = []
   handoffEventInserts = 0
+  handoffEventRows: Row[] = []
   // Toggle to simulate a packet that has expired / vanished.
   packetExists = true
 
@@ -94,6 +95,31 @@ class FakeIssuePool {
       normalized.startsWith('select set_config')
     ) {
       return { rows: [], rowCount: 0 }
+    }
+    // triageIssue — locked status/lane re-check inside the tx.
+    if (normalized.startsWith('select status, lane from context_work_items')) {
+      const row = this.rows.find((r) => r.id === params[1])
+      return { rows: row ? [{ status: row.status, lane: row.lane }] : [], rowCount: row ? 1 : 0 }
+    }
+    // updateContextWorkItemWithEventTx — locked full-row read.
+    if (
+      normalized.startsWith('select id, company_id, support_packet_id, domain') &&
+      normalized.includes('for update')
+    ) {
+      const row = this.rows.find((r) => r.id === params[1])
+      return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 }
+    }
+    // updateContextWorkItemWithEventTx — status/lane write.
+    if (normalized.startsWith('update context_work_items') && normalized.includes('set status = $3')) {
+      const row = this.rows.find((r) => r.id === params[1])
+      if (!row) return { rows: [], rowCount: 0 }
+      row.status = params[2]
+      row.lane = params[3]
+      row.assignee_user_id = params[4] ?? null
+      row.resolved_at = params[5] ?? null
+      row.reversed_at = params[6] ?? null
+      row.updated_at = '2026-05-21T13:00:00.000Z'
+      return { rows: [{ ...row }], rowCount: 1 }
     }
     // listContextWorkItems — the consumer pins domain='app_issue' via a param.
     if (normalized.includes('from context_work_items') && normalized.includes('order by updated_at desc')) {
@@ -156,10 +182,21 @@ class FakeIssuePool {
       this.accessLogInserts.push({ accessType, metadata: params[params.length - 1] })
       return { rows: [], rowCount: 1 }
     }
-    // escalate: handoff event stamp (appendContextHandoffEventTx).
+    // handoff event stamp (appendContextHandoffEventTx) — escalate + triage.
     if (normalized.includes('insert into context_handoff_events')) {
       this.handoffEventInserts += 1
-      return { rows: [{ id: 'evt-1', work_item_id: APP_ISSUE_ID }], rowCount: 1 }
+      const row = {
+        id: `evt-${this.handoffEventInserts}`,
+        work_item_id: params[1] as string,
+        event_type: params[2] as string,
+        actor_kind: params[3] as string,
+        actor_user_id: (params[4] as string | null) ?? null,
+        payload: JSON.parse(params[7] as string) as Row,
+        metadata: JSON.parse(params[8] as string) as Row,
+        idempotency_key: (params[9] as string | null) ?? null,
+      }
+      this.handoffEventRows.push(row)
+      return { rows: [row], rowCount: 1 }
     }
     if (normalized.includes('from context_handoff_events')) {
       return { rows: [], rowCount: 0 }
@@ -335,6 +372,80 @@ describe('internal app-issue surface (/api/issues)', () => {
       const { ctx, responses } = makeCtx(pool, true, { tier: '2' })
       await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/escalate`), ctx)
       expect(responses[0]?.status).toBe(409)
+    })
+  })
+
+  describe('POST /api/issues/:id/events — the app_issue triage write surface', () => {
+    function setStatus(pool: FakeIssuePool, status: string, lane = 'both') {
+      const row = pool.rows.find((r) => r.id === APP_ISSUE_ID)!
+      row.status = status
+      row.lane = lane
+    }
+
+    it('gates on app_issue.triage (403 when denied)', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses, capabilityChecks } = makeCtx(pool, false, { action: 'resolve' })
+      const handled = await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(handled).toBe(true)
+      expect(capabilityChecks).toEqual(['app_issue.triage'])
+      expect(responses[0]?.status).toBe(403)
+    })
+
+    it('accept pulls a new issue into triaged', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { action: 'accept' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(responses[0]?.status).toBe(201)
+      const body = responses[0]?.body as { issue: Row; event: Row }
+      expect(body.issue).toMatchObject({ status: 'triaged', lane: 'triage' })
+      expect(body.event).toMatchObject({ event_type: 'work_item.status_changed', actor_kind: 'user' })
+      expect((body.event.payload as Row).action).toBe('accept')
+    })
+
+    it('resolve accepts the agent output: review_ready -> resolved with resolved_at', async () => {
+      const pool = new FakeIssuePool()
+      setStatus(pool, 'review_ready')
+      const { ctx, responses } = makeCtx(pool, true, { action: 'resolve', message: 'looks good' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(responses[0]?.status).toBe(201)
+      const body = responses[0]?.body as { issue: Row; event: Row }
+      expect(body.issue).toMatchObject({ status: 'resolved', lane: 'done' })
+      expect(body.issue.resolved_at).not.toBeNull()
+      expect(body.event).toMatchObject({ event_type: 'resolution.accepted' })
+      expect((body.event.payload as Row).previous_status).toBe('review_ready')
+    })
+
+    it('wont_do declines: review_ready -> wont_do', async () => {
+      const pool = new FakeIssuePool()
+      setStatus(pool, 'review_ready')
+      const { ctx, responses } = makeCtx(pool, true, { action: 'wont_do' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(responses[0]?.status).toBe(201)
+      const body = responses[0]?.body as { issue: Row; event: Row }
+      expect(body.issue).toMatchObject({ status: 'wont_do', lane: 'done' })
+      expect(body.event).toMatchObject({ event_type: 'work_item.status_changed' })
+    })
+
+    it('409s a transition off a terminal status (resolved cannot accept)', async () => {
+      const pool = new FakeIssuePool()
+      setStatus(pool, 'resolved', 'done')
+      const { ctx, responses } = makeCtx(pool, true, { action: 'accept' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(responses[0]?.status).toBe(409)
+    })
+
+    it('400s an unknown action', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { action: 'delete_everything' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${APP_ISSUE_ID}/events`), ctx)
+      expect(responses[0]?.status).toBe(400)
+    })
+
+    it('404s a field_request id (domains cannot bleed)', async () => {
+      const pool = new FakeIssuePool()
+      const { ctx, responses } = makeCtx(pool, true, { action: 'resolve' })
+      await handleIssueRoutes(buildReq('POST'), buildUrl(`/api/issues/${FIELD_REQUEST_ID}/events`), ctx)
+      expect(responses[0]).toEqual({ status: 404, body: { error: 'issue not found' } })
     })
   })
 })

@@ -99,6 +99,24 @@ export class FeedbackCaptureQueuedError extends Error {
   }
 }
 
+/**
+ * The capture session is STALE server-side (409 — already finalized/discarded/
+ * expired). Retrying the same session can never succeed, so the controller has
+ * already cleared its local session state when this is thrown: the dock should
+ * drop its local session pointer and let the user start fresh instead of
+ * wedging on a retry loop.
+ */
+export class FeedbackCaptureStaleSessionError extends Error {
+  readonly capture_session_id: string
+
+  constructor(captureSessionId: string, cause?: unknown) {
+    super('This capture session is no longer active — start a new recording.')
+    this.name = 'FeedbackCaptureStaleSessionError'
+    this.capture_session_id = captureSessionId
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause
+  }
+}
+
 type PendingStopState = {
   input: FeedbackCaptureStopInput
   artifactMetadata: Record<string, unknown>
@@ -239,6 +257,15 @@ export class FeedbackCaptureController {
       this.pendingStop = null
       return { capture_session_id: id, audio, replay, additional_artifacts: pending.additionalArtifacts, finalize }
     } catch (error) {
+      // 409 — the session was already finalized/discarded/expired server-side.
+      // Retrying the SAME session can never succeed (it isn't replayable
+      // either), so clear the local session state instead of wedging the dock
+      // in an error→retry loop, and surface a typed error the host can use to
+      // drop its own local session pointer.
+      if (isStaleCaptureSessionError(error)) {
+        this.resetAfterStaleSession()
+        throw new FeedbackCaptureStaleSessionError(id, error)
+      }
       let queuedMutationIds: string[]
       try {
         queuedMutationIds = await this.queuePendingStopForOfflineReplay(id, pending, error)
@@ -279,10 +306,35 @@ export class FeedbackCaptureController {
       this.queuedStartMutationId = null
       this.currentStatus = 'discarded'
     } catch (error) {
+      // 409 on discard means the session is already terminal server-side —
+      // exactly the outcome a discard wants. Treat it as discarded locally.
+      if (isStaleCaptureSessionError(error)) {
+        this.captureSessionId = null
+        this.startQueued = false
+        this.queuedStartMutationId = null
+        this.currentStatus = 'discarded'
+        return
+      }
       this.captureSessionId = id
       this.currentStatus = 'error'
       throw error
     }
+  }
+
+  /**
+   * Drop every reference to the stale session so the controller is reusable:
+   * recorders cancelled, pending stop cleared, status back to 'idle'.
+   */
+  private resetAfterStaleSession(): void {
+    this.audioRecorder?.cancel()
+    this.replayRecorder?.cancel()
+    this.captureSessionId = null
+    this.audioStarted = false
+    this.replayStarted = false
+    this.pendingStop = null
+    this.startQueued = false
+    this.queuedStartMutationId = null
+    this.currentStatus = 'idle'
   }
 
   private async queueStartForOfflineReplay(input: FeedbackCaptureSessionInput, error: unknown): Promise<string | null> {
@@ -519,6 +571,20 @@ function fileNameForAudio(mimeType: string): string {
   if (lower.includes('ogg')) return 'audio.ogg'
   if (lower.includes('wav')) return 'audio.wav'
   return 'audio.webm'
+}
+
+/**
+ * A 409 (or 410) from the capture-session API means the session row is in a
+ * terminal/blocked state server-side (already finalized, discarded, expired,
+ * or owned elsewhere) — never a transient failure, never replayable.
+ */
+function isStaleCaptureSessionError(error: unknown): boolean {
+  if (error instanceof ApiError) return error.status === 409 || error.status === 410
+  if (error && typeof error === 'object') {
+    const maybeStatus = (error as { status?: unknown }).status
+    if (typeof maybeStatus === 'number') return maybeStatus === 409 || maybeStatus === 410
+  }
+  return false
 }
 
 function isReplayableCaptureStopError(error: unknown): boolean {

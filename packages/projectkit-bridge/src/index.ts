@@ -26,6 +26,7 @@ import {
   CONTRACT_VERSION,
   validateCallback,
   validateConcern,
+  validateProjectEvent,
   validateWorkRequest,
   // The two boundary-translation helpers are now OWNED by the published
   // @operator/projectkit "worklifecycle" core (worklifecycle.d.ts names this
@@ -42,6 +43,12 @@ import {
   type CallbackStatus,
   type Concern,
   type ConcernPriority,
+  type EventDomain,
+  type EventOutcome,
+  type ProjectEvent,
+  type ProjectEventEnvelope,
+  type RedactionStatus,
+  type Sensitivity,
   type WorkRequest,
   // WorkItemSeverity/WorkItemStatus are published @operator/projectkit types
   // (apps/api/context-handoff.ts merely re-exports them). Import them straight
@@ -108,10 +115,32 @@ function cleanText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+/**
+ * CONTRACT ENFORCEMENT: every builder validates its own output against the
+ * published projectkit validators before returning it. The builders are the
+ * SINGLE place the contract is enforced for sitelayer emit sites (the
+ * conformance ratchet in apps/api/src/projectkit-concern.test.ts bans
+ * hand-rolled snapshot literals), so an invalid snapshot must fail loudly at
+ * the builder, never travel to a subscriber.
+ */
+function assertContractValid(label: string, problems: string[]): void {
+  if (problems.length > 0) {
+    throw new Error(`projectkit-bridge: ${label} snapshot failed contract validation: ${problems.join('; ')}`)
+  }
+}
+
 export const CONCERN_KIND_DEFAULT = 'execute' as const
 
 export interface BuildConcernInput {
-  workItemId: string
+  /**
+   * The originating context_work_item id. Optional ONLY for a ref-only
+   * dispatch that supplies `concernRef` (e.g. ops diagnostics
+   * `opsdiag:<session>:<action>`): at least one of `workItemId` / `concernRef`
+   * must yield a non-empty concern_ref or the builder throws via
+   * assertContractValid. When present, the work-item linkage + derived context
+   * always travel in `inputs`.
+   */
+  workItemId?: string | null
   title: string
   summary?: string | null
   severity?: WorkItemSeverity | string | null
@@ -130,6 +159,24 @@ export interface BuildConcernInput {
   projectKey?: string
   /** ISO-8601; defaults to now(). */
   dispatchedAt?: string
+  /**
+   * Producer-stable idempotency key override. Defaults to `workItemId`
+   * (concern_ref = work_item_id), but an addressed/derived dispatch may key on
+   * its own ref (e.g. `capan:<capture_session_id>`, `wi:<id>:<audience>`).
+   * The work-item linkage survives in `inputs.work_item_id` either way.
+   */
+  concernRef?: string | null
+  /** Executor pool / feed lane this Concern is addressed to (v1.4.0 `audience`). */
+  audience?: string | null
+  /** Accountable executor identity (v1.4.0 `assignee`). */
+  assignee?: string | null
+  /** Explicit success criteria the executor verifies (v1.4.0 `acceptance`). */
+  acceptance?: string[]
+  /**
+   * Extra executor-facing inputs merged OVER the derived defaults (caller keys
+   * win on collision). Keep it small + flat per the contract guidance.
+   */
+  inputs?: Record<string, unknown>
 }
 
 /**
@@ -144,7 +191,12 @@ export interface BuildConcernInput {
  * the Concern's `inputs` map for a subscriber that wants them.
  */
 export function buildConcernSnapshot(input: BuildConcernInput): Concern {
-  const title = cleanText(input.title) ?? `Sitelayer concern ${input.workItemId.slice(0, 8)}`
+  const workItemId = cleanText(input.workItemId)
+  // concern_ref: explicit override first, else the work-item id. Neither
+  // present -> empty ref -> the published validator flags it and
+  // assertContractValid throws (the builder is the enforcement point).
+  const concernRef = cleanText(input.concernRef) ?? workItemId ?? ''
+  const title = cleanText(input.title) ?? `Sitelayer concern ${(workItemId ?? concernRef).slice(0, 8)}`
   const summary = cleanText(input.summary)
   const priority = severityToPriority(input.severity)
   const callbackStatus = workItemStatusToCallbackStatus(input.status)
@@ -165,29 +217,44 @@ export function buildConcernSnapshot(input: BuildConcernInput): Concern {
     schema_version: CONTRACT_VERSION,
     project_key: cleanText(input.projectKey) ?? DEFAULT_PROJECT_KEY,
     dispatched_at: input.dispatchedAt ?? new Date().toISOString(),
-    concern_ref: input.workItemId,
+    concern_ref: concernRef,
     kind: cleanText(input.kind) ?? CONCERN_KIND_DEFAULT,
     title,
     priority,
     inputs: {
-      work_item_status: input.status ?? null,
-      callback_status: callbackStatus,
-      route: cleanText(input.route),
-      entity_type: cleanText(input.entityType),
-      entity_id: cleanText(input.entityId),
-      capture_session_id: cleanText(input.captureSessionId),
-      support_packet_id: cleanText(input.supportPacketId),
-      evidence_refs: evidenceRefs,
+      // When the Concern derives from a context_work_item, the work-item
+      // linkage + derived context always travel in inputs, so a concern_ref
+      // override (addressed dispatch) never severs the join back to the item.
+      // A ref-only dispatch (no workItemId) carries only the caller's inputs.
+      ...(workItemId
+        ? {
+            work_item_id: workItemId,
+            work_item_status: input.status ?? null,
+            callback_status: callbackStatus,
+            route: cleanText(input.route),
+            entity_type: cleanText(input.entityType),
+            entity_id: cleanText(input.entityId),
+            capture_session_id: cleanText(input.captureSessionId),
+            support_packet_id: cleanText(input.supportPacketId),
+            evidence_refs: evidenceRefs,
+          }
+        : {}),
+      // Caller-specific executor inputs win on collision.
+      ...(input.inputs ?? {}),
     },
   }
   if (summary) concern.summary = summary
   if (sourceEventRef) concern.source_event_ref = sourceEventRef
+  if (cleanText(input.audience)) concern.audience = cleanText(input.audience)!
+  if (cleanText(input.assignee)) concern.assignee = cleanText(input.assignee)!
+  if (input.acceptance && input.acceptance.length > 0) concern.acceptance = input.acceptance
   if (input.callback) {
     const target: ConcernCallbackTarget = {}
     if (cleanText(input.callback.url)) target.url = cleanText(input.callback.url)!
     if (cleanText(input.callback.mode)) target.mode = cleanText(input.callback.mode)!
     concern.callback = target
   }
+  assertContractValid('Concern', validateConcern(concern))
   return concern
 }
 
@@ -199,16 +266,27 @@ export interface BuildWorkRequestInput extends BuildConcernInput {
   intent?: string | null
   /** Sitelayer lane that produced this request (triage/human/agent/both). */
   lane?: string | null
-  /** Acceptance criteria for the requested work. */
-  acceptance?: string[]
+  /** Published WorkRequest sensitivity (public/internal/private). */
+  sensitivity?: Sensitivity | null
+  /**
+   * Extra subscriber-facing payload entries merged OVER the derived defaults
+   * (`lane`) — caller keys win on collision, EXCEPT the embedded `concern`
+   * snapshot, which always survives the merge so one object keeps exposing
+   * both contract shapes. Keep it small + flat per the contract guidance.
+   */
+  payload?: Record<string, unknown>
+  // `acceptance` is inherited from BuildConcernInput (it flows onto BOTH the
+  // WorkRequest and the embedded Concern per the v1.4.0 contract mirror).
 }
 
 /**
  * Build the projectkit `WorkRequest` — the emit-direction "I am asking for
- * work" view. request_ref = work_item_id (stable idempotency handle). Carries
- * the same priority/route/entity/source as the Concern; `payload` embeds the
- * Concern snapshot so one object exposes both shapes for a subscriber that
- * only reads the `dispatch_request` key.
+ * work" view. request_ref mirrors the Concern's concern_ref resolution
+ * (`concernRef` override, else work_item_id) so both shapes share one
+ * producer-stable idempotency handle. Carries the same priority/route/entity/
+ * source as the Concern; `payload` embeds the Concern snapshot so one object
+ * exposes both shapes for a subscriber that only reads the `dispatch_request`
+ * key.
  */
 export function buildWorkRequestSnapshot(input: BuildWorkRequestInput): WorkRequest {
   const concern = buildConcernSnapshot(input)
@@ -218,13 +296,16 @@ export function buildWorkRequestSnapshot(input: BuildWorkRequestInput): WorkRequ
     schema_version: CONTRACT_VERSION,
     project_key: cleanText(input.projectKey) ?? DEFAULT_PROJECT_KEY,
     requested_at: concern.dispatched_at,
-    request_ref: input.workItemId,
+    request_ref: concern.concern_ref,
     intent: cleanText(input.intent) ?? WORK_REQUEST_INTENT_DEFAULT,
     title: concern.title,
     priority: severityToPriority(input.severity),
     payload: {
       lane: cleanText(input.lane),
-      // Embed the full Concern so one snapshot carries both shapes.
+      // Caller payload entries win over the derived defaults...
+      ...(input.payload ?? {}),
+      // ...but the embedded Concern always survives, so one snapshot carries
+      // both contract shapes.
       concern,
     },
   }
@@ -233,8 +314,121 @@ export function buildWorkRequestSnapshot(input: BuildWorkRequestInput): WorkRequ
   if (cleanText(input.entityType)) request.entity_kind = cleanText(input.entityType)!
   if (cleanText(input.entityId)) request.entity_id = cleanText(input.entityId)!
   if (sourceEventRef) request.source_event_ref = sourceEventRef
+  if (input.sensitivity) request.sensitivity = input.sensitivity
   if (input.acceptance && input.acceptance.length > 0) request.acceptance = input.acceptance
+  if (cleanText(input.audience)) request.audience = cleanText(input.audience)!
+  if (cleanText(input.assignee)) request.assignee = cleanText(input.assignee)!
+  assertContractValid('WorkRequest', validateWorkRequest(request))
   return request
+}
+
+/**
+ * Input for `buildProjectEventSnapshot`. Field names mirror the published
+ * `ProjectEvent` contract (camelCased); blank/empty optionals are omitted from
+ * the snapshot, never emitted as empty strings.
+ */
+export interface BuildProjectEventInput {
+  /** Stable wire string, project-namespaced, e.g. `sitelayer.ops_diagnostic.x.requested`. */
+  eventType: string
+  projectKey?: string
+  /** ISO-8601; defaults to now(). */
+  occurredAt?: string
+  domain?: EventDomain
+  outcome?: EventOutcome | string | null
+  environment?: string | null
+  buildSha?: string | null
+  sourceSurface?: string | null
+  routePath?: string | null
+  sessionId?: string | null
+  actorKind?: string | null
+  /** End-user/app principal. An explicit `null` is meaningful and travels. */
+  principalId?: string | number | null
+  entityKind?: string | null
+  /** Entity identifier. An explicit `null` is meaningful and travels. */
+  entityId?: string | number | null
+  action?: string | null
+  summary?: string | null
+  sensitivity?: Sensitivity | null
+  redactionStatus?: RedactionStatus | null
+  /** Project-specific extras a subscriber may ignore. Keep it small + flat. */
+  payload?: Record<string, unknown>
+}
+
+/**
+ * Build a projectkit `ProjectEvent` — the canonical "this happened" unit a
+ * testbed emits. Same enforcement as the Concern/WorkRequest/Callback
+ * builders: the snapshot is validated against the published
+ * `validateProjectEvent` before it returns, and the bridge is the ONLY module
+ * that stamps `schema_version`/CONTRACT_VERSION for sitelayer emit sites.
+ */
+export function buildProjectEventSnapshot(input: BuildProjectEventInput): ProjectEvent {
+  const event: ProjectEvent = {
+    schema_version: CONTRACT_VERSION,
+    event_type: cleanText(input.eventType) ?? '',
+    project_key: cleanText(input.projectKey) ?? DEFAULT_PROJECT_KEY,
+    occurred_at: input.occurredAt ?? new Date().toISOString(),
+  }
+  if (input.domain) event.domain = input.domain
+  if (cleanText(input.outcome)) event.outcome = cleanText(input.outcome)!
+  if (cleanText(input.environment)) event.environment = cleanText(input.environment)!
+  if (cleanText(input.buildSha)) event.build_sha = cleanText(input.buildSha)!
+  if (cleanText(input.sourceSurface)) event.source_surface = cleanText(input.sourceSurface)!
+  if (cleanText(input.routePath)) event.route_path = cleanText(input.routePath)!
+  if (cleanText(input.sessionId)) event.session_id = cleanText(input.sessionId)!
+  if (cleanText(input.actorKind)) event.actor_kind = cleanText(input.actorKind)!
+  if (input.principalId !== undefined) event.principal_id = input.principalId
+  if (cleanText(input.entityKind)) event.entity_kind = cleanText(input.entityKind)!
+  if (input.entityId !== undefined) event.entity_id = input.entityId
+  if (cleanText(input.action)) event.action = cleanText(input.action)!
+  if (cleanText(input.summary)) event.summary = cleanText(input.summary)!
+  if (input.sensitivity) event.sensitivity = input.sensitivity
+  if (input.redactionStatus) event.redaction_status = input.redactionStatus
+  if (input.payload) event.payload = input.payload
+  assertContractValid('ProjectEvent', validateProjectEvent(event))
+  return event
+}
+
+export interface BuildProjectEventEnvelopeInput {
+  /** Already-built (validated) ProjectEvents; re-validated here defensively. */
+  events: ProjectEvent[]
+  projectKey?: string
+  /** ISO-8601 when the batch was flushed; defaults to now(). */
+  emittedAt?: string
+  producer: { name: string; version?: string }
+  /** Optional idempotency key so a subscriber can dedupe retries. */
+  deliveryId?: string | null
+}
+
+/**
+ * Build a projectkit `ProjectEventEnvelope` — the transport wrapper a sink
+ * delivers. The bridge stamps `contract_version` here (emit sites never touch
+ * CONTRACT_VERSION). The published contract ships no envelope validator, so
+ * this enforces the envelope's own required fields and re-runs
+ * `validateProjectEvent` over every event, throwing via the same
+ * assertContractValid seam as the other builders.
+ */
+export function buildProjectEventEnvelope(input: BuildProjectEventEnvelopeInput): ProjectEventEnvelope {
+  const problems: string[] = []
+  const producerName = cleanText(input.producer?.name)
+  if (!producerName) problems.push('producer.name is required')
+  if (!Array.isArray(input.events) || input.events.length === 0) {
+    problems.push('events must be a non-empty array')
+  } else {
+    for (const [index, event] of input.events.entries()) {
+      for (const problem of validateProjectEvent(event)) problems.push(`events[${index}]: ${problem}`)
+    }
+  }
+  assertContractValid('ProjectEventEnvelope', problems)
+  const producerVersion = cleanText(input.producer?.version)
+  const envelope: ProjectEventEnvelope = {
+    contract_version: CONTRACT_VERSION,
+    project_key: cleanText(input.projectKey) ?? DEFAULT_PROJECT_KEY,
+    emitted_at: input.emittedAt ?? new Date().toISOString(),
+    producer: { name: producerName!, ...(producerVersion ? { version: producerVersion } : {}) },
+    events: input.events,
+  }
+  if (cleanText(input.deliveryId)) envelope.delivery_id = cleanText(input.deliveryId)!
+  return envelope
 }
 
 /**
@@ -306,6 +500,7 @@ export function buildCallbackSnapshot(input: {
   if (artifacts.length > 0) callback.artifacts = artifacts
   if (cleanText(input.error)) callback.error = cleanText(input.error)!
   if (cleanText(input.completedAt)) callback.completed_at = cleanText(input.completedAt)!
+  assertContractValid('Callback', validateCallback(callback))
   return callback
 }
 

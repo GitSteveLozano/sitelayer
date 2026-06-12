@@ -35,6 +35,7 @@ import {
 import { z } from 'zod'
 import { HttpError, isValidUuid, parseExpectedVersion, parseJsonBody, parseOptionalNumber } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 // POST /api/projects wire-format. The route already enforces non-empty
 // name + customer_name and a uuid-shaped customer_id; the schema adds
@@ -641,67 +642,72 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     }
     const { event: eventType, state_version: stateVersion } = parsed.value
 
-    const outcome = await withMutationTx(async (client) => {
-      const lockedResult = await client.query<ProjectCloseoutRow>(
-        `select id, company_id, status, state_version, closed_at, closed_by,
+    // Captured by loadSnapshot so the structural reduce below can gate
+    // CLOSEOUT on the locked row's lifecycle_state (the reducer snapshot
+    // intentionally doesn't carry it).
+    let lockedCloseoutRow: ProjectCloseoutRow | undefined
+    const outcome = await withMutationTx((client) =>
+      dispatchWorkflowEvent<ProjectCloseoutRow, ProjectCloseoutWorkflowSnapshot, ProjectCloseoutWorkflowEvent>(client, {
+        definition: {
+          name: PROJECT_CLOSEOUT_WORKFLOW_NAME,
+          schemaVersion: PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+          // Gap 4: gate CLOSEOUT on the real lifecycle_state, not the
+          // lossy status projection. Throwing here surfaces as the same
+          // illegal-transition 409 the hand-rolled gate returned if the
+          // project hasn't started.
+          reduce: (snapshot, event) => {
+            if (event.type === 'CLOSEOUT') {
+              const disabledReason = closeoutLifecycleDisabledReason(lockedCloseoutRow!.lifecycle_state)
+              if (disabledReason) throw new Error(disabledReason)
+            }
+            return transitionProjectCloseoutWorkflow(snapshot, event)
+          },
+        },
+        companyId: ctx.company.id,
+        entityType: 'project',
+        entityId: projectId,
+        expectedStateVersion: stateVersion,
+        actorUserId: ctx.currentUserId,
+        loadSnapshot: async (c) => {
+          const lockedResult = await c.query<ProjectCloseoutRow>(
+            `select id, company_id, status, state_version, closed_at, closed_by,
               summary_locked_at, post_mortem_acknowledged_at, post_mortem_acknowledged_by,
               lifecycle_state, workflow_engine, workflow_run_id,
               version, created_at, updated_at
          from projects
          where company_id = $1 and id = $2 and deleted_at is null
          for update`,
-        [ctx.company.id, projectId],
-      )
-      const current = lockedResult.rows[0]
-      if (!current) return { kind: 'not_found' as const }
-      if (current.state_version !== stateVersion) {
-        return { kind: 'version_conflict' as const, row: current }
-      }
-
-      // Gap 4: gate CLOSEOUT on the real lifecycle_state, not the lossy
-      // status projection. Reject with an illegal-transition 409 if the
-      // project hasn't started.
-      if (eventType === 'CLOSEOUT') {
-        const disabledReason = closeoutLifecycleDisabledReason(current.lifecycle_state)
-        if (disabledReason) {
-          return { kind: 'illegal_transition' as const, row: current, message: disabledReason }
-        }
-      }
-
-      // Route stamps the clock/actor at the boundary; the reducer stays pure.
-      const now = new Date().toISOString()
-      const reducerEvent: ProjectCloseoutWorkflowEvent =
-        eventType === 'CLOSEOUT'
-          ? { type: 'CLOSEOUT', closed_at: now, closed_by: ctx.currentUserId }
-          : { type: 'ACKNOWLEDGE_POST_MORTEM', acknowledged_at: now, acknowledged_by: ctx.currentUserId }
-      const beforeStateVersion = current.state_version
-      let nextSnapshot: ProjectCloseoutWorkflowSnapshot
-      try {
-        nextSnapshot = transitionProjectCloseoutWorkflow(
-          {
-            state: projectStatusToCloseoutState(current.status, current.post_mortem_acknowledged_at),
-            state_version: current.state_version,
-            closed_at: current.closed_at,
-            closed_by: current.closed_by,
-            summary_locked_at: current.summary_locked_at,
-            post_mortem_acknowledged_at: current.post_mortem_acknowledged_at,
-            post_mortem_acknowledged_by: current.post_mortem_acknowledged_by,
-          },
-          reducerEvent,
-        )
-      } catch (err) {
-        return {
-          kind: 'illegal_transition' as const,
-          row: current,
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
-
-      // Persist from the reducer's nextSnapshot only — the route never
-      // re-derives status/summary_locked_at in SQL. `status='completed'`
-      // is the projection of both completed and post_mortem states.
-      const updateResult = await client.query<ProjectCloseoutRow>(
-        `update projects
+            [ctx.company.id, projectId],
+          )
+          const current = lockedResult.rows[0]
+          if (!current) return null
+          lockedCloseoutRow = current
+          return {
+            row: current,
+            snapshot: {
+              state: projectStatusToCloseoutState(current.status, current.post_mortem_acknowledged_at),
+              state_version: current.state_version,
+              closed_at: current.closed_at,
+              closed_by: current.closed_by,
+              summary_locked_at: current.summary_locked_at,
+              post_mortem_acknowledged_at: current.post_mortem_acknowledged_at,
+              post_mortem_acknowledged_by: current.post_mortem_acknowledged_by,
+            },
+          }
+        },
+        // Route stamps the clock/actor at the boundary; the reducer stays pure.
+        buildEvent: () => {
+          const now = new Date().toISOString()
+          return eventType === 'CLOSEOUT'
+            ? { type: 'CLOSEOUT', closed_at: now, closed_by: ctx.currentUserId }
+            : { type: 'ACKNOWLEDGE_POST_MORTEM', acknowledged_at: now, acknowledged_by: ctx.currentUserId }
+        },
+        // Persist from the reducer's nextSnapshot only — the route never
+        // re-derives status/summary_locked_at in SQL. `status='completed'`
+        // is the projection of both completed and post_mortem states.
+        persist: async (c, nextSnapshot) => {
+          const updateResult = await c.query<ProjectCloseoutRow>(
+            `update projects
            set status = 'completed',
                state_version = $3,
                closed_at = $4,
@@ -716,43 +722,37 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
               summary_locked_at, post_mortem_acknowledged_at, post_mortem_acknowledged_by,
               lifecycle_state, workflow_engine, workflow_run_id,
               version, created_at, updated_at`,
-        [
-          ctx.company.id,
-          projectId,
-          nextSnapshot.state_version,
-          nextSnapshot.closed_at ?? null,
-          nextSnapshot.closed_by ?? null,
-          nextSnapshot.summary_locked_at ?? null,
-          nextSnapshot.post_mortem_acknowledged_at ?? null,
-          nextSnapshot.post_mortem_acknowledged_by ?? null,
-        ],
-      )
-      const updated = updateResult.rows[0]
-      if (!updated) throw new HttpError(500, 'project closeout update returned no row')
-
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: PROJECT_CLOSEOUT_WORKFLOW_NAME,
-        schemaVersion: PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'project',
-        entityId: projectId,
-        stateVersion: beforeStateVersion,
-        eventType,
-        eventPayload: reducerEvent,
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const observed = workflowEventOutcome(eventType)
-      if (observed) observeWorkflowEvent(PROJECT_CLOSEOUT_WORKFLOW_NAME, observed)
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'project',
-        entityId: projectId,
-        action: eventType === 'CLOSEOUT' ? 'closeout' : 'closeout:post_mortem',
-        row: updated,
-      })
-      return { kind: 'ok' as const, row: updated, eventType }
-    })
+            [
+              ctx.company.id,
+              projectId,
+              nextSnapshot.state_version,
+              nextSnapshot.closed_at ?? null,
+              nextSnapshot.closed_by ?? null,
+              nextSnapshot.summary_locked_at ?? null,
+              nextSnapshot.post_mortem_acknowledged_at ?? null,
+              nextSnapshot.post_mortem_acknowledged_by ?? null,
+            ],
+          )
+          const updated = updateResult.rows[0]
+          if (!updated) throw new HttpError(500, 'project closeout update returned no row')
+          return updated
+        },
+        // The primitive appends the workflow_event_log row (keyed on the
+        // BEFORE state_version) between persist and these side effects —
+        // same in-tx order as the hand-rolled pipeline.
+        sideEffects: async (c, _next, updated) => {
+          const observed = workflowEventOutcome(eventType)
+          if (observed) observeWorkflowEvent(PROJECT_CLOSEOUT_WORKFLOW_NAME, observed)
+          await recordMutationLedger(c, {
+            companyId: ctx.company.id,
+            entityType: 'project',
+            entityId: projectId,
+            action: eventType === 'CLOSEOUT' ? 'closeout' : 'closeout:post_mortem',
+            row: updated,
+          })
+        },
+      }),
+    )
 
     if (outcome.kind === 'not_found') {
       ctx.sendJson(404, { error: 'project not found' })
@@ -777,7 +777,7 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     // moment costs lock). Best-effort, post-commit (see legacy path).
     // The closeout row lacks name/customer_name; the helper falls back to
     // the summary's project name.
-    if (outcome.eventType === 'CLOSEOUT') {
+    if (eventType === 'CLOSEOUT') {
       await fireMarginShortfallAlert(ctx, projectId, {})
     }
     ctx.sendJson(200, projectCloseoutSnapshotResponse(outcome.row))

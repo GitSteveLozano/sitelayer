@@ -129,6 +129,48 @@ describe('createWorkDispatchReconcilerRunner', () => {
     expect(released).toEqual([true])
   })
 
+  it('covers agent-feed-dispatched items: an agent_running item whose ack came from the feed claim (no mesh_task_id) is reconciled', async () => {
+    // The agent-feed claim path (agent-feed.ts applyClaimEffects) writes
+    // agent.dispatch_acknowledged + status='agent_running' — the exact pair
+    // the candidate query keys on. Its ack payload has NO mesh_task_id, so
+    // the lateral payload->>'mesh_task_id' projection is null and the
+    // idempotency key falls back to 'unknown'. This proves the L4 safety net
+    // sees agent-feed work, not only mesh dispatches.
+    const { pool, calls } = makePool([
+      {
+        id: '00000000-0000-4000-9000-000000000001',
+        status: 'agent_running',
+        lane: 'agent',
+        severity: 'high',
+        route: '/desktop/takeoff',
+        entity_type: 'context_work_item',
+        dispatch_acknowledged_at: '2026-06-04 12:00:00+00',
+        mesh_task_id: null,
+        capture_session_id: null,
+      },
+    ])
+    const runner = createWorkDispatchReconcilerRunner({ pool })
+
+    const summary = await runner.maybeReconcile('company-1')
+
+    expect(summary).toEqual({ ran: true, reconciled: 1, failed: 0 })
+    // The candidate predicate matches on event_type alone — nothing in the
+    // SQL filters by actor_ref/source, so a feed-claim ack qualifies.
+    const select = calls.find((call) => call.sql.includes('from context_work_items w'))
+    expect(select?.sql).toContain("event_type = 'agent.dispatch_acknowledged'")
+    expect(select?.sql).not.toContain('actor_ref')
+    const insert = calls.find((call) => call.sql.includes('insert into context_handoff_events'))
+    expect(insert?.params[4]).toBe('context_work_item:lost_callback:00000000-0000-4000-9000-000000000001:unknown')
+    const update = calls.find((call) => call.sql.startsWith('update context_work_items'))
+    expect(update?.params).toEqual([
+      'company-1',
+      '00000000-0000-4000-9000-000000000001',
+      'proposal_expired',
+      'both',
+      'agent_running',
+    ])
+  })
+
   it('throttles repeated reconciles inside the configured interval', async () => {
     const { pool, calls } = makePool([])
     const runner = createWorkDispatchReconcilerRunner({ pool })

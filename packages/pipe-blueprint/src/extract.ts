@@ -109,6 +109,10 @@ export interface BuildBlueprintTakeoffOptions {
    *  (e.g. gemini-3.1-flash-lite — the bang-for-buck winner) instead of Claude.
    *  When set, the Anthropic client + `model` are ignored. */
   visionProvider?: TakeoffVisionProvider
+  /** Receives the REAL accumulated token usage of every Claude call this
+   *  build makes (classify + per-page extract), so callers can persist actual
+   *  provider spend. Not invoked on dry-run or visionProvider paths. */
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void
   /** When true, skip Anthropic calls and emit a fixture-driven mock. */
   dryRun?: boolean
   /** Pages to use for dry-run. Defaults to a one-floor-plan-page mock. */
@@ -304,6 +308,7 @@ async function runClassify(opts: BuildBlueprintTakeoffOptions, model: string, pd
     pdfBase64,
     prompt: CLASSIFY_PROMPT,
     cacheDocument: true,
+    ...(opts.onUsage ? { onUsage: opts.onUsage } : {}),
   })
 }
 
@@ -330,6 +335,7 @@ async function runExtract(
     pdfBase64,
     prompt: `${EXTRACT_PROMPT}\n\n(Focus on page index ${pageIndex} only.)`,
     cacheDocument: true,
+    ...(opts.onUsage ? { onUsage: opts.onUsage } : {}),
   })
 }
 

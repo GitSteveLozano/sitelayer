@@ -4,6 +4,7 @@ import {
   ESTIMATE_SHARE_WORKFLOW_NAME,
   ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
   transitionEstimateShareWorkflow,
+  type EstimateShareWorkflowEvent,
   type EstimateShareWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import { z } from 'zod'
@@ -11,6 +12,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken } from '../estimate-share-token.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import {
   PORTAL_ESTIMATES_PATH_PREFIX,
   SHARE_COLUMNS,
@@ -218,9 +220,11 @@ export async function handleEstimateShareRoutes(
 
       // Enqueue the `send_estimate_share` side-effect (the registered workflow
       // side-effect type). Idempotency key per share row so a replayed SEND
-      // upserts the same outbox row. The worker runner that delivers the share
-      // link to the recipient is downstream (a notification channel), but the
-      // outbox row is the durable hand-off and the audit trail today.
+      // upserts the same outbox row. Delivered by the dedicated worker runner
+      // apps/worker/src/runners/estimate-share-email.ts, which emails the
+      // recipient their portal link; the mutation_type is registered in
+      // DEDICATED_HANDLER_MUTATION_TYPES (@sitelayer/queue) so the generic
+      // apply-with-no-work drain can never stamp it 'applied' without sending.
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'estimate_share_link',
@@ -413,72 +417,76 @@ export async function handleEstimateShareRoutes(
   if (req.method === 'POST' && revokeMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = revokeMatch[1] ?? ''
-    const result = await withMutationTx(async (client) => {
-      const lockedResult = await client.query<EstimateShareRow>(
-        `select ${SHARE_COLUMNS}
-         from estimate_share_links
-         where company_id = $1 and id = $2
-         for update`,
-        [ctx.company.id, id],
-      )
-      const current = lockedResult.rows[0]
-      if (!current) return { kind: 'not_found' as const }
-
-      const snapshot = shareRowToSnapshot(current)
-      const revokedAt = new Date().toISOString()
-      let next: EstimateShareWorkflowSnapshot
-      try {
-        next = transitionEstimateShareWorkflow(snapshot, {
-          type: 'REVOKE',
-          revoked_at: revokedAt,
-          revoked_by: ctx.currentUserId,
-        })
-      } catch (err) {
-        return {
-          kind: 'illegal_transition' as const,
-          message: err instanceof Error ? err.message : String(err),
-        }
-      }
-
-      const updateResult = await client.query<EstimateShareRow>(
-        `update estimate_share_links
-           set status = $3,
-               state_version = $4,
-               revoked_at = $5,
-               expires_at = now(),
-               updated_at = now()
-         where company_id = $1 and id = $2
-         returning ${SHARE_COLUMNS}`,
-        [ctx.company.id, id, next.state, next.state_version, next.revoked_at ?? revokedAt],
-      )
-      const row = updateResult.rows[0]
-      if (!row) throw new HttpError(500, 'estimate share revoke update returned no row')
-
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: ESTIMATE_SHARE_WORKFLOW_NAME,
-        schemaVersion: ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'estimate_share_link',
-        entityId: row.id,
-        stateVersion: snapshot.state_version,
-        eventType: 'REVOKE',
-        eventPayload: { type: 'REVOKE', revoked_at: revokedAt, revoked_by: ctx.currentUserId },
-        snapshotAfter: next,
-        actorUserId: ctx.currentUserId,
-      })
-
-      await recordMutationLedger(client, {
+    // The revoke surface takes no client-supplied state_version — the legacy
+    // path locked the row and dispatched REVOKE against whatever version it
+    // found. Capture the locked row's own state_version and feed it back as
+    // the "expected" version so the primitive's post-lock optimistic check is
+    // a no-op (same mutable-slot pattern as the legacy /submit alias in
+    // daily-logs.ts). The reducer event's clock lives in buildEvent; the
+    // persist fallback needs the same timestamp, so it travels by closure.
+    let resolvedExpected = -1
+    let revokedAt = ''
+    const result = await withMutationTx((client) =>
+      dispatchWorkflowEvent<EstimateShareRow, EstimateShareWorkflowSnapshot, EstimateShareWorkflowEvent>(client, {
+        definition: {
+          name: ESTIMATE_SHARE_WORKFLOW_NAME,
+          schemaVersion: ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+          reduce: transitionEstimateShareWorkflow,
+        },
         companyId: ctx.company.id,
         entityType: 'estimate_share_link',
-        entityId: row.id,
-        action: 'revoked',
-        row: { id: row.id, project_id: row.project_id, revoked_at: row.revoked_at },
-        idempotencyKey: `estimate_share_link:revoked:${row.id}`,
+        entityId: id,
+        get expectedStateVersion() {
+          return resolvedExpected
+        },
         actorUserId: ctx.currentUserId,
-      })
-
-      return { kind: 'ok' as const, row }
-    })
+        loadSnapshot: async (c) => {
+          const lockedResult = await c.query<EstimateShareRow>(
+            `select ${SHARE_COLUMNS}
+             from estimate_share_links
+             where company_id = $1 and id = $2
+             for update`,
+            [ctx.company.id, id],
+          )
+          const current = lockedResult.rows[0]
+          if (!current) return null
+          const snapshot = shareRowToSnapshot(current)
+          resolvedExpected = snapshot.state_version
+          return { row: current, snapshot }
+        },
+        buildEvent: () => {
+          revokedAt = new Date().toISOString()
+          return { type: 'REVOKE', revoked_at: revokedAt, revoked_by: ctx.currentUserId }
+        },
+        persist: async (c, next) => {
+          const updateResult = await c.query<EstimateShareRow>(
+            `update estimate_share_links
+               set status = $3,
+                   state_version = $4,
+                   revoked_at = $5,
+                   expires_at = now(),
+                   updated_at = now()
+             where company_id = $1 and id = $2
+             returning ${SHARE_COLUMNS}`,
+            [ctx.company.id, id, next.state, next.state_version, next.revoked_at ?? revokedAt],
+          )
+          const row = updateResult.rows[0]
+          if (!row) throw new HttpError(500, 'estimate share revoke update returned no row')
+          return row
+        },
+        sideEffects: async (c, _next, row) => {
+          await recordMutationLedger(c, {
+            companyId: ctx.company.id,
+            entityType: 'estimate_share_link',
+            entityId: row.id,
+            action: 'revoked',
+            row: { id: row.id, project_id: row.project_id, revoked_at: row.revoked_at },
+            idempotencyKey: `estimate_share_link:revoked:${row.id}`,
+            actorUserId: ctx.currentUserId,
+          })
+        },
+      }),
+    )
 
     if (result.kind === 'not_found') {
       ctx.sendJson(404, { error: 'share not found' })
@@ -488,6 +496,9 @@ export async function handleEstimateShareRoutes(
       ctx.sendJson(409, { error: result.message })
       return true
     }
+    // version_conflict is unreachable: expectedStateVersion is resolved from
+    // the locked row itself, so the check always passes (legacy had no
+    // optimistic check on this surface either).
     ctx.sendJson(200, {
       id: result.row.id,
       expires_at: result.row.expires_at,

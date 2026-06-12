@@ -21,6 +21,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Repo remote URL (SITELAYER_REPO_URL) — shared convention with
+# deploy-production-local.sh / fleet-auto-deploy.sh / e2e-runner.sh. May carry
+# a deploy token: never echo it raw (see scripts/repo-remote.sh).
+source scripts/repo-remote.sh
+
 TIER="${1:-}"
 case "$TIER" in
   prod) exec bash scripts/deploy-production-local.sh "${@:2}" ;;
@@ -101,15 +106,17 @@ if ! flock -n 8; then
   exit 1
 fi
 
+# NOTE: SITELAYER_REPO_URL travels in the remote env (it may carry a deploy
+# token — the droplet-side heredoc must never echo it or `set -x`).
 ssh -o BatchMode=yes "$PREVIEW_USER@$PREVIEW_BOX" \
-  "DEPLOY_SHA='$GIT_SHA' SLUG='$SLUG' HOST='$HOST' TIER='$TIER' SHARED='$SHARED' bash -s" <<'REMOTE'
+  "DEPLOY_SHA='$GIT_SHA' SLUG='$SLUG' HOST='$HOST' TIER='$TIER' SHARED='$SHARED' SITELAYER_REPO_URL='$SITELAYER_REPO_URL' bash -s" <<'REMOTE'
 set -euo pipefail
 SRC="$HOME/sitelayer-deploy-src"
 if [ ! -d "$SRC/.git" ]; then
-  git clone https://github.com/GitSteveLozano/sitelayer.git "$SRC"
+  git clone "$SITELAYER_REPO_URL" "$SRC"
 fi
 cd "$SRC"
-git remote set-url origin https://github.com/GitSteveLozano/sitelayer.git
+git remote set-url origin "$SITELAYER_REPO_URL"
 git fetch origin
 git reset --hard
 git clean -fd
@@ -127,8 +134,6 @@ if [ "$TIER" = demo ]; then
   [ -f "$TARGET/.env" ] || { echo "ERROR: $TARGET/.env missing — cannot seed"; exit 1; }
   cd "$TARGET"
   grep -q '^DATABASE_URL=' .env || { echo "ERROR: DATABASE_URL missing in $TARGET/.env"; exit 1; }
-  migration_files="$(find docker/postgres/init -maxdepth 1 -type f -name '*.sql' \
-    ! -name '087_constrained_role_for_rls_probe.sql' | sort | tr '\n' ' ')"
   # When deploy-preview.sh used the LOCAL backend, .env carries
   # PREVIEW_DB_BACKEND=local + a DATABASE_URL pointing at the `preview-db`
   # container. migrate-db.sh / check-db-schema.sh run psql in their OWN
@@ -140,7 +145,7 @@ if [ "$TIER" = demo ]; then
   if grep -q '^PREVIEW_DB_BACKEND=local$' .env; then
     demo_psql_env+=(PSQL_DOCKER_NETWORK=sitelayer-demo_app)
   fi
-  env "${demo_psql_env[@]}" MIGRATION_FILES="$migration_files" scripts/migrate-db.sh
+  env "${demo_psql_env[@]}" scripts/migrate-db.sh
   env "${demo_psql_env[@]}" scripts/check-db-schema.sh
   docker compose --env-file .env -f docker-compose.preview.yml -p sitelayer-demo run --rm --no-deps api \
     sh -lc 'npm install --no-audit --no-fund --prefer-offline && npm run seed:demo'

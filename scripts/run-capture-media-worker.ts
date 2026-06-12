@@ -141,28 +141,44 @@ async function main() {
 
   try {
     do {
-      await runGpuYield('on', logger)
-      try {
-        const companies = await listActiveCompanies(pool, companyOverride)
-        if (companies.length === 0) {
-          logger.warn({ company_slug: companyOverride }, '[capture-media-worker] no companies matched')
+      const companies = await listActiveCompanies(pool, companyOverride)
+      if (companies.length === 0) {
+        logger.warn({ company_slug: companyOverride }, '[capture-media-worker] no companies matched')
+      }
+      // Lazy GPU yield: only unload the llama-swap models when this pass has
+      // artifacts to analyze. The unconditional per-pass yield evicted every
+      // resident model ~2x/min around the clock for empty passes (audit
+      // 2026-06-12: 476 model loads in 99 min), starving the reducer and
+      // research lanes AND the worker's own llama-swap understanding engine.
+      const pending: typeof companies = []
+      for (const company of companies) {
+        try {
+          if ((await runner.countAnalyzable(company.id)) > 0) pending.push(company)
+        } catch (err) {
+          logger.error({ err, company_id: company.id }, '[capture-media-worker] pending peek failed')
+          pending.push(company) // fail open: analyze path decides
         }
-        for (const company of companies) {
-          try {
-            const summary = await runner.forceAnalyze(company.id)
-            logger.info(
-              { company_id: company.id, company_slug: company.slug, summary },
-              '[capture-media-worker] analyzed',
-            )
-          } catch (err) {
-            logger.error(
-              { err, company_id: company.id, company_slug: company.slug },
-              '[capture-media-worker] analyze failed',
-            )
+      }
+      if (pending.length > 0) {
+        await runGpuYield('on', logger)
+        try {
+          for (const company of pending) {
+            try {
+              const summary = await runner.forceAnalyze(company.id)
+              logger.info(
+                { company_id: company.id, company_slug: company.slug, summary },
+                '[capture-media-worker] analyzed',
+              )
+            } catch (err) {
+              logger.error(
+                { err, company_id: company.id, company_slug: company.slug },
+                '[capture-media-worker] analyze failed',
+              )
+            }
           }
+        } finally {
+          await runGpuYield('off', logger)
         }
-      } finally {
-        await runGpuYield('off', logger)
       }
       if (!once && !stopping) await sleep(intervalMs)
     } while (!once && !stopping)

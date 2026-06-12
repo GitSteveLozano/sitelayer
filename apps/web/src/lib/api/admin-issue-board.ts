@@ -9,10 +9,18 @@ import {
   type IssueBoardStatus,
 } from './issue-board'
 
+/**
+ * The two permanently-separate work-item domains. The admin board is the one
+ * deliberately cross-domain READ surface, so items carry their domain and the
+ * filter narrows opt-in — the domains themselves never bleed.
+ */
+export type AdminIssueBoardDomain = 'app_issue' | 'field_request'
+
 export interface AdminIssueBoardFilters {
   companyId?: string | null
   companySlug?: string | null
   groupBy?: IssueBoardGroupBy
+  domain?: AdminIssueBoardDomain | null
   status?: IssueBoardStatus | null
   lane?: IssueBoardLane | null
   assigneeUserId?: string | null
@@ -29,6 +37,7 @@ export interface AdminIssueBoardItem {
   companySlug: string
   companyName: string
   supportPacketId: string
+  domain: AdminIssueBoardDomain
   title: string
   summary: string | null
   status: IssueBoardStatus
@@ -82,6 +91,7 @@ type RawAdminIssueBoardItem = {
   company_name: string
   support_packet_id: string
   capture_session_id: string | null
+  domain: AdminIssueBoardDomain
   title: string
   summary: string | null
   status: IssueBoardStatus
@@ -104,6 +114,7 @@ export function normalizeAdminIssueBoardFilters(filters: AdminIssueBoardFilters 
     ...(filters.companyId ? { companyId: filters.companyId } : {}),
     ...(filters.companySlug ? { companySlug: filters.companySlug } : {}),
     ...(filters.groupBy ? { groupBy: filters.groupBy } : {}),
+    ...(filters.domain ? { domain: filters.domain } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.lane ? { lane: filters.lane } : {}),
     ...(filters.assigneeUserId ? { assigneeUserId: filters.assigneeUserId } : {}),
@@ -121,6 +132,7 @@ export function fetchAdminIssueBoard(filters: AdminIssueBoardFilters = {}): Prom
   setSearchParam(search, 'company_id', normalized.companyId)
   setSearchParam(search, 'company_slug', normalized.companySlug)
   setSearchParam(search, 'group_by', normalized.groupBy)
+  setSearchParam(search, 'domain', normalized.domain)
   setSearchParam(search, 'status', normalized.status)
   setSearchParam(search, 'lane', normalized.lane)
   setSearchParam(search, 'assignee_user_id', normalized.assigneeUserId)
@@ -174,6 +186,7 @@ function mapAdminIssueBoardItem(item: RawAdminIssueBoardItem): AdminIssueBoardIt
     companyName: item.company_name,
     supportPacketId: item.support_packet_id,
     captureSessionId: item.capture_session_id,
+    domain: item.domain,
     title: item.title,
     summary: item.summary,
     status: item.status,

@@ -73,8 +73,24 @@ raw agent churn — `dev` still tracks `dev`. See `docs/AUTO_DEPLOY.md` →
 
 ## Database story
 
+> **SUPERSEDED (2026-06-12):** Demo no longer runs against the managed
+> cluster. The executed reality is the **local Docker-Postgres backend** on
+> the preview droplet: `PREVIEW_DB_BACKEND=local` is persisted in
+> `/app/previews/.env.demo.shared`, so `scripts/deploy-preview.sh` points the
+> stack at the per-tier container DB
+> `postgres://sitelayer:sitelayer@preview-db:5432/sitelayer_demo`
+> (`docker-compose.preview-db.yml`, named volume
+> `sitelayer-demo_preview_db_data`). See `docs/ENVIRONMENTS_AND_MIGRATIONS.md`
+> §2 (the db-split) and `docs/PREVIEW_DEPLOYMENTS.md` (cutover mechanism).
+> The managed-cluster `sitelayer_demo_app` role mandate below is therefore
+> **not the current required state** — it applies only if demo is ever moved
+> back to the managed cluster. The local container has no path to
+> `sitelayer_prod` at all, which is the isolation the role was buying.
+
 - **Dedicated database:** `sitelayer_demo` on the existing managed cluster
   `sitelayer-db` (`9948c96b-b6b6-45ad-adf7-d20e4c206c66`). Already provisioned.
+  _(Historical — see the SUPERSEDED banner above; the live demo DB is the
+  `preview-db` container.)_
 - **App role (REQUIRED state — least privilege, NOT `doadmin`):** the demo tier
   MUST connect as the scoped `sitelayer_demo_app` role, **never** as `doadmin`.
   `doadmin` is the cluster superuser and `sitelayer-db` also hosts

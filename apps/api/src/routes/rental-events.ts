@@ -5,8 +5,7 @@ import {
   nextRentalEvents,
   parseRentalEventRequest,
   RENTAL_WORKFLOW_NAME,
-  RENTAL_WORKFLOW_SCHEMA_VERSION,
-  transitionRentalWorkflow,
+  rentalWorkflow,
   type RentalHumanEventType,
   type RentalWorkflowEvent,
   type RentalWorkflowSnapshot,
@@ -16,7 +15,8 @@ import type { ActiveCompany } from '../auth-types.js'
 import { recordAudit } from '../audit.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 // ---------------------------------------------------------------------------
 // Rental workflow event-API surface — completes Phase 2 of the rental
@@ -159,92 +159,75 @@ export async function handleRentalEventRoutes(
     const { event: eventType, state_version: stateVersion } = parsed.value
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<RentalRowWithState>(
-          `select ${RENTAL_EVENT_COLUMNS}
-           from rentals
-           where company_id = $1 and id = $2 and deleted_at is null
-           for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        // Post-lock version check — see rental-billing-state.ts comment.
-        // The workflow_event_log UNIQUE (entity_id, workflow_name, state_version)
-        // (migration 106) is a belt-and-braces backstop if a future caller
-        // forgets it.
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, row: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType as RentalHumanEventType, ctx.currentUserId)
-        let nextSnapshot: RentalWorkflowSnapshot
-        try {
-          nextSnapshot = transitionRentalWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            row: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<RentalRowWithState>(
-          `update rentals
-             set status = $3,
-                 state_version = $4,
-                 returned_on = case when $3 = 'returned' then coalesce(returned_on, now()::date) else returned_on end,
-                 returned_at = $5,
-                 returned_by = $6,
-                 closed_at = $7,
-                 closed_by = $8,
-                 version = version + 1,
-                 updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${RENTAL_EVENT_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.returned_at ?? null,
-            nextSnapshot.returned_by ?? null,
-            nextSnapshot.closed_at ?? null,
-            nextSnapshot.closed_by ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'rental update returned no row')
-
-        // Append-only workflow_event_log row in the same tx. Replay corpus
-        // for regression testing — feeding the event log back through the
-        // reducer must reproduce the persisted snapshot. UNIQUE
-        // (entity_id, state_version) prevents duplicate writes if a retry
-        // replays this transition.
-        await recordWorkflowEvent(client, {
+      // dispatchWorkflowEvent codifies the lock → version check → reduce →
+      // persist → workflow_event_log → ledger pipeline this route used to
+      // hand-roll (see apps/api/src/workflow-dispatch.ts). The event-log row
+      // (replay corpus, keyed UNIQUE (entity_id, state_version) on the
+      // BEFORE version) is appended by the primitive in the same tx.
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<RentalRowWithState, RentalWorkflowSnapshot, RentalWorkflowEvent>(client, {
+          definition: rentalWorkflow,
           companyId: ctx.company.id,
-          workflowName: RENTAL_WORKFLOW_NAME,
-          schemaVersion: RENTAL_WORKFLOW_SCHEMA_VERSION,
           entityType: 'rental',
-          entityId: updated.id,
-          stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
+          entityId: id,
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
-        // Audit/event ledger row keyed on state_version so each transition
-        // produces a distinct row (history-friendly).
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'rental',
-          entityId: updated.id,
-          action: `event:${eventType.toLowerCase()}`,
-          row: updated,
-          idempotencyKey: `rental:event:${updated.id}:${updated.state_version}`,
-        })
-        return { kind: 'ok' as const, row: updated, eventType }
-      })
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<RentalRowWithState>(
+              `select ${RENTAL_EVENT_COLUMNS}
+               from rentals
+               where company_id = $1 and id = $2 and deleted_at is null
+               for update`,
+              [ctx.company.id, id],
+            )
+            const current = lockedResult.rows[0]
+            if (!current) return null
+            return { row: current, snapshot: rowToSnapshot(current) }
+          },
+          buildEvent: () => buildReducerEvent(eventType as RentalHumanEventType, ctx.currentUserId),
+          persist: async (c, nextSnapshot) => {
+            const updateResult = await c.query<RentalRowWithState>(
+              `update rentals
+                 set status = $3,
+                     state_version = $4,
+                     returned_on = case when $3 = 'returned' then coalesce(returned_on, now()::date) else returned_on end,
+                     returned_at = $5,
+                     returned_by = $6,
+                     closed_at = $7,
+                     closed_by = $8,
+                     version = version + 1,
+                     updated_at = now()
+               where company_id = $1 and id = $2
+               returning ${RENTAL_EVENT_COLUMNS}`,
+              [
+                ctx.company.id,
+                id,
+                nextSnapshot.state,
+                nextSnapshot.state_version,
+                nextSnapshot.returned_at ?? null,
+                nextSnapshot.returned_by ?? null,
+                nextSnapshot.closed_at ?? null,
+                nextSnapshot.closed_by ?? null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new HttpError(500, 'rental update returned no row')
+            return updated
+          },
+          sideEffects: async (c, _next, updated) => {
+            // Audit/event ledger row keyed on state_version so each transition
+            // produces a distinct row (history-friendly).
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'rental',
+              entityId: updated.id,
+              action: `event:${eventType.toLowerCase()}`,
+              row: updated,
+              idempotencyKey: `rental:event:${updated.id}:${updated.state_version}`,
+            })
+          },
+        }),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'rental not found' })
@@ -270,11 +253,11 @@ export async function handleRentalEventRoutes(
         actorUserId: ctx.currentUserId,
         entityType: 'rental',
         entityId: result.row.id,
-        action: `event:${result.eventType.toLowerCase()}`,
+        action: `event:${eventType.toLowerCase()}`,
         after: result.row,
       })
-      observeAudit('rental', `event:${result.eventType.toLowerCase()}`)
-      const outcome = workflowEventOutcome(result.eventType)
+      observeAudit('rental', `event:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(RENTAL_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.row))
       return true

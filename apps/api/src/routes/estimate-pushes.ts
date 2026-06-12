@@ -3,10 +3,9 @@ import type { Pool, PoolClient } from 'pg'
 import { sumMoney } from '@sitelayer/domain'
 import {
   ESTIMATE_PUSH_WORKFLOW_NAME,
-  ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
+  estimatePushWorkflow,
   nextEstimatePushEvents,
   parseEstimatePushEventRequest,
-  transitionEstimatePushWorkflow,
   type EstimatePushHumanEventType,
   type EstimatePushWorkflowEvent,
   type EstimatePushWorkflowSnapshot,
@@ -14,7 +13,8 @@ import {
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { HttpError } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
@@ -420,109 +420,101 @@ export async function handleEstimatePushRoutes(
 
     try {
       const result = await withMutationTx(async (client) => {
-        const lockedResult = await client.query<EstimatePushRow>(
-          `select ${ESTIMATE_PUSH_COLUMNS}
-           from estimate_pushes
-           where company_id = $1 and id = $2 and deleted_at is null
-           for update`,
-          [ctx.company.id, pushId],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, row: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType, ctx.currentUserId)
-        let nextSnapshot: EstimatePushWorkflowSnapshot
-        try {
-          nextSnapshot = transitionEstimatePushWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            row: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<EstimatePushRow>(
-          `update estimate_pushes
-             set status = $3,
-                 state_version = $4,
-                 reviewed_at = $5,
-                 reviewed_by = $6,
-                 approved_at = $7,
-                 approved_by = $8,
-                 posted_at = $9,
-                 failed_at = $10,
-                 error = $11,
-                 qbo_estimate_id = $12,
-                 version = version + 1,
-                 updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${ESTIMATE_PUSH_COLUMNS}`,
-          [
-            ctx.company.id,
-            pushId,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.reviewed_at ?? null,
-            nextSnapshot.reviewed_by ?? null,
-            nextSnapshot.approved_at ?? null,
-            nextSnapshot.approved_by ?? null,
-            nextSnapshot.posted_at ?? null,
-            nextSnapshot.failed_at ?? null,
-            nextSnapshot.error ?? null,
-            nextSnapshot.qbo_estimate_id ?? null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'estimate push update returned no row')
-
-        await recordWorkflowEvent(client, {
+        const dispatched = await dispatchWorkflowEvent<
+          EstimatePushRow,
+          EstimatePushWorkflowSnapshot,
+          EstimatePushWorkflowEvent
+        >(client, {
+          definition: estimatePushWorkflow,
           companyId: ctx.company.id,
-          workflowName: ESTIMATE_PUSH_WORKFLOW_NAME,
-          schemaVersion: ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
           entityType: 'estimate_push',
-          entityId: updated.id,
-          stateVersion: stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
+          entityId: pushId,
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<EstimatePushRow>(
+              `select ${ESTIMATE_PUSH_COLUMNS}
+                 from estimate_pushes
+                 where company_id = $1 and id = $2 and deleted_at is null
+                 for update`,
+              [ctx.company.id, pushId],
+            )
+            const row = lockedResult.rows[0]
+            if (!row) return null
+            return { row, snapshot: rowToSnapshot(row) }
+          },
+          buildEvent: () => buildReducerEvent(eventType, ctx.currentUserId),
+          persist: async (c, next) => {
+            const updateResult = await c.query<EstimatePushRow>(
+              `update estimate_pushes
+                   set status = $3,
+                       state_version = $4,
+                       reviewed_at = $5,
+                       reviewed_by = $6,
+                       approved_at = $7,
+                       approved_by = $8,
+                       posted_at = $9,
+                       failed_at = $10,
+                       error = $11,
+                       qbo_estimate_id = $12,
+                       version = version + 1,
+                       updated_at = now()
+                 where company_id = $1 and id = $2
+                 returning ${ESTIMATE_PUSH_COLUMNS}`,
+              [
+                ctx.company.id,
+                pushId,
+                next.state,
+                next.state_version,
+                next.reviewed_at ?? null,
+                next.reviewed_by ?? null,
+                next.approved_at ?? null,
+                next.approved_by ?? null,
+                next.posted_at ?? null,
+                next.failed_at ?? null,
+                next.error ?? null,
+                next.qbo_estimate_id ?? null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new HttpError(500, 'estimate push update returned no row')
+            return updated
+          },
+          sideEffects: async (c, _next, updated) => {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'estimate_push',
+              entityId: updated.id,
+              action: `event:${eventType.toLowerCase()}`,
+              row: updated,
+              idempotencyKey: `estimate_push:event:${updated.id}:${updated.state_version}`,
+            })
 
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'estimate_push',
-          entityId: updated.id,
-          action: `event:${eventType.toLowerCase()}`,
-          row: updated,
-          idempotencyKey: `estimate_push:event:${updated.id}:${updated.state_version}`,
+            if (eventType === 'POST_REQUESTED') {
+              const lines = await fetchPushLines(c, ctx.company.id, pushId)
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'estimate_push',
+                entityId: updated.id,
+                action: 'post_qbo_estimate',
+                mutationType: 'post_qbo_estimate',
+                row: updated,
+                outboxPayload: {
+                  estimate_push_id: updated.id,
+                  project_id: updated.project_id,
+                  customer_id: updated.customer_id,
+                  subtotal: updated.subtotal,
+                  lines,
+                },
+                idempotencyKey: `estimate_push:post:${updated.id}`,
+              })
+            }
+          },
         })
-
-        if (eventType === 'POST_REQUESTED') {
-          const lines = await fetchPushLines(client, ctx.company.id, pushId)
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'estimate_push',
-            entityId: updated.id,
-            action: 'post_qbo_estimate',
-            mutationType: 'post_qbo_estimate',
-            row: updated,
-            outboxPayload: {
-              estimate_push_id: updated.id,
-              project_id: updated.project_id,
-              customer_id: updated.customer_id,
-              subtotal: updated.subtotal,
-              lines,
-            },
-            idempotencyKey: `estimate_push:post:${updated.id}`,
-          })
-        }
+        if (dispatched.kind !== 'ok') return dispatched
 
         const lines = await fetchPushLines(client, ctx.company.id, pushId)
-        return { kind: 'ok' as const, row: updated, lines, eventType }
+        return { ...dispatched, lines }
       })
 
       if (result.kind === 'not_found') {
@@ -551,11 +543,11 @@ export async function handleEstimatePushRoutes(
         actorUserId: ctx.currentUserId,
         entityType: 'estimate_push',
         entityId: result.row.id,
-        action: `event:${result.eventType.toLowerCase()}`,
+        action: `event:${eventType.toLowerCase()}`,
         after: result.row,
       })
-      observeAudit('estimate_push', `event:${result.eventType.toLowerCase()}`)
-      const outcome = workflowEventOutcome(result.eventType)
+      observeAudit('estimate_push', `event:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(ESTIMATE_PUSH_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.row, result.lines))
       return true

@@ -30,6 +30,8 @@ export type HandoffEventType =
   | 'agent.dispatch_retried'
   | 'agent.dispatch_cancel_requested'
   | 'agent.callback_missing'
+  | 'agent.failed'
+  | 'agent.dispatch_expired'
   | 'agent.message_received'
   | 'agent.artifact_attached'
   | 'agent.proposal_ready'

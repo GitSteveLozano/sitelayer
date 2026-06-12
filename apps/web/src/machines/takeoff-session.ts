@@ -10,7 +10,8 @@ import { calculateLinealLength, calculatePolygonArea, type PitchDriver, type Tak
  * ---------------
  * The canvas (`screens/desktop/est-canvas.tsx`, ~5.4k lines) scattered its
  * session across ~40 `useState` atoms spread over three divergent surfaces
- * (desktop body, phone body, and `screens/projects/takeoff-canvas.tsx`). There
+ * (desktop body, phone body, and the since-retired v1
+ * `screens/projects/takeoff-canvas.tsx`, deleted 2026-06-12). There
  * was no way to *assert* or *inject* a canvas state, so getting a tester into
  * "mid-polygon-draw with 3 points placed" or "AI capture pending review" meant
  * replaying a multi-minute click path. This machine absorbs all of that UI
@@ -133,8 +134,16 @@ export interface TakeoffSelectionSlice {
 export interface TakeoffCaptureSlice {
   kind: TakeoffCaptureKind | null
   /** live = real pipeline call; dry-run = deterministic stub. An ATTRIBUTE,
-   *  never a hardcoded assumption (the old projects surface pinned dryRun:true). */
+   *  never a hardcoded assumption (the old projects surface pinned dryRun:true).
+   *  After a run completes, the runCapture actor overwrites this with the
+   *  SERVER-resolved mode (from the draft's `capture_provenance`) so the
+   *  review overlay's LIVE/DEMO chip reflects what actually happened, not what
+   *  was requested. */
   mode: 'live' | 'dry-run'
+  /** The takeoff draft CREATED by the capture run (POST /capture creates a new
+   *  draft). Promote targets this draft, never the session's pre-capture
+   *  `draftId`. Null until a run completes. */
+  draftId: string | null
   /** Captured result JSON awaiting review (shape owned by capture-schema). */
   result: unknown | null
   /** Per-quantity-id review decisions. */
@@ -230,20 +239,43 @@ export interface TakeoffSessionDeps {
     worldDistance: number
     unit: string
   }) => Promise<void>
-  /** Run a capture pipeline; returns the review-required result_json. */
+  /** Run a capture pipeline; resolves once the result is reviewable.
+   *  REAL contract (async-capture split 2026-06-12, wired by
+   *  `takeoff-session-deps.ts`): POST /capture (creates a NEW draft; a live
+   *  read answers 202 'processing'), then poll GET /takeoff-drafts/:id/result
+   *  until the status leaves 'processing'. A 'failed' status REJECTS (provider
+   *  errors never produce stub rows). `mode`/`draftId` in the output are the
+   *  server-resolved honesty signals — when present they overwrite the
+   *  requested mode and record the capture-created draft for promote. */
   runCapture: (input: {
     projectId: string
     draftId: string | null
     kind: TakeoffCaptureKind
     mode: 'live' | 'dry-run'
-  }) => Promise<{ result: unknown }>
-  /** Promote selected captured quantities into committed measurements. */
+  }) => Promise<TakeoffCaptureRunOutput>
+  /** Promote selected captured quantities into committed measurements.
+   *  `draftId` is the capture-created draft (capture.draftId) when one exists,
+   *  else the session draft. */
   promoteCaptured: (input: { projectId: string; draftId: string | null; quantityIds: string[] }) => Promise<void>
 }
 
-/** Default deps throw until wired into the screen (next PR). The machine is
- *  fully usable now via the factory with injected deps (tests) — nothing calls
- *  these until the canvas screen passes real lib/api-backed implementations. */
+/** Output of a completed capture run (see {@link TakeoffSessionDeps.runCapture}). */
+export interface TakeoffCaptureRunOutput {
+  /** The reviewable result JSON (shape owned by capture-schema). */
+  result: unknown
+  /** Server-resolved honesty signal: 'live' only when the draft's
+   *  `capture_provenance` is a real provider read. Optional for injected test
+   *  deps — absent keeps the requested mode. */
+  mode?: 'live' | 'dry-run'
+  /** Id of the draft the capture run created (promote targets it). */
+  draftId?: string | null
+}
+
+/** Default deps throw until wired. The REAL lib/api-backed capture/promote
+ *  implementations live in `takeoff-session-deps.ts`
+ *  (`createTakeoffSessionApiDeps`) — the est-canvas bodies pass those; tests
+ *  inject synchronous mocks. The remaining actors (commit / calibrate) still
+ *  persist via the screens' hybrid TanStack-Query path and are never invoked. */
 export const unwiredTakeoffSessionDeps: TakeoffSessionDeps = {
   loadSession: async ({ blueprintId, pageId, draftId }) => ({ blueprintId, pageId, draftId }),
   commitMeasurement: async () => {
@@ -325,7 +357,7 @@ function defaultSelection(): TakeoffSelectionSlice {
   return { selectedId: null, bulkIds: [], reassignIds: null, editGeomId: null, editPoints: null }
 }
 function defaultCapture(): TakeoffCaptureSlice {
-  return { kind: null, mode: 'dry-run', result: null, decisions: {}, showLow: true }
+  return { kind: null, mode: 'dry-run', draftId: null, result: null, decisions: {}, showLow: true }
 }
 
 export interface BuildTakeoffSessionContextInput {
@@ -404,7 +436,7 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
           unit: calibration.unit,
         })
       }),
-      runCapture: fromPromise<{ result: unknown }, { context: TakeoffSessionContext }>(async ({ input }) =>
+      runCapture: fromPromise<TakeoffCaptureRunOutput, { context: TakeoffSessionContext }>(async ({ input }) =>
         deps.runCapture({
           projectId: input.context.projectId,
           draftId: input.context.draftId,
@@ -415,7 +447,9 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
       promoteCaptured: fromPromise<void, { context: TakeoffSessionContext; quantityIds: string[] }>(async ({ input }) =>
         deps.promoteCaptured({
           projectId: input.context.projectId,
-          draftId: input.context.draftId,
+          // Promote targets the draft the capture run CREATED; the session
+          // draftId is only a fallback for seeded/legacy states.
+          draftId: input.context.capture.draftId ?? input.context.draftId,
           quantityIds: input.quantityIds,
         }),
       ),
@@ -560,6 +594,7 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
                 ...context.capture,
                 kind: event.kind,
                 mode: event.mode ?? context.capture.mode,
+                draftId: null,
                 result: null,
                 decisions: {},
               }),
@@ -769,7 +804,15 @@ export function createTakeoffSessionMachine(deps: TakeoffSessionDeps = unwiredTa
               onDone: {
                 target: 'reviewing',
                 actions: assign({
-                  capture: ({ context, event }) => ({ ...context.capture, result: event.output.result }),
+                  // The output's mode/draftId are the server-resolved honesty
+                  // signals — adopt them when present so the review overlay's
+                  // LIVE/DEMO chip reflects what actually ran.
+                  capture: ({ context, event }) => ({
+                    ...context.capture,
+                    result: event.output.result,
+                    mode: event.output.mode ?? context.capture.mode,
+                    draftId: event.output.draftId ?? context.capture.draftId,
+                  }),
                 }),
               },
               onError: {

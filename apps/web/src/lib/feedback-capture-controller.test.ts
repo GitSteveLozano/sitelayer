@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   FeedbackCaptureController,
   FeedbackCaptureQueuedError,
+  FeedbackCaptureStaleSessionError,
   type FeedbackCaptureBackend,
 } from './feedback-capture-controller'
+import { ApiError } from './api/client'
 
 function backend(): FeedbackCaptureBackend & {
   startSession: ReturnType<typeof vi.fn>
@@ -481,6 +483,104 @@ describe('FeedbackCaptureController', () => {
       }),
     )
     expect(controller.status).toBe('queued')
+    expect(controller.activeCaptureSessionId).toBeNull()
+  })
+
+  it('clears local session state on a stale-session 409 so the user can start fresh', async () => {
+    const api = backend()
+    const audio = audioRecorder()
+    const replay = replayRecorder()
+    api.finalizeSession.mockRejectedValueOnce(
+      new ApiError({
+        status: 409,
+        path: '/api/capture-sessions/00000000-0000-4000-8000-000000000123/finalize',
+        method: 'POST',
+        requestId: null,
+        body: { error: 'capture session has already been finalized' },
+      }),
+    )
+    const controller = new FeedbackCaptureController({
+      backend: api,
+      audioRecorder: audio,
+      replayRecorder: replay,
+      // Even with an offline queue configured, a 409 is NOT replayable — the
+      // stale branch must win over the queue path.
+      offlineQueue: { target: { type: 'authenticated' }, enqueueMutation: vi.fn(async () => ({ id: 'never' })) },
+    })
+
+    await controller.start({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      consent_version: 'portal-feedback-v1',
+    })
+
+    const stop = controller.stop({ title: 'Stale session' })
+    await expect(stop).rejects.toBeInstanceOf(FeedbackCaptureStaleSessionError)
+    await expect(stop).rejects.toMatchObject({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+    })
+
+    // The wedge is gone: no retained session, no retryable stop, back to idle.
+    expect(controller.status).toBe('idle')
+    expect(controller.activeCaptureSessionId).toBeNull()
+    expect(controller.canRetryStop).toBe(false)
+    expect(audio.cancel).toHaveBeenCalled()
+    expect(replay.cancel).toHaveBeenCalled()
+
+    // A fresh start works immediately.
+    await controller.start({
+      capture_session_id: '00000000-0000-4000-8000-000000000456',
+      consent_version: 'portal-feedback-v1',
+    })
+    expect(controller.status).toBe('recording')
+    expect(controller.activeCaptureSessionId).toBe('00000000-0000-4000-8000-000000000456')
+  })
+
+  it('treats a status-shaped 409 (non-ApiError) from stop the same way', async () => {
+    const api = backend()
+    const audio = audioRecorder()
+    api.uploadArtifact.mockRejectedValueOnce({ status: 409, message: 'capture session is finalized' })
+    const controller = new FeedbackCaptureController({
+      backend: api,
+      audioRecorder: audio,
+      replayRecorder: null,
+    })
+
+    await controller.start({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      consent_version: 'portal-feedback-v1',
+    })
+
+    await expect(controller.stop({ title: 'Stale' })).rejects.toBeInstanceOf(FeedbackCaptureStaleSessionError)
+    expect(controller.status).toBe('idle')
+    expect(controller.activeCaptureSessionId).toBeNull()
+    expect(controller.canRetryStop).toBe(false)
+  })
+
+  it('completes a discard locally when the server says the session is already terminal (409)', async () => {
+    const api = backend()
+    const audio = audioRecorder()
+    api.discardSession.mockRejectedValueOnce(
+      new ApiError({
+        status: 409,
+        path: '/api/capture-sessions/00000000-0000-4000-8000-000000000123/discard',
+        method: 'POST',
+        requestId: null,
+        body: { error: 'capture session is finalized' },
+      }),
+    )
+    const controller = new FeedbackCaptureController({
+      backend: api,
+      audioRecorder: audio,
+      replayRecorder: null,
+    })
+
+    await controller.start({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      consent_version: 'portal-feedback-v1',
+    })
+    await controller.discard()
+
+    expect(controller.status).toBe('discarded')
     expect(controller.activeCaptureSessionId).toBeNull()
   })
 

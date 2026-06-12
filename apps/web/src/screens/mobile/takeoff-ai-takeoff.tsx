@@ -26,17 +26,23 @@
  * WIRED to the real capture pipeline. There are two RUN paths (preserved from the
  * desktop twin — the mobile twin only had the dry-run path; the merge gives mobile
  * the live path too, additively):
- *   - LIVE: when the API reports live mode is available (BLUEPRINT_VISION_MODE=live
- *     + ANTHROPIC_API_KEY, surfaced via /api/features) AND the project has a
- *     blueprint document, the screen downloads that blueprint PDF and streams it as
- *     multipart/form-data so the API runs the real Claude-vision sheet read. The
- *     response carries result_summary.mode='live'.
+ *   - LIVE (ASYNC since 2026-06-12): when the API reports live mode is available
+ *     (Gemini prod default or env-gated Anthropic, surfaced via /api/features) AND
+ *     the project has a blueprint document, the screen downloads that blueprint PDF
+ *     and streams it as multipart/form-data. The API answers 202 with
+ *     result_summary.status='processing' and NO inline result — the worker runs the
+ *     provider read; the review screen polls GET /api/takeoff-drafts/:id/result
+ *     (useTakeoffDraftResult refetchInterval) until the status leaves 'processing'.
  *   - DRY-RUN: otherwise (no blueprint, live mode off, or any live-path error) it
- *     posts the dry-run JSON payload — deterministic demo quantities, no Anthropic
- *     spend, and keeps the demo badge.
+ *     posts the dry-run JSON payload — deterministic demo quantities (201, sync),
+ *     no provider spend, and keeps the demo badge.
  * REVIEW reads the draft's stored TakeoffResult and promotes the kept quantities to
- * committed `takeoff_measurements` via .../:draftId/promote; it shows the demo badge
- * only for dry-run drafts and an "AI read · review required" affordance for live ones.
+ * committed `takeoff_measurements` via .../:draftId/promote. While the worker is
+ * still processing it renders an explicit in-progress state; a failed capture
+ * surfaces the provider error (zero fabricated rows) with a "run again" retry that
+ * re-POSTs /capture (fresh draft). The demo-vs-live badge keys off the server's
+ * `provenance` discriminator ('stub-dry-run' = demo, '*-live' = real read), falling
+ * back to the navigation-state capture mode for processing/pre-migration drafts.
  *
  * The symbol→item target toggles + sheet scope stay presentational — the capture
  * endpoint takes no per-target/per-sheet selection (GAP LIST). They still gate RUN
@@ -47,7 +53,9 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DLoadingState, type DColumn } from '../../components/d/index.js'
 import { MAiStripe, MBanner, MButton, MI, MInput, MPill, Spark } from '../../components/m/index.js'
 import {
+  draftResultStatus,
   fetchBlueprintFile,
+  isLiveProvenance,
   promoteRejectionsFromError,
   useBlueprintVisionLiveAvailable,
   useCaptureBlueprintVisionLive,
@@ -60,6 +68,7 @@ import {
   type PromoteResponse,
 } from '../../lib/api/takeoff-drafts.js'
 import { useProjectBlueprints } from '../../lib/api/takeoff.js'
+import { reviewFloorLabel, statusForConfidence, type ReviewFloorStatus } from '../../machines/takeoff-confidence.js'
 
 // ---------------------------------------------------------------------------
 // Demo-data notice (C1, takeoff deep-dive 2026-06-01).
@@ -83,6 +92,15 @@ const DEMO_BADGE_BODY =
 const LIVE_BADGE_TITLE = 'AI READ · REVIEW REQUIRED'
 const LIVE_BADGE_BODY =
   'These quantities were measured from your blueprint by the AI sheet read. They are a starting point, not a final takeoff — verify every line against the drawing before you accept it into a bid.'
+
+// Async-capture states (2026-06-12). A LIVE capture is 202-accepted and runs on
+// the worker: review polls the draft result until the status leaves
+// 'processing'. A failed read produces ZERO fabricated rows — the only honest
+// render is the provider error plus a re-run affordance (fresh POST /capture).
+const PROCESSING_TITLE = 'AI READ IN PROGRESS'
+const PROCESSING_BODY =
+  'The AI is reading your blueprint on the server. This screen updates automatically — quantities appear when the read completes.'
+const FAILED_TITLE = 'AI READ FAILED · NO QUANTITIES PRODUCED'
 
 // Capture mode discriminator carried setup → review (via navigation state) and
 // returned on result_summary.mode. Absent ⇒ treated as 'dry-run' (demo badge).
@@ -204,14 +222,11 @@ const TARGETS: Target[] = [
   { sym: 'JOINT LINE', item: 'Sealant', param: 'LINEAR · PERIM', on: false },
 ]
 
-// Shared setup hook — owns the target toggles + the two RUN paths (LIVE multipart
-// Claude-vision + DRY-RUN JSON stub). Both the responsive screen and the
-// standalone `EstAiTakeoffSetupPanel` (consumed by the desktop est-canvas overlay)
-// use it, so the capture logic lives in exactly one place.
-function useTakeoffSetup(projectId: string, onReviewDraft: (draftId: string, mode: CaptureMode) => void) {
-  // Target toggles stay presentational (the capture endpoint takes no per-target
-  // selection — GAP). They still gate RUN (≥1 target).
-  const [targets, setTargets] = useState<Target[]>(TARGETS)
+// Shared RUN hook — owns the two capture paths (LIVE multipart provider read +
+// DRY-RUN JSON stub). Used by the setup hook below AND by the review screen's
+// failed-capture retry (a re-run is always a fresh POST /capture → fresh draft),
+// so the capture logic lives in exactly one place.
+function useRunAutoTakeoff(projectId: string, onReviewDraft: (draftId: string, mode: CaptureMode) => void) {
   const capture = useCaptureTakeoffDraft(projectId)
   const captureLive = useCaptureBlueprintVisionLive(projectId)
 
@@ -229,9 +244,6 @@ function useTakeoffSetup(projectId: string, onReviewDraft: (draftId: string, mod
   const isPending = capture.isPending || captureLive.isPending
   const errorMessage = liveError ?? capture.error?.message ?? captureLive.error?.message ?? null
 
-  const toggle = (index: number) => setTargets((prev) => prev.map((t, i) => (i === index ? { ...t, on: !t.on } : t)))
-  const enabled = targets.filter((t) => t.on).length
-
   // draft_kind='takeoff' tags the draft so the company AI queue routes its
   // "Review draft →" back to this takeoff reviewer (migration 122). It is also
   // the API default, but we send it explicitly to keep the two AI flows
@@ -248,9 +260,11 @@ function useTakeoffSetup(projectId: string, onReviewDraft: (draftId: string, mod
     setLiveError(null)
 
     // LIVE path: download the project's blueprint PDF and stream it as
-    // multipart/form-data so the API runs the real Claude-vision sheet read. Any
-    // failure (storage read, network, API error) falls back to dry-run so the
-    // estimator always lands on a reviewable draft.
+    // multipart/form-data. Since the 2026-06-12 async split a live capture is
+    // ACCEPTED (202, result_summary.status='processing') rather than run
+    // inline — the review screen polls the draft result until the worker
+    // finishes. Any failure here (storage read, network, API rejection) falls
+    // back to dry-run so the estimator always lands on a reviewable draft.
     if (canRunLive && firstBlueprint) {
       void fetchBlueprintFile(firstBlueprint.id, firstBlueprint.file_name)
         .then((file) =>
@@ -269,12 +283,27 @@ function useTakeoffSetup(projectId: string, onReviewDraft: (draftId: string, mod
       return
     }
 
-    // DRY-RUN path: JSON body → deterministic stub on the API; no Anthropic
-    // spend. Carries the real draft id + mode into the review lane.
+    // DRY-RUN path: JSON body → deterministic stub on the API (synchronous
+    // 201); no provider spend. Carries the real draft id + mode into review.
     runDryRun()
   }
 
-  return { targets, toggle, enabled, canRunLive, isPending, errorMessage, runTakeoff }
+  return { canRunLive, isPending, errorMessage, runTakeoff }
+}
+
+// Shared setup hook — target toggles over the shared RUN hook. Both the
+// responsive screen and the standalone `EstAiTakeoffSetupPanel` (consumed by
+// the desktop est-canvas overlay) use it.
+function useTakeoffSetup(projectId: string, onReviewDraft: (draftId: string, mode: CaptureMode) => void) {
+  // Target toggles stay presentational (the capture endpoint takes no per-target
+  // selection — GAP). They still gate RUN (≥1 target).
+  const [targets, setTargets] = useState<Target[]>(TARGETS)
+  const run = useRunAutoTakeoff(projectId, onReviewDraft)
+
+  const toggle = (index: number) => setTargets((prev) => prev.map((t, i) => (i === index ? { ...t, on: !t.on } : t)))
+  const enabled = targets.filter((t) => t.on).length
+
+  return { targets, toggle, enabled, ...run }
 }
 
 type TakeoffSetupState = ReturnType<typeof useTakeoffSetup>
@@ -626,27 +655,14 @@ export function TakeoffAiTakeoffSetup({ companySlug }: { companySlug: string }) 
 // Review — accept/adjust AI-detected quantities (from the real captured
 // TakeoffResult), then promote the kept ones to committed measurements.
 // ---------------------------------------------------------------------------
-type ReviewStatus = 'ok' | 'review' | 'flag'
+// Review-floor thresholds come from the SHARED `machines/takeoff-confidence`
+// module (wave-3 convergence) — it mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR
+// (0.7) in @sitelayer/capture-schema, the API's review_required gate. (The old
+// mobile twin had drifted to a private 0.8 floor — exactly why the single
+// module exists.)
+type ReviewStatus = ReviewFloorStatus
 
-// Mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR (0.7) in @sitelayer/capture-schema:
-// the API flags any captured quantity below this as review_required. Keep in sync.
-// (We adopt the desktop twin's 0.7 floor; the old mobile twin used 0.8 — the 0.7
-// floor is the one that matches the API gate.)
-const REVIEW_CONFIDENCE_FLOOR = 0.7
-
-/** Rows at/above the API review floor are safe to keep by default; below it the
- * estimator must review before accepting. <0.5 is flagged as low-confidence. */
-function statusForConfidence(confidence: number): ReviewStatus {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'ok'
-  if (confidence >= 0.5) return 'review'
-  return 'flag'
-}
-
-function confidenceLabel(confidence: number): 'HIGH' | 'MED' | 'LOW' {
-  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'HIGH'
-  if (confidence >= 0.5) return 'MED'
-  return 'LOW'
-}
+const confidenceLabel = reviewFloorLabel
 
 function statusColor(status: ReviewStatus): string {
   return status === 'ok' ? 'var(--m-green)' : status === 'review' ? 'var(--m-amber)' : 'var(--m-red)'
@@ -742,12 +758,33 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
 
   const draftId = useReviewDraftId(projectId)
   const mode = useReviewMode()
-  const isLive = mode === 'live'
   const resultQuery = useTakeoffDraftResult(draftId)
   const promote = usePromoteCapturedQuantities(projectId, draftId)
 
+  // Async-capture poll states (2026-06-12). While 'processing' the hook keeps
+  // refetching on an interval; 'failed' carries the provider error and ZERO
+  // fabricated rows; 'ready' is the reviewable state below.
+  const captureStatus = draftResultStatus(resultQuery.data)
+  const isProcessing = captureStatus === 'processing'
+  const isFailed = captureStatus === 'failed'
+  const captureError = resultQuery.data?.error ?? null
+
+  // Demo-vs-live: prefer the server's honest provenance discriminator
+  // ('stub-dry-run' = demo rows, '*-live' = real provider read); fall back to
+  // the navigation-state capture mode for processing / pre-migration drafts
+  // (which defaults to the conservative demo badge).
+  const provenanceIsLive = isLiveProvenance(resultQuery.data?.provenance)
+  const isLive = provenanceIsLive ?? mode === 'live'
+
+  // Failed-capture retry: re-running is a fresh POST /capture → fresh draft.
+  // Swap the review target to the new draft in place (replace: the broken
+  // draft shouldn't stay on the Back stack).
+  const retry = useRunAutoTakeoff(projectId, (id, retryMode) =>
+    navigate(nav.toReview(), { state: { draftId: id, mode: retryMode }, replace: true }),
+  )
+
   const quantities = useMemo<CapturedQuantity[]>(
-    () => resultQuery.data?.takeoff_result.quantities ?? [],
+    () => resultQuery.data?.takeoff_result?.quantities ?? [],
     [resultQuery.data],
   )
 
@@ -973,12 +1010,18 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
             className="m-topbar-eyebrow"
             style={{
               display: 'inline-block',
-              background: isLive ? 'var(--m-green)' : 'var(--m-amber)',
+              background: isProcessing
+                ? 'var(--m-amber)'
+                : isFailed
+                  ? 'var(--m-red)'
+                  : isLive
+                    ? 'var(--m-green)'
+                    : 'var(--m-amber)',
               color: 'var(--m-ink)',
               padding: '3px 8px',
             }}
           >
-            {isLive ? 'AI READ' : 'DEMO'} ·{' '}
+            {isProcessing ? 'AI READ · IN PROGRESS' : isFailed ? 'AI READ · FAILED' : isLive ? 'AI READ' : 'DEMO'} ·{' '}
             {resultQuery.data?.source ? resultQuery.data.source.toUpperCase() : 'AI DRAFT'}
           </span>
           <h2
@@ -993,9 +1036,13 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
           >
             {resultQuery.isLoading
               ? 'Loading draft…'
-              : quantities.length > 0
-                ? `${quantities.length} detected ${quantities.length === 1 ? 'quantity' : 'quantities'}.`
-                : 'No quantities detected.'}
+              : isProcessing
+                ? 'Reading your blueprint…'
+                : isFailed
+                  ? 'AI read failed.'
+                  : quantities.length > 0
+                    ? `${quantities.length} detected ${quantities.length === 1 ? 'quantity' : 'quantities'}.`
+                    : 'No quantities detected.'}
           </h2>
           <div
             style={{
@@ -1011,7 +1058,44 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
         </div>
 
         <div style={{ padding: '14px 20px 0' }}>
-          {isLive ? (
+          {/* Poll states render INSTEAD of the demo/live badge — there are no
+              quantities to label while processing, and a failed read must show
+              the provider error + retry, never a badge over fabricated rows. */}
+          {isProcessing ? (
+            <MBanner
+              tone="attention"
+              icon={<MI.FileText size={18} />}
+              title={PROCESSING_TITLE}
+              body={PROCESSING_BODY}
+            />
+          ) : isFailed ? (
+            <>
+              <MBanner
+                tone="warn"
+                icon={<MI.AlertTri size={18} />}
+                title={FAILED_TITLE}
+                body={captureError ?? 'The AI provider returned an error. No quantities were produced.'}
+              />
+              <div style={{ marginTop: 10 }}>
+                <MButton variant="primary" onClick={retry.runTakeoff} disabled={retry.isPending}>
+                  {retry.isPending ? 'Re-running…' : 'Run AI read again'}
+                </MButton>
+                {retry.errorMessage ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: 'var(--m-red)',
+                    }}
+                  >
+                    ● {retry.errorMessage}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : isLive ? (
             <MBanner
               tone="attention"
               icon={<MI.FileText size={18} />}
@@ -1031,7 +1115,7 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
               Couldn&apos;t load the draft result. {resultQuery.error.message}
             </div>
           ) : null}
-          {!resultQuery.isLoading && !resultQuery.isError && quantities.length === 0 ? (
+          {!resultQuery.isLoading && !resultQuery.isError && !isProcessing && !isFailed && quantities.length === 0 ? (
             <div
               style={{
                 padding: 20,
@@ -1210,7 +1294,8 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
             <div>
               <DEyebrow>
                 {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} ·{' '}
-                {isLive ? 'AI read' : 'Demo'} · {quantities.length} items
+                {isProcessing ? 'AI read in progress' : isFailed ? 'AI read failed' : isLive ? 'AI read' : 'Demo'} ·{' '}
+                {quantities.length} items
               </DEyebrow>
               <DH1>Review draft</DH1>
             </div>
@@ -1233,40 +1318,83 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
             </div>
           ) : null}
 
-          {isLive ? (
+          {/* Poll states render INSTEAD of the demo/live badges (no quantities
+              exist to label while processing; a failed read surfaces the
+              provider error + retry, never fabricated rows). */}
+          {isProcessing ? (
             <MBanner
               tone="attention"
               icon={<MI.FileText size={18} />}
-              title={LIVE_BADGE_TITLE}
-              body={LIVE_BADGE_BODY}
+              title={PROCESSING_TITLE}
+              body={PROCESSING_BODY}
             />
-          ) : (
-            <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
-          )}
+          ) : null}
+          {isFailed ? (
+            <>
+              <MBanner
+                tone="warn"
+                icon={<MI.AlertTri size={18} />}
+                title={FAILED_TITLE}
+                body={captureError ?? 'The AI provider returned an error. No quantities were produced.'}
+              />
+              <div>
+                <MButton variant="primary" onClick={retry.runTakeoff} disabled={retry.isPending}>
+                  {retry.isPending ? 'Re-running…' : 'Run AI read again'}
+                </MButton>
+                {retry.errorMessage ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: 'var(--m-red)',
+                    }}
+                  >
+                    ● {retry.errorMessage}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {!isProcessing && !isFailed ? (
+            isLive ? (
+              <MBanner
+                tone="attention"
+                icon={<MI.FileText size={18} />}
+                title={LIVE_BADGE_TITLE}
+                body={LIVE_BADGE_BODY}
+              />
+            ) : (
+              <MBanner tone="warn" icon={<MI.AlertTri size={18} />} title={DEMO_BADGE_TITLE} body={DEMO_BADGE_BODY} />
+            )
+          ) : null}
 
-          {isLive ? (
-            <MAiStripe
-              tone="good"
-              eyebrow="AI auto-takeoff · LIVE"
-              title="AI-read quantities — review before you bid"
-              attribution="AI sheet read · review required"
-            >
-              These rows were measured from your blueprint by the AI sheet read — a starting point, not a finished
-              takeoff. The confidence buckets below flag where the AI was unsure. Nothing is committed until you accept
-              the draft; verify every line against the drawing first.
-            </MAiStripe>
-          ) : (
-            <MAiStripe
-              tone="warn"
-              eyebrow="AI auto-takeoff · DEMO"
-              title="Demo quantities — not a real AI sheet read"
-              attribution="Demo data · stub · review required"
-            >
-              This draft is demo/stub output — these rows are placeholder quantities, not measured from your blueprint.
-              The confidence buckets below are illustrative only. Nothing is committed until you accept the draft; do
-              not accept demo data into a real bid.
-            </MAiStripe>
-          )}
+          {!isProcessing && !isFailed ? (
+            isLive ? (
+              <MAiStripe
+                tone="good"
+                eyebrow="AI auto-takeoff · LIVE"
+                title="AI-read quantities — review before you bid"
+                attribution="AI sheet read · review required"
+              >
+                These rows were measured from your blueprint by the AI sheet read — a starting point, not a finished
+                takeoff. The confidence buckets below flag where the AI was unsure. Nothing is committed until you
+                accept the draft; verify every line against the drawing first.
+              </MAiStripe>
+            ) : (
+              <MAiStripe
+                tone="warn"
+                eyebrow="AI auto-takeoff · DEMO"
+                title="Demo quantities — not a real AI sheet read"
+                attribution="Demo data · stub · review required"
+              >
+                This draft is demo/stub output — these rows are placeholder quantities, not measured from your
+                blueprint. The confidence buckets below are illustrative only. Nothing is committed until you accept the
+                draft; do not accept demo data into a real bid.
+              </MAiStripe>
+            )
+          ) : null}
 
           {/* AI confidence triage (design dsg__54: OK / REVIEW / FLAGGED). */}
           <DKpiStrip>
@@ -1294,6 +1422,16 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
             <DLoadingState label="Promoting accepted quantities…" />
           ) : resultQuery.isLoading ? (
             <DLoadingState label="Loading captured draft…" />
+          ) : isProcessing ? (
+            <DLoadingState label="AI is reading your blueprint — this screen updates automatically…" />
+          ) : isFailed ? (
+            <DataTable<DesktopRow>
+              title="AI takeoff draft"
+              columns={columns}
+              rows={[]}
+              rowKey={(r) => r.id}
+              empty={`AI read failed: ${captureError ?? 'provider error'}. No quantities were produced — run the AI read again.`}
+            />
           ) : resultQuery.isError ? (
             <DataTable<DesktopRow>
               title="AI takeoff draft"

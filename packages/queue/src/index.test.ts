@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { QueryResult, QueryResultRow } from 'pg'
 import {
   DEDICATED_HANDLER_MUTATION_TYPES,
+  GENERIC_APPLY_MUTATION_TYPES,
+  GENERIC_APPLY_MUTATION_TYPE_PREFIXES,
+  isGenericApplyMutationType,
   processOutboxBatch,
   processQueue,
   processQueueWithClient,
   processRentalBillingInvoicePush,
   pruneAppliedQueue,
+  quarantineUnroutableOutbox,
   type QueueClient,
   type ReleasableQueueClient,
   type RentalBillingInvoicePushFn,
@@ -45,6 +49,8 @@ function sqlCalls(client: FakeQueueClient) {
 describe('queue processing', () => {
   it('claims ready outbox and sync rows with leases, applies them, and touches integration state', async () => {
     const client = new FakeQueueClient([
+      // quarantine pass (no unroutable rows)
+      { rows: [], rowCount: 0 },
       { rows: [{ id: '00000000-0000-0000-0000-000000000001' }], rowCount: 1 },
       {
         rows: [
@@ -87,21 +93,25 @@ describe('queue processing', () => {
 
     expect(result.processedOutboxCount).toBe(1)
     expect(result.processedSyncEventCount).toBe(1)
+    expect(result.quarantinedOutboxCount).toBe(0)
     expect(result.outbox[0]?.attempt_count).toBe(1)
     expect(result.syncEvents[0]?.direction).toBe('inbound')
-    expect(queries[0]).toContain('update mutation_outbox')
-    expect(queries[0]).toContain('for update skip locked')
+    // Query 0 is the unroutable-row quarantine sweep; the generic claim is 1.
+    expect(queries[0]).toContain("set status = 'failed'")
+    expect(queries[1]).toContain('update mutation_outbox')
+    expect(queries[1]).toContain('for update skip locked')
     // Exponential backoff + jitter (replaced the flat 5-min retry).
-    expect(queries[0]).toMatch(/next_attempt_at = now\(\) \+ \(/)
-    expect(queries[0]).toContain("least(interval '6 hours', interval '5 seconds' * power(2, least(attempt_count, 16)))")
-    expect(queries[0]).toContain('0.5 + random() * 0.5')
-    expect(queries[2]).toContain('update sync_events')
-    expect(queries[2]).toContain('for update skip locked')
-    expect(queries[4]).toContain('update integration_connections')
+    expect(queries[1]).toMatch(/next_attempt_at = now\(\) \+ \(/)
+    expect(queries[1]).toContain("least(interval '6 hours', interval '5 seconds' * power(2, least(attempt_count, 16)))")
+    expect(queries[1]).toContain('0.5 + random() * 0.5')
+    expect(queries[3]).toContain('update sync_events')
+    expect(queries[3]).toContain('for update skip locked')
+    expect(queries[5]).toContain('update integration_connections')
   })
 
   it('does not update integration state when no rows are ready', async () => {
     const client = new FakeQueueClient([
+      { rows: [], rowCount: 0 }, // quarantine
       { rows: [], rowCount: 0 },
       { rows: [], rowCount: 0 },
     ])
@@ -191,15 +201,114 @@ describe('queue processing', () => {
     expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('notify_foreman_decline')
   })
 
-  it('generic processOutboxBatch passes the dedicated-handler list to SQL', async () => {
+  it('claims the four formerly-missing dedicated job kinds (2026-06-12 regression)', () => {
+    // These four had dedicated runners but were MISSING from the exclusion
+    // list, so a lane pause / backlog / mid-heartbeat enqueue let the generic
+    // drain mark them applied with no work and a green audit trail.
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('takeoff_to_bid')
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('voice_to_log')
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('welcome_email')
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('damage_charge_invoice_push')
+    // …and the previously handler-less estimate-share email now has a runner.
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('send_estimate_share')
+  })
+
+  it('keeps the generic allowlist and the dedicated registry disjoint', () => {
+    for (const dedicated of DEDICATED_HANDLER_MUTATION_TYPES) {
+      expect(isGenericApplyMutationType(dedicated)).toBe(false)
+    }
+    for (const generic of GENERIC_APPLY_MUTATION_TYPES) {
+      expect([...DEDICATED_HANDLER_MUTATION_TYPES]).not.toContain(generic)
+    }
+    // No dedicated type may hide under a generic prefix either.
+    for (const prefix of GENERIC_APPLY_MUTATION_TYPE_PREFIXES) {
+      for (const dedicated of DEDICATED_HANDLER_MUTATION_TYPES) {
+        expect(dedicated.startsWith(prefix)).toBe(false)
+      }
+    }
+  })
+
+  it('INVERTED CONTRACT: generic processOutboxBatch claims ONLY the explicit allowlist', async () => {
     const client = new FakeQueueClient([{ rows: [], rowCount: 0 }])
     await processOutboxBatch(client, 'company-1', 5)
-    expect(client.calls[0]?.values).toBeDefined()
-    // Third bound param is the dedicated-handler exclusion list. We compare
-    // against the exported constant rather than a hard-coded literal so a
-    // new dedicated handler being added doesn't silently break this gate.
-    const handlerList = client.calls[0]!.values![2]
-    expect(handlerList).toEqual([...DEDICATED_HANDLER_MUTATION_TYPES])
+    const sql = sqlCalls(client)[0]!
+    // The claim is allowlist-shaped (= any), not exclusion-shaped (<> all):
+    // with a paused lane, a >limit backlog, or a mid-heartbeat enqueue, a
+    // dedicated or unknown mutation_type is structurally unclaimable here.
+    expect(sql).toContain('mutation_type = any($3::text[])')
+    expect(sql).toContain('mutation_type like any($4::text[])')
+    expect(sql).not.toContain('<> all')
+    expect(client.calls[0]!.values![2]).toEqual([...GENERIC_APPLY_MUTATION_TYPES])
+    expect(client.calls[0]!.values![3]).toEqual(GENERIC_APPLY_MUTATION_TYPE_PREFIXES.map((p) => `${p}%`))
+    // Paused-lane regression sentinels: none of the dedicated job kinds can
+    // appear in the bound allowlist.
+    const allowlist = client.calls[0]!.values![2] as string[]
+    for (const dedicated of DEDICATED_HANDLER_MUTATION_TYPES) {
+      expect(allowlist).not.toContain(dedicated)
+    }
+  })
+
+  it('quarantineUnroutableOutbox parks unknown types as failed (never applied) and skips both registries', async () => {
+    const client = new FakeQueueClient([
+      {
+        rows: [
+          {
+            id: '00000000-0000-0000-0000-00000000dead',
+            entity_type: 'estimate_share_link',
+            entity_id: 'share-1',
+            mutation_type: 'send_estimate_share_v2',
+          },
+        ],
+        rowCount: 1,
+      },
+    ])
+    const rows = await quarantineUnroutableOutbox(client, 'company-1')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.mutation_type).toBe('send_estimate_share_v2')
+    const sql = sqlCalls(client)[0]!
+    // Fails loudly: parked at 'failed' with an instructive error; applied_at
+    // is never stamped, so ops cannot read this as success.
+    expect(sql).toContain("set status = 'failed'")
+    expect(sql).toContain('no handler registered for mutation_type')
+    expect(sql).not.toContain('applied_at = now()')
+    // Predicate excludes BOTH registries, so dedicated rows waiting out a
+    // paused lane are left pending for their runner, not quarantined.
+    expect(sql).toContain('not ( mutation_type = any($2::text[]) or mutation_type like any($3::text[]) )')
+    expect(sql).toContain('mutation_type <> all($4::text[])')
+    expect(client.calls[0]!.values![1]).toEqual([...GENERIC_APPLY_MUTATION_TYPES])
+    expect(client.calls[0]!.values![3]).toEqual([...DEDICATED_HANDLER_MUTATION_TYPES])
+  })
+
+  it('processQueueWithClient surfaces quarantined rows in the result', async () => {
+    const client = new FakeQueueClient([
+      {
+        rows: [
+          {
+            id: '00000000-0000-0000-0000-00000000dea1',
+            entity_type: 'widget',
+            entity_id: 'w-1',
+            mutation_type: 'mystery_type',
+          },
+        ],
+        rowCount: 1,
+      },
+      { rows: [], rowCount: 0 }, // outbox claim
+      { rows: [], rowCount: 0 }, // sync claim
+    ])
+    const result = await processQueueWithClient(client, 'company-1', 5)
+    expect(result.quarantinedOutboxCount).toBe(1)
+    expect(result.quarantinedOutbox[0]?.mutation_type).toBe('mystery_type')
+    expect(result.processedOutboxCount).toBe(0)
+  })
+
+  it('isGenericApplyMutationType matches exact entries and the event: prefix only', () => {
+    expect(isGenericApplyMutationType('create')).toBe(true)
+    expect(isGenericApplyMutationType('event:return')).toBe(true)
+    expect(isGenericApplyMutationType('event:close')).toBe(true)
+    expect(isGenericApplyMutationType('welcome_email')).toBe(false)
+    expect(isGenericApplyMutationType('damage_charge_invoice_push')).toBe(false)
+    expect(isGenericApplyMutationType('send_estimate_share')).toBe(false)
+    expect(isGenericApplyMutationType('not_a_known_type')).toBe(false)
   })
 })
 

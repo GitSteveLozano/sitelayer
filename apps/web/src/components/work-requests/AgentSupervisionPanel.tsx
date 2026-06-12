@@ -649,7 +649,9 @@ const EVENT_LABELS: Record<string, string> = {
   'agent.artifact_attached': 'Artifact attached',
   'agent.proposal_ready': 'Proposal ready',
   'agent.completed': 'Agent completed',
+  'agent.failed': 'Agent failed',
   'agent.callback_missing': 'Agent callback missing',
+  'agent.dispatch_expired': 'Agent claim expired',
   'human.review_requested': 'Review requested',
 }
 

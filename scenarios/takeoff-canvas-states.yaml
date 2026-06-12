@@ -19,7 +19,8 @@
 #
 # Seed (dev/demo only — refuses APP_TIER=prod):
 #   npx tsx scripts/seed-scenario.ts scenarios/takeoff-canvas-states.yaml
-#   # then open each project's /projects/:id/takeoff-canvas as e2e-admin.
+#   # then open each project's takeoff canvas as e2e-admin: /desktop/canvas/:id
+#   # (the old /projects/:id/takeoff-canvas URL still works via the legacy redirect).
 #
 # Geometry is 0–100 board space (what normalizeGeometry persists). Seeded
 # `quantity` is advisory — the server recomputes true quantity from geometry +

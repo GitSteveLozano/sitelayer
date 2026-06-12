@@ -1,4 +1,4 @@
-import type { Expression } from 'expr-eval'
+import type { SafeExpression } from './safe-parser.js'
 
 /**
  * Variables bound when evaluating an assembly-component quantity formula (or the
@@ -15,8 +15,8 @@ import type { Expression } from 'expr-eval'
  * from the component's `formula_vars` JSON (e.g. `{ coverage_rate: 32 }`).
  *
  * Values are restricted to `number | string` on purpose: never allow function
- * values into the evaluation scope (closes expr-eval advisory
- * GHSA-jc85-fpwf-qm7x — "does not restrict functions passed to evaluate").
+ * values into the evaluation scope (the function-injection class of attack —
+ * formerly expr-eval advisory GHSA-jc85-fpwf-qm7x — stays structurally dead).
  */
 export interface FormulaContext {
   measurement_quantity: number
@@ -52,10 +52,10 @@ export interface FormulaResult {
 }
 
 /**
- * Result of a BOOLEAN formula (an `include_when` expression). expr-eval returns
- * a JS boolean for a bare comparison (`height > 8`) and a number for arithmetic
- * (`sides`); both are accepted and reduced to truthiness here (0 / false →
- * false, any other finite number / true → true).
+ * Result of a BOOLEAN formula (an `include_when` expression). The evaluator
+ * returns a JS boolean for a bare comparison (`height > 8`) and a number for
+ * arithmetic (`sides`); both are accepted and reduced to truthiness here
+ * (0 / false → false, any other finite number / true → true).
  */
 export interface BooleanFormulaResult {
   ok: boolean
@@ -64,14 +64,14 @@ export interface BooleanFormulaResult {
 }
 
 /**
- * Opaque wrapper over a parsed expr-eval `Expression` plus the variable names
+ * Opaque wrapper over a parsed {@link SafeExpression} plus the variable names
  * it references. Callers should treat this as a handle and not reach into it.
  */
 export interface ParsedFormula {
   /** The original source text (already length-validated). */
   readonly source: string
-  /** Parsed expr-eval expression. */
-  readonly expression: Expression
+  /** Parsed expression (in-package safe engine; no eval/Function, whitelist-only). */
+  readonly expression: SafeExpression
   /** Distinct variable names the expression references. */
   readonly variables: readonly string[]
 }

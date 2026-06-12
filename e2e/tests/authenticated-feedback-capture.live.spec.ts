@@ -37,7 +37,7 @@ liveTest(
   async ({ adminPage: page }) => {
     await installFakeMediaRecorder(page)
     await openTakeoffCapturePage(page)
-    const canvas = page.locator('svg.cursor-crosshair').first()
+    const canvas = takeoffCanvasSurface(page)
     await canvas.click({ position: { x: 80, y: 80 } })
     await canvas.click({ position: { x: 220, y: 90 } })
     await canvas.click({ position: { x: 190, y: 210 } })
@@ -158,12 +158,27 @@ liveTest(
 
 async function openTakeoffCapturePage(page: Page): Promise<void> {
   await installTakeoffCanvasMocks(page)
+  // The v1 takeoff canvas (`screens/projects/takeoff-canvas.tsx`) was RETIRED
+  // on 2026-06-12 (consolidation Phase 3 close-out). Its legacy deep-link now
+  // redirects to the consolidated est-canvas editor for the current viewport
+  // (desktop → /desktop/canvas/:id, mobile → /projects/:id/takeoff-mobile),
+  // preserving query params. We drive the LEGACY URL on purpose so this smoke
+  // also covers the saved-deep-link redirect contract.
   await page.goto(
     `/projects/${PROJECT_ID}/takeoff-canvas?capture_feedback=1&capture_replay=1&blueprint=${BLUEPRINT_ID}&draft=${DRAFT_ID}`,
   )
   await page.addStyleTag({ content: '[data-testid="role-switcher"] { display: none !important; }' })
-  await expect(page.getByRole('heading', { name: 'capture-geometry-smoke.pdf' })).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('takeoff-canvas-source-sheet-status')).toContainText('PDF rasterization needed')
+  await expect(page).toHaveURL(/\/desktop\/canvas\/|\/takeoff-mobile/, { timeout: 20_000 })
+  // est-canvas board-space drawing surface (both form-factor bodies render the
+  // same 0–100 board-space SVG; both register the canvas-geometry capture
+  // artifact provider the upload assertions below rely on).
+  await expect(takeoffCanvasSurface(page)).toBeVisible({ timeout: 20_000 })
+}
+
+// The 0–100 board-space drawing SVG shared by the est-canvas desktop and
+// mobile bodies (the v1 `svg.cursor-crosshair` hook went away with v1).
+function takeoffCanvasSurface(page: Page) {
+  return page.locator('svg[viewBox="0 0 100 100"]').first()
 }
 
 async function readCaptureSessionId(page: Page): Promise<string> {

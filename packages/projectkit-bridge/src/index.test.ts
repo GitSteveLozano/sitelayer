@@ -5,12 +5,15 @@ import {
   CONTRACT_VERSION,
   validateCallback,
   validateConcern,
+  validateProjectEvent,
   validateWorkRequest,
   WORK_ITEM_STATUSES,
 } from '@operator/projectkit'
 import {
   buildCallbackSnapshot,
   buildConcernSnapshot,
+  buildProjectEventEnvelope,
+  buildProjectEventSnapshot,
   buildWorkRequestSnapshot,
   isTerminalCallbackStatus,
   normalizeCallbackArtifacts,
@@ -214,6 +217,114 @@ describe('buildConcernSnapshot', () => {
   })
 })
 
+// The addressed-dispatch surface the apps/api emit sites route through
+// (capture-sessions.ts `capan:<session>` / admin-work-requests.ts
+// `wi:<id>:<audience>`): concern_ref override, v1.4.0 audience / assignee /
+// acceptance, and caller-supplied executor inputs.
+describe('buildConcernSnapshot — addressed dispatch (concernRef / audience / assignee / acceptance / inputs)', () => {
+  it('honors a concernRef override while keeping the work-item linkage in inputs', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      concernRef: `capan:${CAPTURE_SESSION_ID}`,
+      title: 'Analyze capture',
+      captureSessionId: CAPTURE_SESSION_ID,
+      dispatchedAt: FIXED_AT,
+    })
+    expect(concern.concern_ref).toBe(`capan:${CAPTURE_SESSION_ID}`)
+    // The override must never sever the join back to the work item.
+    expect(concern.inputs?.work_item_id).toBe(WORK_ITEM_ID)
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('defaults concern_ref to workItemId when concernRef is absent/blank', () => {
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X' }).concern_ref).toBe(WORK_ITEM_ID)
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X', concernRef: '  ' }).concern_ref).toBe(
+      WORK_ITEM_ID,
+    )
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X', concernRef: null }).concern_ref).toBe(
+      WORK_ITEM_ID,
+    )
+  })
+
+  it('carries the v1.4.0 audience / assignee / acceptance fields, contract-valid', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      concernRef: `wi:${WORK_ITEM_ID}:steve`,
+      title: 'Fix the thing',
+      audience: 'steve',
+      assignee: 'steve',
+      acceptance: ['Reproduce the bug', 'Land the fix with a test'],
+      dispatchedAt: FIXED_AT,
+    })
+    expect(concern.audience).toBe('steve')
+    expect(concern.assignee).toBe('steve')
+    expect(concern.acceptance).toEqual(['Reproduce the bug', 'Land the fix with a test'])
+    expect(validateConcern(concern)).toEqual([])
+    expect(requiredFieldProblems(CONCERN_DEF, concern as unknown as Record<string, unknown>)).toEqual([])
+  })
+
+  it('omits audience / assignee / acceptance when blank or empty (never empty-string fields)', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'X',
+      audience: '  ',
+      assignee: null,
+      acceptance: [],
+    })
+    expect(concern.audience).toBeUndefined()
+    expect(concern.assignee).toBeUndefined()
+    expect(concern.acceptance).toBeUndefined()
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('merges caller inputs OVER the derived defaults (caller keys win; defaults survive)', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'Analyze capture',
+      status: 'new',
+      route: '/derived/route',
+      captureSessionId: CAPTURE_SESSION_ID,
+      inputs: {
+        capture_session_id: 'caller-wins', // collision: caller value wins
+        url: '/caller/url', // caller-only key travels
+        artifacts: [{ kind: 'rrweb', ref: 'art-1' }],
+      },
+    })
+    expect(concern.inputs?.capture_session_id).toBe('caller-wins')
+    expect(concern.inputs?.url).toBe('/caller/url')
+    expect(concern.inputs?.artifacts).toEqual([{ kind: 'rrweb', ref: 'art-1' }])
+    // Derived defaults the caller did not override are still present.
+    expect(concern.inputs?.route).toBe('/derived/route')
+    expect(concern.inputs?.callback_status).toBe('accepted')
+    expect(concern.inputs?.work_item_id).toBe(WORK_ITEM_ID)
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('mirrors audience / assignee / acceptance onto the WorkRequest (and its embedded Concern)', () => {
+    const workRequest = buildWorkRequestSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'X',
+      audience: 'capture-analyzer',
+      assignee: 'capture-analyzer',
+      acceptance: ['Return the analysis'],
+      dispatchedAt: FIXED_AT,
+    })
+    expect(workRequest.audience).toBe('capture-analyzer')
+    expect(workRequest.assignee).toBe('capture-analyzer')
+    expect(workRequest.acceptance).toEqual(['Return the analysis'])
+    const embedded = (workRequest.payload as { concern: { audience?: string; assignee?: string } }).concern
+    expect(embedded.audience).toBe('capture-analyzer')
+    expect(embedded.assignee).toBe('capture-analyzer')
+    expect(validateWorkRequest(workRequest)).toEqual([])
+  })
+
+  it('CONTRACT ENFORCEMENT: an invalid snapshot throws at the builder instead of travelling', () => {
+    // Empty workItemId -> empty concern_ref -> the published validator flags it
+    // and assertContractValid converts that into a loud throw.
+    expect(() => buildConcernSnapshot({ workItemId: '', title: 'X' })).toThrow(/contract validation/)
+  })
+})
+
 describe('buildWorkRequestSnapshot', () => {
   it('embeds the Concern and adds request fields, still contract-valid', () => {
     const workRequest = buildWorkRequestSnapshot({
@@ -269,6 +380,169 @@ describe('buildWorkRequestSnapshot', () => {
     })
     expect(workRequest.intent).toBe('capture-followup')
     expect(validateWorkRequest(workRequest)).toEqual([])
+  })
+})
+
+// The ref-only dispatch surface (no context_work_item exists; the caller's ref
+// IS the producer-stable idempotency key — the ops-diagnostics emit site).
+describe('ref-only dispatch (no workItemId)', () => {
+  const OPSDIAG_REF = 'opsdiag:11111111-1111-4111-8111-111111111111:dispatch_agent_review'
+
+  it('builds a contract-valid Concern from concernRef alone, carrying only caller inputs', () => {
+    const concern = buildConcernSnapshot({
+      concernRef: OPSDIAG_REF,
+      title: 'Dispatch agent review for onsite diagnostics',
+      severity: 'high',
+      audience: 'onsite-diagnostics',
+      assignee: 'onsite-diagnostics',
+      sourceEventRef: 'ops_diagnostic_session:11111111-1111-4111-8111-111111111111',
+      dispatchedAt: FIXED_AT,
+      acceptance: ['Inspect the plan.'],
+      inputs: { requested_action: 'dispatch_agent_review', requested_by: 'user_99' },
+    })
+    expect(concern.concern_ref).toBe(OPSDIAG_REF)
+    expect(concern.kind).toBe('execute')
+    expect(concern.priority).toBe('high')
+    // No work item -> no derived work-item linkage keys, ONLY the caller inputs.
+    expect(concern.inputs).toEqual({ requested_action: 'dispatch_agent_review', requested_by: 'user_99' })
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('CONTRACT ENFORCEMENT: throws when neither workItemId nor concernRef yields a ref', () => {
+    expect(() => buildConcernSnapshot({ title: 'X' })).toThrow(/contract validation/)
+    expect(() => buildConcernSnapshot({ title: 'X', concernRef: '  ' })).toThrow(/contract validation/)
+  })
+
+  it('mirrors the ref onto request_ref and carries sensitivity + merged payload (concern embed survives)', () => {
+    const workRequest = buildWorkRequestSnapshot({
+      concernRef: OPSDIAG_REF,
+      title: 'Dispatch agent review for onsite diagnostics',
+      severity: 'normal',
+      intent: 'review',
+      route: '/ops',
+      entityType: 'ops_diagnostic_session',
+      entityId: '11111111-1111-4111-8111-111111111111',
+      sensitivity: 'internal',
+      dispatchedAt: FIXED_AT,
+      payload: { requested_action: 'dispatch_agent_review', concern: 'caller-cannot-clobber' },
+    })
+    expect(workRequest.request_ref).toBe(OPSDIAG_REF)
+    expect(workRequest.sensitivity).toBe('internal')
+    expect(workRequest.route_path).toBe('/ops')
+    const payload = workRequest.payload as Record<string, unknown>
+    expect(payload.requested_action).toBe('dispatch_agent_review')
+    expect(payload.lane).toBeNull()
+    // The embedded Concern always survives the payload merge.
+    const embedded = payload.concern as { concern_ref: string }
+    expect(embedded.concern_ref).toBe(OPSDIAG_REF)
+    expect(validateConcern(embedded)).toEqual([])
+    expect(validateWorkRequest(workRequest)).toEqual([])
+  })
+
+  it('keeps request_ref = work_item_id when no concernRef override is supplied (existing emit sites)', () => {
+    const workRequest = buildWorkRequestSnapshot({ workItemId: WORK_ITEM_ID, title: 'X' })
+    expect(workRequest.request_ref).toBe(WORK_ITEM_ID)
+  })
+})
+
+describe('buildProjectEventSnapshot', () => {
+  it('builds a contract-valid ProjectEvent and stamps schema_version = CONTRACT_VERSION', () => {
+    const event = buildProjectEventSnapshot({
+      eventType: 'sitelayer.ops_diagnostic.dispatch_agent_review.requested',
+      occurredAt: FIXED_AT,
+      domain: 'workflow_event',
+      outcome: 'requested',
+      environment: 'test',
+      sourceSurface: 'mobile_ops',
+      routePath: '/ops',
+      actorKind: 'operator',
+      principalId: 'user_99',
+      entityKind: 'ops_diagnostic_session',
+      entityId: '11111111-1111-4111-8111-111111111111',
+      action: 'dispatch_agent_review',
+      summary: 'Operator requested Dispatch agent review from Mobile Ops.',
+      sensitivity: 'internal',
+      redactionStatus: 'summary_only',
+      payload: { work_request: { request_ref: 'r-1' } },
+    })
+    expect(event.schema_version).toBe(CONTRACT_VERSION)
+    expect(event.event_type).toBe('sitelayer.ops_diagnostic.dispatch_agent_review.requested')
+    expect(event.project_key).toBe('sitelayer') // default
+    expect(event.occurred_at).toBe(FIXED_AT)
+    expect(event.domain).toBe('workflow_event')
+    expect(event.outcome).toBe('requested')
+    expect(event.principal_id).toBe('user_99')
+    expect(event.entity_id).toBe('11111111-1111-4111-8111-111111111111')
+    expect(event.redaction_status).toBe('summary_only')
+    expect(event.payload).toEqual({ work_request: { request_ref: 'r-1' } })
+    expect(validateProjectEvent(event)).toEqual([])
+  })
+
+  it('a null principalId is meaningful and travels; blank optionals are omitted', () => {
+    const event = buildProjectEventSnapshot({
+      eventType: 'sitelayer.x.happened',
+      occurredAt: FIXED_AT,
+      principalId: null,
+      environment: '  ',
+      summary: null,
+    })
+    expect('principal_id' in event).toBe(true)
+    expect(event.principal_id).toBeNull()
+    expect('environment' in event).toBe(false)
+    expect('summary' in event).toBe(false)
+    expect('entity_id' in event).toBe(false) // undefined -> omitted
+    expect(validateProjectEvent(event)).toEqual([])
+  })
+
+  it('CONTRACT ENFORCEMENT: an invalid snapshot throws at the builder instead of travelling', () => {
+    expect(() => buildProjectEventSnapshot({ eventType: '' })).toThrow(/contract validation/)
+    expect(() => buildProjectEventSnapshot({ eventType: 'sitelayer.x', occurredAt: 'not-a-timestamp' })).toThrow(
+      /contract validation/,
+    )
+  })
+})
+
+describe('buildProjectEventEnvelope', () => {
+  const validEvent = () => buildProjectEventSnapshot({ eventType: 'sitelayer.x.happened', occurredAt: FIXED_AT })
+
+  it('wraps validated events and stamps contract_version (the bridge owns the stamp)', () => {
+    const envelope = buildProjectEventEnvelope({
+      emittedAt: FIXED_AT,
+      producer: { name: 'sitelayer.ops-diagnostics' },
+      deliveryId: 'opsdiag:s-1:dispatch_agent_review:e-1',
+      events: [validEvent()],
+    })
+    expect(envelope.contract_version).toBe(CONTRACT_VERSION)
+    expect(envelope.project_key).toBe('sitelayer') // default
+    expect(envelope.emitted_at).toBe(FIXED_AT)
+    expect(envelope.producer).toEqual({ name: 'sitelayer.ops-diagnostics' }) // no empty version key
+    expect(envelope.delivery_id).toBe('opsdiag:s-1:dispatch_agent_review:e-1')
+    expect(envelope.events).toHaveLength(1)
+  })
+
+  it('omits delivery_id when blank and carries producer.version when supplied', () => {
+    const envelope = buildProjectEventEnvelope({
+      producer: { name: 'sitelayer.api', version: '1.0.0' },
+      deliveryId: null,
+      events: [validEvent()],
+    })
+    expect('delivery_id' in envelope).toBe(false)
+    expect(envelope.producer).toEqual({ name: 'sitelayer.api', version: '1.0.0' })
+  })
+
+  it('CONTRACT ENFORCEMENT: throws on a missing producer, empty events, or an invalid event', () => {
+    expect(() => buildProjectEventEnvelope({ producer: { name: ' ' }, events: [validEvent()] })).toThrow(
+      /contract validation/,
+    )
+    expect(() => buildProjectEventEnvelope({ producer: { name: 'sitelayer.api' }, events: [] })).toThrow(
+      /contract validation/,
+    )
+    expect(() =>
+      buildProjectEventEnvelope({
+        producer: { name: 'sitelayer.api' },
+        events: [{ bogus: true } as unknown as ReturnType<typeof validEvent>],
+      }),
+    ).toThrow(/events\[0\]/)
   })
 })
 

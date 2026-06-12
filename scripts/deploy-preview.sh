@@ -334,11 +334,15 @@ preview_migration_files() {
   local skip_role_migration="${PREVIEW_SKIP_CONSTRAINED_ROLE_MIGRATION:-1}"
   local find_args=(-maxdepth 1 -type f -name '*.sql')
 
-  # The constrained-role migration is local/CI-only in practice. Preview
-  # deploys run as the managed-DB app role, which cannot CREATE ROLE, and
-  # the preview app does not need the RLS runtime probe login role.
+  # The constrained-role migration is local/verify-gate-only in practice.
+  # Preview deploys run as the managed-DB app role, which cannot CREATE ROLE,
+  # and the preview app does not need the RLS runtime probe login role.
+  # (016_restore_constrained_role.sql restored the role after the 2026-06-02
+  # baseline squash deleted the original 087 file; the migration also
+  # self-skips on insufficient_privilege, so this filter is belt-and-
+  # suspenders.)
   if [ "$skip_role_migration" = "1" ]; then
-    find_args+=(! -name '087_constrained_role_for_rls_probe.sql')
+    find_args+=(! -name '016_restore_constrained_role.sql')
   fi
 
   find docker/postgres/init "${find_args[@]}" | sort | tr '\n' ' '

@@ -13,9 +13,10 @@ import {
 } from '@sitelayer/workflows'
 import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 // POST /api/projects/:id/change-orders wire-format. The handler trims
 // `description`, requires a finite `value_delta`, and defaults
@@ -127,6 +128,49 @@ function buildReducerEvent(
       : { type: 'REJECT', actor_user_id: actorUserId, occurred_at: occurredAt }
   }
   return { type: eventType, actor_user_id: actorUserId, occurred_at: occurredAt }
+}
+
+/**
+ * The event object handed to the generic `dispatchWorkflowEvent`
+ * primitive. The primitive persists `JSON.stringify(event)` as the
+ * workflow_event_log `event_payload`, and this route's legacy payload is
+ * `{ event, reason }` — NOT the reducer event — which the replay harness
+ * regression-tests byte-for-byte. So the carrier's ENUMERABLE shape is
+ * exactly the legacy payload, while `type` (what the primitive writes to
+ * event_type) and `reducer_event` (what the real reducer consumes) ride
+ * along as non-enumerable properties that JSON.stringify never sees.
+ */
+type ChangeOrderDispatchEvent = {
+  type: ChangeOrderHumanEventType
+  reducer_event: ChangeOrderWorkflowEvent
+  event: ChangeOrderHumanEventType
+  reason: string | null
+}
+
+function buildDispatchEvent(
+  eventType: ChangeOrderHumanEventType,
+  actorUserId: string,
+  reason: string | undefined,
+): ChangeOrderDispatchEvent {
+  const carrier = { event: eventType, reason: reason ?? null } as ChangeOrderDispatchEvent
+  Object.defineProperty(carrier, 'type', { value: eventType, enumerable: false })
+  Object.defineProperty(carrier, 'reducer_event', {
+    value: buildReducerEvent(eventType, actorUserId, reason),
+    enumerable: false,
+  })
+  return carrier
+}
+
+/**
+ * `DispatchDefinition` for the primitive. Reduces with the registered
+ * pure transition; the carrier indirection exists only to keep the
+ * persisted event_payload byte-identical to the hand-rolled era.
+ */
+const changeOrderDispatchDefinition = {
+  name: CHANGE_ORDER_WORKFLOW_NAME,
+  schemaVersion: CHANGE_ORDER_WORKFLOW_SCHEMA_VERSION,
+  reduce: (snapshot: ChangeOrderWorkflowSnapshot, event: ChangeOrderDispatchEvent): ChangeOrderWorkflowSnapshot =>
+    transitionChangeOrderWorkflow(snapshot, event.reducer_event),
 }
 
 /**
@@ -276,89 +320,86 @@ export async function handleChangeOrderRoutes(
     }
     const { event: eventType, state_version: stateVersion, reason } = parsed.value
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const locked = await client.query<ChangeOrderRow>(
-          `select ${CHANGE_ORDER_COLUMNS} from change_orders
-           where company_id = $1 and id = $2 and deleted_at is null for update`,
-          [ctx.company.id, id],
-        )
-        const current = locked.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.state_version !== stateVersion) {
-          return { kind: 'conflict' as const, row: current }
-        }
-        let nextSnapshot: ChangeOrderWorkflowSnapshot
-        try {
-          nextSnapshot = transitionChangeOrderWorkflow(
-            rowToSnapshot(current),
-            buildReducerEvent(eventType, ctx.currentUserId, reason),
-          )
-        } catch (err) {
-          return { kind: 'illegal' as const, message: err instanceof Error ? err.message : 'illegal transition' }
-        }
-        const updated = await client.query<ChangeOrderRow>(
-          `update change_orders set
-             status = $3, state_version = $4, sent_at = $5, accepted_at = $6, rejected_at = $7,
-             voided_at = $8, reject_reason = $9, approved_by = $10, version = version + 1, updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${CHANGE_ORDER_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.sent_at ?? null,
-            nextSnapshot.accepted_at ?? null,
-            nextSnapshot.rejected_at ?? null,
-            nextSnapshot.voided_at ?? null,
-            nextSnapshot.reject_reason ?? null,
-            nextSnapshot.approved_by ?? null,
-          ],
-        )
-        const row = updated.rows[0]!
-        await recordWorkflowEvent(client, {
+      // Captured by loadSnapshot so the audit side effect can record the
+      // pre-transition status (the primitive's sideEffects callback only
+      // sees the updated row).
+      let lockedRow: ChangeOrderRow | undefined
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<ChangeOrderRow, ChangeOrderWorkflowSnapshot, ChangeOrderDispatchEvent>(client, {
+          definition: changeOrderDispatchDefinition,
           companyId: ctx.company.id,
-          workflowName: CHANGE_ORDER_WORKFLOW_NAME,
-          schemaVersion: CHANGE_ORDER_WORKFLOW_SCHEMA_VERSION,
           entityType: 'change_order',
           entityId: id,
           // PRE-transition state_version (the version the event was
           // dispatched against), mirroring rental-billing-state.ts:214. The
-          // unique (entity_id, state_version) constraint then rejects a
+          // primitive keys the workflow_event_log row on this, so the
+          // unique (entity_id, state_version) constraint rejects a
           // replayed transition, and the read endpoint reads this as
           // `from_state_version` with `snapshot_after->>'state_version'`
           // (== this + 1) as `to_state_version`.
-          stateVersion,
-          eventType,
-          eventPayload: { event: eventType, reason: reason ?? null },
-          // snapshot_after must carry a `state` key (the read endpoint
-          // projects snapshot_after->>'state' as to_state / from_state).
-          // nextSnapshot is the reducer shape (keyed on `state`), so the
-          // projection is correct — do not pass the rowToContext shape here
-          // (that one keys on `status`).
-          snapshotAfter: nextSnapshot,
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
-        await recordAudit(client, {
-          companyId: ctx.company.id,
-          actorUserId: ctx.currentUserId,
-          action: `change_order.${eventType.toLowerCase()}`,
-          entityType: 'change_order',
-          entityId: id,
-          before: { status: current.status },
-          after: { status: row.status },
-        })
-        return { kind: 'ok' as const, row }
-      })
+          loadSnapshot: async (c) => {
+            const locked = await c.query<ChangeOrderRow>(
+              `select ${CHANGE_ORDER_COLUMNS} from change_orders
+               where company_id = $1 and id = $2 and deleted_at is null for update`,
+              [ctx.company.id, id],
+            )
+            const row = locked.rows[0]
+            if (!row) return null
+            lockedRow = row
+            // snapshot_after must carry a `state` key (the read endpoint
+            // projects snapshot_after->>'state' as to_state / from_state).
+            // rowToSnapshot is the reducer shape (keyed on `state`), so the
+            // projection is correct — do not pass the rowToContext shape
+            // here (that one keys on `status`).
+            return { row, snapshot: rowToSnapshot(row) }
+          },
+          buildEvent: () => buildDispatchEvent(eventType, ctx.currentUserId, reason),
+          persist: async (c, next) => {
+            const updated = await c.query<ChangeOrderRow>(
+              `update change_orders set
+                 status = $3, state_version = $4, sent_at = $5, accepted_at = $6, rejected_at = $7,
+                 voided_at = $8, reject_reason = $9, approved_by = $10, version = version + 1, updated_at = now()
+               where company_id = $1 and id = $2
+               returning ${CHANGE_ORDER_COLUMNS}`,
+              [
+                ctx.company.id,
+                id,
+                next.state,
+                next.state_version,
+                next.sent_at ?? null,
+                next.accepted_at ?? null,
+                next.rejected_at ?? null,
+                next.voided_at ?? null,
+                next.reject_reason ?? null,
+                next.approved_by ?? null,
+              ],
+            )
+            return updated.rows[0]!
+          },
+          sideEffects: async (c, _next, row) => {
+            await recordAudit(c, {
+              companyId: ctx.company.id,
+              actorUserId: ctx.currentUserId,
+              action: `change_order.${eventType.toLowerCase()}`,
+              entityType: 'change_order',
+              entityId: id,
+              before: { status: lockedRow!.status },
+              after: { status: row.status },
+            })
+          },
+        }),
+      )
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'change order not found' })
         return true
       }
-      if (result.kind === 'conflict') {
+      if (result.kind === 'version_conflict') {
         ctx.sendJson(409, { error: 'stale state_version', ...snapshotResponse(result.row) })
         return true
       }
-      if (result.kind === 'illegal') {
+      if (result.kind === 'illegal_transition') {
         ctx.sendJson(422, { error: result.message })
         return true
       }

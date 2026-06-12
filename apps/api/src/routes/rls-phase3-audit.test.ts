@@ -442,10 +442,12 @@ describeRuntime('RLS Phase 3 audit — runtime probe (constrained role)', () => 
         client.release()
       }
     } finally {
-      // Always drop the RLS toggle so the dev DB isn't left in a forced
-      // state if a teardown step throws.
-      await pool.query('alter table projects no force row level security').catch(() => undefined)
-      await pool.query('alter table projects disable row level security').catch(() => undefined)
+      // Restore the BASELINE posture (000_baseline.sql ships projects
+      // ENABLE+FORCE'd). The pre-squash version of this probe DISABLED RLS
+      // here, which left the shared DB out of baseline state and failed any
+      // later forced-coverage audit against the same database.
+      await pool.query('alter table projects enable row level security').catch(() => undefined)
+      await pool.query('alter table projects force row level security').catch(() => undefined)
     }
   })
 
@@ -469,8 +471,9 @@ describeRuntime('RLS Phase 3 audit — runtime probe (constrained role)', () => 
         client.release()
       }
     } finally {
-      await pool.query('alter table projects no force row level security').catch(() => undefined)
-      await pool.query('alter table projects disable row level security').catch(() => undefined)
+      // Restore baseline ENABLE+FORCE posture (see note in the first test).
+      await pool.query('alter table projects enable row level security').catch(() => undefined)
+      await pool.query('alter table projects force row level security').catch(() => undefined)
     }
   })
 
@@ -498,8 +501,9 @@ describeRuntime('RLS Phase 3 audit — runtime probe (constrained role)', () => 
         client.release()
       }
     } finally {
-      await pool.query('alter table projects no force row level security').catch(() => undefined)
-      await pool.query('alter table projects disable row level security').catch(() => undefined)
+      // Restore baseline ENABLE+FORCE posture (see note in the first test).
+      await pool.query('alter table projects enable row level security').catch(() => undefined)
+      await pool.query('alter table projects force row level security').catch(() => undefined)
     }
   })
 
@@ -512,10 +516,10 @@ describeRuntime('RLS Phase 3 audit — runtime probe (constrained role)', () => 
         // best-effort
       }
     }
-    // Make doubly sure RLS is off before we leave (in case an assertion
-    // throw bypassed the per-test finally block).
-    await swallow('alter table projects no force row level security')
-    await swallow('alter table projects disable row level security')
+    // Make doubly sure projects is back in its BASELINE ENABLE+FORCE state
+    // before we leave (in case an assertion throw bypassed a finally block).
+    await swallow('alter table projects enable row level security')
+    await swallow('alter table projects force row level security')
     await swallow('delete from company_bootstrap_state where company_id = any($1::uuid[])', [[COMPANY_A, COMPANY_B]])
     await swallow('delete from projects where id = any($1::uuid[])', [[projectA, projectB]])
     await swallow('delete from companies where id = any($1::uuid[])', [[COMPANY_A, COMPANY_B]])

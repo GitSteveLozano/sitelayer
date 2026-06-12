@@ -5,17 +5,17 @@ import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import {
   RENTAL_WORKFLOW_NAME,
-  RENTAL_WORKFLOW_SCHEMA_VERSION,
-  transitionRentalWorkflow,
+  rentalWorkflow,
   type RentalWorkflowEvent,
   type RentalWorkflowSnapshot,
   type RentalWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 // Permissive wire-format schemas — fields optional/nullish so the existing
 // partial-create / partial-PATCH semantics are unchanged; downstream String()
@@ -113,87 +113,101 @@ async function applyRentalWorkflowTransition(
   | { kind: 'not_found' }
   | { kind: 'illegal_transition'; message: string; row: RentalRow & { state_version: number } }
 > {
-  const lockedResult = await client.query<
-    RentalRow & {
-      state_version: number
-      returned_at: string | null
-      returned_by: string | null
-      closed_at: string | null
-      closed_by: string | null
-    }
-  >(
-    `select ${RENTAL_SELECT_COLUMNS}, state_version, returned_at, returned_by, closed_at, closed_by
-     from rentals
-     where company_id = $1 and id = $2 and deleted_at is null
-     for update`,
-    [args.companyId, args.rentalId],
-  )
-  const current = lockedResult.rows[0]
-  if (!current) return { kind: 'not_found' as const }
-
-  const currentSnapshot: RentalWorkflowSnapshot = {
-    state: (current.status as RentalWorkflowState) ?? 'active',
-    state_version: current.state_version ?? 1,
-    returned_at: current.returned_at ?? null,
-    returned_by: current.returned_by ?? null,
-    closed_at: current.closed_at ?? null,
-    closed_by: current.closed_by ?? null,
-  }
-
-  let nextSnapshot: RentalWorkflowSnapshot
-  try {
-    nextSnapshot = transitionRentalWorkflow(currentSnapshot, args.event)
-  } catch (err) {
-    return {
-      kind: 'illegal_transition' as const,
-      message: err instanceof Error ? err.message : String(err),
-      row: current,
-    }
-  }
-
-  const updated = await client.query<RentalRow & { state_version: number }>(
-    `update rentals
-       set status = $3,
-           state_version = $4,
-           returned_on = case when $3 = 'returned' then coalesce(returned_on, now()::date) else returned_on end,
-           returned_at = $5,
-           returned_by = $6,
-           closed_at = $7,
-           closed_by = $8,
-           version = version + 1,
-           updated_at = now()
-     where company_id = $1 and id = $2
-     returning ${RENTAL_SELECT_COLUMNS}, state_version`,
-    [
-      args.companyId,
-      args.rentalId,
-      nextSnapshot.state,
-      nextSnapshot.state_version,
-      nextSnapshot.returned_at ?? null,
-      nextSnapshot.returned_by ?? null,
-      nextSnapshot.closed_at ?? null,
-      nextSnapshot.closed_by ?? null,
-    ],
-  )
-
-  await recordWorkflowEvent(client, {
+  // The /return and /transfer callers don't carry a client state_version
+  // (they gate on the row `version` / business validation instead), so the
+  // optimistic check is satisfied with the locked row's own state_version:
+  // a mutable slot bridges loadSnapshot → expectedStateVersion, same as the
+  // legacy daily-log /submit path in routes/daily-logs.ts.
+  let resolvedExpected = -1
+  const result = await dispatchWorkflowEvent<
+    RentalRow & { state_version: number },
+    RentalWorkflowSnapshot,
+    RentalWorkflowEvent
+  >(client, {
+    definition: rentalWorkflow,
     companyId: args.companyId,
-    workflowName: RENTAL_WORKFLOW_NAME,
-    schemaVersion: RENTAL_WORKFLOW_SCHEMA_VERSION,
     entityType: 'rental',
     entityId: args.rentalId,
-    stateVersion: currentSnapshot.state_version,
-    eventType: args.eventType,
-    eventPayload: args.event,
-    snapshotAfter: nextSnapshot,
+    get expectedStateVersion() {
+      return resolvedExpected
+    },
     actorUserId: args.actorUserId,
+    loadSnapshot: async (c) => {
+      const lockedResult = await c.query<
+        RentalRow & {
+          state_version: number
+          returned_at: string | null
+          returned_by: string | null
+          closed_at: string | null
+          closed_by: string | null
+        }
+      >(
+        `select ${RENTAL_SELECT_COLUMNS}, state_version, returned_at, returned_by, closed_at, closed_by
+         from rentals
+         where company_id = $1 and id = $2 and deleted_at is null
+         for update`,
+        [args.companyId, args.rentalId],
+      )
+      const current = lockedResult.rows[0]
+      if (!current) return null
+      const snapshot: RentalWorkflowSnapshot = {
+        state: (current.status as RentalWorkflowState) ?? 'active',
+        state_version: current.state_version ?? 1,
+        returned_at: current.returned_at ?? null,
+        returned_by: current.returned_by ?? null,
+        closed_at: current.closed_at ?? null,
+        closed_by: current.closed_by ?? null,
+      }
+      resolvedExpected = snapshot.state_version
+      return { row: current, snapshot }
+    },
+    // Clock/actor stamping stays at the call sites (the same event object is
+    // shared with the surrounding business writes), so buildEvent is a
+    // pass-through.
+    buildEvent: () => args.event,
+    persist: async (c, nextSnapshot) => {
+      const updated = await c.query<RentalRow & { state_version: number }>(
+        `update rentals
+           set status = $3,
+               state_version = $4,
+               returned_on = case when $3 = 'returned' then coalesce(returned_on, now()::date) else returned_on end,
+               returned_at = $5,
+               returned_by = $6,
+               closed_at = $7,
+               closed_by = $8,
+               version = version + 1,
+               updated_at = now()
+         where company_id = $1 and id = $2
+         returning ${RENTAL_SELECT_COLUMNS}, state_version`,
+        [
+          args.companyId,
+          args.rentalId,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.returned_at ?? null,
+          nextSnapshot.returned_by ?? null,
+          nextSnapshot.closed_at ?? null,
+          nextSnapshot.closed_by ?? null,
+        ],
+      )
+      const updatedRow = updated.rows[0]
+      if (!updatedRow) throw new HttpError(500, 'rental update returned no row')
+      return updatedRow
+    },
   })
+
+  if (result.kind === 'not_found') return { kind: 'not_found' as const }
+  if (result.kind === 'illegal_transition') {
+    return { kind: 'illegal_transition' as const, message: result.message, row: result.row }
+  }
+  if (result.kind === 'version_conflict') {
+    // Unreachable: expectedStateVersion resolves to the locked row's own
+    // state_version above, so the post-lock compare always passes.
+    throw new HttpError(500, 'rental workflow state_version conflict')
+  }
   const outcome = workflowEventOutcome(args.eventType)
   if (outcome) observeWorkflowEvent(RENTAL_WORKFLOW_NAME, outcome)
-
-  const updatedRow = updated.rows[0]
-  if (!updatedRow) throw new HttpError(500, 'rental update returned no row')
-  return { kind: 'ok' as const, row: updatedRow, nextSnapshot }
+  return { kind: 'ok' as const, row: result.row, nextSnapshot: result.snapshot }
 }
 
 /**

@@ -22,15 +22,18 @@ import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
 import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
 import { createWelcomeEmailRunner } from './runners/welcome-email.js'
+import { createEstimateShareEmailRunner } from './runners/estimate-share-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
+import { createTakeoffCaptureRunner } from './runners/takeoff-capture.js'
 import { createDebugBundleRunner } from './runners/debug-bundle.js'
 import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkDispatchReconcilerRunner } from './runners/work-dispatch-reconciler.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
+import { createAgentFeedLeaseSweepRunner } from './runners/agent-feed-lease-sweep.js'
 import { createLaneHealthKeeper } from './runners/lane-health-keeper.js'
 import { recordJobRun } from './runners/job-runs.js'
 import { runIfLaneActive } from './dispatch-lanes.js'
@@ -115,6 +118,7 @@ const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
 const welcomeEmailRunner = createWelcomeEmailRunner({ pool, logger })
+const estimateShareEmailRunner = createEstimateShareEmailRunner({ pool, logger })
 const debugBundleRunner = createDebugBundleRunner({ pool, logger })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
 // Observability spectrum (T3, records-nothing): isolated, env-gated forwarder of
@@ -141,10 +145,21 @@ const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
   storage: objectGcStorage,
   logger,
 })
+// Async AI blueprint capture (takeoff_capture_pipeline outbox rows enqueued
+// by POST /api/projects/:id/takeoff-drafts/capture). Reuses the same
+// object-storage client as the GC runners to read the blueprint bytes.
+const takeoffCaptureRunner = createTakeoffCaptureRunner({
+  pool,
+  storage: objectGcStorage,
+  logger,
+})
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
 const workDispatchReconcilerRunner = createWorkDispatchReconcilerRunner({ pool })
 const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
+// Requeue agent-feed concerns wedged in 'claimed' by a crashed executor
+// (lease window AGENT_FEED_CLAIM_LEASE_MINUTES, default 30).
+const agentFeedLeaseSweepRunner = createAgentFeedLeaseSweepRunner({ pool })
 const laneHealthKeeper = createLaneHealthKeeper({ pool, logger })
 // Wedge 2 audit-escrow tick — hourly forward-anchor of audit_events +
 // context_handoff_events into the signed chain (migration 095). Has
@@ -502,6 +517,52 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
 
+  // Estimate-share delivery emails — drains send_estimate_share outbox rows
+  // (enqueued by POST /api/projects/:id/estimate/share) and emails the
+  // recipient their portal link. Dedicated lane seeded by migration 017.
+  // NOTE: pausing the lane is SAFE under the inverted outbox contract — the
+  // rows stay pending for this runner; the generic drain can never eat them.
+  const estimateShareEmailSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'send_estimate_share',
+    () =>
+      estimateShareEmailRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] send_estimate_share drain failed')
+        captureWithEntityContext(error, {
+          scope: 'send_estimate_share',
+          entity_type: 'estimate_share_link',
+          company_id: companyId,
+        })
+        return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+      }),
+    { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
+  )
+
+  // Async AI blueprint capture — drains takeoff_capture_pipeline outbox rows
+  // (enqueued by POST /api/projects/:id/takeoff-drafts/capture for LIVE
+  // blueprint_vision runs), executes the Gemini/Anthropic pipeline off the
+  // HTTP path, and transitions the draft to 'ready' (result + provenance +
+  // real token usage) or 'failed'. Dedicated lane seeded by migration 018.
+  // Pausing the lane is SAFE under the inverted outbox contract — the rows
+  // stay pending for this runner; the generic drain can never eat them.
+  const takeoffCaptureSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'takeoff_capture_pipeline',
+    () =>
+      takeoffCaptureRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] takeoff_capture_pipeline drain failed')
+        captureWithEntityContext(error, {
+          scope: 'takeoff_capture_pipeline',
+          entity_type: 'takeoff_draft',
+          company_id: companyId,
+        })
+        return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+      }),
+    { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
+  )
+
   const voiceToLogSummary = await runIfLaneActive(
     pool,
     logger,
@@ -643,6 +704,25 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { ran: false, updated: 0, failed: 0 },
   )
 
+  // Agent-feed claim-lease expiry — requeues concerns a crashed executor left
+  // in 'claimed'. Rides the same lane gate as the other work-request sweeps.
+  const agentFeedLeaseSweepSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'work_request_stale',
+    () =>
+      agentFeedLeaseSweepRunner.maybeSweep(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] agent_feed_lease_sweep failed')
+        captureWithEntityContext(error, {
+          scope: 'agent_feed_lease_sweep',
+          entity_type: 'agent_feed_concern',
+          company_id: companyId,
+        })
+        return { ran: false, requeued: 0, failed: 1 }
+      }),
+    { ran: false, requeued: 0, failed: 0 },
+  )
+
   // Audit-escrow tick — hourly forward-anchor of audit_events +
   // context_handoff_events into the signed chain. Cadence is gated
   // inside the runner; safe to invoke each heartbeat.
@@ -737,6 +817,11 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     companycam_failed: companyCamSummary.failed,
     welcome_email_processed: welcomeEmailSummary.processed,
     welcome_email_failed: welcomeEmailSummary.failed,
+    send_estimate_share_processed: estimateShareEmailSummary.processed,
+    send_estimate_share_failed: estimateShareEmailSummary.failed,
+    takeoff_capture_processed: takeoffCaptureSummary.processed,
+    takeoff_capture_completed: takeoffCaptureSummary.insightsCreated,
+    takeoff_capture_failed: takeoffCaptureSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
     capture_artifact_retention_gc_ran: captureArtifactRetentionGcSummary.ran,
@@ -758,6 +843,9 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
     work_request_stale_sweep_updated: workRequestStaleSummary.updated,
     work_request_stale_sweep_failed: workRequestStaleSummary.failed,
+    agent_feed_lease_sweep_ran: agentFeedLeaseSweepSummary.ran,
+    agent_feed_lease_sweep_requeued: agentFeedLeaseSweepSummary.requeued,
+    agent_feed_lease_sweep_failed: agentFeedLeaseSweepSummary.failed,
     rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
     estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
     audit_escrow_ran: auditEscrowSummary.ran,
@@ -770,6 +858,24 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
 
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
+    if (processed.quarantinedOutbox > 0) {
+      // Contract violation, not normal operation: an enqueued mutation_type
+      // has NO handler (neither generic-allowlisted nor dedicated). The rows
+      // are parked at status='failed' with an instructive error instead of
+      // being silently marked applied. Surface loudly.
+      const quarantineError = new Error(
+        `outbox-contract: quarantined ${processed.quarantinedOutbox} unroutable outbox row(s): ` +
+          processed.quarantinedRows.map((r) => `${r.mutation_type} (${r.entity_type}/${r.entity_id})`).join(', '),
+      )
+      logger.error(
+        { company_slug: companySlug, quarantined: processed.quarantinedRows },
+        '[worker] outbox rows quarantined — mutation_type has no registered handler',
+      )
+      captureWithEntityContext(quarantineError, {
+        scope: 'outbox_contract_quarantine',
+        company_id: companyId,
+      })
+    }
     logger.info(
       {
         company_slug: companySlug,
@@ -777,6 +883,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
         pending_sync_events: pendingSyncEvents,
         processed_outbox: processed.processedOutbox,
         processed_sync_events: processed.processedSyncEvents,
+        quarantined_outbox: processed.quarantinedOutbox,
         ...tickSummaryFields,
       },
       '[worker] tick',
@@ -796,6 +903,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     damageChargePushSummary.processed > 0 ||
     companyCamSummary.processed > 0 ||
     welcomeEmailSummary.processed > 0 ||
+    estimateShareEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
     captureArtifactRetentionGcSummary.deleted > 0 ||
     captureArtifactAnalysisSummary.analyzed > 0 ||
@@ -803,6 +911,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     contextWorkDispatchSummary.processed > 0 ||
     workDispatchReconcileSummary.ran ||
     workRequestStaleSummary.ran ||
+    agentFeedLeaseSweepSummary.ran ||
     auditEscrowSummary.ran
   ) {
     logger.info(

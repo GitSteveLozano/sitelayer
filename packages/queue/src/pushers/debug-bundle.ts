@@ -4,20 +4,22 @@ import type { QueueClient } from '../index.js'
 // index.ts → pusher → index.ts value-import cycle: a runtime import of a value
 // defined later in index.ts can resolve as `undefined` under Vite's circular-
 // module evaluation. Behaviourally identical to index.ts:markOutboxRowFailedFresh.
+// status='failed' is a PARKED-TERMINAL state — no drain re-claims it; see the
+// honesty note on index.ts:markOutboxRowFailedFresh (the phantom 15-min
+// next_attempt_at retry was removed 2026-06-12 because nothing performed it).
 async function markOutboxRowFailedFresh(
   client: QueueClient,
   companyId: string,
   outboxId: string,
   errorMessage: string,
-  retryDelayMinutes = 15,
 ): Promise<void> {
   try {
     await client.query('begin')
     await client.query(
       `update mutation_outbox
-         set status = 'failed', error = $3, next_attempt_at = now() + ($4 || ' minutes')::interval
+         set status = 'failed', error = $3, updated_at = now()
        where company_id = $1 and id = $2`,
-      [companyId, outboxId, errorMessage.slice(0, 1000), String(retryDelayMinutes)],
+      [companyId, outboxId, errorMessage.slice(0, 1000)],
     )
     await client.query('commit')
   } catch (markErr) {

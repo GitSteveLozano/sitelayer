@@ -1,9 +1,9 @@
 // Shared canvas coordinate math for the takeoff drawing surface.
 //
-// The desktop (`screens/desktop/est-canvas.tsx`), mobile
-// (`screens/mobile/takeoff-mobile.tsx`), and projects
-// (`screens/projects/takeoff-canvas.tsx`) takeoff canvases all map a pointer's
-// screen position into the SVG's 0–100 board space using the SAME
+// The desktop (`screens/desktop/est-canvas.tsx`) and mobile
+// (`screens/mobile/takeoff-mobile.tsx`) takeoff canvases (plus, historically,
+// the v1 `screens/projects/takeoff-canvas.tsx`, retired 2026-06-12) map a
+// pointer's screen position into the SVG's 0–100 board space using the SAME
 // `getScreenCTM()` / `createSVGPoint()` / `matrixTransform(ctm.inverse())`
 // transform, and the same `clamp` / `round2` primitives. That math was
 // duplicated verbatim across the three screens; this module is its single

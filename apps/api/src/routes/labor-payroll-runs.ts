@@ -14,10 +14,11 @@ import {
 } from '@sitelayer/workflows'
 import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 
 // POST /api/labor-payroll-runs wire-format. The route already enforces
 // YYYY-MM-DD on period_start/period_end and a uuid-shaped
@@ -537,109 +538,99 @@ export async function handleLaborPayrollRunRoutes(
     const { event: eventType, state_version: stateVersion } = parsed.value
 
     try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const lockedResult = await client.query<LaborPayrollRunRow>(
-          `select ${LABOR_PAYROLL_RUN_COLUMNS}
-           from labor_payroll_runs
-           where company_id = $1 and id = $2 and deleted_at is null
-           for update`,
-          [ctx.company.id, id],
-        )
-        const current = lockedResult.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        if (current.state_version !== stateVersion) {
-          return { kind: 'version_conflict' as const, run: current }
-        }
-
-        const reducerEvent = buildReducerEvent(eventType as LaborPayrollHumanEventType, ctx.currentUserId)
-        let nextSnapshot: LaborPayrollWorkflowSnapshot
-        try {
-          nextSnapshot = transitionLaborPayrollWorkflow(rowToSnapshot(current), reducerEvent)
-        } catch (err) {
-          return {
-            kind: 'illegal_transition' as const,
-            run: current,
-            message: err instanceof Error ? err.message : String(err),
-          }
-        }
-
-        const updateResult = await client.query<LaborPayrollRunRow>(
-          `update labor_payroll_runs
-             set state = $3,
-                 state_version = $4,
-                 approved_at = $5,
-                 approved_by_user_id = $6,
-                 posted_at = $7,
-                 failed_at = $8,
-                 error_message = $9,
-                 qbo_payroll_batch_ref = $10::jsonb,
-                 version = version + 1,
-                 updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${LABOR_PAYROLL_RUN_COLUMNS}`,
-          [
-            ctx.company.id,
-            id,
-            nextSnapshot.state,
-            nextSnapshot.state_version,
-            nextSnapshot.approved_at ?? null,
-            nextSnapshot.approved_by ?? null,
-            nextSnapshot.posted_at ?? null,
-            nextSnapshot.failed_at ?? null,
-            nextSnapshot.error ?? null,
-            nextSnapshot.qbo_timeactivity_ids ? JSON.stringify(nextSnapshot.qbo_timeactivity_ids) : null,
-          ],
-        )
-        const updated = updateResult.rows[0]
-        if (!updated) throw new HttpError(500, 'labor payroll run update returned no row')
-
-        await recordWorkflowEvent(client, {
+      const result = await withMutationTx((client: PoolClient) =>
+        dispatchWorkflowEvent<LaborPayrollRunRow, LaborPayrollWorkflowSnapshot, LaborPayrollWorkflowEvent>(client, {
+          definition: {
+            name: LABOR_PAYROLL_WORKFLOW_NAME,
+            schemaVersion: LABOR_PAYROLL_WORKFLOW_SCHEMA_VERSION,
+            reduce: transitionLaborPayrollWorkflow,
+          },
           companyId: ctx.company.id,
-          workflowName: LABOR_PAYROLL_WORKFLOW_NAME,
-          schemaVersion: LABOR_PAYROLL_WORKFLOW_SCHEMA_VERSION,
           entityType: 'labor_payroll_run',
-          entityId: updated.id,
-          stateVersion,
-          eventType,
-          eventPayload: reducerEvent,
-          snapshotAfter: nextSnapshot,
+          entityId: id,
+          expectedStateVersion: stateVersion,
           actorUserId: ctx.currentUserId,
-        })
-        await recordMutationLedger(client, {
-          companyId: ctx.company.id,
-          entityType: 'labor_payroll_run',
-          entityId: updated.id,
-          action: `event:${eventType.toLowerCase()}`,
-          row: updated,
-          idempotencyKey: `labor_payroll_run:event:${updated.id}:${updated.state_version}`,
-        })
+          loadSnapshot: async (c) => {
+            const lockedResult = await c.query<LaborPayrollRunRow>(
+              `select ${LABOR_PAYROLL_RUN_COLUMNS}
+               from labor_payroll_runs
+               where company_id = $1 and id = $2 and deleted_at is null
+               for update`,
+              [ctx.company.id, id],
+            )
+            const current = lockedResult.rows[0]
+            if (!current) return null
+            return { row: current, snapshot: rowToSnapshot(current) }
+          },
+          buildEvent: () => buildReducerEvent(eventType as LaborPayrollHumanEventType, ctx.currentUserId),
+          persist: async (c, nextSnapshot) => {
+            const updateResult = await c.query<LaborPayrollRunRow>(
+              `update labor_payroll_runs
+                 set state = $3,
+                     state_version = $4,
+                     approved_at = $5,
+                     approved_by_user_id = $6,
+                     posted_at = $7,
+                     failed_at = $8,
+                     error_message = $9,
+                     qbo_payroll_batch_ref = $10::jsonb,
+                     version = version + 1,
+                     updated_at = now()
+               where company_id = $1 and id = $2
+               returning ${LABOR_PAYROLL_RUN_COLUMNS}`,
+              [
+                ctx.company.id,
+                id,
+                nextSnapshot.state,
+                nextSnapshot.state_version,
+                nextSnapshot.approved_at ?? null,
+                nextSnapshot.approved_by ?? null,
+                nextSnapshot.posted_at ?? null,
+                nextSnapshot.failed_at ?? null,
+                nextSnapshot.error ?? null,
+                nextSnapshot.qbo_timeactivity_ids ? JSON.stringify(nextSnapshot.qbo_timeactivity_ids) : null,
+              ],
+            )
+            const updated = updateResult.rows[0]
+            if (!updated) throw new HttpError(500, 'labor payroll run update returned no row')
+            return updated
+          },
+          sideEffects: async (c, _next, updated) => {
+            await recordMutationLedger(c, {
+              companyId: ctx.company.id,
+              entityType: 'labor_payroll_run',
+              entityId: updated.id,
+              action: `event:${eventType.toLowerCase()}`,
+              row: updated,
+              idempotencyKey: `labor_payroll_run:event:${updated.id}:${updated.state_version}`,
+            })
 
-        // POST_REQUESTED: enqueue the QBO push outbox row. Per-run idempotency
-        // key (NOT per-state_version) so a RETRY_POST → POST_REQUESTED replay
-        // lands on the same row and 'on conflict do update' resets it to
-        // pending without creating duplicate work.
-        if (eventType === 'POST_REQUESTED') {
-          await recordMutationLedger(client, {
-            companyId: ctx.company.id,
-            entityType: 'labor_payroll_run',
-            entityId: updated.id,
-            action: 'post_qbo_time_activities',
-            mutationType: 'post_qbo_time_activities',
-            row: updated,
-            outboxPayload: {
-              labor_payroll_run_id: updated.id,
-              period_start: updated.period_start,
-              period_end: updated.period_end,
-              covered_labor_entry_ids: updated.covered_labor_entry_ids,
-              total_hours: updated.total_hours,
-              total_cents: updated.total_cents,
-            },
-            idempotencyKey: `labor_payroll_run:post:${updated.id}`,
-          })
-        }
-
-        return { kind: 'ok' as const, run: updated, eventType }
-      })
+            // POST_REQUESTED: enqueue the QBO push outbox row. Per-run idempotency
+            // key (NOT per-state_version) so a RETRY_POST → POST_REQUESTED replay
+            // lands on the same row and 'on conflict do update' resets it to
+            // pending without creating duplicate work.
+            if (eventType === 'POST_REQUESTED') {
+              await recordMutationLedger(c, {
+                companyId: ctx.company.id,
+                entityType: 'labor_payroll_run',
+                entityId: updated.id,
+                action: 'post_qbo_time_activities',
+                mutationType: 'post_qbo_time_activities',
+                row: updated,
+                outboxPayload: {
+                  labor_payroll_run_id: updated.id,
+                  period_start: updated.period_start,
+                  period_end: updated.period_end,
+                  covered_labor_entry_ids: updated.covered_labor_entry_ids,
+                  total_hours: updated.total_hours,
+                  total_cents: updated.total_cents,
+                },
+                idempotencyKey: `labor_payroll_run:post:${updated.id}`,
+              })
+            }
+          },
+        }),
+      )
 
       if (result.kind === 'not_found') {
         ctx.sendJson(404, { error: 'labor payroll run not found' })
@@ -648,14 +639,14 @@ export async function handleLaborPayrollRunRoutes(
       if (result.kind === 'version_conflict') {
         ctx.sendJson(409, {
           error: 'state_version mismatch — reload and retry',
-          snapshot: snapshotResponse(result.run),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
       if (result.kind === 'illegal_transition') {
         ctx.sendJson(409, {
           error: result.message,
-          snapshot: snapshotResponse(result.run),
+          snapshot: snapshotResponse(result.row),
         })
         return true
       }
@@ -664,14 +655,14 @@ export async function handleLaborPayrollRunRoutes(
         companyId: ctx.company.id,
         actorUserId: ctx.currentUserId,
         entityType: 'labor_payroll_run',
-        entityId: result.run.id,
-        action: `event:${result.eventType.toLowerCase()}`,
-        after: result.run,
+        entityId: result.row.id,
+        action: `event:${eventType.toLowerCase()}`,
+        after: result.row,
       })
-      observeAudit('labor_payroll_run', `event:${result.eventType.toLowerCase()}`)
-      const outcome = workflowEventOutcome(result.eventType)
+      observeAudit('labor_payroll_run', `event:${eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(eventType)
       if (outcome) observeWorkflowEvent(LABOR_PAYROLL_WORKFLOW_NAME, outcome)
-      ctx.sendJson(200, snapshotResponse(result.run))
+      ctx.sendJson(200, snapshotResponse(result.row))
       return true
     } catch (err) {
       ctx.sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })

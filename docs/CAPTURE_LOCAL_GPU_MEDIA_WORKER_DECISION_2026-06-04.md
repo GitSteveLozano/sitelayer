@@ -132,10 +132,15 @@ permanent skipped event for unreachable Whisper.
 
 ## Open Follow-Ups
 
-- Populate `/home/taylorsando/.config/sitelayer/capture-media-worker.env` with
+- ✅ **DONE (verified 2026-06-12):** Populate
+  `/home/taylorsando/.config/sitelayer/capture-media-worker.env` with
   the target Sitelayer DB and DO Spaces credentials, then run the installer from
-  an unsandboxed shell. The Codex sandbox cannot write that path.
-- Add a repair command for historical `local whisper unavailable` skipped events
+  an unsandboxed shell. The workstation media worker is live and the local
+  Whisper service is healthy.
+- ⏳ **OPEN (still not built as of 2026-06-12):** Add a repair command for
+  historical `local whisper unavailable` skipped events
   if any important sessions were already consumed by the bad droplet default.
+  No such command exists yet; affected sessions remain permanently skipped
+  until it is written.
 - Decide whether `gemini-cli` enrichment should stay as a manual fallback or run
   through a separate subscription-CLI queue.

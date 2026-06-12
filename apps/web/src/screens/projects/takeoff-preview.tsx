@@ -58,7 +58,9 @@ export function TakeoffPreviewScreen() {
 
   const capturedScene = useMemo(() => {
     if (!isCaptureDraft || !showCapturedGeometry) return null
-    return buildCapturedGeometryScene(draftResult.data?.takeoff_result.geometry, {
+    // takeoff_result is null while an async live capture is processing/failed
+    // (2026-06-12 split) — render no captured geometry rather than crashing.
+    return buildCapturedGeometryScene(draftResult.data?.takeoff_result?.geometry, {
       source: draftResult.data?.source ?? activeDraft?.source ?? null,
     })
   }, [isCaptureDraft, showCapturedGeometry, draftResult.data, activeDraft?.source])

@@ -2,15 +2,13 @@ import type http from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { Capability } from '@sitelayer/domain'
+import type { ProjectEventEnvelope, WorkRequest } from '@operator/projectkit'
 import {
-  CONTRACT_VERSION,
-  validateProjectEvent,
-  validateWorkRequest,
-  type Concern,
-  type ProjectEvent,
-  type ProjectEventEnvelope,
-  type WorkRequest,
-} from '@operator/projectkit'
+  buildConcernSnapshot,
+  buildProjectEventEnvelope,
+  buildProjectEventSnapshot,
+  buildWorkRequestSnapshot,
+} from '@sitelayer/projectkit-bridge'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
@@ -658,37 +656,27 @@ async function enqueueOnsiteDiagnosticConcernTx(
   const audience = opsDiagnosticAgentAudience()
   if (!audience) return null
   const concernRef = `opsdiag:${args.session.id}:${args.actionKey}`
-  const concern: Concern = {
-    schema_version: CONTRACT_VERSION,
-    project_key: 'sitelayer',
-    dispatched_at: args.requestedAt,
-    concern_ref: concernRef,
-    kind: 'execute',
+  // Routed through the validated @sitelayer/projectkit-bridge builder (the
+  // single place the published contract is assembled + enforced — the
+  // conformance ratchet in apps/api/src/projectkit-concern.test.ts bans
+  // hand-rolled snapshot literals). Ref-only dispatch: no work item exists, so
+  // concernRef carries the producer-stable idempotency key. kind defaults to
+  // 'execute'; severity maps 1:1 onto the published priority vocabulary.
+  const concern = buildConcernSnapshot({
+    concernRef,
     title: `${args.actionLabel} for onsite diagnostics`,
     summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
+    severity: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
     audience,
     assignee: audience,
-    source_event_ref: `ops_diagnostic_session:${args.session.id}`,
-    priority: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    sourceEventRef: `ops_diagnostic_session:${args.session.id}`,
+    dispatchedAt: args.requestedAt,
     acceptance: [
       'Inspect the onsite diagnostic session plan and blockers.',
       'Return a callback with the next phone-safe operator action or a clear reason no action is possible.',
     ],
-    inputs: {
-      ops_diagnostic_session_id: args.session.id,
-      action_event_id: args.event.id,
-      requested_action: args.actionKey,
-      requested_by: args.actorUserId,
-      plan_status: args.session.plan.status,
-      control_level: args.session.plan.control_level,
-      recommended_entry: args.session.plan.recommended_entry,
-      can_capture_desktop: args.session.plan.can_capture_desktop,
-      can_route_work: args.session.plan.can_route_work,
-      can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
-      blockers: args.session.plan.blockers,
-      ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
-    },
-  }
+    inputs: onsiteDiagnosticExecutorInputs(args),
+  })
   const id = await insertAgentFeedConcernTx(client, {
     companyId: args.companyId,
     audience,
@@ -1055,6 +1043,33 @@ export async function __captureOnsiteDesktopEvidenceForTests(
   return captureOnsiteDesktopEvidence(ctx, opts, args, runTx)
 }
 
+/**
+ * The flat executor-facing context for an onsite diagnostic action — travels
+ * as the agent-feed Concern's `inputs` and as the routed WorkRequest's
+ * `payload` (and its embedded Concern's `inputs`).
+ */
+function onsiteDiagnosticExecutorInputs(args: {
+  session: StoredOnsiteDiagnosticSession
+  event: OpsOnsiteDiagnosticAuditEvent
+  actionKey: OpsOnsiteDiagnosticActionKey
+  actorUserId: string | null
+}): Record<string, unknown> {
+  return {
+    ops_diagnostic_session_id: args.session.id,
+    action_event_id: args.event.id,
+    requested_action: args.actionKey,
+    requested_by: args.actorUserId,
+    plan_status: args.session.plan.status,
+    control_level: args.session.plan.control_level,
+    recommended_entry: args.session.plan.recommended_entry,
+    can_capture_desktop: args.session.plan.can_capture_desktop,
+    can_route_work: args.session.plan.can_route_work,
+    can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
+    blockers: args.session.plan.blockers,
+    ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
+  }
+}
+
 function buildOnsiteDiagnosticCaptureEnvelope(args: {
   session: StoredOnsiteDiagnosticSession
   event: OpsOnsiteDiagnosticAuditEvent
@@ -1065,74 +1080,52 @@ function buildOnsiteDiagnosticCaptureEnvelope(args: {
   const requestedAt = args.event.at
   const requestRef = `opsdiag:${args.session.id}:${args.actionKey}`
   const deliveryId = `${requestRef}:${args.event.id}`
-  const workRequest: WorkRequest = {
-    schema_version: CONTRACT_VERSION,
-    project_key: 'sitelayer',
-    requested_at: requestedAt,
-    request_ref: requestRef,
-    intent: onsiteActionWorkIntent(args.actionKey),
+  const executorInputs = onsiteDiagnosticExecutorInputs(args)
+  // All three contract shapes are assembled by the validated
+  // @sitelayer/projectkit-bridge builders (each throws on a contract
+  // violation — the bridge is the only module stamping CONTRACT_VERSION).
+  const workRequest = buildWorkRequestSnapshot({
+    concernRef: requestRef,
     title: `${args.actionLabel} for onsite diagnostics`,
     summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
-    priority: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
-    route_path: '/ops',
-    entity_kind: 'ops_diagnostic_session',
-    entity_id: args.session.id,
-    source_event_ref: `ops_diagnostic_session:${args.session.id}`,
+    severity: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    intent: onsiteActionWorkIntent(args.actionKey),
+    route: '/ops',
+    entityType: 'ops_diagnostic_session',
+    entityId: args.session.id,
+    sourceEventRef: `ops_diagnostic_session:${args.session.id}`,
     sensitivity: 'internal',
     acceptance: onsiteActionAcceptance(args.actionKey),
-    payload: {
-      ops_diagnostic_session_id: args.session.id,
-      action_event_id: args.event.id,
-      requested_action: args.actionKey,
-      requested_by: args.actorUserId,
-      plan_status: args.session.plan.status,
-      control_level: args.session.plan.control_level,
-      recommended_entry: args.session.plan.recommended_entry,
-      can_capture_desktop: args.session.plan.can_capture_desktop,
-      can_route_work: args.session.plan.can_route_work,
-      can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
-      blockers: args.session.plan.blockers,
-      ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
-    },
-  }
-  const workProblems = validateWorkRequest(workRequest)
-  if (workProblems.length > 0) {
-    throw new Error(`onsite WorkRequest contract violation: ${workProblems.join('; ')}`)
-  }
+    dispatchedAt: requestedAt,
+    inputs: executorInputs,
+    payload: executorInputs,
+  })
 
-  const event: ProjectEvent = {
-    schema_version: CONTRACT_VERSION,
-    event_type: `sitelayer.ops_diagnostic.${args.actionKey}.requested`,
-    project_key: 'sitelayer',
-    occurred_at: requestedAt,
+  const event = buildProjectEventSnapshot({
+    eventType: `sitelayer.ops_diagnostic.${args.actionKey}.requested`,
+    occurredAt: requestedAt,
     domain: 'workflow_event',
     outcome: 'requested',
     environment: process.env.APP_TIER ?? process.env.NODE_ENV ?? 'unknown',
-    source_surface: 'mobile_ops',
-    route_path: '/ops',
-    actor_kind: 'operator',
-    principal_id: args.actorUserId,
-    entity_kind: 'ops_diagnostic_session',
-    entity_id: args.session.id,
+    sourceSurface: 'mobile_ops',
+    routePath: '/ops',
+    actorKind: 'operator',
+    principalId: args.actorUserId,
+    entityKind: 'ops_diagnostic_session',
+    entityId: args.session.id,
     action: args.actionKey,
     summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
     sensitivity: 'internal',
-    redaction_status: 'summary_only',
+    redactionStatus: 'summary_only',
     payload: { work_request: workRequest },
-  }
-  const eventProblems = validateProjectEvent(event)
-  if (eventProblems.length > 0) {
-    throw new Error(`onsite ProjectEvent contract violation: ${eventProblems.join('; ')}`)
-  }
+  })
 
-  return {
-    contract_version: CONTRACT_VERSION,
-    project_key: 'sitelayer',
-    emitted_at: requestedAt,
+  return buildProjectEventEnvelope({
+    emittedAt: requestedAt,
     producer: { name: 'sitelayer.ops-diagnostics' },
-    delivery_id: deliveryId,
+    deliveryId,
     events: [event],
-  }
+  })
 }
 
 function onsiteActionWorkIntent(actionKey: OpsOnsiteDiagnosticActionKey): string {

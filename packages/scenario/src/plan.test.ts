@@ -256,6 +256,36 @@ describe('planScenario — renderable takeoff (blueprints + geometry)', () => {
   })
 })
 
+describe('planScenario — capture-born work items stamp the app_issue domain', () => {
+  // LOCKED DECISION: app_issue and field_request are permanently separate
+  // domains. A capture session is the app_issue surface, so the seeded work
+  // item must land on the issue board — migration 009 defaults the column to
+  // 'field_request', so the insert has to stamp the domain explicitly (the
+  // live finalize path in apps/api/src/routes/capture-sessions.ts does).
+  it('steve-demo capture work item inserts domain=app_issue (visible on the /issues surface, not the field_request board)', () => {
+    const plan = planFor('steve-demo.yaml')
+    const op = opByLabel(plan, 'context_work_item:steve-ai-takeoff-target-feedback')
+    expect(op?.kind).toBe('query')
+    if (op?.kind !== 'query') return
+
+    expect(op.text).toMatch(/insert into context_work_items/i)
+
+    // Locate `domain` positionally in the column list so the assertion checks
+    // the bound value actually feeding that column, not just its presence.
+    const columnList = /insert into context_work_items\s*\(([^)]*)\)/i.exec(op.text)?.[1]
+    expect(columnList).toBeDefined()
+    const columns = (columnList ?? '').split(',').map((c) => c.trim())
+    const domainIdx = columns.indexOf('domain')
+    expect(domainIdx).toBeGreaterThanOrEqual(0)
+
+    // The issues surface pins `domain = 'app_issue'` (routes/issues.ts), and
+    // the field_request board pins `domain = 'field_request'` — the seeded
+    // capture work item must match the former and never the latter.
+    expect(op.values[domainIdx]).toBe('app_issue')
+    expect(op.values[domainIdx]).not.toBe('field_request')
+  })
+})
+
 describe('planScenario — summary', () => {
   it('resolves steve-demo refs deterministically', () => {
     const plan = planFor('steve-demo.yaml')

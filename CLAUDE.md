@@ -33,7 +33,7 @@ dev/demo/prod deploys.
 - **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, labor-payroll, project-lifecycle, field-event, rental, daily-log, notification, shipment, damage-charge-settlement, rental-request-approval, qbo-sync-run, scaffold-ops-approval). See `docs/DETERMINISTIC_WORKFLOWS.md` and the "Workflow Inventory" section below.
 - **Single HTTP client** = `apps/web/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
 
-**Routing topology (read before adding a reachable route).** The canonical runtime shell is `apps/web/src/screens/mobile-shell.tsx` (`MobileShell`), mounted at `App.tsx`'s `/*` route via `routes/workspace.tsx`. `MobileShell` carries its OWN inline `<Routes>` table, including the `projects/:projectId/*` and `rentals/*` catchalls. To add a new reachable mobile route, add it inside **`mobile-shell.tsx` before those catchalls** (otherwise a catchall swallows it); a full-screen/specialized route instead mounts directly in `App.tsx` (e.g. `/financial/*`, `/more`) or in `more.tsx` / `financial.tsx`. **`routes/{projects,rentals,schedule,home,time,log,crew}.tsx` are legacy/dead — never mounted under the shell (and being removed). Do NOT add routes there.**
+**Routing topology (read before adding a reachable route).** The canonical runtime shell is `apps/web/src/screens/mobile-shell.tsx` (`MobileShell`), mounted at `App.tsx`'s `/*` route via `routes/workspace.tsx`. `MobileShell` carries its OWN inline `<Routes>` table, including the `projects/:projectId/*` and `rentals/*` catchalls. To add a new reachable mobile route, add it inside **`mobile-shell.tsx` before those catchalls** (otherwise a catchall swallows it); a full-screen/specialized route instead mounts directly in `App.tsx` (e.g. `/financial/*`, `/more`) or in `more.tsx` / `financial.tsx`. **The legacy dead route files `routes/{projects,rentals,schedule,home,time,log,crew}.tsx` were removed (2ceeab3d); every surviving `routes/*.tsx` is imported and live. Do NOT recreate per-feature route files there — routes go in `mobile-shell.tsx` / `App.tsx` as above.**
 
 Where new code goes:
 
@@ -385,20 +385,34 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    `BLUEPRINT_DOWNLOAD_PRESIGNED=1` requires Spaces CORS validated for
    the web app origin first.
 
-4. **Blueprint-vision live mode is opt-in via two env vars.** _Why:_
+4. **Blueprint-vision live mode is opt-in via env vars, and LIVE runs are
+   ASYNC (2026-06-12).** _Why:_
    `POST /api/projects/:id/takeoff-drafts/capture` (`kind=blueprint_vision`)
-   calls Claude Opus on every drawing page; an accidentally-set key plus
-   a wired multipart upload would otherwise rack up Anthropic spend on
-   the first request. The dispatcher checks `BLUEPRINT_VISION_MODE=live`
-   AND a non-empty `ANTHROPIC_API_KEY` together — either missing falls
-   back to the deterministic dry-run stub. _How to apply:_ set both env
-   vars in `/app/sitelayer/.env` on the prod droplet (manifest entry in
-   `ops/env/production.env.json`; never commit the key; `.env.example` only
-   documents placeholders), and verify live behaviour
-   against a single sheet PDF before flipping the mode for the fleet.
-   The live path requires the multipart form (`blueprint_file` part) so
-   the PDF streams straight into Spaces; the JSON-body variant of the
-   endpoint stays dry-run.
+   used to await the Gemini/Anthropic vision call inline in the HTTP
+   handler and, on ANY provider error, silently served believable demo
+   rows labelled "dry-run". Now a LIVE capture returns `202` with the
+   draft at `capture_status='processing'` and enqueues a
+   `takeoff_capture_pipeline` outbox row; the WORKER
+   (`apps/worker/src/runners/takeoff-capture.ts`, lane
+   `takeoff_capture_pipeline`, migration 018) runs the provider call and
+   transitions the draft to `ready` (result + `capture_provenance`
+   `gemini-live`/`anthropic-live` + REAL token usage in
+   `capture_token_usage`) or `failed` (`capture_error` set — provider
+   errors NEVER produce stub rows, and the flat $0.25/page cost
+   placeholder is gone). Provider selection: `BLUEPRINT_VISION_MODE=gemini`
+   - `GEMINI_API_KEY` ⇒ Gemini (prod default since ef9c6926);
+     `BLUEPRINT_VISION_MODE=live` + `ANTHROPIC_API_KEY` ⇒ Anthropic; either
+     missing ⇒ the deterministic dry-run stub, which stays SYNCHRONOUS
+     (`201`, `capture_provenance='stub-dry-run'`) so demo/e2e fixtures keep
+     working. _How to apply:_ set the env vars in `/app/sitelayer/.env` on
+     the prod droplet (manifest entry in `ops/env/production.env.json`;
+     never commit keys) for BOTH the api and worker containers — the worker
+     is what makes the live call now — and verify against a single sheet
+     before fleet rollout. Anthropic live still requires the multipart form
+     (`blueprint_file` part); Gemini live also accepts the JSON body and
+     reads the project's latest stored blueprint. Poll
+     `GET /api/takeoff-drafts/:id/result` until `status` leaves
+     `processing`.
 
 ### Incident runbooks
 
@@ -440,7 +454,9 @@ only reach `review_ready` via `agent.completed` — a human accepts to resolve)
 speaks the `@operator/projectkit` contract: the dispatch payload carries a
 `Concern`/`WorkRequest` snapshot and the inbound agent-callback carries a
 `Callback` snapshot (`packages/projectkit-bridge`, conformance gate
-`apps/api/src/projectkit-concern.test.ts`). mesh is the default dispatch
+`packages/projectkit-bridge/src/index.test.ts` — the former
+`apps/api/src/projectkit-concern.test.ts` was deleted when the contract
+conformance moved into the bridge package). mesh is the default dispatch
 backend behind a URL — one swappable adapter, never the owner. The
 cross-testbed reference is `~/notes/how-capture-works-across-testbeds-2026-06-06.md`.
 
@@ -613,7 +629,7 @@ Blueprints / takeoff:
 - POST `/api/projects/:id/takeoff-drafts/capture` — run a capture pipeline (`kind` = blueprint_vision | roomplan | drone | photogrammetry); returns a review-required `TakeoffResult` draft
 - POST `/api/projects/:id/takeoff-drafts/:draftId/promote` — promote selected captured quantities into committed `takeoff_measurements`
 
-3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Not built: a scaffold _designer_, and captured geometry isn't yet fed into the renderer (only manual blueprint polygons are).
+3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Captured draft `TakeoffGeometry` IS fed into the renderer since `05be647d` (`apps/web/src/lib/takeoff/captured-geometry-3d.ts`, wired through `takeoff-preview.tsx`) — not just manual blueprint polygons. Residual gaps: a scaffold _designer_ is still not built, and RoomPlan walls are metrics-only (no captured wall geometry reaches the scene).
 
 Estimation:
 

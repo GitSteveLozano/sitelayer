@@ -44,6 +44,15 @@ vanished, would a customer lose data?"** Exactly one tier answers _yes_.
 | **demo**    | `demo.preview.sitelayer.sandolab.xyz` | **Docker Postgres on the preview droplet**                | Disposable — **reseeded every deploy**   | Watch-mode + idempotent `seed:demo`                    | `main` (promoted)      |
 | **preview** | `pr-N.preview.sitelayer.sandolab.xyz` | **Docker Postgres on the preview droplet** (per-PR)       | Disposable — **ephemeral, self-reaping** | Watch-mode, per-PR, `deploy-preview.sh`                | the PR branch          |
 
+> **STALE (2026-06-12) — migration window note below is overtaken by events.**
+> The cutover has been executed for the tiers that matter day-to-day: **demo
+> runs the local Docker-Postgres backend** (`PREVIEW_DB_BACKEND=local`
+> persisted in `/app/previews/.env.demo.shared` → container `preview-db`, DB
+> `sitelayer_demo`), and per-PR **preview stacks default to the local
+> backend** (tier default in `scripts/deploy-preview.sh`). The "DB home"
+> column above describes the live state for those tiers, not just a target.
+> Original note kept for history:
+>
 > **Migration window note.** As of the verified inventory, dev/demo/preview DBs
 > (`sitelayer_dev`, `sitelayer_demo`, `sitelayer_preview`) still physically live
 > on the managed cluster alongside `sitelayer_prod`. The "DB home" column above is

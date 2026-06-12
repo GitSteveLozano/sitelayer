@@ -1813,22 +1813,27 @@ function planCaptureWorkItem(
     b,
     `context_work_item:${session.ref}`,
     `insert into context_work_items (
-       id, company_id, support_packet_id, title, summary, status, lane,
+       id, company_id, support_packet_id, domain, title, summary, status, lane,
        severity, route, capture_session_id, entity_type, entity_id,
        assignee_user_id, created_by_user_id, created_at, updated_at,
        resolved_at, metadata, reversibility_window_seconds
      )
      values (
-       $1, $2, $3, $4, $5, $6, $7,
-       $8, $9, $10::uuid, $11, $12,
-       $13, $14, $15::timestamptz, $15::timestamptz,
-       $16::timestamptz, $17::jsonb, $18
+       $1, $2, $3, $4, $5, $6, $7, $8,
+       $9, $10, $11::uuid, $12, $13,
+       $14, $15, $16::timestamptz, $16::timestamptz,
+       $17::timestamptz, $18::jsonb, $19
      )
      on conflict (id) do nothing`,
     [
       workItemId,
       b.companyId,
       supportPacketId,
+      // Capture-born work items are app feedback, so they always land on the
+      // app_issue board — never field_request (mirrors the live finalize path
+      // in apps/api/src/routes/capture-sessions.ts; migration 009 defaults the
+      // column to field_request, so omitting it here would seed the wrong board).
+      'app_issue',
       itemSpec.title,
       summary,
       itemSpec.status ?? 'new',

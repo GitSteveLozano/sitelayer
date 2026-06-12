@@ -10,6 +10,12 @@ export default defineConfig({
         new URL('../../packages/formula-evaluator/src/index.ts', import.meta.url),
       ),
       '@sitelayer/logger': fileURLToPath(new URL('../../packages/logger/src/index.ts', import.meta.url)),
+      '@sitelayer/capture-schema': fileURLToPath(
+        new URL('../../packages/capture-schema/src/index.ts', import.meta.url),
+      ),
+      '@sitelayer/pipe-blueprint': fileURLToPath(
+        new URL('../../packages/pipe-blueprint/src/index.ts', import.meta.url),
+      ),
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
       '@sitelayer/scenario': fileURLToPath(new URL('../../packages/scenario/src/index.ts', import.meta.url)),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
@@ -30,6 +36,8 @@ export default defineConfig({
       '@sitelayer/formula-evaluator',
       '@sitelayer/logger',
       '@sitelayer/queue',
+      '@sitelayer/capture-schema',
+      '@sitelayer/pipe-blueprint',
       '@sitelayer/scenario',
       '@sitelayer/workflows',
       '@sitelayer/projectkit-bridge',

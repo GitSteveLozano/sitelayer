@@ -1,5 +1,11 @@
 # SiteLayer — More We Can Build (vs. the original vision)
 
+> **STALE (2026-06-12):** Snapshot from 2026-05-26 (with a 2026-06-01 patch
+> note below); the gap analysis has drifted further since. For what is actually
+> live and what is next, use [`CRITICAL_PATH.md`](../CRITICAL_PATH.md) and the
+> 2026-06-12 audit (debt campaign). Keep this doc for the strategic framing,
+> not for build/no-build status.
+
 **As of:** 2026-05-26 · Source: Steve's ProService Bid-Intelligence spec (5 layers + 7 agents) and the PlanSwift/Avontus/ConstructionClock merged-platform doc, both mapped against the current code.
 
 > **Update 2026-06-01 — foundation pieces have LANDED on `main`** (verified

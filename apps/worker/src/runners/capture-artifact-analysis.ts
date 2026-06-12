@@ -112,6 +112,34 @@ const WHISPER_UNAVAILABLE_POLICIES = ['retry', 'skip'] as const
 const VIDEO_ANALYSIS_MODES = ['off', 'frames-only', 'gemini'] as const
 const DEFAULT_CALLBACK_TOKEN_TTL_HOURS = 72
 
+const ANALYZABLE_ELIGIBILITY_SQL = `from capture_artifacts a
+         join context_work_items w
+           on w.company_id = a.company_id
+          and w.capture_session_id = a.capture_session_id
+          and w.metadata ->> 'source' = 'capture_session_finalize'
+        where a.company_id = $1
+          and a.deleted_at is null
+          and not (a.metadata ? 'derived_from_artifact_id')
+          and (
+            (
+              a.storage_key is not null
+              and (
+                a.kind = any($2::text[])
+                or a.content_type like 'text/%'
+                or a.content_type = 'application/json'
+                or ($4::boolean and (a.kind = 'audio' or a.content_type like 'audio/%'))
+                or ($5::boolean and (a.kind = 'video' or a.content_type like 'video/%'))
+              )
+            )
+            or (a.storage_key is null and a.uri is not null)
+          )
+          and not exists (
+            select 1 from context_handoff_events e
+             where e.company_id = a.company_id
+               and e.work_item_id = w.id
+               and e.idempotency_key = 'capture_artifact:analysis:' || a.id::text
+          )`
+
 export function createCaptureArtifactAnalysisRunner(deps: {
   pool: Pool
   storage: ObjectStorageClient | null
@@ -133,6 +161,39 @@ export function createCaptureArtifactAnalysisRunner(deps: {
     async forceAnalyze(companyId: string): Promise<CaptureArtifactAnalysisSummary> {
       if (!storage) return { ran: false, analyzed: 0, skipped: 0, failed: 0 }
       return analyzeCaptureArtifacts(pool, storage, companyId, { logger, videoFrameExtractor })
+    },
+    // Cheap pending-work peek sharing the EXACT eligibility predicate with
+    // analyzeCaptureArtifacts (ANALYZABLE_ELIGIBILITY_SQL). Lets the worker
+    // skip the per-pass GPU yield when there is nothing to analyze — the
+    // unconditional yield was unloading every llama-swap model ~2x/min
+    // around the clock for empty passes (2026-06-12 audit: 476 model loads
+    // in 99 min), evicting the very models MEDIA_UNDERSTANDING_ENGINE=
+    // llama-swap needs.
+    async countAnalyzable(companyId: string): Promise<number> {
+      if (!storage) return 0
+      const audioMode = readMode('CAPTURE_ARTIFACT_AUDIO_ANALYSIS_MODE', AUDIO_ANALYSIS_MODES, 'off')
+      const videoMode = readMode('CAPTURE_ARTIFACT_VIDEO_ANALYSIS_MODE', VIDEO_ANALYSIS_MODES, 'off')
+      const limit = Math.min(readPositiveInt('CAPTURE_ARTIFACT_ANALYSIS_LIMIT', 10), 50)
+      const client = await pool.connect()
+      try {
+        await client.query('begin')
+        await setCompanyGuc(client, companyId)
+        const res = await client.query<{ n: string }>(
+          `select count(*) as n from (
+             select a.id
+             ${ANALYZABLE_ELIGIBILITY_SQL}
+             limit $3
+           ) pending`,
+          [companyId, Array.from(ANALYZABLE_KINDS), limit, audioMode !== 'off', videoMode !== 'off'],
+        )
+        await client.query('rollback')
+        return Number(res.rows[0]?.n ?? 0)
+      } catch (err) {
+        await client.query('rollback').catch(() => {})
+        throw err
+      } finally {
+        client.release()
+      }
     },
   }
 }
@@ -178,33 +239,7 @@ async function analyzeCaptureArtifacts(
               a.access_policy,
               a.metadata,
               a.retention_expires_at
-         from capture_artifacts a
-         join context_work_items w
-           on w.company_id = a.company_id
-          and w.capture_session_id = a.capture_session_id
-          and w.metadata ->> 'source' = 'capture_session_finalize'
-        where a.company_id = $1
-          and a.deleted_at is null
-          and not (a.metadata ? 'derived_from_artifact_id')
-          and (
-            (
-              a.storage_key is not null
-              and (
-                a.kind = any($2::text[])
-                or a.content_type like 'text/%'
-                or a.content_type = 'application/json'
-                or ($4::boolean and (a.kind = 'audio' or a.content_type like 'audio/%'))
-                or ($5::boolean and (a.kind = 'video' or a.content_type like 'video/%'))
-              )
-            )
-            or (a.storage_key is null and a.uri is not null)
-          )
-          and not exists (
-            select 1 from context_handoff_events e
-             where e.company_id = a.company_id
-               and e.work_item_id = w.id
-               and e.idempotency_key = 'capture_artifact:analysis:' || a.id::text
-          )
+         ${ANALYZABLE_ELIGIBILITY_SQL}
         order by a.created_at asc
         limit $3
         for update of a skip locked`,

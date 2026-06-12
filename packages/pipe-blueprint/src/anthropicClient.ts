@@ -14,6 +14,11 @@ export interface CallClaudePdfOptions {
   prompt: string
   maxTokens?: number
   cacheDocument?: boolean
+  /** Receives the REAL token usage off the Anthropic response (response.usage)
+   *  for each call, so callers can persist actual spend instead of inventing a
+   *  flat per-page estimate. Optional + non-throwing: usage accounting must
+   *  never fail the extraction itself. */
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void
 }
 
 export async function callClaudePdfJson<T = unknown>(opts: CallClaudePdfOptions): Promise<T> {
@@ -43,6 +48,17 @@ export async function callClaudePdfJson<T = unknown>(opts: CallClaudePdfOptions)
       },
     ],
   })
+
+  if (opts.onUsage) {
+    try {
+      opts.onUsage({
+        inputTokens: typeof response.usage?.input_tokens === 'number' ? response.usage.input_tokens : 0,
+        outputTokens: typeof response.usage?.output_tokens === 'number' ? response.usage.output_tokens : 0,
+      })
+    } catch {
+      // usage accounting must never fail the extraction
+    }
+  }
 
   // Concatenate all `text` blocks from the response and parse as JSON.
   // Anthropic responses can include multiple content blocks.

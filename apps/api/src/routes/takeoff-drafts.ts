@@ -2,10 +2,8 @@ import type http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { Pool } from 'pg'
-import { getRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
-import { currentTraceHeaders, recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { recordCostLog } from '../cost-log.js'
+import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import type { TakeoffResult } from '@sitelayer/capture-schema'
 import {
@@ -22,10 +20,7 @@ import { captureDroneDraft } from '../takeoff-capture-pipelines/drone.js'
 import {
   captureBlueprintVisionDraft,
   parseCountScope,
-  resolveBlueprintVisionMode,
   resolveBlueprintVisionProvider,
-  type BlueprintLiveInputs,
-  type StoredBlueprintInput,
 } from '../takeoff-capture-pipelines/blueprint-vision.js'
 import { defaultCaptureName } from '../takeoff-capture-pipelines/shared.js'
 
@@ -55,32 +50,11 @@ const ALLOWED_CAPTURE_KINDS = new Set(['roomplan', 'photogrammetry', 'drone', 'b
 // 'manual' is intentionally absent here.
 const ALLOWED_FEED_SOURCES = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
 
-// Placeholder cost per blueprint page Claude Opus reads. The real cost
-// is token-driven (input + output) but the Anthropic SDK call site does
-// not surface usage today; we record a flat per-page estimate so the
-// per-company spend column has data while we wait for the SDK to expose
-// it. metadata flags the estimation method.
-const BLUEPRINT_VISION_COST_PER_PAGE_USD = 0.25
-
-/**
- * Count drawing pages in a captured blueprint TakeoffResult. Returns 0
- * for non-blueprint captures or when the artifact metadata is missing
- * — the caller skips cost logging in that case.
- */
-function countBlueprintPages(takeoffResult: unknown): number {
-  if (!takeoffResult || typeof takeoffResult !== 'object') return 0
-  const sa = (takeoffResult as { sourceArtifact?: unknown }).sourceArtifact
-  if (!sa || typeof sa !== 'object') return 0
-  const kind = (sa as { kind?: unknown }).kind
-  if (kind !== 'blueprint') return 0
-  const blueprint = (sa as { blueprint?: unknown }).blueprint
-  if (!blueprint || typeof blueprint !== 'object') return 0
-  const pdfMeta = (blueprint as { pdfMeta?: unknown }).pdfMeta
-  if (!pdfMeta || typeof pdfMeta !== 'object') return 0
-  const pages = (pdfMeta as { pages?: unknown }).pages
-  return typeof pages === 'number' && Number.isFinite(pages) && pages > 0 ? Math.floor(pages) : 0
-}
-const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status, source, takeoff_result_blob_uri, review_required, pipeline_version, count_scope_json, version, deleted_at, created_at, updated_at`
+// NOTE (2026-06-12): the flat $0.25/page blueprint-vision cost placeholder is
+// GONE. Live captures run in the worker (runners/takeoff-capture.ts), which
+// records REAL provider token usage (Gemini usageMetadata / Anthropic usage)
+// onto takeoff_drafts.capture_token_usage and the company_usage_log row.
+const RETURNING_COLUMNS = `id, company_id, project_id, name, type, kind, status, source, takeoff_result_blob_uri, review_required, pipeline_version, count_scope_json, capture_status, capture_provenance, capture_error, capture_token_usage, version, deleted_at, created_at, updated_at`
 
 // Draft `kind` values the capture endpoint accepts. Orthogonal to `source`
 // (which pipeline produced the geometry): `kind` says how the operator should
@@ -289,27 +263,36 @@ function buildPromotedNotes(quantity: {
   return joined.length > 0 ? joined : null
 }
 
+/** Provenance discriminator persisted on every capture draft. Live values are
+ *  written by the worker; the route only ever writes the synchronous two. */
+export type CaptureProvenance = 'gemini-live' | 'anthropic-live' | 'stub-dry-run' | 'deterministic'
+
 /**
- * Run the requested capture pipeline against its kind-specific payload
- * and return the resulting `TakeoffResult` with review-floor applied.
+ * Run the requested SYNCHRONOUS capture pipeline against its kind-specific
+ * payload and return the resulting `TakeoffResult` with review-floor applied
+ * plus an honest provenance discriminator. Live blueprint_vision captures
+ * never reach this — the route enqueues them for the worker instead.
  * Throws on validation / pipeline errors; the caller maps to 400/422.
+ *
+ * Provenance:
+ *   - roomplan / photogrammetry / drone parse REAL captured input
+ *     deterministically (no model call) → 'deterministic'.
+ *   - blueprint_vision here is always the demo stub → 'stub-dry-run'.
  */
 async function dispatchCapturePipeline(
   kind: string,
   payload: Record<string, unknown>,
   projectId: string,
-  blueprintLive?: BlueprintLiveInputs,
-  storedImage?: StoredBlueprintInput,
-): Promise<{ result: TakeoffResult; pipelineVersion: string }> {
+): Promise<{ result: TakeoffResult; pipelineVersion: string; provenance: CaptureProvenance }> {
   switch (kind) {
     case 'roomplan':
-      return captureRoomplanDraft(payload, projectId)
+      return { ...(await captureRoomplanDraft(payload, projectId)), provenance: 'deterministic' }
     case 'photogrammetry':
-      return capturePhotogrammetryDraft(payload, projectId)
+      return { ...(await capturePhotogrammetryDraft(payload, projectId)), provenance: 'deterministic' }
     case 'drone':
-      return captureDroneDraft(payload, projectId)
+      return { ...(await captureDroneDraft(payload, projectId)), provenance: 'deterministic' }
     case 'blueprint_vision':
-      return captureBlueprintVisionDraft(payload, projectId, blueprintLive, storedImage)
+      return captureBlueprintVisionDraft(payload, projectId)
     default:
       throw new Error(`unsupported capture kind: ${kind}`)
   }
@@ -567,7 +550,8 @@ export async function handleTakeoffDraftRoutes(
     const countScope = parseCountScope(payload)
 
     // Verify project tenancy before kicking the pipeline so a foreign
-    // projectId doesn't waste a Claude/Luma call on the way to a 404.
+    // projectId doesn't waste a pipeline run (or an enqueue) on the way
+    // to a 404.
     const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `select id from projects
@@ -580,29 +564,33 @@ export async function handleTakeoffDraftRoutes(
       return true
     }
 
-    let blueprintLive: BlueprintLiveInputs | undefined
-    if (multipartResult && ctx.storage) {
-      // Read bytes back out of storage so the pipeline sees the same
-      // payload that landed in Spaces. Avoids a second buffer in memory
-      // beyond what putStream already required, but keeps the artifact
-      // pdfSha256 anchored on the persisted bytes.
-      try {
-        const persisted = await ctx.storage.get(multipartResult.storagePath)
-        blueprintLive = { pdfBytes: persisted, storagePath: multipartResult.storagePath }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'storage read failed'
-        ctx.sendJson(500, { error: `failed to read uploaded blueprint: ${message}` })
-        return true
-      }
-    }
+    // ── LIVE vs SYNC split (2026-06-12) ─────────────────────────────────────
+    // LIVE blueprint_vision captures (a real Gemini/Anthropic provider call)
+    // no longer run inline in this handler — the old path re-downloaded the
+    // PDF, base64-encoded it in memory, and awaited the vision call inside
+    // node:http (unbounded on the Anthropic per-page loop). Instead the route
+    // inserts the draft at capture_status='processing' and enqueues ONE
+    // dedicated 'takeoff_capture_pipeline' outbox row (stable idempotency key
+    // per draft); the worker runner executes the shared pipeline
+    // (packages/pipe-blueprint/src/live-capture.ts) and transitions the draft
+    // to 'ready' (result + provenance + REAL token usage) or 'failed' (error
+    // surfaced, zero fabricated rows).
+    //
+    // DRY-RUN (deterministic stub / count-scope / non-AI pipelines) stays
+    // synchronous so demo + e2e fixtures keep their immediate-result shape —
+    // but the result now carries an honest provenance discriminator.
+    const provider = resolveBlueprintVisionProvider()
+    const explicitDryRun = payload.dryRun === true
 
-    // The Gemini provider reads the project's EXISTING blueprint (the canvas
-    // "AI auto-takeoff" flow sends no multipart upload), so load the latest
-    // blueprint document and hand its bytes in. Non-fatal: any failure falls
-    // through to the dry-run stub.
-    let storedImage: StoredBlueprintInput | undefined
-    if (kind === 'blueprint_vision' && !blueprintLive && ctx.storage && resolveBlueprintVisionProvider() === 'gemini') {
-      try {
+    // Resolve the blueprint input the worker should read. Multipart uploads
+    // were already streamed to storage above; the canvas "AI auto-takeoff"
+    // flow sends no upload, so fall back to the project's latest existing
+    // blueprint document (the input the old inline Gemini path used).
+    let liveInput: { storage_path: string; mime_type: string } | null = null
+    if (kind === 'blueprint_vision' && !explicitDryRun && !countScope && provider !== 'dry-run') {
+      if (multipartResult) {
+        liveInput = { storage_path: multipartResult.storagePath, mime_type: 'application/pdf' }
+      } else if (provider === 'gemini') {
         const bp = await withCompanyClient(ctx.company.id, (c) =>
           c.query<{ storage_path: string; file_name: string }>(
             `select storage_path, file_name from blueprint_documents
@@ -613,42 +601,98 @@ export async function handleTakeoffDraftRoutes(
         )
         const row = bp.rows[0]
         if (row?.storage_path) {
-          const bytes = await ctx.storage.get(row.storage_path)
-          storedImage = { bytes, mimeType: getBlueprintMimeType(row.file_name) }
+          liveInput = { storage_path: row.storage_path, mime_type: getBlueprintMimeType(row.file_name) }
         }
-      } catch {
-        // ignore — dry-run stub is the safe fallback
       }
     }
 
-    let dispatchOutcome: { result: TakeoffResult; pipelineVersion: string }
+    if (liveInput) {
+      // ── ASYNC LIVE PATH ──────────────────────────────────────────────────
+      const enqueuedInput = liveInput
+      const created = await withMutationTx(async (client) => {
+        const insertResult = await client.query(
+          `insert into takeoff_drafts (
+              company_id, project_id, name, type, kind, status,
+              source, takeoff_result_json, review_required, pipeline_version, count_scope_json,
+              capture_status, capture_provenance
+            )
+            values ($1, $2, $3, 'measurement', $4, 'active', $5, null, false, null, null, 'processing', null)
+            returning ${RETURNING_COLUMNS}`,
+          [ctx.company.id, projectId, name, draftKind, kind],
+        )
+        const row = insertResult.rows[0]
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'takeoff_draft',
+          entityId: row.id,
+          action: 'create',
+          row: { ...row, source: kind, kind: draftKind },
+          actorUserId: ctx.currentUserId ?? null,
+        })
+        // The dedicated work row the worker drains. Stable per-draft
+        // idempotency key: a replayed enqueue for the same draft collapses
+        // onto this row (ON CONFLICT in recordMutationOutbox) instead of
+        // double-running the provider.
+        await recordMutationOutbox(
+          ctx.company.id,
+          'takeoff_draft',
+          row.id,
+          'takeoff_capture_pipeline',
+          {
+            draft_id: row.id,
+            project_id: projectId,
+            kind,
+            provider,
+            payload,
+            storage_path: enqueuedInput.storage_path,
+            mime_type: enqueuedInput.mime_type,
+          },
+          `takeoff_capture:run:${row.id}`,
+          'server',
+          ctx.currentUserId ?? null,
+          client,
+        )
+        return row
+      })
+
+      // 202: accepted for processing. The web app polls the draft
+      // (GET /api/projects/:id/takeoff-drafts or GET /api/takeoff-drafts/:id/result)
+      // until capture_status leaves 'processing'.
+      ctx.sendJson(202, {
+        draft: created,
+        result_summary: {
+          status: 'processing',
+          provider,
+          quantities_count: 0,
+          review_required: false,
+          mode: 'live',
+          provenance: null,
+        },
+      })
+      return true
+    }
+
+    // ── SYNCHRONOUS PATH (deterministic: dry-run stub / count-scope /
+    //    roomplan / photogrammetry / drone) ─────────────────────────────────
+    let dispatchOutcome: { result: TakeoffResult; pipelineVersion: string; provenance: string }
     try {
-      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId, blueprintLive, storedImage)
+      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'pipeline failed'
       ctx.sendJson(422, { error: message })
       return true
     }
-    const { result: takeoffResult, pipelineVersion } = dispatchOutcome
+    const { result: takeoffResult, pipelineVersion, provenance } = dispatchOutcome
     const reviewRequired = takeoffResult.quantities.some((q) => q.confidence < 0.5)
-
-    // Was the underlying pipeline actually a live Anthropic call? The
-    // dispatcher returns the same TakeoffResult shape either way, so we
-    // re-resolve the env-gated mode flag here instead of threading a
-    // bool through the pipeline contract. Live mode requires both the
-    // multipart upload (which the route created blueprintLive from) and
-    // the env vars (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY).
-    const usedBlueprintVisionLive =
-      kind === 'blueprint_vision' && blueprintLive != null && resolveBlueprintVisionMode() === 'live'
-    const blueprintPagesCount = usedBlueprintVisionLive ? countBlueprintPages(takeoffResult) : 0
 
     const created = await withMutationTx(async (client) => {
       const insertResult = await client.query(
         `insert into takeoff_drafts (
             company_id, project_id, name, type, kind, status,
-            source, takeoff_result_json, review_required, pipeline_version, count_scope_json
+            source, takeoff_result_json, review_required, pipeline_version, count_scope_json,
+            capture_status, capture_provenance
           )
-          values ($1, $2, $3, 'measurement', $4, 'active', $5, $6::jsonb, $7, $8, $9::jsonb)
+          values ($1, $2, $3, 'measurement', $4, 'active', $5, $6::jsonb, $7, $8, $9::jsonb, 'ready', $10)
           returning ${RETURNING_COLUMNS}`,
         [
           ctx.company.id,
@@ -660,6 +704,7 @@ export async function handleTakeoffDraftRoutes(
           reviewRequired,
           pipelineVersion,
           countScope ? JSON.stringify(countScope) : null,
+          provenance,
         ],
       )
       const row = insertResult.rows[0]
@@ -671,50 +716,22 @@ export async function handleTakeoffDraftRoutes(
         row: { ...row, source: kind, kind: draftKind, pipeline_version: pipelineVersion },
         actorUserId: ctx.currentUserId ?? null,
       })
-      // Cost attribution for blueprint vision: flat $0.25/page placeholder
-      // (the Anthropic SDK call site doesn't surface token counts). One row
-      // per attempt rather than per page so the cost log lines up 1:1 with
-      // the draft it produced; metadata pages count lets the read endpoint
-      // recover the per-page rate.
-      if (usedBlueprintVisionLive && blueprintPagesCount > 0) {
-        const requestCtx = getRequestContext()
-        const { sentryTrace } = currentTraceHeaders()
-        await recordCostLog(client, {
-          companyId: ctx.company.id,
-          operation: 'blueprint_vision_page',
-          costUsd: BLUEPRINT_VISION_COST_PER_PAGE_USD * blueprintPagesCount,
-          description: `blueprint_vision:capture pages=${blueprintPagesCount}`,
-          requestId: requestCtx?.requestId ?? null,
-          sentryTrace,
-          metadata: {
-            pages: blueprintPagesCount,
-            estimation: 'flat_per_page',
-            per_page_usd: BLUEPRINT_VISION_COST_PER_PAGE_USD,
-            input_tokens: null,
-            output_tokens: null,
-            pipeline_version: pipelineVersion,
-            draft_id: row.id,
-          },
-        })
-      }
       return row
     })
 
-    // Explicit live/dry-run discriminator (C1 follow-up). The client uses
-    // this to flip the AI-takeoff demo badge: only a real Anthropic sheet
-    // read (multipart PDF + BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY)
-    // reports mode='live'; every stub/Gemini-fallback/dry-run path stays
-    // 'dry-run' and keeps the "demo data" affordance. Additive — older
-    // clients that don't read it keep the prior (always-demo) behaviour.
-    const captureMode: 'live' | 'dry-run' = usedBlueprintVisionLive ? 'live' : 'dry-run'
-
+    // mode stays 'dry-run' on every synchronous response (back-compat with
+    // the C1 demo-badge contract): a synchronous capture is by construction
+    // never a live provider read. `provenance` is the honest discriminator —
+    // 'stub-dry-run' (demo rows) vs 'deterministic' (real parsed input).
     ctx.sendJson(201, {
       draft: created,
       result_summary: {
+        status: 'ready',
         quantities_count: takeoffResult.quantities.length,
         review_required: reviewRequired,
         capture_source: takeoffResult.source,
-        mode: captureMode,
+        mode: 'dry-run',
+        provenance,
         geometry: {
           rooms: takeoffResult.geometry?.rooms?.length ?? 0,
           surfaces: takeoffResult.geometry?.surfaces?.length ?? 0,
@@ -1058,6 +1075,12 @@ export async function handleTakeoffDraftRoutes(
   }
 
   // GET /api/takeoff-drafts/:id/result — return the stashed TakeoffResult JSON
+  // plus the capture lifecycle fields. This is the poll-until-ready surface
+  // for async live captures:
+  //   - capture_status='processing' → 200 { status:'processing', takeoff_result:null }
+  //   - capture_status='failed'     → 200 { status:'failed', error, takeoff_result:null }
+  //   - ready with a stored result  → 200 { status:'ready', takeoff_result, provenance, token_usage, ... }
+  //   - ready with NO result (manual draft) → 404 (unchanged contract)
   if (req.method === 'GET' && url.pathname.match(/^\/api\/takeoff-drafts\/[^/]+\/result$/)) {
     const draftId = url.pathname.split('/')[3] ?? ''
     if (!isValidUuid(draftId)) {
@@ -1070,26 +1093,48 @@ export async function handleTakeoffDraftRoutes(
         source: string
         review_required: boolean
         pipeline_version: string | null
+        capture_status: string
+        capture_provenance: string | null
+        capture_error: string | null
+        capture_token_usage: unknown
       }>(
-        `select takeoff_result_json, source, review_required, pipeline_version
+        `select takeoff_result_json, source, review_required, pipeline_version,
+                capture_status, capture_provenance, capture_error, capture_token_usage
          from takeoff_drafts
         where company_id = $1 and id = $2 and deleted_at is null`,
         [ctx.company.id, draftId],
       ),
     )
-    if (!result.rows[0]) {
+    const row = result.rows[0]
+    if (!row) {
       ctx.sendJson(404, { error: 'draft not found' })
       return true
     }
-    if (!result.rows[0].takeoff_result_json) {
+    if (row.capture_status === 'processing' || row.capture_status === 'failed') {
+      ctx.sendJson(200, {
+        status: row.capture_status,
+        error: row.capture_error,
+        takeoff_result: null,
+        source: row.source,
+        review_required: false,
+        pipeline_version: row.pipeline_version,
+        provenance: row.capture_provenance,
+        token_usage: row.capture_token_usage ?? null,
+      })
+      return true
+    }
+    if (!row.takeoff_result_json) {
       ctx.sendJson(404, { error: 'draft has no captured takeoff result (manual draft)' })
       return true
     }
     ctx.sendJson(200, {
-      takeoff_result: result.rows[0].takeoff_result_json,
-      source: result.rows[0].source,
-      review_required: result.rows[0].review_required,
-      pipeline_version: result.rows[0].pipeline_version,
+      status: 'ready',
+      takeoff_result: row.takeoff_result_json,
+      source: row.source,
+      review_required: row.review_required,
+      pipeline_version: row.pipeline_version,
+      provenance: row.capture_provenance,
+      token_usage: row.capture_token_usage ?? null,
     })
     return true
   }

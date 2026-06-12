@@ -1,6 +1,13 @@
 import { useMemo } from 'react'
 import { Spark } from '@/components/m'
 import type { CaptureDecision, TakeoffSessionEvent } from '@/machines/takeoff-session'
+import {
+  confidenceBadge,
+  confidenceBucket,
+  confidenceSparkState,
+  TAKEOFF_REJECT_REASONS,
+  type ConfidenceBucket,
+} from '@/machines/takeoff-confidence'
 import { floatBox, floatHead } from './desktop-body-styles'
 
 /**
@@ -27,42 +34,16 @@ import { floatBox, floatHead } from './desktop-body-styles'
  * keeps the overlay strictly gated to the reviewing state by its caller.
  */
 
-// ─── Confidence bucketing (REUSED from screens/projects/takeoff-canvas.tsx) ──
-// Same ordinal thresholds the standalone review panel uses, kept in lockstep so
-// a proposal reads identically on the canvas and on the route.
-export type ConfidenceBucket = 'high' | 'medium' | 'low'
+// ─── Confidence bucketing — SHARED single source (wave-3 convergence) ────────
+// The ordinal thresholds live in `@/machines/takeoff-confidence` so every
+// review surface (this overlay, AgentSuggestionsPanel, the mobile review
+// lanes) reads the SAME numbers. Re-exported for existing importers.
+export { confidenceBucket, confidenceBadge, type ConfidenceBucket } from '@/machines/takeoff-confidence'
 
-export function confidenceBucket(confidence: number): ConfidenceBucket {
-  if (confidence >= 0.85) return 'high'
-  if (confidence >= 0.6) return 'medium'
-  return 'low'
-}
-
-export function confidenceBadge(bucket: ConfidenceBucket): string {
-  switch (bucket) {
-    case 'high':
-      return 'HIGH'
-    case 'medium':
-      return 'MED'
-    case 'low':
-      return 'LOW'
-  }
-}
-
-function confidenceSparkState(bucket: ConfidenceBucket): 'strong' | 'accent' | 'muted' {
-  switch (bucket) {
-    case 'high':
-      return 'strong'
-    case 'medium':
-      return 'accent'
-    case 'low':
-      return 'muted'
-  }
-}
-
-/** Four canonical rejection reasons — REUSED from the standalone review panel
- *  (`TAKEOFF_REJECT_REASONS`). Equal-weight chips, never free text. */
-export const AI_REVIEW_REJECT_REASONS = ['wrong_code', 'wrong_quantity', 'not_in_scope', 'other'] as const
+/** Four canonical rejection reasons — the shared `TAKEOFF_REJECT_REASONS`.
+ *  Equal-weight chips, never free text. Re-exported under the overlay's
+ *  historical name for existing importers. */
+export const AI_REVIEW_REJECT_REASONS = TAKEOFF_REJECT_REASONS
 
 // ─── The proposal shape carried in `capture.result.quantities` ───────────────
 // The `ai-reviewing` seed (and the dry-run capture stub) load a deliberately
@@ -221,6 +202,14 @@ export interface AiReviewOverlayProps {
   result: unknown
   decisions: Record<string, CaptureDecision>
   showLow: boolean
+  /**
+   * The machine's `capture.mode` — provenance honesty for the on-canvas
+   * review surface (async-capture split 2026-06-12): 'dry-run' proposals are
+   * deterministic stub rows and must NEVER read like a real extraction, so the
+   * header carries an explicit DEMO chip. Defaults to the conservative
+   * 'dry-run' when the caller doesn't know.
+   */
+  mode?: 'live' | 'dry-run'
   /** Local synced selection shared with the canvas markers. */
   selectedId: string | null
   onSelect: (id: string | null) => void
@@ -246,6 +235,7 @@ export function AiReviewOverlay({
   result,
   decisions,
   showLow,
+  mode = 'dry-run',
   selectedId,
   onSelect,
   dispatch,
@@ -274,7 +264,21 @@ export function AiReviewOverlay({
     >
       <div style={{ ...floatHead, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Spark state="accent" size={11} aria-hidden />
-        <span>AI Review · {model.proposals.length} on plan</span>
+        <span style={{ flex: 1 }}>AI Review · {model.proposals.length} on plan</span>
+        {/* Provenance chip — stub output must never look like a real read. */}
+        <span
+          data-testid="ai-review-mode-chip"
+          style={{
+            padding: '1px 6px',
+            background: mode === 'live' ? 'var(--m-green)' : 'var(--m-amber)',
+            color: 'var(--m-ink)',
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: '0.06em',
+          }}
+        >
+          {mode === 'live' ? 'LIVE READ' : 'DEMO · STUB'}
+        </span>
       </div>
 
       <div style={{ overflow: 'auto', flex: 1 }}>

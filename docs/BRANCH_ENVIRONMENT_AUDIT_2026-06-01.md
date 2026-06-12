@@ -11,6 +11,18 @@
 >   long-lived code branch, and a green-`Quality` gate is being added to the
 >   prod deploy script. The analysis below is retained as the rationale for
 >   that decision.
+>
+> **SUPERSEDED — deploy mechanism too (2026-06-12):** the Environment Matrix's
+> "Workflow" column below (`.github/workflows/deploy-{droplet,dev,demo,preview}.yml`)
+> no longer exists — every Actions deploy workflow was removed in `70b9584b`
+> and the repo now runs **zero GitHub Actions** (`quality.yml` deleted
+> 2026-06-02). Deploys are local-fleet via `scripts/deploy.sh <prod|dev|demo>`
+> (prod → `scripts/deploy-production-local.sh`; dev/demo →
+> `scripts/deploy-preview.sh` on the preview droplet), gated by the local
+> `scripts/verify-local.sh` (`npm run verify`). The branch-protection /
+> green-`Quality` framing above is likewise historical: there is no CI status
+> check anymore. See root `CLAUDE.md` → "Deploy procedure" and
+> `docs/RELEASE_GATES.md`.
 
 ## Bottom Line
 

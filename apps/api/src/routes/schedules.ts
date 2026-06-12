@@ -5,11 +5,13 @@ import {
   CREW_SCHEDULE_WORKFLOW_NAME,
   CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
   transitionCrewScheduleWorkflow,
+  type CrewScheduleWorkflowEvent,
   type CrewScheduleWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { HttpError, isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 
 // POST /api/schedules wire-format validation. Mirrors the
@@ -158,77 +160,88 @@ export async function handleScheduleRoutes(
         return row
       }
 
-      // Auto-confirm at birth: walk the same CONFIRM transition the legacy
-      // /confirm route uses (draft@1 → confirmed@2) so the row, its event
+      // Auto-confirm at birth: dispatch the same CONFIRM transition the
+      // legacy /confirm route uses (draft@1 → confirmed@2) through the
+      // generic `dispatchWorkflowEvent` primitive so the row, its event
       // log, and the worker-drained side effect stay identical to the
-      // two-step create-then-confirm flow. No per-worker labor entries are
-      // supplied at creation time, so the materializer inserts none (it
-      // still bumps projects.version) — equivalent to confirming with an
-      // empty `entries` body.
-      const confirmEvent = {
-        type: 'CONFIRM' as const,
-        confirmed_at: new Date().toISOString(),
-        confirmed_by: ctx.currentUserId,
-      }
+      // two-step create-then-confirm flow. The freshly-inserted row is
+      // already locked by this tx's INSERT, so loadSnapshot hands back the
+      // in-memory row instead of re-selecting. No per-worker labor entries
+      // are supplied at creation time, so the materializer inserts none
+      // (it still bumps projects.version) — equivalent to confirming with
+      // an empty `entries` body.
       const beforeStateVersion: number = row.state_version
-      const confirmedSnapshot: CrewScheduleWorkflowSnapshot = transitionCrewScheduleWorkflow(
-        { state: 'draft', state_version: beforeStateVersion, confirmed_at: null, confirmed_by: null },
-        confirmEvent,
-      )
-      const confirmedResult = await client.query(
-        `update crew_schedules
-           set status = $3,
-               state_version = $4,
-               confirmed_at = $5,
-               confirmed_by = $6,
-               version = version + 1
-         where company_id = $1 and id = $2
-         returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
-                   deleted_at, created_at, start_time, end_time, takeoff_measurement_id`,
-        [
-          ctx.company.id,
-          row.id,
-          confirmedSnapshot.state,
-          confirmedSnapshot.state_version,
-          confirmedSnapshot.confirmed_at,
-          confirmedSnapshot.confirmed_by,
-        ],
-      )
-      const confirmedRow = confirmedResult.rows[0]
-      if (!confirmedRow) throw new HttpError(500, 'crew schedule confirm returned no row')
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: CREW_SCHEDULE_WORKFLOW_NAME,
-        schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'crew_schedule',
-        entityId: row.id,
-        stateVersion: beforeStateVersion,
-        eventType: 'CONFIRM',
-        eventPayload: confirmEvent,
-        snapshotAfter: confirmedSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const confirmOutcome = workflowEventOutcome('CONFIRM')
-      if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'crew_schedule',
-        entityId: row.id,
-        action: 'materialize_labor_entries',
-        mutationType: 'materialize_labor_entries',
-        row: confirmedRow,
-        syncPayload: { action: 'confirm', schedule: confirmedRow },
-        outboxPayload: {
-          schedule_id: confirmedRow.id,
-          project_id: confirmedRow.project_id,
-          scheduled_for: confirmedRow.scheduled_for,
-          crew: confirmedRow.crew,
-          confirmed_by: confirmedSnapshot.confirmed_by ?? ctx.currentUserId,
-          entries: [],
+      const confirmResult = await dispatchWorkflowEvent<
+        typeof row,
+        CrewScheduleWorkflowSnapshot,
+        CrewScheduleWorkflowEvent
+      >(client, {
+        definition: {
+          name: CREW_SCHEDULE_WORKFLOW_NAME,
+          schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+          reduce: transitionCrewScheduleWorkflow,
         },
-        idempotencyKey: `crew_schedule:materialize_labor:${confirmedRow.id}`,
+        companyId: ctx.company.id,
+        entityType: 'crew_schedule',
+        entityId: row.id,
+        expectedStateVersion: beforeStateVersion,
+        actorUserId: ctx.currentUserId,
+        loadSnapshot: async () => ({
+          row,
+          snapshot: { state: 'draft', state_version: beforeStateVersion, confirmed_at: null, confirmed_by: null },
+        }),
+        buildEvent: () => ({
+          type: 'CONFIRM',
+          confirmed_at: new Date().toISOString(),
+          confirmed_by: ctx.currentUserId,
+        }),
+        persist: async (c, next) => {
+          const confirmedResult = await c.query(
+            `update crew_schedules
+                 set status = $3,
+                     state_version = $4,
+                     confirmed_at = $5,
+                     confirmed_by = $6,
+                     version = version + 1
+               where company_id = $1 and id = $2
+               returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
+                         deleted_at, created_at, start_time, end_time, takeoff_measurement_id`,
+            [ctx.company.id, row.id, next.state, next.state_version, next.confirmed_at, next.confirmed_by],
+          )
+          const confirmedRow = confirmedResult.rows[0]
+          if (!confirmedRow) throw new HttpError(500, 'crew schedule confirm returned no row')
+          return confirmedRow
+        },
+        sideEffects: async (c, next, confirmedRow) => {
+          const confirmOutcome = workflowEventOutcome('CONFIRM')
+          if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
+          await recordMutationLedger(c, {
+            companyId: ctx.company.id,
+            entityType: 'crew_schedule',
+            entityId: row.id,
+            action: 'materialize_labor_entries',
+            mutationType: 'materialize_labor_entries',
+            row: confirmedRow,
+            syncPayload: { action: 'confirm', schedule: confirmedRow },
+            outboxPayload: {
+              schedule_id: confirmedRow.id,
+              project_id: confirmedRow.project_id,
+              scheduled_for: confirmedRow.scheduled_for,
+              crew: confirmedRow.crew,
+              confirmed_by: next.confirmed_by ?? ctx.currentUserId,
+              entries: [],
+            },
+            idempotencyKey: `crew_schedule:materialize_labor:${confirmedRow.id}`,
+          })
+        },
       })
-      return confirmedRow
+      if (confirmResult.kind !== 'ok') {
+        // Unreachable: the row was inserted in this tx at draft@1 and the
+        // snapshot/expected version are taken from it, so neither a
+        // version conflict nor an illegal transition can occur.
+        throw new HttpError(500, 'crew schedule auto-confirm dispatch failed')
+      }
+      return confirmResult.row
     })
     ctx.sendJson(201, schedule)
     return true
@@ -320,134 +333,121 @@ export async function handleScheduleRoutes(
     const body = await ctx.readBody()
     const entries = Array.isArray(body.entries) ? body.entries : []
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const confirmation = await withMutationTx(async (client: PoolClient) => {
-      // Load the row first so we can run the deterministic reducer
-      // against its current snapshot. The optimistic version check
-      // (expected_version) stays on `version` for back-compat with the
-      // SPA's existing PATCH plumbing; the workflow's `state_version`
-      // is bumped by the reducer.
-      const lockedResult = await client.query<{
-        id: string
-        project_id: string
-        scheduled_for: string
-        crew: unknown
-        status: 'draft' | 'confirmed'
-        state_version: number
-        confirmed_at: string | null
-        confirmed_by: string | null
-        version: number
-        created_at: string
-      }>(
-        `select id, project_id, scheduled_for, crew, status, state_version,
-                confirmed_at, confirmed_by, version, created_at
-         from crew_schedules
-         where company_id = $1 and id = $2 and deleted_at is null
-         for update`,
-        [ctx.company.id, scheduleId],
-      )
-      const current = lockedResult.rows[0]
-      if (!current) return null
-      if (expectedVersion != null && current.version !== expectedVersion) {
-        // Surface as null so the route's not-found branch hits the
-        // version-conflict path that already exists below.
-        return null
-      }
-
-      const reducerEvent = {
-        type: 'CONFIRM' as const,
-        confirmed_at: new Date().toISOString(),
-        confirmed_by: ctx.currentUserId,
-      }
-      const beforeStateVersion = current.state_version
-      let nextSnapshot: CrewScheduleWorkflowSnapshot
-      try {
-        nextSnapshot = transitionCrewScheduleWorkflow(
-          {
-            state: current.status,
-            state_version: current.state_version,
-            confirmed_at: current.confirmed_at,
-            confirmed_by: current.confirmed_by,
-          },
-          reducerEvent,
-        )
-      } catch (err) {
-        // Already-confirmed row: treat as a no-op success rather than a
-        // 500. The SPA hits /confirm idempotently after offline replay,
-        // and we don't want a 4xx if the row already moved.
-        if (current.status === 'confirmed') {
-          return { schedule: current, laborEntries: [] }
-        }
-        throw err
-      }
-
-      const updateResult = await client.query(
-        `update crew_schedules
-           set status = $3,
-               state_version = $4,
-               confirmed_at = $5,
-               confirmed_by = $6,
-               version = version + 1
-         where company_id = $1 and id = $2
-         returning id, project_id, scheduled_for, crew, status, state_version,
-                   confirmed_at, confirmed_by, version, created_at`,
-        [
-          ctx.company.id,
-          scheduleId,
-          nextSnapshot.state,
-          nextSnapshot.state_version,
-          nextSnapshot.confirmed_at,
-          nextSnapshot.confirmed_by,
-        ],
-      )
-      const schedule = updateResult.rows[0]
-      if (!schedule) throw new HttpError(500, 'crew schedule update returned no row')
-      // Workflow event log row in the same tx as the state update.
-      // Replay corpus for regression: feeding the log back through
-      // transitionCrewScheduleWorkflow must reproduce the persisted
-      // snapshot. Unique (entity_id, state_version) prevents duplicate
-      // writes if a retry replays this transition.
-      await recordWorkflowEvent(client, {
-        companyId: ctx.company.id,
-        workflowName: CREW_SCHEDULE_WORKFLOW_NAME,
-        schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
-        entityType: 'crew_schedule',
-        entityId: scheduleId,
-        stateVersion: beforeStateVersion,
-        eventType: 'CONFIRM',
-        eventPayload: reducerEvent,
-        snapshotAfter: nextSnapshot,
-        actorUserId: ctx.currentUserId,
-      })
-      const confirmOutcome = workflowEventOutcome('CONFIRM')
-      if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
-      // Gap 1 convergence (expand phase): the labor-entry materialization +
-      // projects.version bump are NO LONGER inline here. Both confirm paths
-      // (this legacy /confirm and the headless /events) now enqueue the SAME
-      // stable-keyed `materialize_labor_entries` outbox row; the worker runner
-      // (apps/worker/src/runners/crew-schedule-confirm.ts) is the single
-      // materializer, so the two paths are behaviorally equivalent. Per-entity
-      // idempotency key (NOT per-state_version) so a replay upserts one row.
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'crew_schedule',
-        entityId: scheduleId,
-        action: 'materialize_labor_entries',
-        mutationType: 'materialize_labor_entries',
-        row: schedule,
-        syncPayload: { action: 'confirm', schedule },
-        outboxPayload: {
-          schedule_id: schedule.id,
-          project_id: schedule.project_id,
-          scheduled_for: schedule.scheduled_for,
-          crew: schedule.crew,
-          confirmed_by: nextSnapshot.confirmed_by ?? ctx.currentUserId,
-          entries,
+    // Locked-row shape for the /confirm dispatch (also what the no-op
+    // already-confirmed response carries).
+    type ScheduleConfirmRow = {
+      id: string
+      project_id: string
+      scheduled_for: string
+      crew: unknown
+      status: 'draft' | 'confirmed'
+      state_version: number
+      confirmed_at: string | null
+      confirmed_by: string | null
+      version: number
+      created_at: string
+    }
+    // The optimistic version check (expected_version) stays on `version`
+    // for back-compat with the SPA's existing PATCH plumbing — it runs
+    // inside loadSnapshot; the workflow-level state_version check is
+    // disabled by echoing the locked row's own state_version back
+    // (the resolvedExpected pattern from daily-logs.ts).
+    let resolvedExpected = -1
+    const result = await withMutationTx((client: PoolClient) =>
+      dispatchWorkflowEvent<ScheduleConfirmRow, CrewScheduleWorkflowSnapshot, CrewScheduleWorkflowEvent>(client, {
+        definition: {
+          name: CREW_SCHEDULE_WORKFLOW_NAME,
+          schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+          reduce: transitionCrewScheduleWorkflow,
         },
-        idempotencyKey: `crew_schedule:materialize_labor:${schedule.id}`,
-      })
-      return { schedule, laborEntries: [] }
-    })
-    if (!confirmation) {
+        companyId: ctx.company.id,
+        entityType: 'crew_schedule',
+        entityId: scheduleId,
+        get expectedStateVersion() {
+          return resolvedExpected
+        },
+        actorUserId: ctx.currentUserId,
+        loadSnapshot: async (c) => {
+          const lockedResult = await c.query<ScheduleConfirmRow>(
+            `select id, project_id, scheduled_for, crew, status, state_version,
+                    confirmed_at, confirmed_by, version, created_at
+             from crew_schedules
+             where company_id = $1 and id = $2 and deleted_at is null
+             for update`,
+            [ctx.company.id, scheduleId],
+          )
+          const current = lockedResult.rows[0]
+          if (!current) return null
+          if (expectedVersion != null && current.version !== expectedVersion) {
+            // Surface as not_found so the route's existing
+            // version-conflict fallback (ctx.checkVersion) runs below.
+            return null
+          }
+          resolvedExpected = current.state_version
+          return {
+            row: current,
+            snapshot: {
+              state: current.status,
+              state_version: current.state_version,
+              confirmed_at: current.confirmed_at,
+              confirmed_by: current.confirmed_by,
+            },
+          }
+        },
+        buildEvent: () => ({
+          type: 'CONFIRM',
+          confirmed_at: new Date().toISOString(),
+          confirmed_by: ctx.currentUserId,
+        }),
+        persist: async (c, next) => {
+          const updateResult = await c.query<ScheduleConfirmRow>(
+            `update crew_schedules
+               set status = $3,
+                   state_version = $4,
+                   confirmed_at = $5,
+                   confirmed_by = $6,
+                   version = version + 1
+             where company_id = $1 and id = $2
+             returning id, project_id, scheduled_for, crew, status, state_version,
+                       confirmed_at, confirmed_by, version, created_at`,
+            [ctx.company.id, scheduleId, next.state, next.state_version, next.confirmed_at, next.confirmed_by],
+          )
+          const schedule = updateResult.rows[0]
+          if (!schedule) throw new HttpError(500, 'crew schedule update returned no row')
+          return schedule
+        },
+        sideEffects: async (c, next, schedule) => {
+          const confirmOutcome = workflowEventOutcome('CONFIRM')
+          if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
+          // Gap 1 convergence (expand phase): the labor-entry materialization +
+          // projects.version bump are NO LONGER inline here. Both confirm paths
+          // (this legacy /confirm and the headless /events) now enqueue the SAME
+          // stable-keyed `materialize_labor_entries` outbox row; the worker runner
+          // (apps/worker/src/runners/crew-schedule-confirm.ts) is the single
+          // materializer, so the two paths are behaviorally equivalent. Per-entity
+          // idempotency key (NOT per-state_version) so a replay upserts one row.
+          await recordMutationLedger(c, {
+            companyId: ctx.company.id,
+            entityType: 'crew_schedule',
+            entityId: scheduleId,
+            action: 'materialize_labor_entries',
+            mutationType: 'materialize_labor_entries',
+            row: schedule,
+            syncPayload: { action: 'confirm', schedule },
+            outboxPayload: {
+              schedule_id: schedule.id,
+              project_id: schedule.project_id,
+              scheduled_for: schedule.scheduled_for,
+              crew: schedule.crew,
+              confirmed_by: next.confirmed_by ?? ctx.currentUserId,
+              entries,
+            },
+            idempotencyKey: `crew_schedule:materialize_labor:${schedule.id}`,
+          })
+        },
+      }),
+    )
+    if (result.kind === 'not_found') {
       if (
         !(await ctx.checkVersion(
           'crew_schedules',
@@ -461,7 +461,24 @@ export async function handleScheduleRoutes(
       ctx.sendJson(404, { error: 'schedule not found' })
       return true
     }
-    ctx.sendJson(200, confirmation)
+    if (result.kind === 'version_conflict') {
+      // Unreachable: expectedStateVersion echoes the locked row's own
+      // state_version. Kept so the dispatch-result arms stay exhaustive.
+      throw new Error('crew schedule confirm dispatched against a stale state_version')
+    }
+    if (result.kind === 'illegal_transition') {
+      // Already-confirmed row: treat as a no-op success rather than a
+      // 500. The SPA hits /confirm idempotently after offline replay,
+      // and we don't want a 4xx if the row already moved.
+      if (result.row.status === 'confirmed') {
+        ctx.sendJson(200, { schedule: result.row, laborEntries: [] })
+        return true
+      }
+      // Any other illegal transition (e.g. a declined row) keeps the
+      // legacy rethrow → generic 500 path.
+      throw new Error(result.message)
+    }
+    ctx.sendJson(200, { schedule: result.row, laborEntries: [] })
     return true
   }
 

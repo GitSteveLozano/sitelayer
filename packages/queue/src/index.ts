@@ -203,16 +203,128 @@ export type ProcessedSyncEventRow = {
   created_at: string
 } & TraceContext
 
+export type QuarantinedOutboxRow = {
+  id: string
+  entity_type: string
+  entity_id: string
+  mutation_type: string
+}
+
 export type QueueProcessResult = {
   processedOutboxCount: number
   processedSyncEventCount: number
   outbox: ProcessedOutboxRow[]
   syncEvents: ProcessedSyncEventRow[]
+  /** Rows parked as 'failed' because NO handler (generic or dedicated) claims their mutation_type. */
+  quarantinedOutboxCount: number
+  quarantinedOutbox: QuarantinedOutboxRow[]
+}
+
+// ---------------------------------------------------------------------------
+// OUTBOX CONTRACT (inverted 2026-06-12).
+//
+// The generic drain (processOutboxBatch) marks rows 'applied' WITHOUT doing
+// any work — that is only correct for mutation_types that are pure
+// audit-trail / sync-feed anchors. Historically the drain applied EVERYTHING
+// except a hand-maintained exclusion list, so any dedicated job type missing
+// from that list (takeoff_to_bid, voice_to_log, welcome_email,
+// damage_charge_invoice_push were all missing) was silently swallowed with a
+// green audit trail whenever its lane was paused, its runner was behind the
+// backlog, or the row was enqueued mid-heartbeat.
+//
+// The contract is now an explicit ALLOWLIST:
+//   - GENERIC_APPLY_MUTATION_TYPES (+ prefixes) — genuinely-generic
+//     audit-anchor types the generic drain may apply with no work.
+//   - DEDICATED_HANDLER_MUTATION_TYPES — claimed only by their dedicated
+//     runner; the generic drain never touches them.
+//   - Anything else is UNROUTABLE and fails loudly:
+//     quarantineUnroutableOutbox() parks the row at status='failed' with an
+//     instructive error instead of lying with status='applied'.
+//
+// The conformance ratchet lives in
+// apps/worker/src/outbox-conformance.test.ts: every mutation_type literal
+// enqueued anywhere in the repo must be in exactly one of the two lists.
+// ---------------------------------------------------------------------------
+
+// Mutation types the generic drain may mark 'applied' with NO work. These are
+// audit-trail / sync-feed anchors written by recordMutationLedger (apps/api),
+// recordLedger (worker), or direct inserts — the mutation_outbox row IS the
+// artifact; no downstream system performs work keyed on it. Enumerated from
+// every enqueue site in the repo on 2026-06-12 (see the conformance test).
+export const GENERIC_APPLY_MUTATION_TYPES = [
+  // recordMutationLedger default (`action`) vocabulary — CRUD-ish ledger
+  // anchors emitted by the API route handlers.
+  'accepted',
+  'apply',
+  'approve',
+  'bill',
+  'calibrate',
+  'closeout',
+  'closeout:post_mortem',
+  'copy_week_clone',
+  'create',
+  'created',
+  'decline',
+  'declined',
+  'delete',
+  'dismiss',
+  'freeze',
+  'import',
+  'invoice',
+  'parse_result',
+  'photo_add',
+  'photo_remove',
+  'push-qbo',
+  'recompute',
+  'replace',
+  'reschedule',
+  'respond_message',
+  'restore',
+  'return',
+  'revoked',
+  'set_margin',
+  'stage_message',
+  'stage_transcript',
+  'submit',
+  'sync',
+  'transfer',
+  'unverify_scale',
+  'update',
+  'upsert',
+  'verify_scale',
+  'version',
+  // rental_request APPROVE audit anchor — the route creates the rentals
+  // inline; the outbox row documents "this APPROVE → these rentals"
+  // (apps/api/src/routes/rental-requests.ts).
+  'create_rental_from_request',
+  // qbo_sync_run START_SYNC anchor — the route still performs the QBO sync
+  // inline and emits SYNC_SUCCEEDED/FAILED itself; the outbox row exists so
+  // the work can move to a worker drain in a follow-up
+  // (packages/workflows/src/qbo-sync-run.ts header). If that drain ships,
+  // move 'run_qbo_sync' to DEDICATED_HANDLER_MUTATION_TYPES.
+  'run_qbo_sync',
+] as const
+
+// Prefix-matched generic types. `event:<rental_event>` rows are per-transition
+// audit anchors from apps/api/src/routes/rental-events.ts (action =
+// `event:${eventType.toLowerCase()}`).
+export const GENERIC_APPLY_MUTATION_TYPE_PREFIXES = ['event:'] as const
+
+/** SQL LIKE patterns for the prefix allowlist (bound as a text[] param). */
+function genericPrefixLikePatterns(): string[] {
+  return GENERIC_APPLY_MUTATION_TYPE_PREFIXES.map((prefix) => `${prefix}%`)
+}
+
+/** True when the generic apply-with-no-work drain is allowed to apply this type. */
+export function isGenericApplyMutationType(mutationType: string): boolean {
+  if ((GENERIC_APPLY_MUTATION_TYPES as readonly string[]).includes(mutationType)) return true
+  return GENERIC_APPLY_MUTATION_TYPE_PREFIXES.some((prefix) => mutationType.startsWith(prefix))
 }
 
 // mutation_types claimed by dedicated handlers, NOT by the generic drain.
-// Adding a new dedicated handler? Add its mutation_type here so the generic
-// drain doesn't race the dedicated worker.
+// Adding a new dedicated handler? Add its mutation_type here AND to the
+// runner registry in apps/worker/src/outbox-contract.ts (the conformance
+// test keeps the two in lockstep).
 export const DEDICATED_HANDLER_MUTATION_TYPES = [
   'post_qbo_invoice',
   // Rental cadence invoice push — drained by apps/worker/src/runners/
@@ -258,6 +370,40 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // it 'applied' WITHOUT running the Sentry/Axiom pulls or writing the
   // debug_bundle capture_artifact — a silent enrichment-drop, the same footgun.
   'assemble_debug_bundle',
+  // AI takeoff→bid agent — drained by apps/worker/src/runners/takeoff-to-bid.ts
+  // (drainAgentMutations over takeoff-to-bid-agent.ts). Was MISSING from this
+  // list until 2026-06-12: the generic drain could mark the row 'applied'
+  // without running the agent whenever the takeoff_to_bid lane was paused or
+  // the row landed mid-heartbeat.
+  'takeoff_to_bid',
+  // AI voice→daily-log agent — drained by apps/worker/src/runners/voice-to-log.ts.
+  // Same missing-from-the-list silent-drop class as takeoff_to_bid.
+  'voice_to_log',
+  // Onboarding welcome email — drained by apps/worker/src/runners/welcome-email.ts.
+  // Same missing-from-the-list class: a paused welcome_email lane (or a
+  // backlogged heartbeat) let the generic drain mark the row 'applied' and the
+  // email never sent.
+  'welcome_email',
+  // Damage-charge → QBO invoice push — drained by apps/worker/src/runners/
+  // damage-charges.ts (processDamageChargeInvoicePush). Was MISSING: a QBO
+  // circuit-open pause (lane-health-keeper pauses the damage_charges lane)
+  // let the generic drain convert queued pushes into falsely-applied no-ops.
+  'damage_charge_invoice_push',
+  // Estimate-share delivery email — drained by apps/worker/src/runners/
+  // estimate-share-email.ts. Enqueued by POST /api/projects/:id/estimate/share
+  // (apps/api/src/routes/estimate-shares-admin.ts). Before 2026-06-12 this
+  // type had NO handler anywhere and the generic drain stamped it 'applied'
+  // while the customer email never sent.
+  'send_estimate_share',
+  // Async AI blueprint capture — drained by apps/worker/src/runners/
+  // takeoff-capture.ts. Enqueued by POST /api/projects/:id/takeoff-drafts/
+  // capture for LIVE blueprint_vision runs (the route inserts the draft at
+  // capture_status='processing' and the runner executes the Gemini/Anthropic
+  // pipeline, writing result + provenance + real token usage, or marking the
+  // draft failed). If the generic drain could claim this row the draft would
+  // sit at 'processing' forever with a green 'applied' audit trail — the
+  // exact silent-drop class this list exists to prevent.
+  'takeoff_capture_pipeline',
 ] as const
 
 /**
@@ -349,7 +495,14 @@ export async function processOutboxBatch(
       select id
       from mutation_outbox
       where company_id = $1
-        and mutation_type <> all($3::text[])
+        -- INVERTED CONTRACT: the apply-with-no-work drain only ever touches
+        -- the explicit generic allowlist. Dedicated-runner types and unknown
+        -- types are structurally unreachable here, no matter what lanes are
+        -- paused or how deep the backlog is.
+        and (
+          mutation_type = any($3::text[])
+          or mutation_type like any($4::text[])
+        )
         and (
           (status = 'pending' and next_attempt_at <= now())
           or (status = 'processing' and next_attempt_at <= now())
@@ -360,7 +513,7 @@ export async function processOutboxBatch(
     )
     returning id
     `,
-    [companyId, limit, [...DEDICATED_HANDLER_MUTATION_TYPES]],
+    [companyId, limit, [...GENERIC_APPLY_MUTATION_TYPES], genericPrefixLikePatterns()],
   )
 
   const ids = claimed.rows.map((row) => row.id)
@@ -377,6 +530,50 @@ export async function processOutboxBatch(
     [companyId, ids],
   )
   return applied.rows
+}
+
+/**
+ * Park every due outbox row whose mutation_type has NO registered handler —
+ * neither in the generic apply-with-no-work allowlist nor claimed by a
+ * dedicated runner. Before the 2026-06-12 contract inversion these rows were
+ * silently marked 'applied' by the generic drain; now they FAIL LOUDLY:
+ * status='failed' with an instructive error, applied_at stays NULL.
+ *
+ * 'failed' is the established parked-terminal outbox state (it is never
+ * re-claimed by any drain) — the row stays visible in /api/sync/outbox and
+ * /api/system/mutation-outbox until an operator registers a handler (or
+ * allowlists the type) and re-arms the row.
+ *
+ * Rows mid-lease for a dedicated runner are untouched: the predicate skips
+ * every type in DEDICATED_HANDLER_MUTATION_TYPES, and only rows whose
+ * next_attempt_at has elapsed are considered.
+ */
+export async function quarantineUnroutableOutbox(
+  client: QueueClient,
+  companyId: string,
+): Promise<QuarantinedOutboxRow[]> {
+  const result = await client.query<QuarantinedOutboxRow>(
+    `
+    update mutation_outbox
+    set status = 'failed',
+        error = 'outbox-contract: no handler registered for mutation_type "' || mutation_type
+          || '" — not in GENERIC_APPLY_MUTATION_TYPES and not in DEDICATED_HANDLER_MUTATION_TYPES. '
+          || 'Register a dedicated runner (apps/worker/src/outbox-contract.ts) or allowlist the type '
+          || '(packages/queue/src/index.ts), then re-arm this row.',
+        updated_at = now()
+    where company_id = $1
+      and status in ('pending', 'processing')
+      and next_attempt_at <= now()
+      and not (
+        mutation_type = any($2::text[])
+        or mutation_type like any($3::text[])
+      )
+      and mutation_type <> all($4::text[])
+    returning id, entity_type, entity_id, mutation_type
+    `,
+    [companyId, [...GENERIC_APPLY_MUTATION_TYPES], genericPrefixLikePatterns(), [...DEDICATED_HANDLER_MUTATION_TYPES]],
+  )
+  return result.rows
 }
 
 export async function processSyncEventBatch(
@@ -438,6 +635,9 @@ export async function processQueueWithClient(
   companyId: string,
   limit = 25,
 ): Promise<QueueProcessResult> {
+  // Quarantine FIRST so a just-enqueued unroutable row fails loudly in the
+  // same heartbeat instead of sitting pending behind the claim window.
+  const quarantined = await quarantineUnroutableOutbox(client, companyId)
   const outboxRows = await processOutboxBatch(client, companyId, limit)
   const syncEventRows = await processSyncEventBatch(client, companyId, limit)
 
@@ -458,6 +658,8 @@ export async function processQueueWithClient(
     processedSyncEventCount: syncEventRows.length,
     outbox: outboxRows,
     syncEvents: syncEventRows,
+    quarantinedOutboxCount: quarantined.length,
+    quarantinedOutbox: quarantined,
   }
 }
 
@@ -479,9 +681,20 @@ export async function processQueue(pool: QueuePool, companyId: string, limit = 2
 /**
  * Mark a single outbox row failed in its own transaction. Used after a
  * per-row work tx has been rolled back so the failure is recorded even
- * when the inner catch path's recovery work itself threw. Best-effort:
- * if even this update can't succeed, the row will be re-claimed once
- * its 5-minute lease elapses.
+ * when the inner catch path's recovery work itself threw.
+ *
+ * HONESTY NOTE (2026-06-12): status='failed' is a PARKED-TERMINAL state.
+ * No drain in the codebase claims 'failed' rows (every claim filters
+ * status in ('pending','processing')), so this function used to lie when
+ * it advertised a 15-minute retry via next_attempt_at — nothing ever
+ * performed it. The phantom next_attempt_at bump is gone; a parked row
+ * only runs again when something re-arms it back to 'pending' (a human
+ * workflow RETRY_POST re-upserting the same idempotency_key, or a
+ * re-arm endpoint like the QBO backfill re-click in routes/qbo.ts).
+ *
+ * Best-effort: if even this update can't succeed, the row is still under
+ * the claim lease (status='processing', next_attempt_at=+5min) and WILL
+ * be re-claimed once that lease elapses.
  *
  * Exported for use by the pusher modules under `./pushers/`.
  */
@@ -490,21 +703,21 @@ export async function markOutboxRowFailedFresh(
   companyId: string,
   outboxId: string,
   errorMessage: string,
-  retryDelayMinutes = 15,
 ): Promise<void> {
   try {
     await client.query('begin')
     await client.query(
       `update mutation_outbox
-         set status = 'failed', error = $3, next_attempt_at = now() + ($4 || ' minutes')::interval
+         set status = 'failed', error = $3, updated_at = now()
        where company_id = $1 and id = $2`,
-      [companyId, outboxId, errorMessage.slice(0, 1000), String(retryDelayMinutes)],
+      [companyId, outboxId, errorMessage.slice(0, 1000)],
     )
     await client.query('commit')
   } catch (markErr) {
     await client.query('rollback').catch(() => {})
-    // Re-throw so the caller can log it; the row will be re-claimed once
-    // next_attempt_at elapses (the original claim already set this).
+    // Re-throw so the caller can log it; the row is still leased as
+    // 'processing' and will be re-claimed once next_attempt_at elapses
+    // (the original claim already set this).
     throw markErr
   }
 }

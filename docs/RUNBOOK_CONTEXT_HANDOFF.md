@@ -241,6 +241,79 @@ item and redacted timeline remain canonical after packet expiry. Work item
 detail reads return a bounded event page by default; use `limit` and `offset`
 when inspecting long timelines.
 
+## Agent Feed (projectkit pull-executors) — stuck claims
+
+Added 2026-06-12. The agent feed (`apps/api/src/routes/agent-feed.ts`,
+`agent_feed_concerns`, migration `014_agent_feed_concerns.sql`) is the
+PRODUCER side of the `@operator/projectkit` pull-executor contract: executors
+(the local capture-analyzer, Steve's Claude Code) poll
+`GET /api/agent-feed/concerns?audience=<aud>` and POST Callbacks back. An
+`accepted` callback is the CLAIM (`pending → claimed`); a terminal
+`succeeded|failed|cancelled` callback stores the Callback JSON and stamps
+`completed_at`. Auth is `AGENT_FEED_TOKENS` bearer (machine clients, not
+Clerk); when it is unset every feed route answers 503 by design.
+
+### Symptom
+
+A concern sits in `status='claimed'` forever — the executor claimed it and
+then died/lost the row, so no terminal callback ever arrives and the concern
+never returns to the pollable `pending` set.
+
+### Detection — claimed past the lease window
+
+```sql
+-- Concerns claimed longer than the lease window (default it to the value of
+-- AGENT_FEED_CLAIM_LEASE_MINUTES configured on the API/worker).
+select id, audience, project_key, concern_ref, work_item_id,
+       capture_session_id, claimed_at,
+       now() - claimed_at as held_for
+from agent_feed_concerns
+where status = 'claimed'
+  and claimed_at < now() - (:'lease_minutes' || ' minutes')::interval
+order by claimed_at asc
+limit 50;
+```
+
+### Recovery
+
+1. **Preferred — the lease sweep runner.** A worker lease-sweep runner is
+   being added in this same (2026-06-12) campaign: it requeues
+   `claimed → pending` once `claimed_at` is older than
+   `AGENT_FEED_CLAIM_LEASE_MINUTES`, so a healthy executor's next poll picks
+   the concern back up. Verify the env var is set on the worker and check the
+   worker logs for the sweep's output before reaching for SQL.
+2. **Break-glass manual requeue** (only if the sweep is not deployed/running):
+
+   ```sql
+   update agent_feed_concerns
+      set status = 'pending', claimed_at = null, updated_at = now()
+    where id = :'concern_id'
+      and status = 'claimed';
+   ```
+
+   The claim is first-write-wins (`status='pending'` predicate), so a requeue
+   is safe against a racing late claim; a late TERMINAL callback for the old
+   claim will still land if the row has not been re-claimed.
+
+3. **Executor-side checks:** the executor's bearer token must match its OWN
+   audience in `AGENT_FEED_TOKENS` (a token only grants its audience; wrong
+   audience = 403, unset/invalid env = 503 on every route).
+
+### Where the timeline events land
+
+The CLAIM itself writes **no timeline event** — the feed only tracks claim +
+terminal on the `agent_feed_concerns` row. Terminal callbacks post-process
+into the linked work item (`work_item_id`):
+
+- `capture-analyzer` audience, succeeded → persists the analysis markdown into
+  `context_work_items.metadata.capture_analysis` and appends an
+  `agent.artifact_attached` event to `context_handoff_events`.
+- any other audience (e.g. `steve`) → appends `agent.completed` on success,
+  `agent.message_received` on failed/cancelled.
+
+So the diagnosis queries earlier in this runbook (timeline query #2) apply
+unchanged once you have the `work_item_id` from the detection query above.
+
 ## Verifying Recovery
 
 For a dev/preview API smoke, use the seeded e2e tenant:

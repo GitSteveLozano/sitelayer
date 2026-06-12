@@ -1,5 +1,10 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { useAdminIssueBoard, type AdminIssueBoardFilters, type AdminIssueBoardItem } from '@/lib/api/admin-issue-board'
+import {
+  useAdminIssueBoard,
+  type AdminIssueBoardDomain,
+  type AdminIssueBoardFilters,
+  type AdminIssueBoardItem,
+} from '@/lib/api/admin-issue-board'
 import { request } from '@/lib/api/client'
 import type { IssueBoardGroupBy, IssueBoardLane, IssueBoardStatus } from '@/lib/api/issue-board'
 import { usePlatformGrants, useGrantPlatformCapability, useRevokePlatformCapability } from '@/lib/api/platform-grants'
@@ -270,15 +275,20 @@ const STATUS_OPTIONS: IssueBoardStatus[] = [
   'reversed',
 ]
 const LANE_OPTIONS: IssueBoardLane[] = ['triage', 'human', 'agent', 'both', 'done']
+// The two permanently-separate domains. This board is the one deliberately
+// cross-domain READ surface, so the filter is opt-in narrowing, never a default.
+const DOMAIN_OPTIONS: AdminIssueBoardDomain[] = ['app_issue', 'field_request']
 
 function WorkRequestsTab() {
   const [groupBy, setGroupBy] = useState<IssueBoardGroupBy>('status_group')
   const [companySlug, setCompanySlug] = useState('')
+  const [domain, setDomain] = useState<AdminIssueBoardDomain | ''>('')
   const [lane, setLane] = useState<IssueBoardLane | ''>('')
   const [status, setStatus] = useState<IssueBoardStatus | ''>('')
   const filters: AdminIssueBoardFilters = { groupBy, limit: 200 }
   const trimmedCompanySlug = companySlug.trim()
   if (trimmedCompanySlug) filters.companySlug = trimmedCompanySlug
+  if (domain) filters.domain = domain
   if (lane) filters.lane = lane
   if (status) filters.status = status
   const board = useAdminIssueBoard(filters)
@@ -302,6 +312,19 @@ function WorkRequestsTab() {
         <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as IssueBoardGroupBy)} style={styles.select}>
           <option value="status_group">Status groups</option>
           <option value="lane">Lanes</option>
+        </select>
+        <select
+          value={domain}
+          onChange={(e) => setDomain(e.target.value as AdminIssueBoardDomain | '')}
+          style={styles.select}
+          aria-label="Domain"
+        >
+          <option value="">Any domain</option>
+          {DOMAIN_OPTIONS.map((d) => (
+            <option key={d} value={d}>
+              {label(d)}
+            </option>
+          ))}
         </select>
         <select
           value={status}
@@ -356,6 +379,12 @@ function AdminIssueCard({ item }: { item: AdminIssueBoardItem }) {
       <div style={styles.issueTitle}>{item.title || 'Untitled issue'}</div>
       {item.summary ? <div style={{ color: '#4b5563', fontSize: 12 }}>{item.summary}</div> : null}
       <div style={styles.issueMeta}>
+        {/* DOMAIN badge: app_issue (software bug) vs field_request (real-world
+            job problem) never co-mingle; this cross-domain board says which
+            world each card belongs to at a glance. */}
+        <span style={{ ...styles.chip, ...domainChipStyle(item.domain) }} data-testid="admin-issue-domain">
+          {label(item.domain)}
+        </span>
         <span style={{ ...styles.chip, background: '#eef2ff', color: '#3730a3' }}>{item.companySlug}</span>
         <span style={{ ...styles.chip, ...statusChipStyle(item.status) }}>{label(item.status)}</span>
         <span style={{ ...styles.chip, background: '#ecfdf5', color: '#047857' }}>{label(item.lane)}</span>
@@ -399,6 +428,12 @@ function age(createdAt: string): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 48) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
+}
+
+function domainChipStyle(domain: AdminIssueBoardDomain): CSSProperties {
+  return domain === 'app_issue'
+    ? { background: '#fdf2f8', color: '#9d174d', border: '1px solid #fbcfe8' }
+    : { background: '#f0f9ff', color: '#075985', border: '1px solid #bae6fd' }
 }
 
 function statusChipStyle(status: IssueBoardStatus): CSSProperties {

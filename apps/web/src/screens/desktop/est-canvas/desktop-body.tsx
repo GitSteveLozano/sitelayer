@@ -81,7 +81,9 @@ import { RunningTotals } from './running-totals'
 import { SingleSelectBar, BulkSelectToolbar } from './select-toolbars'
 import { JumpedFromPanel, SheetRefChip, EmptyDropzone, AssignItemAffordance } from './canvas-chrome'
 
+import { useQueryClient } from '@tanstack/react-query'
 import { useTakeoffSession } from '@/machines/takeoff-session'
+import { createTakeoffSessionApiDeps } from '@/machines/takeoff-session-deps'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
 // Desktop command-center takeoff body — extracted verbatim from est-canvas.tsx
@@ -112,10 +114,13 @@ export function EstCanvasDesktopBody() {
   // NOT model stays local (hybrid): blueprint/page selection, upload, the AI
   // setup panels, copy/array/mirror panel, conditions form, sheet callouts,
   // pitch/deduct/snap toggles, toasts, and the `useCanvasViewport` pan/zoom
-  // capability. The dep actors stay unwired — COMMIT / calibrate / edit / etc.
-  // persist via the EXISTING TanStack-Query mutation hooks, then dispatch the
-  // matching machine event to reset the UI slice (so behavior is identical and
-  // the async actor wiring is a clean follow-up rather than a risky rewrite).
+  // capability. The CAPTURE actors (runCapture / promoteCaptured) are WIRED to
+  // the real async capture + promote endpoints via
+  // `createTakeoffSessionApiDeps` (wave-3 review convergence) — the machine is
+  // the single orchestrator of capture → review → promote. The remaining
+  // actors (COMMIT / calibrate / edit) still persist via the EXISTING
+  // TanStack-Query mutation hooks, then dispatch the matching machine event to
+  // reset the UI slice (behavior-preserving hybrid).
   //
   // `?seed=<name>` (dev/test only) boots the machine straight into a named
   // state via resolveTakeoffSeed — a tester lands mid-polygon-draw / scale /
@@ -129,7 +134,9 @@ export function EstCanvasDesktopBody() {
     // re-syncs ids below. (react-hooks/exhaustive-deps is not enabled here.)
   }, [])
 
-  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed })
+  const queryClient = useQueryClient()
+  const sessionDeps = useMemo(() => createTakeoffSessionApiDeps({ queryClient }), [queryClient])
+  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed, deps: sessionDeps })
   const { context: sctx, dispatch: sdispatch } = session
 
   // --- Drafts (reuse mobile data layer; default to active/first) -----------
@@ -2172,14 +2179,17 @@ export function EstCanvasDesktopBody() {
           machine's reviewing state, so the draw / scale / select surfaces are
           behavior-preserving. Accept/Reject record `capture.decisions` via
           REVIEW_DECISION; "Promote accepted" dispatches PROMOTE with the
-          accepted ids (persistence stays on the existing hybrid path — the
-          machine's promoteCaptured actor is unwired, so PROMOTE simply lands the
-          UI in `promoting`); the show-low toggle filters by `capture.showLow`. */}
+          accepted ids — the machine's promoteCaptured actor is WIRED to the
+          real promote endpoint (createTakeoffSessionApiDeps) against the
+          capture-created draft, so `promoting → idle` means the rows are
+          committed measurements; the show-low toggle filters by
+          `capture.showLow`. */}
       {isReviewing || isPromoting ? (
         <AiReviewOverlay
           result={sctx.capture.result}
           decisions={sctx.capture.decisions}
           showLow={sctx.capture.showLow}
+          mode={sctx.capture.mode}
           selectedId={reviewSelectedId}
           onSelect={setReviewSelectedId}
           dispatch={sdispatch}

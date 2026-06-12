@@ -12,6 +12,8 @@ const EVENT_LABEL: Partial<Record<ContextHandoffEvent['event_type'], string>> = 
   'agent.dispatch_retried': 'Agent retry',
   'agent.dispatch_cancel_requested': 'Agent cancel requested',
   'agent.callback_missing': 'Agent callback missing',
+  'agent.failed': 'Agent failed',
+  'agent.dispatch_expired': 'Agent claim expired',
   'agent.message_received': 'Agent message',
   'agent.artifact_attached': 'Artifact attached',
   'agent.proposal_ready': 'Proposal ready',
