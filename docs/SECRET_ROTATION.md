@@ -96,12 +96,29 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 
 **Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Set the build value (e.g. in `ops/env/production.build.env` on the fleet, or as a `VITE_CLERK_PUBLISHABLE_KEY` build-arg env), then re-deploy from the fleet with `scripts/deploy.sh prod` so a fresh image is built.
 
-> **2026-06-12 progress (agent session):** the `demo-tier` deletion was driven
-> through the Clerk dashboard (delete modal confirmed, "never used" verified)
-> but Clerk required step-up re-verification (account password) at the final
-> step — only the operator can complete it. A dashboard tab was left open at
-> that prompt on taylor-pc-ubuntu. `demo2` rotation not started (same step-up
-> wall). All three actions below remain OPEN.
+> **2026-06-12 ROTATION EXECUTED (agent session) — `demo2` is now UNUSED;
+> only the dashboard revoke clicks remain.** The dev-instance primary secret
+> key was pulled via the Clerk CLI's platform API
+> (`GET /v1/platform/applications/{app}?include_secret_keys=true` — the
+> documented BAPI/platform surfaces have no named-key CRUD; this read is what
+> `clerk env pull` uses) and swapped into BOTH consumers of `demo2`
+> (`sk_test_Gd5S…`):
+>
+> - `/app/previews/.env.demo.shared` + rendered demo `.env` — demo stack
+>   recreated, `/api/version` 200, and `POST /api/demo/sign-in-link` minted a
+>   valid `__clerk_ticket` on the new key (verified end-to-end).
+> - `/app/previews/.env.dev.shared` — swapped in the shared file only; the
+>   dev stack still holds `demo2` in its running env until its next
+>   deploy/restart re-renders. **Do not revoke `demo2` until dev has
+>   restarted** (the fleet auto-deploy fast-follow makes this minutes, not
+>   days). Timestamped `.bak-rotate-*` backups sit beside both shared files.
+>
+> Remaining (operator, Clerk dashboard → API keys — step-up password
+> required; a tab was left at the prompt on taylor-pc-ubuntu): (1) delete
+> `demo-tier` (never used), (2) revoke `demo2` once dev has restarted. Both
+> are now zero-coordination clicks. Note both tiers now share the instance
+> primary ("default") key; mint a dedicated named key later if per-tier
+> revocability is wanted.
 
 ### 1a. Demo Clerk keys — OPEN actions (operator-pending, recorded 2026-06-12)
 
