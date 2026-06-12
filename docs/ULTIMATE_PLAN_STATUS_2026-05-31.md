@@ -1,5 +1,11 @@
 # Sitelayer Ultimate Plan Status - 2026-05-31
 
+> **STALE (2026-06-12):** Status snapshot of the now-historical `dev-np`
+> branch at `0303a7b` (branches have since converged on `main`-as-truth).
+> Implementation status below has drifted substantially. Use
+> [`CRITICAL_PATH.md`](../CRITICAL_PATH.md) and the 2026-06-12 audit
+> (debt campaign) as the live source of truth.
+
 Branch reviewed: `dev-np`
 HEAD reviewed: `0303a7b` (`dev-np`)
 Mode: implementation status after Claude UI/headless sweep plus capture backend pass

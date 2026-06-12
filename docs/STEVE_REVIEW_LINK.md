@@ -26,6 +26,14 @@ https://dev.sitelayer.sandolab.xyz/collab/steve?audio=0
 
 Optional targeted link (drop him on a specific screen):
 
+> **STALE target URL (2026-06-12):** `/projects/:id/takeoff-canvas` is the
+> **v1** takeoff canvas, whose retirement is in flight (parallel lane, same
+> campaign). Target the current estimating canvas instead:
+> `?target=/desktop/canvas/PROJECT_ID` (EstCanvas,
+> `apps/web/src/screens/desktop/est-canvas.tsx`; mobile shell mounts the same
+> screen at `/projects/PROJECT_ID/takeoff-mobile`). The v1 example below is
+> kept for history only.
+
 ```text
 https://dev.sitelayer.sandolab.xyz/collab/steve?target=/projects/PROJECT_ID/takeoff-canvas
 ```

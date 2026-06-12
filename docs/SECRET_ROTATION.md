@@ -96,6 +96,30 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 
 **Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Set the build value (e.g. in `ops/env/production.build.env` on the fleet, or as a `VITE_CLERK_PUBLISHABLE_KEY` build-arg env), then re-deploy from the fleet with `scripts/deploy.sh prod` so a fresh image is built.
 
+### 1a. Demo Clerk keys — OPEN actions (operator-pending, recorded 2026-06-12)
+
+The demo tier mints prospect sign-in tokens with a Clerk **test**-instance
+`CLERK_SECRET_KEY` stored in `/app/previews/.env.demo.shared` on the preview
+droplet (see `docs/DEMO_ENVIRONMENT.md`). Audit state as of 2026-06-12 — all
+three actions are **OPEN and operator-pending** (they need the Clerk dashboard
+plus droplet access; nothing in-repo can execute them):
+
+1. **Delete the unused demo-tier Clerk secret key.** A demo-tier key exists in
+   the Clerk dashboard that nothing references — remove it to shrink the
+   credential surface (Clerk dashboard → API Keys → revoke).
+2. **Rotate the `demo2` key — it transited a transcript.** The `demo2` Clerk
+   secret value passed through an agent transcript and must be treated as
+   exposed: create a replacement key in the Clerk test instance, then revoke
+   `demo2` (per `docs/INCIDENT_RESPONSE.md` §8: revoke first once the
+   replacement is live).
+3. **Update `/app/previews/.env.demo.shared`** with the replacement
+   `CLERK_SECRET_KEY`, then bounce the demo stack so it re-reads the env:
+   `cd /app/previews/demo && docker compose -p sitelayer-demo up -d --force-recreate`,
+   and verify with `npm run demo:email -- --role owner --name "Smoke"` (or a
+   `POST /api/demo/sign-in-link` call) that token minting still works.
+
+When these are executed, mark each line done with the date here.
+
 ---
 
 ## 2. Sentry auth token — `SENTRY_AUTH_TOKEN`

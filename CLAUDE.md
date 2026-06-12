@@ -454,7 +454,9 @@ only reach `review_ready` via `agent.completed` — a human accepts to resolve)
 speaks the `@operator/projectkit` contract: the dispatch payload carries a
 `Concern`/`WorkRequest` snapshot and the inbound agent-callback carries a
 `Callback` snapshot (`packages/projectkit-bridge`, conformance gate
-`apps/api/src/projectkit-concern.test.ts`). mesh is the default dispatch
+`packages/projectkit-bridge/src/index.test.ts` — the former
+`apps/api/src/projectkit-concern.test.ts` was deleted when the contract
+conformance moved into the bridge package). mesh is the default dispatch
 backend behind a URL — one swappable adapter, never the owner. The
 cross-testbed reference is `~/notes/how-capture-works-across-testbeds-2026-06-06.md`.
 
@@ -627,7 +629,7 @@ Blueprints / takeoff:
 - POST `/api/projects/:id/takeoff-drafts/capture` — run a capture pipeline (`kind` = blueprint_vision | roomplan | drone | photogrammetry); returns a review-required `TakeoffResult` draft
 - POST `/api/projects/:id/takeoff-drafts/:draftId/promote` — promote selected captured quantities into committed `takeoff_measurements`
 
-3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Not built: a scaffold _designer_, and captured geometry isn't yet fed into the renderer (only manual blueprint polygons are).
+3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Captured draft `TakeoffGeometry` IS fed into the renderer since `05be647d` (`apps/web/src/lib/takeoff/captured-geometry-3d.ts`, wired through `takeoff-preview.tsx`) — not just manual blueprint polygons. Residual gaps: a scaffold _designer_ is still not built, and RoomPlan walls are metrics-only (no captured wall geometry reaches the scene).
 
 Estimation:
 
