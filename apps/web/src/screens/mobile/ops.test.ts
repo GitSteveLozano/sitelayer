@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
+  buildLeaveBehindCaptureInviteInput,
   canOpenDesktopEvidence,
   desktopEvidenceTone,
   formatAgentFeedDeliveryHeadline,
@@ -241,5 +242,34 @@ describe('MobileOps field readiness checklist', () => {
     expect(rows.find((row) => row.key === 'capture-route')?.supporting).toBe('Capture router has no active sink.')
     expect(rows.find((row) => row.key === 'agent-lane')?.tone).toBe('amber')
     expect(rows.find((row) => row.key === 'agent-lane')?.supporting).toBe('Agent feed ready; route still blocked.')
+  })
+})
+
+describe('MobileOps leave-behind capture invite', () => {
+  it('builds a signed guest-capture invite without diagnostic control credentials', () => {
+    const payload = buildLeaveBehindCaptureInviteInput({
+      companySlug: 'acme',
+      session: session({
+        id: 'diag-session-9',
+        state: 'active',
+        plan: plan({ control_level: 'route' }),
+      }),
+    })
+
+    expect(payload).toMatchObject({
+      reviewer_ref: 'onsite-worker',
+      source: 'mobile_ops_leavebehind',
+      target_route: '/ops',
+      expires_in_days: 7,
+      allowed_capture_modes: ['text', 'state', 'screen'],
+      metadata: {
+        created_from: 'mobile_ops',
+        company_slug: 'acme',
+        ops_diagnostic_session_id: 'diag-session-9',
+        ops_diagnostic_control_level: 'route',
+        ops_diagnostic_state: 'active',
+      },
+    })
+    expect(JSON.stringify(payload)).not.toContain('control_token')
   })
 })
