@@ -25,6 +25,10 @@ export default mergeConfig(
       // exceed Vitest's 5000ms default under full-suite load. Bump the
       // per-test timeout so it's deterministic rather than load-flaky.
       testTimeout: 30000,
+      // The merge verifier pins gates to a bounded CPU set while the full
+      // workspace suite is running. Keep web's jsdom-heavy tests below that
+      // ceiling so npm workspace runs do not fail from worker oversubscription.
+      maxWorkers: 4,
       // Vitest defaults to running in the workspace root. Pinning the
       // root keeps test discovery scoped to web even when invoked
       // from the monorepo root.
