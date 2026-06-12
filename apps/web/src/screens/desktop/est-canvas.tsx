@@ -23,12 +23,11 @@
  * CAPABILITY (ON for desktop, OFF for the phone body). No takeoff logic is
  * reinvented.
  *
- * NOTE: `screens/projects/takeoff-canvas.tsx` is a DIFFERENT, still-live surface
- * (the v1 projects-tab takeoff IA — elevation tags, the four @sitelayer/pipe-*
- * capture pipelines, the AI agent-suggestions review panel, the 3D/photo/summary/
- * revision-compare cross-links). It is NOT a redundant copy of this pair and was
- * deliberately left intact in Phase C — folding its unique capabilities here is a
- * separate, larger effort. See the PR description for the rationale.
+ * NOTE: the v1 `screens/projects/takeoff-canvas.tsx` surface was RETIRED on
+ * 2026-06-12 (its unique capabilities — elevation tags, the @sitelayer/pipe-*
+ * capture entry, the AI review/promote panel — were migrated here in takeoff
+ * Phases 2-3, and the legacy route now redirects through the
+ * `lib/takeoff/canvas-route.ts` seam). This pair of bodies is the only canvas.
  */
 
 import { useIsDesktop } from '@/lib/use-is-desktop'

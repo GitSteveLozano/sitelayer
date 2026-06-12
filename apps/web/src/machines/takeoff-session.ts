@@ -10,7 +10,8 @@ import { calculateLinealLength, calculatePolygonArea, type PitchDriver, type Tak
  * ---------------
  * The canvas (`screens/desktop/est-canvas.tsx`, ~5.4k lines) scattered its
  * session across ~40 `useState` atoms spread over three divergent surfaces
- * (desktop body, phone body, and `screens/projects/takeoff-canvas.tsx`). There
+ * (desktop body, phone body, and the since-retired v1
+ * `screens/projects/takeoff-canvas.tsx`, deleted 2026-06-12). There
  * was no way to *assert* or *inject* a canvas state, so getting a tester into
  * "mid-polygon-draw with 3 points placed" or "AI capture pending review" meant
  * replaying a multi-minute click path. This machine absorbs all of that UI
