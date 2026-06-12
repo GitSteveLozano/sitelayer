@@ -34,6 +34,11 @@
 #
 set -euo pipefail
 
+# Repo remote URL (SITELAYER_REPO_URL) — shared convention with deploy.sh /
+# deploy-production-local.sh / fleet-auto-deploy.sh. May carry a deploy token:
+# never log it raw (use sitelayer_repo_url_redacted).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/repo-remote.sh"
+
 # ---- Configuration (all overridable) ---------------------------------------
 E2E_RUNNER_HOME="${E2E_RUNNER_HOME:-$HOME/.cache/sitelayer-e2e-runner}"
 E2E_RUNNER_REPO_DIR="${E2E_RUNNER_REPO_DIR:-$E2E_RUNNER_HOME/repo}"
@@ -41,7 +46,7 @@ E2E_RUNNER_STATE_FILE="${E2E_RUNNER_STATE_FILE:-$E2E_RUNNER_HOME/passed-shas}"
 E2E_RUNNER_LOG_FILE="${E2E_RUNNER_LOG_FILE:-$E2E_RUNNER_HOME/e2e-runner.log}"
 E2E_RUNNER_LOCK_FILE="${E2E_RUNNER_LOCK_FILE:-/tmp/sitelayer-e2e-runner.lock}"
 E2E_RUNNER_PAUSED_FILE="${E2E_RUNNER_PAUSED_FILE:-$E2E_RUNNER_HOME/PAUSED}"
-E2E_RUNNER_REMOTE_URL="${E2E_RUNNER_REMOTE_URL:-https://github.com/GitSteveLozano/sitelayer.git}"
+E2E_RUNNER_REMOTE_URL="${E2E_RUNNER_REMOTE_URL:-$SITELAYER_REPO_URL}"
 
 # Branches to verify (space-separated). dev is the integration tip; main is the
 # release tip. Both are deterministic to verify on an idle box.
@@ -229,7 +234,7 @@ ensure_repo() {
     git -C "$E2E_RUNNER_REPO_DIR" fetch --prune --quiet origin || die "git fetch failed in $E2E_RUNNER_REPO_DIR"
   else
     mkdir -p "$(dirname "$E2E_RUNNER_REPO_DIR")"
-    log "clone $E2E_RUNNER_REMOTE_URL -> $E2E_RUNNER_REPO_DIR"
+    log "clone $(sitelayer_repo_url_redacted "$E2E_RUNNER_REMOTE_URL") -> $E2E_RUNNER_REPO_DIR"
     git clone --quiet "$E2E_RUNNER_REMOTE_URL" "$E2E_RUNNER_REPO_DIR" || die "git clone failed"
   fi
 }

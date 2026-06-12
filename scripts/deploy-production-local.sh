@@ -23,6 +23,11 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Repo remote URL (SITELAYER_REPO_URL) — shared convention with deploy.sh /
+# fleet-auto-deploy.sh / e2e-runner.sh. May carry a deploy token: never echo
+# it raw (see scripts/repo-remote.sh).
+source scripts/repo-remote.sh
+
 DEPLOY_HOST="${DEPLOY_HOST:-165.245.230.3}"
 DEPLOY_USER="${DEPLOY_USER:-sitelayer}"
 REGISTRY="${SITELAYER_REGISTRY:-registry.digitalocean.com/sitelayer/sitelayer}"
@@ -206,8 +211,10 @@ rm -f /tmp/sl-regcfg.json'
 fi
 
 # --- remote deploy (reuse existing droplet .env) -----------------------------
+# NOTE: SITELAYER_REPO_URL travels in the remote env (it may carry a deploy
+# token — the droplet-side heredoc must never echo it or `set -x`).
 ssh -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-  "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' SKIP_MIGRATIONS='$SKIP_MIGRATIONS' bash -s" <<'REMOTE'
+  "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' SKIP_MIGRATIONS='$SKIP_MIGRATIONS' SITELAYER_REPO_URL='$SITELAYER_REPO_URL' bash -s" <<'REMOTE'
 set -euo pipefail
 exec 9>/tmp/sitelayer-production-deploy.lock
 flock -n 9 || { echo "ERROR: another production deploy is already running"; exit 1; }
@@ -229,7 +236,7 @@ cd /app/sitelayer
 [ -f .env ] || { echo "ERROR: /app/sitelayer/.env missing (run a full GitHub deploy once to seed it)"; exit 1; }
 
 previous_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
-git remote set-url origin https://github.com/GitSteveLozano/sitelayer.git 2>/dev/null || true
+git remote set-url origin "$SITELAYER_REPO_URL" 2>/dev/null || true
 git fetch origin
 git reset --hard
 git clean -fd -e .env -e ".last_*" -e ".env.bak.*"

@@ -21,10 +21,19 @@ docker-compose.override.yml
 # directly to main via the GitHub web UI on 2026-05-04 (commits
 # 43612f3 → a80163a) and deleted 2 minutes later. The blob is permanent
 # in pack history; un-rewriting requires force-pushing all of main and
-# wasn't worth it. This rule prevents the next one. Existing committed
-# zips need explicit allowlist entries (e.g. /docs/...zip).
+# wasn't worth it. This rule prevents the next one. NO allowlist entries:
+# the previous one (the docs/ WhatsApp export zip) was real client data on a
+# public repo and was removed 2026-06-12 (docs/RUNBOOK_REPO_PRIVATE_CUTOVER.md).
 *.zip
-!/docs/WhatsApp Chat with LA _ Tiny Bison.zip
+
+# Client-data hygiene (2026-06-12): raw client exports and customer estimate
+# PDFs must never be committed. The WhatsApp thread export + real customer
+# estimates (GST numbers) were git-rm'ed from HEAD on 2026-06-12 — keep them
+# out. blueprints_sample/ may only carry the sanitized synthetic example.
+WhatsApp Chat*
+/docs/WhatsApp*
+/blueprints_sample/*
+!/blueprints_sample/blueprints_example.pdf
 
 # Fleet-local build secrets for deploy-production-local.sh (never commit)
 ops/env/production.build.env

@@ -76,6 +76,13 @@
 #
 set -euo pipefail
 
+# Repo remote URL (SITELAYER_REPO_URL) — shared convention with deploy.sh /
+# deploy-production-local.sh / e2e-runner.sh. Exported by the lib, so the
+# deploy.sh this watcher runs in its dedicated checkout resolves the SAME
+# remote. May carry a deploy token: never log it raw (use
+# sitelayer_repo_url_redacted).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/repo-remote.sh"
+
 # ---- Configuration (all overridable) ---------------------------------------
 AUTODEPLOY_HOME="${AUTODEPLOY_HOME:-$HOME/.cache/sitelayer-autodeploy}"
 AUTODEPLOY_REPO_DIR="${AUTODEPLOY_REPO_DIR:-$AUTODEPLOY_HOME/repo}"
@@ -85,22 +92,14 @@ AUTODEPLOY_LOCK_FILE="${AUTODEPLOY_LOCK_FILE:-/tmp/sitelayer-autodeploy.lock}"
 AUTODEPLOY_PAUSED_FILE="${AUTODEPLOY_PAUSED_FILE:-$AUTODEPLOY_HOME/PAUSED}"
 # Remote to clone/fetch the dedicated deploy checkout from. This MUST use the
 # SAME transport as the droplet-side checkout that scripts/deploy.sh's heredoc
-# refreshes (it hardcodes `https://github.com/GitSteveLozano/sitelayer.git` and
-# runs `git remote set-url origin <that https url>` on the droplet). Keeping the
-# watcher on the SAME https url avoids a git@ (SSH) vs https divergence: the
-# watcher needs no GitHub deploy key, and both checkouts fetch the identical SHA
-# over the identical transport. If an operator overrides this with the SSH form
-# (git@github.com:GitSteveLozano/sitelayer.git), normalize it back to https
-# below so the two sides cannot silently diverge.
-AUTODEPLOY_REMOTE_URL="${AUTODEPLOY_REMOTE_URL:-https://github.com/GitSteveLozano/sitelayer.git}"
-# Normalize a git@github.com:owner/repo(.git) SSH override to the https form the
-# droplet-side deploy.sh uses, so the watcher's dedicated checkout and the
-# droplet checkout stay on one transport.
-case "$AUTODEPLOY_REMOTE_URL" in
-  git@github.com:*)
-    AUTODEPLOY_REMOTE_URL="https://github.com/${AUTODEPLOY_REMOTE_URL#git@github.com:}"
-    ;;
-esac
+# refreshes — both now resolve from the shared SITELAYER_REPO_URL
+# (scripts/repo-remote.sh), which is exported, so the deploy.sh this watcher
+# invokes passes the identical URL through to the droplet: the two sides
+# cannot silently diverge. To change the remote everywhere (e.g. a
+# token-bearing https URL or SSH deploy-key form after the private cutover),
+# set SITELAYER_REPO_URL on the systemd unit. AUTODEPLOY_REMOTE_URL remains a
+# watcher-local fetch override for isolated testing only.
+AUTODEPLOY_REMOTE_URL="${AUTODEPLOY_REMOTE_URL:-$SITELAYER_REPO_URL}"
 
 # Tiers this watcher manages (space-separated). prod is rejected by design.
 AUTODEPLOY_TIERS="${AUTODEPLOY_TIERS:-dev demo}"
@@ -248,7 +247,7 @@ ensure_repo() {
     git -C "$AUTODEPLOY_REPO_DIR" fetch --prune --quiet origin || die "git fetch failed in $AUTODEPLOY_REPO_DIR"
   else
     mkdir -p "$(dirname "$AUTODEPLOY_REPO_DIR")"
-    log "clone $AUTODEPLOY_REMOTE_URL -> $AUTODEPLOY_REPO_DIR"
+    log "clone $(sitelayer_repo_url_redacted "$AUTODEPLOY_REMOTE_URL") -> $AUTODEPLOY_REPO_DIR"
     git clone --quiet "$AUTODEPLOY_REMOTE_URL" "$AUTODEPLOY_REPO_DIR" || die "git clone failed"
   fi
 }
