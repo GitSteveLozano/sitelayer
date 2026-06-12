@@ -35,6 +35,7 @@ const ALL_LANES = [
   'lock_labor_entries',
   'field_events',
   'takeoff_to_bid',
+  'takeoff_capture_pipeline',
   'voice_to_log',
   'companycam_poll',
   'welcome_email',

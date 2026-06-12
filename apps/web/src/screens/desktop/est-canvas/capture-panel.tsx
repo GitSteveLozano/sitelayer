@@ -40,10 +40,16 @@ export function CapturePanel({ projectId, onCaptured }: { projectId: string; onC
       {
         onSuccess: (res) => {
           onCaptured(res.draft.id)
+          // Every pipeline this panel runs is synchronous today (file uploads +
+          // blueprint dry-run), but the capture endpoint can 202 a live
+          // blueprint read (async split 2026-06-12) — report it honestly
+          // instead of claiming 0 captured quantities.
           setNote(
-            res.result_summary.review_required
-              ? `Captured ${res.result_summary.quantities_count} quantities — some need review.`
-              : `Captured ${res.result_summary.quantities_count} quantities.`,
+            res.result_summary.status === 'processing'
+              ? 'Capture accepted — the AI read is running; the draft fills in when it completes.'
+              : res.result_summary.review_required
+                ? `Captured ${res.result_summary.quantities_count} quantities — some need review.`
+                : `Captured ${res.result_summary.quantities_count} quantities.`,
           )
         },
         onError: (err) => setError(err instanceof Error ? err.message : 'Capture failed'),

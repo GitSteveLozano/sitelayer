@@ -2180,6 +2180,7 @@ export function EstCanvasDesktopBody() {
           result={sctx.capture.result}
           decisions={sctx.capture.decisions}
           showLow={sctx.capture.showLow}
+          mode={sctx.capture.mode}
           selectedId={reviewSelectedId}
           onSelect={setReviewSelectedId}
           dispatch={sdispatch}

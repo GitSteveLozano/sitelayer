@@ -385,20 +385,34 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    `BLUEPRINT_DOWNLOAD_PRESIGNED=1` requires Spaces CORS validated for
    the web app origin first.
 
-4. **Blueprint-vision live mode is opt-in via two env vars.** _Why:_
+4. **Blueprint-vision live mode is opt-in via env vars, and LIVE runs are
+   ASYNC (2026-06-12).** _Why:_
    `POST /api/projects/:id/takeoff-drafts/capture` (`kind=blueprint_vision`)
-   calls Claude Opus on every drawing page; an accidentally-set key plus
-   a wired multipart upload would otherwise rack up Anthropic spend on
-   the first request. The dispatcher checks `BLUEPRINT_VISION_MODE=live`
-   AND a non-empty `ANTHROPIC_API_KEY` together — either missing falls
-   back to the deterministic dry-run stub. _How to apply:_ set both env
-   vars in `/app/sitelayer/.env` on the prod droplet (manifest entry in
-   `ops/env/production.env.json`; never commit the key; `.env.example` only
-   documents placeholders), and verify live behaviour
-   against a single sheet PDF before flipping the mode for the fleet.
-   The live path requires the multipart form (`blueprint_file` part) so
-   the PDF streams straight into Spaces; the JSON-body variant of the
-   endpoint stays dry-run.
+   used to await the Gemini/Anthropic vision call inline in the HTTP
+   handler and, on ANY provider error, silently served believable demo
+   rows labelled "dry-run". Now a LIVE capture returns `202` with the
+   draft at `capture_status='processing'` and enqueues a
+   `takeoff_capture_pipeline` outbox row; the WORKER
+   (`apps/worker/src/runners/takeoff-capture.ts`, lane
+   `takeoff_capture_pipeline`, migration 018) runs the provider call and
+   transitions the draft to `ready` (result + `capture_provenance`
+   `gemini-live`/`anthropic-live` + REAL token usage in
+   `capture_token_usage`) or `failed` (`capture_error` set — provider
+   errors NEVER produce stub rows, and the flat $0.25/page cost
+   placeholder is gone). Provider selection: `BLUEPRINT_VISION_MODE=gemini`
+   - `GEMINI_API_KEY` ⇒ Gemini (prod default since ef9c6926);
+     `BLUEPRINT_VISION_MODE=live` + `ANTHROPIC_API_KEY` ⇒ Anthropic; either
+     missing ⇒ the deterministic dry-run stub, which stays SYNCHRONOUS
+     (`201`, `capture_provenance='stub-dry-run'`) so demo/e2e fixtures keep
+     working. _How to apply:_ set the env vars in `/app/sitelayer/.env` on
+     the prod droplet (manifest entry in `ops/env/production.env.json`;
+     never commit keys) for BOTH the api and worker containers — the worker
+     is what makes the live call now — and verify against a single sheet
+     before fleet rollout. Anthropic live still requires the multipart form
+     (`blueprint_file` part); Gemini live also accepts the JSON body and
+     reads the project's latest stored blueprint. Poll
+     `GET /api/takeoff-drafts/:id/result` until `status` leaves
+     `processing`.
 
 ### Incident runbooks
 

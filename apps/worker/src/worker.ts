@@ -26,6 +26,7 @@ import { createEstimateShareEmailRunner } from './runners/estimate-share-email.j
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
+import { createTakeoffCaptureRunner } from './runners/takeoff-capture.js'
 import { createDebugBundleRunner } from './runners/debug-bundle.js'
 import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
@@ -139,6 +140,14 @@ const captureArtifactRetentionGc = createCaptureArtifactRetentionGcRunner({
   storage: objectGcStorage,
 })
 const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
+  pool,
+  storage: objectGcStorage,
+  logger,
+})
+// Async AI blueprint capture (takeoff_capture_pipeline outbox rows enqueued
+// by POST /api/projects/:id/takeoff-drafts/capture). Reuses the same
+// object-storage client as the GC runners to read the blueprint bytes.
+const takeoffCaptureRunner = createTakeoffCaptureRunner({
   pool,
   storage: objectGcStorage,
   logger,
@@ -526,6 +535,30 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
 
+  // Async AI blueprint capture — drains takeoff_capture_pipeline outbox rows
+  // (enqueued by POST /api/projects/:id/takeoff-drafts/capture for LIVE
+  // blueprint_vision runs), executes the Gemini/Anthropic pipeline off the
+  // HTTP path, and transitions the draft to 'ready' (result + provenance +
+  // real token usage) or 'failed'. Dedicated lane seeded by migration 018.
+  // Pausing the lane is SAFE under the inverted outbox contract — the rows
+  // stay pending for this runner; the generic drain can never eat them.
+  const takeoffCaptureSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'takeoff_capture_pipeline',
+    () =>
+      takeoffCaptureRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] takeoff_capture_pipeline drain failed')
+        captureWithEntityContext(error, {
+          scope: 'takeoff_capture_pipeline',
+          entity_type: 'takeoff_draft',
+          company_id: companyId,
+        })
+        return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+      }),
+    { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
+  )
+
   const voiceToLogSummary = await runIfLaneActive(
     pool,
     logger,
@@ -763,6 +796,9 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     welcome_email_failed: welcomeEmailSummary.failed,
     send_estimate_share_processed: estimateShareEmailSummary.processed,
     send_estimate_share_failed: estimateShareEmailSummary.failed,
+    takeoff_capture_processed: takeoffCaptureSummary.processed,
+    takeoff_capture_completed: takeoffCaptureSummary.insightsCreated,
+    takeoff_capture_failed: takeoffCaptureSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
     capture_artifact_retention_gc_ran: captureArtifactRetentionGcSummary.ran,

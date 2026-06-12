@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './client'
-import { promoteRejectionsFromError } from './takeoff-drafts'
+import {
+  draftResultStatus,
+  isLiveProvenance,
+  promoteRejectionsFromError,
+  type DraftResultResponse,
+} from './takeoff-drafts'
 
 function rejectionError(body: unknown): ApiError {
   return new ApiError({
@@ -46,5 +51,52 @@ describe('promoteRejectionsFromError', () => {
       { quantity_id: 'q1', service_item_code: '99 99 99', reason: 'code not in curated catalog' },
       { quantity_id: 'q2', service_item_code: 'AA', reason: 'not in curated catalog' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Async-capture helpers (2026-06-12 split).
+// ---------------------------------------------------------------------------
+
+function resultResponse(overrides: Partial<DraftResultResponse>): DraftResultResponse {
+  return {
+    takeoff_result: null,
+    source: 'blueprint_vision',
+    review_required: false,
+    pipeline_version: '1.0.0',
+    ...overrides,
+  }
+}
+
+describe('draftResultStatus', () => {
+  it('returns null when there is no response yet', () => {
+    expect(draftResultStatus(undefined)).toBeNull()
+  })
+
+  it('passes through the explicit poll states', () => {
+    expect(draftResultStatus(resultResponse({ status: 'processing' }))).toBe('processing')
+    expect(draftResultStatus(resultResponse({ status: 'failed', error: 'provider exploded' }))).toBe('failed')
+    expect(draftResultStatus(resultResponse({ status: 'ready' }))).toBe('ready')
+  })
+
+  it("treats an older API response without `status` as 'ready' (old sync contract)", () => {
+    expect(draftResultStatus(resultResponse({}))).toBe('ready')
+  })
+})
+
+describe('isLiveProvenance', () => {
+  it('classifies the two live provider reads as live', () => {
+    expect(isLiveProvenance('gemini-live')).toBe(true)
+    expect(isLiveProvenance('anthropic-live')).toBe(true)
+  })
+
+  it('classifies stub + deterministic output as not live', () => {
+    expect(isLiveProvenance('stub-dry-run')).toBe(false)
+    expect(isLiveProvenance('deterministic')).toBe(false)
+  })
+
+  it('returns null (caller fallback decides) when provenance is absent', () => {
+    expect(isLiveProvenance(null)).toBeNull()
+    expect(isLiveProvenance(undefined)).toBeNull()
   })
 })

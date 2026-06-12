@@ -40,6 +40,7 @@ export const DEDICATED_RUNNER_REGISTRY: Readonly<Record<string, string>> = {
   welcome_email: 'apps/worker/src/runners/welcome-email.ts',
   damage_charge_invoice_push: 'apps/worker/src/runners/damage-charges.ts',
   send_estimate_share: 'apps/worker/src/runners/estimate-share-email.ts',
+  takeoff_capture_pipeline: 'apps/worker/src/runners/takeoff-capture.ts',
 }
 
 export const WORKER_DEDICATED_MUTATION_TYPES: readonly string[] = Object.keys(DEDICATED_RUNNER_REGISTRY)

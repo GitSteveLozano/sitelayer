@@ -26,9 +26,59 @@ export interface TakeoffDraft {
   review_required?: boolean
   /** Phase C: semver of the producing pipeline. Null for manual drafts. */
   pipeline_version?: string | null
+  /**
+   * Async-capture lifecycle (migration 018). 'processing' = a live capture is
+   * running on the worker; 'failed' = the provider read errored (see
+   * `capture_error`); 'ready' = reviewable (manual + pre-migration rows are
+   * 'ready'). Optional so an older API build that predates the column still
+   * type-checks — absent is treated as 'ready'.
+   */
+  capture_status?: CaptureStatus
+  /** Honest output discriminator — see {@link CaptureProvenance}. Null for
+   *  manual drafts, pre-migration rows, and processing/failed drafts. */
+  capture_provenance?: CaptureProvenance | null
+  /** Provider error string for capture_status='failed'; null otherwise. */
+  capture_error?: string | null
+  /** REAL provider token usage for live captures (never estimated). Null on
+   *  manual / dry-run / pre-migration rows. */
+  capture_token_usage?: CaptureTokenUsage | null
   deleted_at: string | null
   created_at: string
   updated_at: string
+}
+
+/** Async-capture lifecycle states on a takeoff draft (migration 018). */
+export type CaptureStatus = 'processing' | 'ready' | 'failed'
+
+/**
+ * Honest discriminator for what actually produced a draft's quantities:
+ *   - 'gemini-live' / 'anthropic-live' — a REAL provider sheet read.
+ *   - 'stub-dry-run' — deterministic demo/stub rows (blueprint dry-run, count
+ *     stub). Must NEVER be presented as a real extraction.
+ *   - 'deterministic' — real-input parse (roomplan / photogrammetry / drone).
+ */
+export type CaptureProvenance = 'gemini-live' | 'anthropic-live' | 'stub-dry-run' | 'deterministic'
+
+/** REAL provider token usage stored on the draft. Token fields are null when
+ *  the provider response omitted them — they are never estimated. */
+export interface CaptureTokenUsage {
+  provider: string
+  model: string
+  input_tokens: number | null
+  output_tokens: number | null
+}
+
+/**
+ * Demo-vs-real classifier for the review badges. `'stub-dry-run'` is the only
+ * provenance that means demo data; the two `*-live` values and 'deterministic'
+ * are real output. When provenance is absent (older API / pre-migration row /
+ * still processing) the caller's fallback decides — pass the conservative
+ * value for the surface (the takeoff review screens fall back to their
+ * navigation-state capture mode, defaulting to demo).
+ */
+export function isLiveProvenance(provenance: CaptureProvenance | string | null | undefined): boolean | null {
+  if (provenance == null) return null
+  return provenance === 'gemini-live' || provenance === 'anthropic-live'
 }
 
 export type CaptureKind = 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
@@ -70,20 +120,37 @@ export function countScopePayload(scope: CaptureCountScope): Record<string, unkn
 }
 
 export interface CaptureResultSummary {
+  /**
+   * Async-capture split (2026-06-12): 'ready' = synchronous capture, result is
+   * on the draft now (201). 'processing' = LIVE capture accepted and queued on
+   * the worker (202) — NO result is returned inline; poll
+   * GET /api/takeoff-drafts/:id/result until status leaves 'processing'.
+   * Optional so an older API build that predates the field still type-checks
+   * (absent ⇒ 'ready', the old synchronous contract).
+   */
+  status?: 'ready' | 'processing'
+  /** Which provider the worker will call — only on 202 'processing' responses. */
+  provider?: 'gemini' | 'anthropic'
   quantities_count: number
   review_required: boolean
-  capture_source: string
+  /** Absent on 202 'processing' responses (no result exists yet). */
+  capture_source?: string
   /**
-   * Live/dry-run discriminator (C1 follow-up). 'live' means the API actually
-   * ran the Anthropic Claude-vision sheet read against the streamed multipart
-   * PDF (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY). 'dry-run' covers
-   * every stub/demo/fallback path. Optional so an older API build that predates
-   * the field still type-checks — the review UI treats absent as 'dry-run' and
-   * keeps the demo badge.
+   * Live/dry-run discriminator (C1 follow-up). 'live' means the API queued a
+   * REAL provider sheet read (202). 'dry-run' covers every synchronous
+   * stub/demo/deterministic path (back-compat with the demo badge). Optional so
+   * an older API build that predates the field still type-checks — the review
+   * UI treats absent as 'dry-run' and keeps the demo badge.
    */
   mode?: 'live' | 'dry-run'
-  geometry: { rooms: number; surfaces: number; objects: number }
-  pipeline_version: string
+  /** Honest output discriminator on synchronous (201) responses:
+   *  'stub-dry-run' (demo rows) or 'deterministic' (real-input parse).
+   *  Null on 202 'processing' responses (poll for the final provenance). */
+  provenance?: CaptureProvenance | null
+  /** Absent on 202 'processing' responses. */
+  geometry?: { rooms: number; surfaces: number; objects: number }
+  /** Absent on 202 'processing' responses. */
+  pipeline_version?: string
 }
 
 export interface CaptureResponse {
@@ -320,7 +387,7 @@ export interface CountMarker {
  * array for whole-draft results (no objects), so callers can fall back to their
  * decorative marker layout.
  */
-export function countMarkersFromResult(result: CapturedTakeoffResult | undefined): CountMarker[] {
+export function countMarkersFromResult(result: CapturedTakeoffResult | null | undefined): CountMarker[] {
   const objects = result?.geometry?.objects
   if (!Array.isArray(objects) || objects.length === 0) return []
   // The per-symbol count emits a single rolled-up quantity; treat its
@@ -340,25 +407,58 @@ export function countMarkersFromResult(result: CapturedTakeoffResult | undefined
 }
 
 export interface DraftResultResponse {
-  takeoff_result: CapturedTakeoffResult
+  /**
+   * Async-capture poll state (2026-06-12): 'processing' = the worker is still
+   * running the live read (takeoff_result is null — keep polling); 'failed' =
+   * the provider read errored (`error` carries the provider error string,
+   * takeoff_result stays null — re-running is a fresh POST /capture);
+   * 'ready' = reviewable. Optional so an older API build that predates the
+   * field still type-checks (absent ⇒ 'ready', the old contract).
+   */
+  status?: CaptureStatus
+  /** Provider error string when status='failed'; null/absent otherwise. */
+  error?: string | null
+  /** Null while status is 'processing' or 'failed'. */
+  takeoff_result: CapturedTakeoffResult | null
   source: string
   review_required: boolean
   pipeline_version: string | null
+  /** Honest output discriminator. Null while processing/failed and on
+   *  pre-migration rows. */
+  provenance?: CaptureProvenance | null
+  /** REAL provider token usage. Null on dry-run / pre-migration rows. */
+  token_usage?: CaptureTokenUsage | null
+}
+
+/** Normalized poll state for a draft-result response — absent status (older
+ *  API build) means the old synchronous contract, i.e. 'ready'. */
+export function draftResultStatus(data: DraftResultResponse | undefined): CaptureStatus | null {
+  if (!data) return null
+  return data.status ?? 'ready'
 }
 
 const draftResultKey = (draftId: string) => ['takeoff-drafts', 'result', draftId] as const
+
+/** Poll cadence while a live capture is processing on the worker. */
+const DRAFT_RESULT_PROCESSING_POLL_MS = 2_500
 
 export function useTakeoffDraftResult(draftId: string | null | undefined) {
   return useQuery<DraftResultResponse>({
     queryKey: draftResultKey(draftId ?? ''),
     queryFn: () => request(`/api/takeoff-drafts/${encodeURIComponent(draftId!)}/result`),
     enabled: Boolean(draftId),
-    // Captured results are immutable for the life of the draft; a refetch
+    // Ready results are immutable for the life of the draft; a refetch
     // is only useful when the operator switches drafts (separate queryKey)
     // or after a fresh capture (handled by useCaptureTakeoffDraft's
     // onSuccess invalidation, which targets the by-project key — bump
     // this stale time so we don't re-pull the JSON on every focus.)
     staleTime: 60_000,
+    // Async live captures (2026-06-12): a 202'd capture lands the draft at
+    // status='processing' and the worker transitions it to ready/failed.
+    // House polling pattern (qbo-sync.ts): keep refetching while in flight,
+    // stop the moment the status leaves 'processing'.
+    refetchInterval: (query) =>
+      draftResultStatus(query.state.data) === 'processing' ? DRAFT_RESULT_PROCESSING_POLL_MS : false,
   })
 }
 
@@ -442,6 +542,13 @@ export function usePromoteCapturedQuantities(projectId: string, draftId: string 
  * and land the result as a new takeoff draft. The server validates
  * `kind`, dispatches to the matching @sitelayer/pipe-* package, and
  * stashes the TakeoffResult on the new draft.
+ *
+ * Async split (2026-06-12): dry-run / count-scope / roomplan /
+ * photogrammetry / drone stay synchronous (201, result_summary.status
+ * 'ready'). A LIVE blueprint_vision capture (live provider env, no dryRun)
+ * returns 202 with result_summary.status 'processing' and NO inline result —
+ * the caller must poll the draft via `useTakeoffDraftResult` until the
+ * status leaves 'processing'.
  */
 export function useCaptureTakeoffDraft(projectId: string) {
   const qc = useQueryClient()
@@ -503,12 +610,18 @@ export interface CaptureLiveInput {
 
 /**
  * Stream the project's blueprint PDF to the capture endpoint as
- * multipart/form-data so the API runs the live Claude-vision sheet read.
- * Mirrors `uploadBlueprint` / `uploadDailyLogPhoto` — FormData body, auth
- * headers from `buildAuthHeaders`, and the browser owns the multipart
- * boundary (we must NOT set content-type). The server infers
- * kind='blueprint_vision' from the multipart branch; we still send `kind`
- * + `draft_kind` explicitly to stay symmetric with the JSON path.
+ * multipart/form-data so the API runs the live AI sheet read (Gemini prod
+ * default or env-gated Anthropic — both providers accept the multipart
+ * upload since the 2026-06-12 async split). Mirrors `uploadBlueprint` /
+ * `uploadDailyLogPhoto` — FormData body, auth headers from
+ * `buildAuthHeaders`, and the browser owns the multipart boundary (we must
+ * NOT set content-type). The server infers kind='blueprint_vision' from the
+ * multipart branch; we still send `kind` + `draft_kind` explicitly to stay
+ * symmetric with the JSON path.
+ *
+ * When the live provider env is present the server answers 202 with
+ * result_summary.status='processing' (no inline result — poll via
+ * `useTakeoffDraftResult`); without it the dry-run stub answers 201.
  */
 export async function captureBlueprintVisionLive(projectId: string, input: CaptureLiveInput): Promise<CaptureResponse> {
   const formData = new FormData()

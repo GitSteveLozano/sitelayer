@@ -62,6 +62,37 @@ describe('buildAiReviewModel', () => {
   })
 })
 
+describe('<AiReviewOverlay /> provenance chip', () => {
+  it('defaults to the DEMO · STUB chip — stub output never reads like a real extraction', () => {
+    render(
+      <AiReviewOverlay
+        result={RESULT}
+        decisions={{}}
+        showLow
+        selectedId={null}
+        onSelect={() => {}}
+        dispatch={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('ai-review-mode-chip').textContent).toBe('DEMO · STUB')
+  })
+
+  it('shows LIVE READ when the machine capture mode is live', () => {
+    render(
+      <AiReviewOverlay
+        result={RESULT}
+        decisions={{}}
+        showLow
+        mode="live"
+        selectedId={null}
+        onSelect={() => {}}
+        dispatch={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('ai-review-mode-chip').textContent).toBe('LIVE READ')
+  })
+})
+
 describe('<AiReviewOverlay />', () => {
   it('renders the seeded proposals as review rows', () => {
     render(

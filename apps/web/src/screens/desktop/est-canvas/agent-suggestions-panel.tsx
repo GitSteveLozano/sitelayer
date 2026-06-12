@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
 import { Card, MobileButton } from '@/components/mobile'
 import {
+  draftResultStatus,
   usePromoteCapturedQuantities,
   useTakeoffDraftResult,
   type CapturedQuantity,
@@ -181,10 +182,13 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
   // only has to type when they actually want to remap. Live updates so
   // newly-captured drafts (capture → switch → here) hydrate correctly.
   useEffect(() => {
-    if (!result.data) return
+    // takeoff_result is null while a live capture is processing or failed
+    // (async-capture split 2026-06-12) — nothing to pre-fill yet.
+    if (!result.data?.takeoff_result) return
+    const captured = result.data.takeoff_result
     setOverrides((prev) => {
       const next: Record<string, string> = { ...prev }
-      for (const q of result.data.takeoff_result.quantities) {
+      for (const q of captured.quantities) {
         if (next[q.id] === undefined) {
           next[q.id] = derivedCodeFor(q) ?? ''
         }
@@ -193,14 +197,21 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
     })
   }, [result.data])
 
-  const quantities = result.data?.takeoff_result.quantities ?? []
+  // Async-capture poll states: the project draft list now includes
+  // processing/failed drafts, so this panel can be pointed at one. The result
+  // hook keeps polling while 'processing'; 'failed' carries the provider error
+  // and ZERO fabricated rows.
+  const captureStatus = draftResultStatus(result.data)
+  const isStubResult = result.data?.provenance === 'stub-dry-run'
+
+  const quantities = result.data?.takeoff_result?.quantities ?? []
   const pipelineVersion = result.data?.pipeline_version ?? draft.pipeline_version ?? null
   // The capture pipelines stamp `producedAt`/`capturedAt` onto the result;
   // fall back to the draft's `created_at` so we always have a usable
   // timestamp for the eyebrow line.
   const capturedAt =
-    (result.data?.takeoff_result as { producedAt?: string; capturedAt?: string } | undefined)?.producedAt ??
-    (result.data?.takeoff_result as { producedAt?: string; capturedAt?: string } | undefined)?.capturedAt ??
+    (result.data?.takeoff_result as { producedAt?: string; capturedAt?: string } | null | undefined)?.producedAt ??
+    (result.data?.takeoff_result as { producedAt?: string; capturedAt?: string } | null | undefined)?.capturedAt ??
     draft.created_at
 
   const visible = quantities.filter((q) => !rejected[q.id])
@@ -321,6 +332,35 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
     )
   }
 
+  // Async live capture still running on the worker — the result hook keeps
+  // polling; render an explicit in-progress state, never an empty result.
+  if (captureStatus === 'processing') {
+    return (
+      <Card tight>
+        <AiEyebrow>Agent suggestions · AI read in progress</AiEyebrow>
+        <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
+          The AI is reading the blueprint on the server. Suggestions appear here automatically when the read completes.
+        </div>
+      </Card>
+    )
+  }
+
+  // Failed live capture: the provider error is the ONLY honest content (zero
+  // fabricated rows). Re-running is a fresh capture from the AI palette.
+  if (captureStatus === 'failed') {
+    return (
+      <Card tight>
+        <AiEyebrow>Agent suggestions · AI read failed</AiEyebrow>
+        <div className="text-[12px] text-warn leading-snug mt-1.5">
+          {result.data.error ?? 'The AI provider returned an error. No quantities were produced.'}
+        </div>
+        <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
+          Re-run the capture (a fresh AI auto-takeoff) to try again — failed reads never produce placeholder rows.
+        </div>
+      </Card>
+    )
+  }
+
   if (quantities.length === 0) {
     return (
       <Card tight>
@@ -360,6 +400,14 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
             </button>
           ) : null}
         </div>
+        {/* Provenance honesty (2026-06-12): stub output must never read like a
+            real extraction. 'stub-dry-run' is the server's explicit demo-data
+            discriminator on the draft result. */}
+        {isStubResult ? (
+          <div className="mt-1.5 text-[11px] font-bold uppercase tracking-[0.06em] text-warn">
+            Demo data · stub quantities — not a real AI sheet read
+          </div>
+        ) : null}
         {summary ? <div className="mt-1.5 text-[11px] text-ink-3">{summary}</div> : null}
         {error ? <div className="mt-1.5 text-[12px] text-warn">{error}</div> : null}
       </Card>

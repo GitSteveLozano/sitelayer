@@ -395,6 +395,15 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // type had NO handler anywhere and the generic drain stamped it 'applied'
   // while the customer email never sent.
   'send_estimate_share',
+  // Async AI blueprint capture — drained by apps/worker/src/runners/
+  // takeoff-capture.ts. Enqueued by POST /api/projects/:id/takeoff-drafts/
+  // capture for LIVE blueprint_vision runs (the route inserts the draft at
+  // capture_status='processing' and the runner executes the Gemini/Anthropic
+  // pipeline, writing result + provenance + real token usage, or marking the
+  // draft failed). If the generic drain could claim this row the draft would
+  // sit at 'processing' forever with a green 'applied' audit trail — the
+  // exact silent-drop class this list exists to prevent.
+  'takeoff_capture_pipeline',
 ] as const
 
 /**

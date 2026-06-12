@@ -667,8 +667,11 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
   const resultQuery = useTakeoffDraftResult(draftId)
   const promote = usePromoteCapturedQuantities(projectId, draftId)
 
+  // Count captures are always synchronous stubs today (status 'ready'), but
+  // takeoff_result is typed nullable since the async-capture split — stay
+  // null-safe so a processing/failed row can never crash this screen.
   const quantities = useMemo<CapturedQuantity[]>(
-    () => resultQuery.data?.takeoff_result.quantities ?? [],
+    () => resultQuery.data?.takeoff_result?.quantities ?? [],
     [resultQuery.data],
   )
 

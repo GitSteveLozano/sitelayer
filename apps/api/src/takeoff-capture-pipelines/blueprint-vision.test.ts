@@ -93,3 +93,26 @@ describe('captureBlueprintVisionDraft — per-symbol count (dry-run)', () => {
     expect(result.geometry?.objects ?? []).toHaveLength(0)
   })
 })
+
+describe('captureBlueprintVisionDraft — provenance honesty', () => {
+  it('every synchronous result is explicitly labelled stub-dry-run', async () => {
+    // Whole-draft demo stub.
+    const wholeDraft = await captureBlueprintVisionDraft({ dryRun: true }, '44444444-4444-4444-8444-444444444444')
+    expect(wholeDraft.provenance).toBe('stub-dry-run')
+    // Per-symbol count stub.
+    const count = await captureBlueprintVisionDraft(
+      { dryRun: true, count_scope: { symbol: { label: 'Outlet' }, sheets: ['M-101'], sensitivity: 'NORMAL' } },
+      '44444444-4444-4444-8444-444444444444',
+    )
+    expect(count.provenance).toBe('stub-dry-run')
+  })
+
+  it('has no live-provider entry point left in this module (async split)', () => {
+    // The LIVE Gemini/Anthropic pipeline moved to @sitelayer/pipe-blueprint
+    // (live-capture.ts) and runs in the worker. The synchronous module accepts
+    // only (payload, projectId) — there is no parameter through which live
+    // bytes can be injected, so the error→DEMO_ROWS fallback class is
+    // structurally gone from the HTTP path.
+    expect(captureBlueprintVisionDraft.length).toBe(2)
+  })
+})

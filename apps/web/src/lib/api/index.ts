@@ -758,7 +758,9 @@ export {
 
 export {
   captureBlueprintVisionLive,
+  draftResultStatus,
   fetchBlueprintFile,
+  isLiveProvenance,
   useBlueprintVisionLiveAvailable,
   useCaptureBlueprintVisionLive,
   useCaptureTakeoffDraft,
@@ -777,9 +779,12 @@ export {
   type CapturedQuantity,
   type CapturedTakeoffResult,
   type CaptureKind,
+  type CaptureProvenance,
   type CaptureRequestBody,
   type CaptureResponse,
   type CaptureResultSummary,
+  type CaptureStatus,
+  type CaptureTokenUsage,
   type DraftResultResponse,
   type PromoteRequestBody,
   type PromoteResponse,

@@ -7,6 +7,12 @@ export default defineConfig({
       '@sitelayer/config': fileURLToPath(new URL('../../packages/config/src/index.ts', import.meta.url)),
       '@sitelayer/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
       '@sitelayer/logger': fileURLToPath(new URL('../../packages/logger/src/index.ts', import.meta.url)),
+      '@sitelayer/capture-schema': fileURLToPath(
+        new URL('../../packages/capture-schema/src/index.ts', import.meta.url),
+      ),
+      '@sitelayer/pipe-blueprint': fileURLToPath(
+        new URL('../../packages/pipe-blueprint/src/index.ts', import.meta.url),
+      ),
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
       '@sitelayer/projectkit-bridge': fileURLToPath(

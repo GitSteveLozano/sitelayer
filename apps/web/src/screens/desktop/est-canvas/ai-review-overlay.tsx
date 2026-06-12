@@ -221,6 +221,14 @@ export interface AiReviewOverlayProps {
   result: unknown
   decisions: Record<string, CaptureDecision>
   showLow: boolean
+  /**
+   * The machine's `capture.mode` — provenance honesty for the on-canvas
+   * review surface (async-capture split 2026-06-12): 'dry-run' proposals are
+   * deterministic stub rows and must NEVER read like a real extraction, so the
+   * header carries an explicit DEMO chip. Defaults to the conservative
+   * 'dry-run' when the caller doesn't know.
+   */
+  mode?: 'live' | 'dry-run'
   /** Local synced selection shared with the canvas markers. */
   selectedId: string | null
   onSelect: (id: string | null) => void
@@ -246,6 +254,7 @@ export function AiReviewOverlay({
   result,
   decisions,
   showLow,
+  mode = 'dry-run',
   selectedId,
   onSelect,
   dispatch,
@@ -274,7 +283,21 @@ export function AiReviewOverlay({
     >
       <div style={{ ...floatHead, display: 'flex', alignItems: 'center', gap: 8 }}>
         <Spark state="accent" size={11} aria-hidden />
-        <span>AI Review · {model.proposals.length} on plan</span>
+        <span style={{ flex: 1 }}>AI Review · {model.proposals.length} on plan</span>
+        {/* Provenance chip — stub output must never look like a real read. */}
+        <span
+          data-testid="ai-review-mode-chip"
+          style={{
+            padding: '1px 6px',
+            background: mode === 'live' ? 'var(--m-green)' : 'var(--m-amber)',
+            color: 'var(--m-ink)',
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: '0.06em',
+          }}
+        >
+          {mode === 'live' ? 'LIVE READ' : 'DEMO · STUB'}
+        </span>
       </div>
 
       <div style={{ overflow: 'auto', flex: 1 }}>

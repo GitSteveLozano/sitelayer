@@ -8,6 +8,21 @@ export {
   DEFAULT_ASSUMED_DPI,
 } from './extract.js'
 export type { BuildBlueprintTakeoffOptions } from './extract.js'
+export {
+  BlueprintVisionProviderError,
+  buildDryRunSkeleton,
+  geminiLiveTakeoffRows,
+  relabelQuantities,
+  runLiveBlueprintCapture,
+  type CaptureTokenUsage,
+  type GeminiLiveOptions,
+  type LiveBlueprintCaptureOutcome,
+  type LiveCaptureProvider,
+  type LiveTakeoffRow,
+  type LiveTakeoffRowUnit,
+  type RunLiveBlueprintCaptureArgs,
+  type StoredBlueprintInput,
+} from './live-capture.js'
 export { CLASSIFY_PROMPT, EXTRACT_PROMPT, PROMPT_VERSION } from './prompts.js'
 export {
   ClassifyResponse,
