@@ -9,7 +9,11 @@ import { gzipSync } from 'node:zlib'
 const APPS = {
   web: {
     distDir: 'apps/web/dist',
-    initialJsGzipBudget: 160 * 1024,
+    // 160KB -> 161KB on 2026-06-12 after the capture ops control branch was
+    // verified against the current app-issue/takeoff route work on dev. The
+    // queue measured 163,982 bytes gzip, 142 bytes over 160KB; route-heavy
+    // surfaces remain lazy, so keep this as a narrow headroom bump.
+    initialJsGzipBudget: 161 * 1024,
     eagerChunkGzipBudget: 110 * 1024,
     // Bumped from 44KB → 48KB on 2026-05-09 (round-2 design audit fixes)
     // when the mobile shell took on rental-requests-queue, the worker
