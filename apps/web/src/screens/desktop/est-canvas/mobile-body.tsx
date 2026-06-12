@@ -63,7 +63,9 @@ import { useConditions, useCreateCondition, type ConditionMeasurementKind } from
 import { type MobileTool, type MobileMode } from './types'
 import { MAX_POLYGON_POINTS } from './constants'
 
+import { useQueryClient } from '@tanstack/react-query'
 import { useTakeoffSession, type TakeoffTool } from '@/machines/takeoff-session'
+import { createTakeoffSessionApiDeps } from '@/machines/takeoff-session-deps'
 import { resolveTakeoffSeed, TAKEOFF_SEED_NAMES } from '@/machines/takeoff-session-seeds'
 
 import {
@@ -234,10 +236,11 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
   // Reads come off `session.context.draft` / `.selection`; writes dispatch
   // machine events. Everything else below (manual qty, wall height, deduct,
   // CSV import, copy panel, toasts) has no machine equivalent and stays local
-  // (hybrid by design). The dep actors stay unwired here — COMMIT/edit/etc.
-  // persist via the EXISTING TanStack-Query mutation hooks, then dispatch the
-  // matching machine event to reset the UI slice (so behavior is identical and
-  // the async actor wiring is a clean follow-up rather than a risky rewrite).
+  // (hybrid by design). The CAPTURE actors (runCapture / promoteCaptured) are
+  // WIRED to the real async capture + promote endpoints via
+  // `createTakeoffSessionApiDeps` (wave-3 review convergence); the remaining
+  // actors (COMMIT/edit/etc.) persist via the EXISTING TanStack-Query mutation
+  // hooks, then dispatch the matching machine event to reset the UI slice.
   //
   // `?seed=<name>` (dev/test only) boots the machine straight into a named
   // state via resolveTakeoffSeed — a tester lands mid-polygon-draw with no
@@ -251,7 +254,9 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
     // re-syncs ids below. (react-hooks/exhaustive-deps is not enabled here.)
   }, [])
 
-  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed })
+  const queryClient = useQueryClient()
+  const sessionDeps = useMemo(() => createTakeoffSessionApiDeps({ queryClient }), [queryClient])
+  const session = useTakeoffSession({ projectId, companySlug, seed: initialSeed, deps: sessionDeps })
   const { context: sctx, dispatch: sdispatch } = session
 
   // CORE slices now read from the machine.

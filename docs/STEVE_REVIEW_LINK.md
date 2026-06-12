@@ -24,7 +24,8 @@ To send a **mic-off** link (screen + interaction replay only, no audio), append
 https://dev.sitelayer.sandolab.xyz/collab/steve?audio=0
 ```
 
-Optional targeted link (drop him on a specific screen):
+Optional targeted link (drop him on a specific screen — e.g. the takeoff
+canvas; Steve reviews on a desktop Mac, so use the desktop est-canvas route):
 
 > **STALE target URL (2026-06-12):** `/projects/:id/takeoff-canvas` is the
 > **v1** takeoff canvas, whose retirement is in flight (parallel lane, same
@@ -35,8 +36,13 @@ Optional targeted link (drop him on a specific screen):
 > kept for history only.
 
 ```text
-https://dev.sitelayer.sandolab.xyz/collab/steve?target=/projects/PROJECT_ID/takeoff-canvas
+https://dev.sitelayer.sandolab.xyz/collab/steve?target=/desktop/canvas/PROJECT_ID
 ```
+
+(The old `?target=/projects/PROJECT_ID/takeoff-canvas` form still works — the
+v1 takeoff canvas was retired 2026-06-12 and that URL now redirects to the
+consolidated est-canvas editor for the viewport, keeping query params. See
+`docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md`.)
 
 ## Message to Steve
 

@@ -1,6 +1,11 @@
 # Takeoff Canvas Consolidation & UX Plan
 
-**Status:** Approved direction (consolidate). Planning only — no canvas code changed yet.
+**Status:** ✅ **Complete — v1 retired 2026-06-12.** `screens/projects/takeoff-canvas.tsx`
+(and its v1-only deps `page-strip.tsx` / `page-calibration-overlay.tsx` /
+`revision-compare-stub.tsx`) are deleted; est-canvas is the single takeoff editor.
+The legacy `/projects/:id/takeoff-canvas` deep-link 301s client-side to the
+canonical per-viewport est-canvas route (`LegacyTakeoffCanvasRedirect` in
+`App.tsx`, via the `takeoffCanvasPath` seam), preserving query params.
 **Author:** agent session, 2026-06-09
 **Scope:** the two parallel takeoff/canvas surfaces in `apps/web/`
 **North star:** [`docs/PLANSWIFT_REBUILD_SPEC.md`](./PLANSWIFT_REBUILD_SPEC.md) (owner-provided) —
@@ -226,21 +231,31 @@ Bring v1's unique capabilities into the shared est-canvas layer, then retire v1:
   imports the panel from the shared file (dependency points est-canvas-ward, not
   the reverse). This closes the functional blocker noted earlier: est-canvas now
   owns the capture _entry_ (CapturePanel) AND the review/promote surface.
-- ⏳ Low-value remainder: page-strip (est-canvas already switches pages), revision
-  compare (a stub on v1), photo-measure cross-link (the de-fork already routes it).
+- ✅ Low-value remainder dropped with v1: page-strip (est-canvas already switches
+  pages), revision compare (was a stub on v1), photo-measure cross-link (the
+  de-fork already routes it). None were migrated; none were live capability.
 
-**Phase 3 status:** all _functional_ v1-unique capabilities are now in est-canvas
-and v1 is **code-decoupled** (it depends on est-canvas, not vice versa). The only
-thing left before deleting v1 (route + `takeoff-canvas.tsx` + its v1-only deps
-`page-strip` / `page-calibration-overlay` / `revision-compare-stub`) is the
-verification gate this environment can't run: a full `npm run verify` + e2e + a
-device-review pass on the new mobile UI. No more feature migration is required.
-v1 stays mounted at its route until that pass clears.
+**Phase 3 status:** ✅ **closed out 2026-06-12 — v1 is deleted.**
+`screens/projects/takeoff-canvas.tsx` and its v1-only deps (`page-strip.tsx`,
+`page-calibration-overlay.tsx`, `revision-compare-stub.tsx`) are removed. The
+`/projects/:id/takeoff-canvas` route now mounts `LegacyTakeoffCanvasRedirect`
+(App.tsx), which resolves saved deep links (bookmarks, capture replays, Steve
+review `?target=` links) through the same `lib/takeoff/canvas-route.ts`
+`takeoffCanvasPath` seam every in-app entry point uses — desktop →
+`/desktop/canvas/:id`, mobile → `/projects/:id/takeoff-mobile` — preserving
+query params (`blueprint` / `draft` / `page` are honored by the est-canvas
+bodies). The authenticated feedback-capture live smoke
+(`e2e/tests/authenticated-feedback-capture.live.spec.ts`) now drives the LEGACY
+URL on purpose so the redirect contract stays covered. Shared helpers that v1
+once hosted (`lib/takeoff/elevation.ts`, `canvas-math.ts`) survive it — that
+relocation is what made the deletion a route-level change.
 
-- ⏳ Then: re-point the rest of the `projects/*` cluster, retire
-  `screens/projects/takeoff-canvas.tsx`, remove its route (App.tsx:352).
+- ✅ Re-pointed the rest of the `projects/*` cluster, retired
+  `screens/projects/takeoff-canvas.tsx`, replaced its route with the redirect.
 - **Verify:** typecheck + lint + unit suites per increment; full
-  `npm run verify` + e2e before the final v1 deletion.
+  `npm run verify` + e2e before the final v1 deletion. (Deletion landed with
+  web typecheck + full web unit suite + lint; the opt-in `E2E_LIVE=1` capture
+  smokes cover the redirect path.)
 
 ---
 

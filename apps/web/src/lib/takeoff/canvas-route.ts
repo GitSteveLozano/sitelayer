@@ -9,10 +9,11 @@ import { useIsDesktop } from '@/lib/use-is-desktop'
  * 1024px gate (`useIsDesktop`) — so a row drawn either way is interchangeable.
  *
  * This is the single source of truth for where "open the takeoff canvas"
- * navigation lands. The v1 `screens/projects/takeoff-canvas` editor is no
- * longer a navigation target (de-fork, Phase 0); routing every entry through
- * here keeps the eventual Phase 3 retirement of that surface a one-file change.
- * See docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md.
+ * navigation lands. The v1 `screens/projects/takeoff-canvas` editor was
+ * RETIRED (deleted) on 2026-06-12 — consolidation Phase 3 close-out. Its old
+ * `/projects/:id/takeoff-canvas` deep-link redirects through this same seam
+ * (`LegacyTakeoffCanvasRedirect` in App.tsx), so saved URLs land on the
+ * canonical est-canvas editor. See docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md.
  */
 export function takeoffCanvasPath(projectId: string, isDesktop: boolean): string {
   return isDesktop ? `/desktop/canvas/${projectId}` : `/projects/${projectId}/takeoff-mobile`

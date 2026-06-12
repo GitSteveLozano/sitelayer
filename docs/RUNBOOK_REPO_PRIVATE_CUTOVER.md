@@ -28,7 +28,7 @@ consumer already speaks https and no per-host SSH key management is needed.
 **Option 1 — fine-grained PAT (recommended):**
 
 1. GitHub (as Steve) → Settings → Developer settings → Fine-grained personal
-   access tokens → *Generate new token*.
+   access tokens → _Generate new token_.
 2. Name: `sitelayer-deploy-ro`. Resource owner: `GitSteveLozano`.
    Repository access: **Only select repositories → sitelayer**.
 3. Permissions: **Contents: Read-only**. Nothing else. Expiry: 1 year
@@ -117,7 +117,7 @@ so child invocations inherit it automatically.
    deploy rewrites `origin` from the passed env automatically
    (`git remote set-url origin "$SITELAYER_REPO_URL"` runs every deploy on
    both droplets), so no manual step is required. If you flip private and
-   want the checkouts working *before* the first post-cutover deploy, set the
+   want the checkouts working _before_ the first post-cutover deploy, set the
    remote by hand once:
    - prod: `ssh sitelayer@165.245.230.3` →
      `git -C /app/sitelayer remote set-url origin '<URL>'`
@@ -134,9 +134,10 @@ access survives the flip; nothing to do).
 ## (c) Flip the repo private (Steve, 1 min)
 
 GitHub → `GitSteveLozano/sitelayer` → Settings → General → Danger Zone →
-*Change repository visibility* → Private.
+_Change repository visibility_ → Private.
 
 Notes:
+
 - The repo runs **ZERO GitHub Actions** (purged 2026-06-01/02; gates are
   `scripts/verify-local.sh`, `scripts/*lint*`, `.githooks/pre-push`) — so
   there is no Actions/runner entitlement to lose in the flip.
@@ -163,11 +164,11 @@ Run in this order, same day as the flip:
    line shows the redacted URL (`https://***@github.com/...`).
 4. **Dev deploy end-to-end:** push a trivial commit to `dev` (or re-run the
    watcher) and confirm `https://dev.sitelayer.sandolab.xyz/api/version`
-   advances to the new SHA — this proves the *preview-droplet* checkout
+   advances to the new SHA — this proves the _preview-droplet_ checkout
    fetches with the credential.
 5. **Prod deploy path (next scheduled prod ship, or a code-only drill):**
    `scripts/deploy.sh prod` (optionally `SKIP_MIGRATIONS=1`) — proves the
-   *prod-droplet* checkout fetches with the credential.
+   _prod-droplet_ checkout fetches with the credential.
 6. **E2E runner:** `systemctl --user start sitelayer-e2e-runner.service` on
    its host; check `~/.cache/sitelayer-e2e-runner/e2e-runner.log` for
    `VERIFY`/`PASS`, no auth errors.
@@ -179,20 +180,20 @@ to public (visibility is reversible), fix the credential placement, re-flip.
 
 The 2026-06-12 `git rm` removed the client data from HEAD only. **Every blob
 below is still fetchable from history by anyone with read access** (and was
-fetchable by *anyone at all* while the repo was public — treat the contents
+fetchable by _anyone at all_ while the repo was public — treat the contents
 as disclosed; flipping private + rewriting limits future exposure, it does
 not un-leak).
 
 Candidate blobs (SHAs at the pre-removal HEAD of `agent/claude/debt-campaign`):
 
-| Blob SHA | Size | Path (historical) | Contents |
-| --- | --- | --- | --- |
-| `e23ae704baae` | 21 KB | `docs/WhatsApp Chat with LA  Tiny Bison.txt` | full client WhatsApp thread (LA / Tiny Bison) |
-| `cd15b97aeaae` | 312 KB | `docs/WhatsApp Chat with LA _ Tiny Bison.zip` | same thread, zip export (was explicitly allowlisted in `.gitignore`) |
-| `f3b48fece12b` | 1.7 MB | `blueprints_sample/1580_Warde_estimate.pdf` | real customer estimate |
-| `417af5ac3f44` | 136 KB | `blueprints_sample/215_Cinnamon_Colors.pdf` | real customer doc |
-| `b5974e184fca` | 37 KB | `blueprints_sample/Estimate_5981.pdf` | real customer estimate — GST/HST reg. no. 813435252, client address/email |
-| `c11a26c4b5fa` | 1.2 MB | `Sitelayer (2).zip` | the 2026-05-04 web-UI upload incident (commits `43612f3` → deleted in `a80163a` 2 min later) — precedent already documented at `.gitignore` lines 20–27 |
+| Blob SHA       | Size   | Path (historical)                             | Contents                                                                                                                                                |
+| -------------- | ------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `e23ae704baae` | 21 KB  | `docs/WhatsApp Chat with LA  Tiny Bison.txt`  | full client WhatsApp thread (LA / Tiny Bison)                                                                                                           |
+| `cd15b97aeaae` | 312 KB | `docs/WhatsApp Chat with LA _ Tiny Bison.zip` | same thread, zip export (was explicitly allowlisted in `.gitignore`)                                                                                    |
+| `f3b48fece12b` | 1.7 MB | `blueprints_sample/1580_Warde_estimate.pdf`   | real customer estimate                                                                                                                                  |
+| `417af5ac3f44` | 136 KB | `blueprints_sample/215_Cinnamon_Colors.pdf`   | real customer doc                                                                                                                                       |
+| `b5974e184fca` | 37 KB  | `blueprints_sample/Estimate_5981.pdf`         | real customer estimate — GST/HST reg. no. 813435252, client address/email                                                                               |
+| `c11a26c4b5fa` | 1.2 MB | `Sitelayer (2).zip`                           | the 2026-05-04 web-UI upload incident (commits `43612f3` → deleted in `a80163a` 2 min later) — precedent already documented at `.gitignore` lines 20–27 |
 
 **Precedent:** the 05-04 zip was deliberately NOT rewritten ("force-pushing
 all of main wasn't worth it"). The calculus differs now: that blob was a
@@ -226,6 +227,7 @@ git push --force --mirror origin
 ```
 
 After the rewrite:
+
 - GitHub support request to purge cached views/PR refs of the old blobs
   (rewritten blobs can remain reachable by SHA on GitHub until purged).
 - Every checkout must re-clone (or `git fetch && git reset --hard` onto the

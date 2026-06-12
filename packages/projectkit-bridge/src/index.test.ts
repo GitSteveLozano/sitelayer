@@ -214,6 +214,114 @@ describe('buildConcernSnapshot', () => {
   })
 })
 
+// The addressed-dispatch surface the apps/api emit sites route through
+// (capture-sessions.ts `capan:<session>` / admin-work-requests.ts
+// `wi:<id>:<audience>`): concern_ref override, v1.4.0 audience / assignee /
+// acceptance, and caller-supplied executor inputs.
+describe('buildConcernSnapshot — addressed dispatch (concernRef / audience / assignee / acceptance / inputs)', () => {
+  it('honors a concernRef override while keeping the work-item linkage in inputs', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      concernRef: `capan:${CAPTURE_SESSION_ID}`,
+      title: 'Analyze capture',
+      captureSessionId: CAPTURE_SESSION_ID,
+      dispatchedAt: FIXED_AT,
+    })
+    expect(concern.concern_ref).toBe(`capan:${CAPTURE_SESSION_ID}`)
+    // The override must never sever the join back to the work item.
+    expect(concern.inputs?.work_item_id).toBe(WORK_ITEM_ID)
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('defaults concern_ref to workItemId when concernRef is absent/blank', () => {
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X' }).concern_ref).toBe(WORK_ITEM_ID)
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X', concernRef: '  ' }).concern_ref).toBe(
+      WORK_ITEM_ID,
+    )
+    expect(buildConcernSnapshot({ workItemId: WORK_ITEM_ID, title: 'X', concernRef: null }).concern_ref).toBe(
+      WORK_ITEM_ID,
+    )
+  })
+
+  it('carries the v1.4.0 audience / assignee / acceptance fields, contract-valid', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      concernRef: `wi:${WORK_ITEM_ID}:steve`,
+      title: 'Fix the thing',
+      audience: 'steve',
+      assignee: 'steve',
+      acceptance: ['Reproduce the bug', 'Land the fix with a test'],
+      dispatchedAt: FIXED_AT,
+    })
+    expect(concern.audience).toBe('steve')
+    expect(concern.assignee).toBe('steve')
+    expect(concern.acceptance).toEqual(['Reproduce the bug', 'Land the fix with a test'])
+    expect(validateConcern(concern)).toEqual([])
+    expect(requiredFieldProblems(CONCERN_DEF, concern as unknown as Record<string, unknown>)).toEqual([])
+  })
+
+  it('omits audience / assignee / acceptance when blank or empty (never empty-string fields)', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'X',
+      audience: '  ',
+      assignee: null,
+      acceptance: [],
+    })
+    expect(concern.audience).toBeUndefined()
+    expect(concern.assignee).toBeUndefined()
+    expect(concern.acceptance).toBeUndefined()
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('merges caller inputs OVER the derived defaults (caller keys win; defaults survive)', () => {
+    const concern = buildConcernSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'Analyze capture',
+      status: 'new',
+      route: '/derived/route',
+      captureSessionId: CAPTURE_SESSION_ID,
+      inputs: {
+        capture_session_id: 'caller-wins', // collision: caller value wins
+        url: '/caller/url', // caller-only key travels
+        artifacts: [{ kind: 'rrweb', ref: 'art-1' }],
+      },
+    })
+    expect(concern.inputs?.capture_session_id).toBe('caller-wins')
+    expect(concern.inputs?.url).toBe('/caller/url')
+    expect(concern.inputs?.artifacts).toEqual([{ kind: 'rrweb', ref: 'art-1' }])
+    // Derived defaults the caller did not override are still present.
+    expect(concern.inputs?.route).toBe('/derived/route')
+    expect(concern.inputs?.callback_status).toBe('accepted')
+    expect(concern.inputs?.work_item_id).toBe(WORK_ITEM_ID)
+    expect(validateConcern(concern)).toEqual([])
+  })
+
+  it('mirrors audience / assignee / acceptance onto the WorkRequest (and its embedded Concern)', () => {
+    const workRequest = buildWorkRequestSnapshot({
+      workItemId: WORK_ITEM_ID,
+      title: 'X',
+      audience: 'capture-analyzer',
+      assignee: 'capture-analyzer',
+      acceptance: ['Return the analysis'],
+      dispatchedAt: FIXED_AT,
+    })
+    expect(workRequest.audience).toBe('capture-analyzer')
+    expect(workRequest.assignee).toBe('capture-analyzer')
+    expect(workRequest.acceptance).toEqual(['Return the analysis'])
+    const embedded = (workRequest.payload as { concern: { audience?: string; assignee?: string } }).concern
+    expect(embedded.audience).toBe('capture-analyzer')
+    expect(embedded.assignee).toBe('capture-analyzer')
+    expect(validateWorkRequest(workRequest)).toEqual([])
+  })
+
+  it('CONTRACT ENFORCEMENT: an invalid snapshot throws at the builder instead of travelling', () => {
+    // Empty workItemId -> empty concern_ref -> the published validator flags it
+    // and assertContractValid converts that into a loud throw.
+    expect(() => buildConcernSnapshot({ workItemId: '', title: 'X' })).toThrow(/contract validation/)
+  })
+})
+
 describe('buildWorkRequestSnapshot', () => {
   it('embeds the Concern and adds request fields, still contract-valid', () => {
     const workRequest = buildWorkRequestSnapshot({

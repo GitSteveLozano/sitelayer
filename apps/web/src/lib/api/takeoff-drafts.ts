@@ -2,6 +2,7 @@
 // Backed by the routes added in apps/api/src/routes/takeoff-drafts.ts.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { REVIEW_CONFIDENCE_FLOOR } from '../../machines/takeoff-confidence'
 import { ApiError, API_URL, buildAuthHeaders, request, requestBlob } from './client'
 
 export interface TakeoffDraft {
@@ -394,7 +395,7 @@ export function countMarkersFromResult(result: CapturedTakeoffResult | null | un
   // confidence as the floor signal for the whole set. (A future live detector
   // can attach per-instance confidence; this stays additive when it does.)
   const countConfidence = result?.quantities?.[0]?.confidence ?? 1
-  const low = countConfidence < 0.7
+  const low = countConfidence < REVIEW_CONFIDENCE_FLOOR
   const markers: CountMarker[] = []
   for (const o of objects) {
     if (!o || !Array.isArray(o.bbox) || o.bbox.length < 2) continue
@@ -439,13 +440,20 @@ export function draftResultStatus(data: DraftResultResponse | undefined): Captur
 
 const draftResultKey = (draftId: string) => ['takeoff-drafts', 'result', draftId] as const
 
-/** Poll cadence while a live capture is processing on the worker. */
-const DRAFT_RESULT_PROCESSING_POLL_MS = 2_500
+/** Poll cadence while a live capture is processing on the worker. Shared with
+ *  the takeoff-session machine's runCapture poll loop. */
+export const DRAFT_RESULT_PROCESSING_POLL_MS = 2_500
+
+/** THE single draft-result fetch (wave-3 convergence) — used by the
+ *  `useTakeoffDraftResult` query and the machine's runCapture poll loop. */
+export function fetchTakeoffDraftResult(draftId: string): Promise<DraftResultResponse> {
+  return request(`/api/takeoff-drafts/${encodeURIComponent(draftId)}/result`)
+}
 
 export function useTakeoffDraftResult(draftId: string | null | undefined) {
   return useQuery<DraftResultResponse>({
     queryKey: draftResultKey(draftId ?? ''),
-    queryFn: () => request(`/api/takeoff-drafts/${encodeURIComponent(draftId!)}/result`),
+    queryFn: () => fetchTakeoffDraftResult(draftId!),
     enabled: Boolean(draftId),
     // Ready results are immutable for the life of the draft; a refetch
     // is only useful when the operator switches drafts (separate queryKey)
@@ -512,6 +520,27 @@ export function promoteRejectionsFromError(error: unknown): PromoteRejection[] {
   return out
 }
 
+/**
+ * THE single promote call site (wave-3 est-canvas review convergence). Every
+ * promote path — the takeoff-session machine's `promoteCaptured` actor, the
+ * `usePromoteCapturedQuantities` mutation behind AgentSuggestionsPanel, and
+ * the count/auto-takeoff review screens — funnels through this function, so
+ * the endpoint shape can never fork per surface again.
+ */
+export function promoteCapturedQuantities(
+  projectId: string,
+  draftId: string,
+  input: PromoteRequestBody,
+): Promise<PromoteResponse> {
+  return request<PromoteResponse>(
+    `/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/${encodeURIComponent(draftId)}/promote`,
+    {
+      method: 'POST',
+      json: input,
+    },
+  )
+}
+
 export function usePromoteCapturedQuantities(projectId: string, draftId: string | null | undefined) {
   const qc = useQueryClient()
   return useMutation<PromoteResponse, Error, PromoteRequestBody>({
@@ -519,13 +548,7 @@ export function usePromoteCapturedQuantities(projectId: string, draftId: string 
       if (!draftId) {
         throw new Error('draft id is required to promote quantities')
       }
-      return request<PromoteResponse>(
-        `/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/${encodeURIComponent(draftId)}/promote`,
-        {
-          method: 'POST',
-          json: input,
-        },
-      )
+      return promoteCapturedQuantities(projectId, draftId, input)
     },
     onSuccess: () => {
       // Invalidate measurements + estimate views — the new rows belong to
@@ -550,14 +573,20 @@ export function usePromoteCapturedQuantities(projectId: string, draftId: string 
  * the caller must poll the draft via `useTakeoffDraftResult` until the
  * status leaves 'processing'.
  */
+/** THE single JSON capture call site (wave-3 convergence) — used by both the
+ *  `useCaptureTakeoffDraft` mutation and the takeoff-session machine's
+ *  `runCapture` actor (`machines/takeoff-session-deps.ts`). */
+export function captureTakeoffDraft(projectId: string, input: CaptureRequestBody): Promise<CaptureResponse> {
+  return request<CaptureResponse>(`/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/capture`, {
+    method: 'POST',
+    json: input,
+  })
+}
+
 export function useCaptureTakeoffDraft(projectId: string) {
   const qc = useQueryClient()
   return useMutation<CaptureResponse, Error, CaptureRequestBody>({
-    mutationFn: (input) =>
-      request<CaptureResponse>(`/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/capture`, {
-        method: 'POST',
-        json: input,
-      }),
+    mutationFn: (input) => captureTakeoffDraft(projectId, input),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['takeoff-drafts', 'by-project', projectId] })
     },
