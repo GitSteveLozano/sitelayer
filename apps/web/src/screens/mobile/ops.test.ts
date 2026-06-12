@@ -7,11 +7,14 @@ import {
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
   formatDesktopEvidenceSummary,
+  resolveLatestDesktopEvidence,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
   OpsOnsiteDiagnosticAgentFeedDelivery,
   OpsOnsiteDiagnosticDesktopEvidenceResult,
+  OpsOnsiteDiagnosticSessionActionResponse,
+  OpsOnsiteDiagnosticSessionRecord,
   OpsOnsiteDiagnosticSessionPlan,
 } from '@/lib/api'
 
@@ -73,6 +76,36 @@ function plan(overrides: Partial<OpsOnsiteDiagnosticSessionPlan> = {}): OpsOnsit
   }
 }
 
+function session(overrides: Partial<OpsOnsiteDiagnosticSessionRecord> = {}): OpsOnsiteDiagnosticSessionRecord {
+  return {
+    id: 'diag-session-1',
+    state: 'active',
+    created_at: '2026-06-12T12:00:00.000Z',
+    expires_at: '2026-06-12T13:00:00.000Z',
+    operator_user_id: 'user_42',
+    label: 'Mobile ops',
+    intent: 'capture_desktop_context',
+    plan: plan(),
+    audit_events: [],
+    agent_feed_deliveries: [],
+    ...overrides,
+  }
+}
+
+function actionResponse(
+  overrides: Partial<OpsOnsiteDiagnosticSessionActionResponse['accepted_action']> = {},
+): OpsOnsiteDiagnosticSessionActionResponse {
+  return {
+    schema: 'sitelayer.ops_diagnostic_session_action.v1',
+    session: session(),
+    accepted_action: {
+      key: 'capture_desktop_context',
+      effect: 'audit_only',
+      ...overrides,
+    },
+  }
+}
+
 describe('MobileOps agent-feed delivery copy', () => {
   it('shows no-callback state for stale claimed onsite actions', () => {
     const state = delivery({
@@ -118,6 +151,23 @@ describe('MobileOps desktop evidence copy', () => {
     expect(formatDesktopEvidenceSummary(desktopEvidence({ status: 'failed', error: 'screen capture timeout' }))).toBe(
       'Attach failed: screen capture timeout',
     )
+  })
+
+  it('falls back to rehydrated session desktop evidence after refresh', () => {
+    const persisted = desktopEvidence({ artifact_id: 'persisted-artifact' })
+    const fresh = desktopEvidence({ artifact_id: 'fresh-artifact' })
+
+    expect(resolveLatestDesktopEvidence(null, session({ desktop_evidence: persisted }))?.artifact_id).toBe(
+      'persisted-artifact',
+    )
+    expect(
+      resolveLatestDesktopEvidence(
+        actionResponse({
+          desktop_evidence: fresh,
+        }),
+        session({ desktop_evidence: persisted }),
+      )?.artifact_id,
+    ).toBe('fresh-artifact')
   })
 })
 

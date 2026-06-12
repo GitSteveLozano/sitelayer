@@ -69,6 +69,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
+  desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult | null
 }
 
 export type OpsOnsiteDiagnosticSessionCreateInput = {

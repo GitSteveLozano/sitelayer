@@ -245,7 +245,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         null)
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
-  const latestDesktopEvidence = lastDiagnosticAction?.accepted_action.desktop_evidence ?? null
+  const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
   const fieldReadinessItems = buildFieldReadinessItems({
@@ -918,6 +918,13 @@ export function formatDesktopEvidenceSummary(evidence: OpsOnsiteDiagnosticDeskto
 
 export function canOpenDesktopEvidence(evidence: OpsOnsiteDiagnosticDesktopEvidenceResult): boolean {
   return Boolean(evidence.capture_session_id && evidence.artifact_id && evidence.file_path && evidence.status === 'attached')
+}
+
+export function resolveLatestDesktopEvidence(
+  action: OpsOnsiteDiagnosticSessionActionResponse | null,
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): OpsOnsiteDiagnosticDesktopEvidenceResult | null {
+  return action?.accepted_action.desktop_evidence ?? session?.desktop_evidence ?? null
 }
 
 function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {
