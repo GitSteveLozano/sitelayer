@@ -94,6 +94,16 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   id: string | null
 }
 
+export type OpsOnsiteDiagnosticCaptureRouteResult = {
+  request_ref: string
+  delivery_id: string
+  status: 'accepted' | 'failed' | 'not_configured'
+  http_status: number | null
+  routed: boolean | null
+  accepted: number | null
+  error: string | null
+}
+
 export type OpsOnsiteDiagnosticActionRequestInput = {
   action_key: OpsOnsiteDiagnosticActionKey
   control_token: string
@@ -105,6 +115,7 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
 }

@@ -154,6 +154,7 @@ export {
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticAgentFeedResult,
   type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticCaptureRouteResult,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionCreateInput,
   type OpsOnsiteDiagnosticSessionCreateResponse,

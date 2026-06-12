@@ -90,17 +90,22 @@ Mobile Ops Field checklist should be read before walking onsite:
 
 1. If Mobile Ops is blocked, use the listed blocker first; do not force an
    action the plan marks disabled.
-2. If routing is not configured, continue audit-only and copy the support
+2. If the action response shows `accepted_action.capture_route.status=failed`,
+   fix the capture-router before assuming the executor saw the request.
+3. If routing is not configured, continue audit-only and copy the support
    packet manually.
-3. If routing is configured but no Concern arrives, verify the audience triplet
+4. If routing is configured but no Concern arrives, verify the audience triplet
    above and restart only the API container after env changes.
-4. If the workstation executor is down, restart the pull executor; the feed is
+5. If the workstation executor is down, restart the pull executor; the feed is
    pull-based and will not require SSH into the workstation.
 
 ## Verifying Recovery
 
 - Start an onsite session from Mobile Ops.
 - Request `dispatch_agent_review`.
+- The action response includes `accepted_action.capture_route.status=accepted`
+  and a deterministic `request_ref` shaped like
+  `opsdiag:<session_id>:dispatch_agent_review`.
 - The action response includes `accepted_action.agent_feed.queued=true`.
 - The executor receives one Concern whose `inputs` includes
   `ops_diagnostic_session_id`.

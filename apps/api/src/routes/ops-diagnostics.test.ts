@@ -92,6 +92,20 @@ function blockedFetch(): typeof fetch {
   }
 }
 
+function routedFetch(
+  deliveries: unknown[],
+  routeResponse: Response = json({ routed: true }, { status: 202 }),
+): typeof fetch {
+  return async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/ingest')) {
+      deliveries.push(JSON.parse(String(init?.body ?? '{}')))
+      return routeResponse.clone()
+    }
+    return greenFetch()(input, init)
+  }
+}
+
 describe('ops diagnostics', () => {
   it('summarizes local control-plane primitives without returning raw details', async () => {
     const fetchImpl: typeof fetch = async (input) => {
@@ -294,9 +308,11 @@ describe('ops diagnostics', () => {
     })
   })
 
-  it('records token-gated onsite diagnostic action requests as audit-only events', async () => {
+  it('records token-gated onsite diagnostic actions and routes a capture WorkRequest', async () => {
     await withReadyOpsAgentFeed(async () => {
       __resetOpsDiagnosticSessionsForTests()
+      const routedEnvelopes: unknown[] = []
+      const fetchImpl = routedFetch(routedEnvelopes)
       const createdResponses: Array<{ status: number; body: unknown }> = []
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
@@ -306,7 +322,7 @@ describe('ops diagnostics', () => {
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({}),
           getCurrentUserId: () => 'user_42',
-          fetchImpl: greenFetch(),
+          fetchImpl,
         },
       )
       const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
@@ -326,13 +342,23 @@ describe('ops diagnostics', () => {
             action_key: 'dispatch_agent_review',
           }),
           getCurrentUserId: () => 'user_99',
+          fetchImpl,
         },
       )
 
       expect(actionResponses[0]?.status).toBe(202)
       expect(actionResponses[0]?.body).toMatchObject({
         schema: 'sitelayer.ops_diagnostic_session_action.v1',
-        accepted_action: { key: 'dispatch_agent_review', effect: 'audit_only' },
+        accepted_action: {
+          key: 'dispatch_agent_review',
+          effect: 'audit_only',
+          capture_route: {
+            status: 'accepted',
+            request_ref: `opsdiag:${created.session.id}:dispatch_agent_review`,
+            routed: true,
+            http_status: 202,
+          },
+        },
         session: {
           audit_events: [
             expect.objectContaining({ type: 'session.started' }),
@@ -344,6 +370,32 @@ describe('ops diagnostics', () => {
             }),
           ],
         },
+      })
+      expect(routedEnvelopes).toHaveLength(1)
+      expect(routedEnvelopes[0]).toMatchObject({
+        contract_version: '1.4.0',
+        project_key: 'sitelayer',
+        delivery_id: expect.stringContaining(`opsdiag:${created.session.id}:dispatch_agent_review:`),
+        events: [
+          expect.objectContaining({
+            event_type: 'sitelayer.ops_diagnostic.dispatch_agent_review.requested',
+            domain: 'workflow_event',
+            outcome: 'requested',
+            payload: {
+              work_request: expect.objectContaining({
+                request_ref: `opsdiag:${created.session.id}:dispatch_agent_review`,
+                intent: 'review',
+                entity_kind: 'ops_diagnostic_session',
+                entity_id: created.session.id,
+                payload: expect.objectContaining({
+                  requested_action: 'dispatch_agent_review',
+                  requested_by: 'user_99',
+                  ops_diagnostic_session_id: created.session.id,
+                }),
+              }),
+            },
+          }),
+        ],
       })
 
       const deniedResponses: Array<{ status: number; body: unknown }> = []
@@ -360,6 +412,57 @@ describe('ops diagnostics', () => {
         },
       )
       expect(deniedResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+    })
+  })
+
+  it('keeps the phone action accepted when capture-router delivery fails', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      __resetOpsDiagnosticSessionsForTests()
+      const routedEnvelopes: unknown[] = []
+      const fetchImpl = routedFetch(routedEnvelopes, json({ error: 'router unavailable' }, { status: 503 }))
+      const createdResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL('http://localhost/api/ops/diagnostics/sessions'),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => createdResponses.push({ status, body }),
+          readBody: async () => ({ intent: 'capture_desktop_context' }),
+          getCurrentUserId: () => 'user_42',
+          fetchImpl,
+        },
+      )
+      const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
+
+      const actionResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => actionResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: created.control_token,
+            action_key: 'capture_desktop_context',
+          }),
+          getCurrentUserId: () => 'user_99',
+          fetchImpl,
+        },
+      )
+
+      expect(actionResponses[0]?.status).toBe(202)
+      expect(actionResponses[0]?.body).toMatchObject({
+        accepted_action: {
+          key: 'capture_desktop_context',
+          effect: 'audit_only',
+          capture_route: {
+            status: 'failed',
+            http_status: 503,
+            error: 'router unavailable',
+          },
+        },
+      })
+      expect(routedEnvelopes).toHaveLength(1)
     })
   })
 

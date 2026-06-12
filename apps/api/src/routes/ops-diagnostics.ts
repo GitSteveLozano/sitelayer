@@ -2,7 +2,15 @@ import type http from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { Capability } from '@sitelayer/domain'
-import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
+import {
+  CONTRACT_VERSION,
+  validateProjectEvent,
+  validateWorkRequest,
+  type Concern,
+  type ProjectEvent,
+  type ProjectEventEnvelope,
+  type WorkRequest,
+} from '@operator/projectkit'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { AGENT_FEED_TOKENS_ENV, insertAgentFeedConcernTx, parseAgentFeedTokens } from './agent-feed.js'
@@ -77,8 +85,19 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
+}
+
+export type OpsOnsiteDiagnosticCaptureRouteResult = {
+  request_ref: string
+  delivery_id: string
+  status: 'accepted' | 'failed' | 'not_configured'
+  http_status: number | null
+  routed: boolean | null
+  accepted: number | null
+  error: string | null
 }
 
 export type OpsOnsiteDiagnosticAgentFeedResult = {
@@ -470,6 +489,13 @@ async function recordOnsiteDiagnosticAction(
       actorUserId,
     )
     if (!persisted) return { ok: false, status: 404, error: 'diagnostic session not found' }
+    const captureRoute = await deliverOnsiteDiagnosticCaptureRoute(diagnosticsOptions(ctx), {
+      session: persisted.session,
+      event: persisted.event,
+      actionKey,
+      actionLabel: action.label,
+      actorUserId,
+    })
     return {
       ok: true,
       value: {
@@ -478,19 +504,31 @@ async function recordOnsiteDiagnosticAction(
         accepted_action: {
           key: actionKey,
           effect: 'audit_only',
+          ...(captureRoute ? { capture_route: captureRoute } : {}),
           ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
         },
       },
     }
   }
 
-  recordMemoryOnsiteDiagnosticAction(session, actionKey, action.label, actorUserId)
+  const event = recordMemoryOnsiteDiagnosticAction(session, actionKey, action.label, actorUserId)
+  const captureRoute = await deliverOnsiteDiagnosticCaptureRoute(diagnosticsOptions(ctx), {
+    session,
+    event,
+    actionKey,
+    actionLabel: action.label,
+    actorUserId,
+  })
   return {
     ok: true,
     value: {
       schema: 'sitelayer.ops_diagnostic_session_action.v1',
       session: publicSession(session),
-      accepted_action: { key: actionKey, effect: 'audit_only' },
+      accepted_action: {
+        key: actionKey,
+        effect: 'audit_only',
+        ...(captureRoute ? { capture_route: captureRoute } : {}),
+      },
     },
   }
 }
@@ -500,9 +538,9 @@ function recordMemoryOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
-): void {
+): OpsOnsiteDiagnosticAuditEvent {
   const at = new Date().toISOString()
-  session.audit_events.push({
+  const event: OpsOnsiteDiagnosticAuditEvent = {
     id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
     at,
     actor_user_id: actorUserId,
@@ -510,7 +548,9 @@ function recordMemoryOnsiteDiagnosticAction(
     action_key: actionKey,
     effect: 'audit_only',
     summary: `Requested ${actionLabel}.`,
-  })
+  }
+  session.audit_events.push(event)
+  return event
 }
 
 async function recordPersistentOnsiteDiagnosticAction(
@@ -519,7 +559,11 @@ async function recordPersistentOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
-): Promise<{ session: StoredOnsiteDiagnosticSession; agentFeed: OpsOnsiteDiagnosticAgentFeedResult | null } | null> {
+): Promise<{
+  session: StoredOnsiteDiagnosticSession
+  event: OpsOnsiteDiagnosticAuditEvent
+  agentFeed: OpsOnsiteDiagnosticAgentFeedResult | null
+} | null> {
   const at = new Date().toISOString()
   const event: OpsOnsiteDiagnosticAuditEvent = {
     id: randomUUID(),
@@ -563,6 +607,7 @@ async function recordPersistentOnsiteDiagnosticAction(
       audit_events: [...session.audit_events, event],
       agent_feed_deliveries: result.deliveries,
     },
+    event,
     agentFeed: result.agentFeed,
   }
 }
@@ -630,6 +675,207 @@ function routedAgentFeedConcernRefs(sessionId: string): string[] {
   return (['route_support_packet', 'dispatch_agent_review'] satisfies OpsOnsiteDiagnosticActionKey[]).map(
     (actionKey) => `opsdiag:${sessionId}:${actionKey}`,
   )
+}
+
+function routesToCaptureRouter(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
+  return (
+    actionKey === 'capture_desktop_context' ||
+    actionKey === 'route_support_packet' ||
+    actionKey === 'dispatch_agent_review'
+  )
+}
+
+async function deliverOnsiteDiagnosticCaptureRoute(
+  opts: OpsDiagnosticsBuildOptions,
+  args: {
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+  },
+): Promise<OpsOnsiteDiagnosticCaptureRouteResult | null> {
+  if (!routesToCaptureRouter(args.actionKey)) return null
+  const routerUrl = trimTrailingSlash(opts.captureRouterUrl ?? '')
+  const fallbackRequestRef = `opsdiag:${args.session.id}:${args.actionKey}`
+  let envelope: ProjectEventEnvelope
+  try {
+    envelope = buildOnsiteDiagnosticCaptureEnvelope(args)
+  } catch (err) {
+    return {
+      request_ref: fallbackRequestRef,
+      delivery_id: `${fallbackRequestRef}:${args.event.id}`,
+      status: 'failed',
+      http_status: null,
+      routed: null,
+      accepted: null,
+      error: err instanceof Error ? err.message : 'capture route envelope build failed',
+    }
+  }
+  const workRequest = objectValue(envelope.events[0]?.payload)?.work_request as WorkRequest | undefined
+  const requestRef = typeof workRequest?.request_ref === 'string' ? workRequest.request_ref : fallbackRequestRef
+  const deliveryId = envelope.delivery_id ?? requestRef
+  if (!routerUrl) {
+    return {
+      request_ref: requestRef,
+      delivery_id: deliveryId,
+      status: 'not_configured',
+      http_status: null,
+      routed: null,
+      accepted: null,
+      error: 'capture router is not configured',
+    }
+  }
+
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetchImpl(`${routerUrl}/ingest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelope),
+      signal: controller.signal,
+    })
+    const body = await response.json().catch(() => null)
+    const bodyObject = objectValue(body)
+    const routed = booleanValue(bodyObject?.routed)
+    const accepted = numberValue(bodyObject?.accepted)
+    const error = statusValue(bodyObject?.error) ?? statusValue(bodyObject?.reason)
+    return {
+      request_ref: requestRef,
+      delivery_id: deliveryId,
+      status: response.ok && routed !== false ? 'accepted' : 'failed',
+      http_status: response.status,
+      routed,
+      accepted,
+      error: response.ok ? error : (error ?? `HTTP ${response.status}`),
+    }
+  } catch (err) {
+    const error =
+      err instanceof Error && err.name === 'AbortError'
+        ? 'timeout'
+        : err instanceof Error
+          ? err.message
+          : 'capture router delivery failed'
+    return {
+      request_ref: requestRef,
+      delivery_id: deliveryId,
+      status: 'failed',
+      http_status: null,
+      routed: null,
+      accepted: null,
+      error,
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function buildOnsiteDiagnosticCaptureEnvelope(args: {
+  session: StoredOnsiteDiagnosticSession
+  event: OpsOnsiteDiagnosticAuditEvent
+  actionKey: OpsOnsiteDiagnosticActionKey
+  actionLabel: string
+  actorUserId: string | null
+}): ProjectEventEnvelope {
+  const requestedAt = args.event.at
+  const requestRef = `opsdiag:${args.session.id}:${args.actionKey}`
+  const deliveryId = `${requestRef}:${args.event.id}`
+  const workRequest: WorkRequest = {
+    schema_version: CONTRACT_VERSION,
+    project_key: 'sitelayer',
+    requested_at: requestedAt,
+    request_ref: requestRef,
+    intent: onsiteActionWorkIntent(args.actionKey),
+    title: `${args.actionLabel} for onsite diagnostics`,
+    summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
+    priority: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    route_path: '/ops',
+    entity_kind: 'ops_diagnostic_session',
+    entity_id: args.session.id,
+    source_event_ref: `ops_diagnostic_session:${args.session.id}`,
+    sensitivity: 'internal',
+    acceptance: onsiteActionAcceptance(args.actionKey),
+    payload: {
+      ops_diagnostic_session_id: args.session.id,
+      action_event_id: args.event.id,
+      requested_action: args.actionKey,
+      requested_by: args.actorUserId,
+      plan_status: args.session.plan.status,
+      control_level: args.session.plan.control_level,
+      recommended_entry: args.session.plan.recommended_entry,
+      can_capture_desktop: args.session.plan.can_capture_desktop,
+      can_route_work: args.session.plan.can_route_work,
+      can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
+      blockers: args.session.plan.blockers,
+      ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
+    },
+  }
+  const workProblems = validateWorkRequest(workRequest)
+  if (workProblems.length > 0) {
+    throw new Error(`onsite WorkRequest contract violation: ${workProblems.join('; ')}`)
+  }
+
+  const event: ProjectEvent = {
+    schema_version: CONTRACT_VERSION,
+    event_type: `sitelayer.ops_diagnostic.${args.actionKey}.requested`,
+    project_key: 'sitelayer',
+    occurred_at: requestedAt,
+    domain: 'workflow_event',
+    outcome: 'requested',
+    environment: process.env.APP_TIER ?? process.env.NODE_ENV ?? 'unknown',
+    source_surface: 'mobile_ops',
+    route_path: '/ops',
+    actor_kind: 'operator',
+    principal_id: args.actorUserId,
+    entity_kind: 'ops_diagnostic_session',
+    entity_id: args.session.id,
+    action: args.actionKey,
+    summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
+    sensitivity: 'internal',
+    redaction_status: 'summary_only',
+    payload: { work_request: workRequest },
+  }
+  const eventProblems = validateProjectEvent(event)
+  if (eventProblems.length > 0) {
+    throw new Error(`onsite ProjectEvent contract violation: ${eventProblems.join('; ')}`)
+  }
+
+  return {
+    contract_version: CONTRACT_VERSION,
+    project_key: 'sitelayer',
+    emitted_at: requestedAt,
+    producer: { name: 'sitelayer.ops-diagnostics' },
+    delivery_id: deliveryId,
+    events: [event],
+  }
+}
+
+function onsiteActionWorkIntent(actionKey: OpsOnsiteDiagnosticActionKey): string {
+  if (actionKey === 'dispatch_agent_review') return 'review'
+  if (actionKey === 'route_support_packet') return 'investigate'
+  return 'capture-followup'
+}
+
+function onsiteActionAcceptance(actionKey: OpsOnsiteDiagnosticActionKey): string[] {
+  if (actionKey === 'capture_desktop_context') {
+    return [
+      'Inspect available screen-capture context for the onsite diagnostic session.',
+      'Return the shortest phone-safe next step, or explain why no desktop evidence is available.',
+    ]
+  }
+  if (actionKey === 'route_support_packet') {
+    return [
+      'Inspect the onsite diagnostic session plan and blockers.',
+      'Route the relevant support packet or explain which prerequisite is missing.',
+    ]
+  }
+  return [
+    'Inspect the onsite diagnostic session plan and blockers.',
+    'Return a callback with the next phone-safe operator action or a clear reason no action is possible.',
+  ]
 }
 
 function actionKeyFromConcernRef(concernRef: string): OpsOnsiteDiagnosticActionKey | null {
@@ -1263,6 +1509,10 @@ function statusValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null
 }
 
 function statusDetail(probe: ProbeResult): string {

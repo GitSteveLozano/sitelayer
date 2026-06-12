@@ -29,8 +29,10 @@ import {
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticCaptureRouteResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
   type WorkItemStatus,
@@ -78,6 +80,9 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const buildSha = getBuildSha()
   const [activeDiagnosticSession, setActiveDiagnosticSession] = useState<OpsOnsiteDiagnosticSessionRecord | null>(null)
   const [diagnosticControlToken, setDiagnosticControlToken] = useState<string | null>(null)
+  const [lastDiagnosticAction, setLastDiagnosticAction] = useState<OpsOnsiteDiagnosticSessionActionResponse | null>(
+    null,
+  )
 
   const work = useQuery({
     queryKey: queryKeys.workRequests.list({ limit: 75 }),
@@ -142,6 +147,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   useEffect(() => {
     setActiveDiagnosticSession(null)
     setDiagnosticControlToken(null)
+    setLastDiagnosticAction(null)
   }, [companySlug])
   useEffect(() => {
     if (!canCaptureAppIssues) return
@@ -164,6 +170,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     onSuccess: (response) => {
       setActiveDiagnosticSession(response.session)
       setDiagnosticControlToken(response.control_token)
+      setLastDiagnosticAction(null)
       persistOpsDiagnosticControl(companySlug, response.session, response.control_token)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
@@ -182,6 +189,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     },
     onSuccess: (response) => {
       setActiveDiagnosticSession(response.session)
+      setLastDiagnosticAction(response)
       if (diagnosticControlToken) persistOpsDiagnosticControl(companySlug, response.session, diagnosticControlToken)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
     },
@@ -222,6 +230,8 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         null)
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
+  const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
+  const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
   const fieldReadinessItems = buildFieldReadinessItems({
     online,
     hasDiagnosticControl,
@@ -329,6 +339,14 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
               headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
               supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
+            />
+          ) : null}
+          {latestCaptureRoute && latestCaptureRouteAction ? (
+            <MListRow
+              leading={<MI.Layers size={18} />}
+              leadingTone={captureRouteTone(latestCaptureRoute)}
+              headline={formatCaptureRouteHeadline(latestCaptureRouteAction)}
+              supporting={formatCaptureRouteSummary(latestCaptureRoute)}
             />
           ) : null}
           <MListRow
@@ -839,6 +857,26 @@ function formatDiagnosticSessionControl(
 function formatDiagnosticActionSummary(action: { enabled: boolean; reason: string }, pending: boolean): string {
   if (pending) return 'Audit event pending.'
   return action.reason
+}
+
+function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {
+  if (route.status === 'accepted') return 'green'
+  if (route.status === 'not_configured') return 'amber'
+  return 'red'
+}
+
+function formatCaptureRouteHeadline(actionKey: OpsOnsiteDiagnosticActionKey): string {
+  return `${diagnosticActionName(actionKey)} route`
+}
+
+function formatCaptureRouteSummary(route: OpsOnsiteDiagnosticCaptureRouteResult): string {
+  if (route.status === 'accepted') {
+    return route.routed === false
+      ? 'Router accepted the envelope without a work request.'
+      : 'Capture router accepted it.'
+  }
+  if (route.status === 'not_configured') return 'Capture router is not configured.'
+  return route.error ? `Route failed: ${route.error}` : 'Capture router did not accept it.'
 }
 
 function latestDiagnosticDelivery(
