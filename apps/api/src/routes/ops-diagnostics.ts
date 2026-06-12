@@ -5,7 +5,7 @@ import type { Capability } from '@sitelayer/domain'
 import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { insertAgentFeedConcernTx } from './agent-feed.js'
+import { AGENT_FEED_TOKENS_ENV, insertAgentFeedConcernTx, parseAgentFeedTokens } from './agent-feed.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -117,6 +117,16 @@ type ProbeResult = {
   http_status: number | null
   body: unknown
   error: string | null
+}
+
+type OpsDiagnosticsBuildOptions = {
+  fetchImpl?: typeof fetch
+  timeoutMs?: number
+  gatewayDiagnosticsUrl?: string
+  screenCaptureUrl?: string
+  captureRouterUrl?: string
+  agentFeedTokensEnv?: string | undefined
+  diagnosticAgentAudience?: string | null | undefined
 }
 
 const DEFAULT_TIMEOUT_MS = 900
@@ -240,8 +250,8 @@ export async function handleOpsDiagnosticsRoutes(
   return false
 }
 
-function diagnosticsOptions(ctx: OpsDiagnosticsRouteCtx): Parameters<typeof buildOpsDiagnostics>[0] {
-  const options: Parameters<typeof buildOpsDiagnostics>[0] = {
+function diagnosticsOptions(ctx: OpsDiagnosticsRouteCtx): OpsDiagnosticsBuildOptions {
+  const options: OpsDiagnosticsBuildOptions = {
     timeoutMs: readTimeoutMs(),
     gatewayDiagnosticsUrl: firstNonEmpty(
       process.env.SITELAYER_OPS_GATEWAY_DIAGNOSTICS_URL,
@@ -250,20 +260,14 @@ function diagnosticsOptions(ctx: OpsDiagnosticsRouteCtx): Parameters<typeof buil
     ),
     screenCaptureUrl: firstNonEmpty(process.env.SITELAYER_OPS_SCREEN_CAPTURE_URL, 'http://127.0.0.1:4357'),
     captureRouterUrl: firstNonEmpty(process.env.SITELAYER_OPS_CAPTURE_ROUTER_URL, 'http://127.0.0.1:8814'),
+    agentFeedTokensEnv: process.env[AGENT_FEED_TOKENS_ENV],
+    diagnosticAgentAudience: process.env[OPS_DIAGNOSTIC_AGENT_AUDIENCE_ENV],
   }
   if (ctx.fetchImpl) options.fetchImpl = ctx.fetchImpl
   return options
 }
 
-export async function buildOpsDiagnostics(
-  opts: {
-    fetchImpl?: typeof fetch
-    timeoutMs?: number
-    gatewayDiagnosticsUrl?: string
-    screenCaptureUrl?: string
-    captureRouterUrl?: string
-  } = {},
-): Promise<OpsDiagnosticsResponse> {
+export async function buildOpsDiagnostics(opts: OpsDiagnosticsBuildOptions = {}): Promise<OpsDiagnosticsResponse> {
   const fetchImpl = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const gatewayDiagnosticsUrl = trimTrailingSlash(opts.gatewayDiagnosticsUrl ?? '')
@@ -280,6 +284,7 @@ export async function buildOpsDiagnostics(
     summarizeGatewayDiagnostics(gatewayProbe),
     summarizeScreenCapture(screenProbe),
     summarizeCaptureRouter(routerProbe),
+    summarizeAgentFeedRouting(opts.diagnosticAgentAudience, opts.agentFeedTokensEnv),
   ]
   const summary = {
     total: components.length,
@@ -885,6 +890,81 @@ function summarizeCaptureRouter(probe: ProbeResult): OpsDiagnosticComponent {
   }
 }
 
+function summarizeAgentFeedRouting(
+  audienceRaw: string | null | undefined,
+  tokensRaw: string | undefined,
+): OpsDiagnosticComponent {
+  const audience = boundedString(audienceRaw, 80)
+  const tokens = parseAgentFeedTokens(tokensRaw)
+  const audienceCount = tokens?.size ?? 0
+  const audienceHasToken = Boolean(audience && tokens?.has(audience))
+
+  if (!audience) {
+    return agentFeedComponent(
+      'degraded',
+      'No onsite diagnostic agent audience configured; routed actions will stay audit-only.',
+      false,
+      Boolean(tokens),
+      audienceHasToken,
+      audienceCount,
+    )
+  }
+
+  if (!tokens) {
+    return agentFeedComponent(
+      'degraded',
+      'Agent feed tokens are not configured or invalid.',
+      true,
+      false,
+      audienceHasToken,
+      audienceCount,
+    )
+  }
+
+  if (!audienceHasToken) {
+    return agentFeedComponent(
+      'degraded',
+      'Configured onsite diagnostic audience has no agent-feed token.',
+      true,
+      true,
+      false,
+      audienceCount,
+    )
+  }
+
+  return agentFeedComponent(
+    'ok',
+    'Onsite diagnostic audience has an agent-feed token.',
+    true,
+    true,
+    true,
+    audienceCount,
+  )
+}
+
+function agentFeedComponent(
+  status: OpsDiagnosticStatus,
+  detail: string,
+  audienceConfigured: boolean,
+  tokensConfigured: boolean,
+  audienceHasToken: boolean,
+  audienceCount: number,
+): OpsDiagnosticComponent {
+  return {
+    key: 'agent_feed',
+    label: 'Agent Feed',
+    status,
+    detail,
+    latency_ms: null,
+    facts: {
+      audience_configured: audienceConfigured,
+      tokens_configured: tokensConfigured,
+      audience_has_token: audienceHasToken,
+      audience_count: audienceCount,
+    },
+  }
+}
+
 function baseComponent(key: string, label: string, probe: ProbeResult, detail: string): OpsDiagnosticComponent {
   return {
     key,
@@ -904,16 +984,19 @@ function buildOnsiteDiagnosticSessionPlan(
   const gateway = componentByKey(components, 'gateway')
   const screenCapture = componentByKey(components, 'screen_capture')
   const captureRouter = componentByKey(components, 'capture_router')
+  const agentFeed = componentByKey(components, 'agent_feed')
   const gatewayOk = gateway?.status === 'ok'
   const screenOk = screenCapture?.status === 'ok' && screenCapture.facts.recording === true
   const routerOk = captureRouter?.status === 'ok'
   const routerHasSink = typeof captureRouter?.facts.sinks === 'string' && captureRouter.facts.sinks.length > 0
-  const canRouteWork = routerOk && routerHasSink
+  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_has_token === true
+  const canRouteWork = routerOk && routerHasSink && agentFeedReady
   const canDispatchAgentReview = gatewayOk && canRouteWork
   const blockers = [
     ...componentBlockers(gateway),
     ...componentBlockers(screenCapture),
     ...componentBlockers(captureRouter),
+    ...componentBlockers(agentFeed),
     ...(routerOk && !routerHasSink ? ['Capture router is healthy but has no active sink.'] : []),
   ]
 
@@ -934,13 +1017,19 @@ function buildOnsiteDiagnosticSessionPlan(
       key: 'route_support_packet',
       label: 'Route support packet',
       enabled: canRouteWork,
-      reason: canRouteWork ? 'Capture router has an active sink.' : 'Capture router cannot accept routed work.',
+      reason: canRouteWork
+        ? 'Capture router has an active sink and an agent-feed audience is ready.'
+        : routerOk && routerHasSink
+          ? 'Agent feed is not ready for routed work.'
+          : 'Capture router cannot accept routed work.',
     },
     {
       key: 'dispatch_agent_review',
       label: 'Dispatch agent review',
       enabled: canDispatchAgentReview,
-      reason: canDispatchAgentReview ? 'Gateway and routing are ready.' : 'Gateway and routing are not both ready.',
+      reason: canDispatchAgentReview
+        ? 'Gateway, capture router, and agent feed are ready.'
+        : 'Gateway, capture router, and agent feed are not all ready.',
     },
   ]
 
