@@ -917,7 +917,9 @@ export function formatDesktopEvidenceSummary(evidence: OpsOnsiteDiagnosticDeskto
 }
 
 export function canOpenDesktopEvidence(evidence: OpsOnsiteDiagnosticDesktopEvidenceResult): boolean {
-  return Boolean(evidence.capture_session_id && evidence.artifact_id && evidence.file_path && evidence.status === 'attached')
+  return Boolean(
+    evidence.capture_session_id && evidence.artifact_id && evidence.file_path && evidence.status === 'attached',
+  )
 }
 
 function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {
