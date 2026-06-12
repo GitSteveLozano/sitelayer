@@ -626,7 +626,7 @@ export async function handleRentalRequestRoutes(
       // and loadSnapshot hands back the row we already locked above (no
       // second SELECT). The rental conversion happens in `persist` BEFORE
       // the rental_requests UPDATE — same within-tx order as before.
-      let createdRentals: RentalRow[] = []
+      const createdRentals: RentalRow[] = []
       let eventNowIso = ''
       try {
         const dispatched = await dispatchWorkflowEvent<
