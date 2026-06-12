@@ -86,6 +86,7 @@ const HEALTH_DISPATCH_STATUSES = ['pending', 'processing', 'failed', 'dead'] as 
 const HANDOFF_PACKET_AUDIENCES = ['operator', 'mesh', 'collaborator', 'github'] as const
 
 type HandoffPacketAudience = (typeof HANDOFF_PACKET_AUDIENCES)[number]
+type DiagnosticCheckStatus = 'ok' | 'pending' | 'warn' | 'error' | 'missing'
 
 type DispatchOutboxSummary = {
   id: string
@@ -157,6 +158,49 @@ type WorkRequestBriefTimelineEntry = {
   payload_keys: string[]
 }
 
+type WorkRequestDiagnosticManifest = {
+  schema: 'sitelayer.work_request_diagnostic_manifest.v1'
+  generated_at: string
+  work_item_id: string
+  capture_session_id: string | null
+  operator_next_step: string
+  needs_attention: boolean
+  readiness: {
+    support_packet: 'ready' | 'missing'
+    capture_session: 'ready' | 'not_captured'
+    artifact_analysis: 'ready' | 'pending' | 'failed' | 'missing'
+    dispatch: string
+    callback: 'available_after_dispatch' | 'scoped_callback_ready'
+  }
+  source: {
+    route: string | null
+    request_id: string | null
+    build_sha: string | null
+    entity_type: string | null
+    entity_id: string | null
+  }
+  evidence: {
+    refs: Array<{ type: string; id: string }>
+    timeline_total: number
+    timeline_truncated: boolean
+    artifact_analysis: {
+      status: string | null
+      eligible_artifact_count: number | null
+      processed_artifact_count: number | null
+      pending_artifact_count: number | null
+      audio_mode: string | null
+      video_mode: string | null
+      updated_at: string | null
+    }
+  }
+  checks: Array<{
+    key: string
+    label: string
+    status: DiagnosticCheckStatus
+    detail: string | null
+  }>
+}
+
 type WorkRequestBrief = {
   schema: 'sitelayer.work_request_brief.v1'
   generated_at: string
@@ -182,6 +226,7 @@ type WorkRequestBrief = {
     dispatch_outbox_status: string | null
     evidence_refs: Array<{ type: string; id: string }>
   }
+  diagnostic_manifest: WorkRequestDiagnosticManifest
   timeline: WorkRequestBriefTimelineEntry[]
   timeline_total: number
   timeline_truncated: boolean
@@ -215,6 +260,7 @@ type WorkRequestHandoffPacket = {
   state: WorkRequestBrief['state']
   work_item: WorkRequestBrief['work_item']
   diagnostics: WorkRequestBrief['diagnostics']
+  diagnostic_manifest: WorkRequestBrief['diagnostic_manifest']
   support_packet: ContextWorkItemDetail['work_item']['support_packet'] | null
   evidence_refs: WorkRequestBrief['diagnostics']['evidence_refs']
   timeline: WorkRequestBrief['timeline']
@@ -253,9 +299,15 @@ function bearerToken(req: http.IncomingMessage): string {
   return authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
 }
 
-function requireMeshDispatchConfigured(ctx: WorkRequestRouteCtx): boolean {
-  if (process.env.MESH_WORK_REQUEST_DISPATCH_URL) return true
-  ctx.sendJson(503, { error: 'mesh dispatch is not configured' })
+function workRequestDispatchUrl(): string {
+  return (
+    process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL?.trim() || process.env.MESH_WORK_REQUEST_DISPATCH_URL?.trim() || ''
+  )
+}
+
+function requireWorkRequestDispatchConfigured(ctx: WorkRequestRouteCtx): boolean {
+  if (workRequestDispatchUrl()) return true
+  ctx.sendJson(503, { error: 'projectkit dispatch is not configured' })
   return false
 }
 
@@ -295,6 +347,7 @@ function dispatchMaxFailed(): number {
 
 function meshBearerToken(): string | null {
   return (
+    optionalText(process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN, 10_000) ??
     optionalText(process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN, 10_000) ??
     optionalText(process.env.MESH_API_TOKEN, 10_000) ??
     null
@@ -305,7 +358,7 @@ function meshTaskCancelUrl(meshTaskId: string): string | null {
   const meshApi = process.env.MESH_API_URL?.trim() || ''
   if (meshApi) return `${meshApi.replace(/\/+$/, '')}/api/orchestrate/tasks/${encodeURIComponent(meshTaskId)}`
 
-  const dispatchUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL?.trim() || ''
+  const dispatchUrl = workRequestDispatchUrl()
   if (!dispatchUrl) return null
   return `${dispatchUrl.replace(/\/+$/, '')}/${encodeURIComponent(meshTaskId)}`
 }
@@ -489,6 +542,156 @@ function timelineEntry(event: ContextHandoffEventRow): WorkRequestBriefTimelineE
   }
 }
 
+function asJsonObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function numberFromMetadata(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function stringFromMetadata(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function buildDiagnosticManifest(input: {
+  detail: ContextWorkItemDetail
+  dispatchOutbox: DispatchOutboxSummary | null
+  evidenceRefs: Array<{ type: string; id: string }>
+  timelineTotal: number
+  timelineTruncated: boolean
+  nextAction: string
+  generatedAt: string
+}): WorkRequestDiagnosticManifest {
+  const item = input.detail.work_item
+  const support = item.support_packet
+  const captureSessionId = item.capture_session_id
+  const analysis = asJsonObject(item.metadata?.capture_artifact_analysis)
+  const analysisStatus = stringFromMetadata(analysis?.status)
+  const artifactAnalysisStatus =
+    analysisStatus === 'ready'
+      ? 'ready'
+      : analysisStatus === 'failed' || analysisStatus === 'error'
+        ? 'failed'
+        : analysisStatus === 'pending' || analysisStatus === 'processing'
+          ? 'pending'
+          : captureSessionId
+            ? 'missing'
+            : 'missing'
+  const dispatchState = input.dispatchOutbox?.status ?? 'not_queued'
+  const checks: WorkRequestDiagnosticManifest['checks'] = [
+    {
+      key: 'support_packet',
+      label: 'Support packet',
+      status: support ? 'ok' : 'error',
+      detail: support ? support.id : 'No support packet is attached to this work item.',
+    },
+    {
+      key: 'capture_session',
+      label: 'Capture session',
+      status: captureSessionId ? 'ok' : 'missing',
+      detail: captureSessionId ?? 'No screen/audio/video capture session is attached.',
+    },
+    {
+      key: 'artifact_analysis',
+      label: 'Artifact analysis',
+      status:
+        artifactAnalysisStatus === 'ready'
+          ? 'ok'
+          : artifactAnalysisStatus === 'pending'
+            ? 'pending'
+            : artifactAnalysisStatus === 'failed'
+              ? 'error'
+              : captureSessionId
+                ? 'warn'
+                : 'missing',
+      detail:
+        analysisStatus ?? (captureSessionId ? 'Capture exists, but analyzer readiness has not been recorded.' : null),
+    },
+    {
+      key: 'dispatch',
+      label: 'Agent dispatch',
+      status:
+        dispatchState === 'applied'
+          ? 'ok'
+          : dispatchState === 'pending' || dispatchState === 'processing'
+            ? 'pending'
+            : dispatchState === 'failed' || dispatchState === 'dead'
+              ? 'error'
+              : input.nextAction === 'dispatch_agent'
+                ? 'warn'
+                : 'missing',
+      detail: input.dispatchOutbox
+        ? `${input.dispatchOutbox.status}, ${input.dispatchOutbox.attempt_count} attempt${
+            input.dispatchOutbox.attempt_count === 1 ? '' : 's'
+          }`
+        : 'No dispatch outbox row exists yet.',
+    },
+    {
+      key: 'timeline',
+      label: 'Handoff timeline',
+      status: input.timelineTotal > 0 ? 'ok' : 'warn',
+      detail: `${input.timelineTotal} event${input.timelineTotal === 1 ? '' : 's'} recorded`,
+    },
+  ]
+  const operatorNextStep = !support
+    ? 'repair_support_packet'
+    : artifactAnalysisStatus === 'pending'
+      ? 'wait_for_capture_analysis'
+      : artifactAnalysisStatus === 'failed'
+        ? 'repair_capture_analysis'
+        : dispatchState === 'failed' || dispatchState === 'dead'
+          ? 'retry_dispatch'
+          : item.status === 'review_ready'
+            ? 'review_agent_output'
+            : input.nextAction
+  return {
+    schema: 'sitelayer.work_request_diagnostic_manifest.v1',
+    generated_at: input.generatedAt,
+    work_item_id: item.id,
+    capture_session_id: captureSessionId,
+    operator_next_step: operatorNextStep,
+    needs_attention: checks.some(
+      (check) => check.status === 'error' || check.status === 'pending' || check.status === 'warn',
+    ),
+    readiness: {
+      support_packet: support ? 'ready' : 'missing',
+      capture_session: captureSessionId ? 'ready' : 'not_captured',
+      artifact_analysis: artifactAnalysisStatus,
+      dispatch: dispatchState,
+      callback: input.dispatchOutbox ? 'scoped_callback_ready' : 'available_after_dispatch',
+    },
+    source: {
+      route: item.route ?? support?.route ?? null,
+      request_id: support?.request_id ?? null,
+      build_sha: support?.build_sha ?? null,
+      entity_type: item.entity_type,
+      entity_id: item.entity_id,
+    },
+    evidence: {
+      refs: input.evidenceRefs,
+      timeline_total: input.timelineTotal,
+      timeline_truncated: input.timelineTruncated,
+      artifact_analysis: {
+        status: analysisStatus,
+        eligible_artifact_count: numberFromMetadata(analysis?.eligible_artifact_count),
+        processed_artifact_count: numberFromMetadata(analysis?.processed_artifact_count),
+        pending_artifact_count: numberFromMetadata(analysis?.pending_artifact_count),
+        audio_mode: stringFromMetadata(analysis?.audio_mode),
+        video_mode: stringFromMetadata(analysis?.video_mode),
+        updated_at: stringFromMetadata(analysis?.updated_at),
+      },
+    },
+    checks,
+  }
+}
+
 function nextActionForWorkItem(row: ContextWorkItemRow, outbox: DispatchOutboxSummary | null): string {
   if (row.status === 'resolved') return 'resolved'
   if (row.status === 'wont_do') return 'closed_without_action'
@@ -508,6 +711,7 @@ function buildAgentBriefMarkdown(input: {
   timeline: WorkRequestBriefTimelineEntry[]
   callback?: WorkRequestBrief['callback']
   nextAction: string
+  diagnosticManifest: WorkRequestDiagnosticManifest
 }): string {
   const item = input.detail.work_item
   const support = item.support_packet
@@ -533,9 +737,14 @@ function buildAgentBriefMarkdown(input: {
     `- Build: ${support?.build_sha ?? 'unknown'}`,
     `- Reversibility expires: ${item.expires_at ?? 'unknown'}`,
     `- Dispatch outbox: ${input.dispatchOutbox?.status ?? 'none'}`,
+    `- Diagnostic next step: ${input.diagnosticManifest.operator_next_step}`,
   )
   if (input.callback) {
     lines.push(`- Callback: ${input.callback.url ?? input.callback.path} (${input.callback.token_type})`)
+  }
+  lines.push('', 'Diagnostic checks:')
+  for (const check of input.diagnosticManifest.checks) {
+    lines.push(`- ${check.label}: ${check.status}${check.detail ? ` (${check.detail})` : ''}`)
   }
   lines.push('', 'Recent timeline:')
   if (input.timeline.length === 0) {
@@ -563,9 +772,26 @@ function buildWorkRequestBrief(
 ): WorkRequestBrief {
   const timelineEvents = detail.events.slice(-12).map(timelineEntry)
   const nextAction = nextActionForWorkItem(detail.work_item, dispatchOutbox)
+  const generatedAt = new Date().toISOString()
+  const evidenceRefs = [
+    { type: 'support_debug_packet', id: detail.work_item.support_packet_id },
+    ...(detail.work_item.capture_session_id
+      ? [{ type: 'capture_session', id: detail.work_item.capture_session_id }]
+      : []),
+  ]
+  const timelineTruncated = detail.events_total > timelineEvents.length
+  const diagnosticManifest = buildDiagnosticManifest({
+    detail,
+    dispatchOutbox,
+    evidenceRefs,
+    timelineTotal: detail.events_total,
+    timelineTruncated,
+    nextAction,
+    generatedAt,
+  })
   const partial = {
     schema: 'sitelayer.work_request_brief.v1' as const,
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt,
     work_item: workItemBriefResponse(detail.work_item),
     state: {
       status: detail.work_item.status,
@@ -586,16 +812,12 @@ function buildWorkRequestBrief(
       entity_id: detail.work_item.entity_id,
       capture_session_id: detail.work_item.capture_session_id,
       dispatch_outbox_status: dispatchOutbox?.status ?? null,
-      evidence_refs: [
-        { type: 'support_debug_packet', id: detail.work_item.support_packet_id },
-        ...(detail.work_item.capture_session_id
-          ? [{ type: 'capture_session', id: detail.work_item.capture_session_id }]
-          : []),
-      ],
+      evidence_refs: evidenceRefs,
     },
+    diagnostic_manifest: diagnosticManifest,
     timeline: timelineEvents,
     timeline_total: detail.events_total,
-    timeline_truncated: detail.events_total > timelineEvents.length,
+    timeline_truncated: timelineTruncated,
     ...(opts.callback ? { callback: opts.callback } : {}),
   }
   const agentBriefMarkdown = buildAgentBriefMarkdown({
@@ -604,6 +826,7 @@ function buildWorkRequestBrief(
     timeline: timelineEvents,
     callback: opts.callback,
     nextAction,
+    diagnosticManifest,
   })
   return {
     ...partial,
@@ -661,6 +884,7 @@ function buildWorkRequestHandoffPacket(input: {
     state: brief.state,
     work_item: brief.work_item,
     diagnostics: brief.diagnostics,
+    diagnostic_manifest: brief.diagnostic_manifest,
     support_packet: includeSupportPacket ? brief.support_packet : null,
     evidence_refs: brief.diagnostics.evidence_refs,
     timeline: brief.timeline,
@@ -785,7 +1009,7 @@ export function computeFieldRequestDedupKey(input: {
     normalizeFingerprintText(input.title),
     normalizeFingerprintText(input.summary),
     String(bucket),
-  ].join(' ')
+  ].join('')
   return createHash('sha256').update(fingerprint).digest('hex')
 }
 
@@ -1503,9 +1727,39 @@ async function getWorkRequestQueueHealth(ctx: WorkRequestRouteCtx) {
           and status in ('pending', 'processing')`,
       [ctx.company.id, DISPATCH_MUTATION_TYPE],
     )
+    const capture = await c.query<{
+      captured_work_items: number
+      analysis_ready: number
+      analysis_pending: number
+      analysis_failed: number
+      analysis_missing: number
+    }>(
+      `select (count(*) filter (where capture_session_id is not null))::int as captured_work_items,
+              (count(*) filter (
+                where capture_session_id is not null
+                  and metadata -> 'capture_artifact_analysis' ->> 'status' = 'ready'
+              ))::int as analysis_ready,
+              (count(*) filter (
+                where capture_session_id is not null
+                  and metadata -> 'capture_artifact_analysis' ->> 'status' in ('pending', 'processing')
+              ))::int as analysis_pending,
+              (count(*) filter (
+                where capture_session_id is not null
+                  and metadata -> 'capture_artifact_analysis' ->> 'status' in ('failed', 'error')
+              ))::int as analysis_failed,
+              (count(*) filter (
+                where capture_session_id is not null
+                  and coalesce(metadata -> 'capture_artifact_analysis' ->> 'status', '') = ''
+              ))::int as analysis_missing
+         from context_work_items
+        where company_id = $1
+          and domain = $2`,
+      [ctx.company.id, FIELD_REQUEST_DOMAIN],
+    )
     return {
       config: {
-        mesh_dispatch_configured: Boolean(process.env.MESH_WORK_REQUEST_DISPATCH_URL),
+        mesh_dispatch_configured: Boolean(workRequestDispatchUrl()),
+        projectkit_dispatch_configured: Boolean(workRequestDispatchUrl()),
         callback_configured: true,
         scoped_callbacks_enabled: true,
         callback_fallback_configured: Boolean(process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN),
@@ -1516,6 +1770,13 @@ async function getWorkRequestQueueHealth(ctx: WorkRequestRouteCtx) {
       dispatch_outbox: {
         ...countsFor(HEALTH_DISPATCH_STATUSES, dispatchStatuses.rows),
         oldest_pending_age_seconds: oldestDispatch.rows[0]?.oldest_pending_age_seconds ?? null,
+      },
+      capture: {
+        captured_work_items: capture.rows[0]?.captured_work_items ?? 0,
+        analysis_ready: capture.rows[0]?.analysis_ready ?? 0,
+        analysis_pending: capture.rows[0]?.analysis_pending ?? 0,
+        analysis_failed: capture.rows[0]?.analysis_failed ?? 0,
+        analysis_missing: capture.rows[0]?.analysis_missing ?? 0,
       },
     }
   })
@@ -2056,7 +2317,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
-  if (!requireMeshDispatchConfigured(ctx)) return
+  if (!requireWorkRequestDispatchConfigured(ctx)) return
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
   if (!isFieldRequestDetail(detail)) {
     ctx.sendJson(404, { error: 'work request not found' })
@@ -2098,7 +2359,8 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
       lane: 'agent',
       payload,
       metadata: {
-        dispatcher: 'mesh',
+        dispatch_surface: 'projectkit',
+        dispatch_adapter: 'mesh',
         evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
       },
       idempotencyKey,
@@ -2126,8 +2388,8 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
     ctx.sendJson(result.status, {
       error:
         result.reason === 'pending'
-          ? 'mesh dispatch backlog is full'
-          : 'mesh dispatch failure backlog requires operator attention',
+          ? 'projectkit dispatch backlog is full'
+          : 'projectkit dispatch failure backlog requires operator attention',
       dispatch_outbox: result.backpressure,
     })
     return
@@ -2157,7 +2419,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
-  if (!requireMeshDispatchConfigured(ctx)) return
+  if (!requireWorkRequestDispatchConfigured(ctx)) return
   let body: Record<string, unknown>
   try {
     body = await ctx.readBody()
@@ -2212,7 +2474,8 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
         outbox_id: retry.outbox.id,
       },
       metadata: {
-        dispatcher: 'mesh',
+        dispatch_surface: 'projectkit',
+        dispatch_adapter: 'mesh',
         reason: optionalText(body.reason, 500),
         evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
       },
@@ -2393,7 +2656,7 @@ function pickLatestMeshTaskId(events: ContextHandoffEventRow[]): string | null {
 
 async function callMeshCancelTask(meshTaskId: string): Promise<{ ok: boolean; status?: number; error?: string }> {
   const url = meshTaskCancelUrl(meshTaskId)
-  if (!url) return { ok: false, error: 'MESH_API_URL or MESH_WORK_REQUEST_DISPATCH_URL not configured' }
+  if (!url) return { ok: false, error: 'MESH_API_URL or PROJECTKIT_WORK_REQUEST_DISPATCH_URL not configured' }
   const headers: Record<string, string> = {}
   const token = meshBearerToken()
   if (token) headers.authorization = `Bearer ${token}`
@@ -2583,7 +2846,7 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
             status: outcome.status ?? null,
             error: outcome.error ?? null,
           },
-          metadata: { dispatcher: 'mesh' },
+          metadata: { dispatch_surface: 'projectkit', dispatch_adapter: 'mesh' },
           idempotencyKey: `context_work_item:mesh_cancel:${id}:${meshTaskId}`,
         }),
       )
@@ -2761,13 +3024,13 @@ export async function handleWorkRequestRoutes(
     return true
   }
 
-  const dispatchMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/dispatch\/mesh$/)
+  const dispatchMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/dispatch\/(?:projectkit|mesh)$/)
   if (dispatchMatch && req.method === 'POST') {
     await dispatchWorkRequestToMesh(req, ctx, decodeURIComponent(dispatchMatch[1]!))
     return true
   }
 
-  const dispatchRetryMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/dispatch\/mesh\/retry$/)
+  const dispatchRetryMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/dispatch\/(?:projectkit|mesh)\/retry$/)
   if (dispatchRetryMatch && req.method === 'POST') {
     await retryWorkRequestMeshDispatch(req, ctx, decodeURIComponent(dispatchRetryMatch[1]!))
     return true

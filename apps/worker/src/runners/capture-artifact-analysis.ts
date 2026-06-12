@@ -559,7 +559,11 @@ async function enqueueAnalysisReadyDispatchForRow(
         capture_session_id: row.capture_session_id,
         capture_artifact_analysis: readiness,
       }),
-      JSON.stringify({ source: 'capture_artifact_analysis', dispatcher: 'mesh' }),
+      JSON.stringify({
+        source: 'capture_artifact_analysis',
+        dispatch_surface: 'projectkit',
+        dispatch_adapter: 'mesh',
+      }),
       `capture_artifact_analysis:dispatch_queued:${row.id}`,
     ],
   )

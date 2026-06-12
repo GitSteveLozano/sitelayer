@@ -1,12 +1,12 @@
 [Unit]
 Description=Sitelayer local GPU capture media worker
-Documentation=file:%h/projects/sitelayer-worktrees/dev-land/docs/CAPTURE_LOCAL_GPU_MEDIA_WORKER_DECISION_2026-06-04.md
+Documentation=file:%h/projects/sitelayer/docs/CAPTURE_LOCAL_GPU_MEDIA_WORKER_DECISION_2026-06-04.md
 After=network-online.target voice-tools-whisper.service llama-swap.service
 Wants=network-online.target voice-tools-whisper.service llama-swap.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/projects/sitelayer-worktrees/dev-land
+WorkingDirectory=%h/projects/sitelayer
 Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CAPTURE_MEDIA_WORKER_INTERVAL_MS=30000
 Environment=CAPTURE_MEDIA_WORKER_GPU_YIELD=1

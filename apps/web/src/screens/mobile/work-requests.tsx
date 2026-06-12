@@ -261,7 +261,9 @@ function WorkQueueHealthStrip({ health }: { health: Awaited<ReturnType<typeof fe
   const failedDispatches = health.dispatch_outbox.failed + health.dispatch_outbox.dead
   const activeDispatches = health.dispatch_outbox.pending + health.dispatch_outbox.processing
   const staleReview = health.work_items.review_stale + health.work_items.proposal_expired
-  const dispatchMisconfigured = !health.config.mesh_dispatch_configured || !health.config.scoped_callbacks_enabled
+  const dispatchMisconfigured = !isDispatchConfigured(health.config) || !health.config.scoped_callbacks_enabled
+  const captureAttention =
+    health.capture.analysis_pending + health.capture.analysis_failed + health.capture.analysis_missing
   return (
     <>
       <MSectionH>Health</MSectionH>
@@ -287,6 +289,12 @@ function WorkQueueHealthStrip({ health }: { health: Awaited<ReturnType<typeof fe
           headline="Review"
           supporting={`${health.work_items.review_ready} ready - ${staleReview} stale`}
         />
+        <MListRow
+          leading={<MI.Camera size={18} />}
+          leadingTone={health.capture.analysis_failed > 0 ? 'red' : captureAttention > 0 ? 'amber' : 'green'}
+          headline="Capture analysis"
+          supporting={`${health.capture.captured_work_items} captured - ${health.capture.analysis_ready} ready - ${health.capture.analysis_pending} pending - ${health.capture.analysis_failed} failed - ${health.capture.analysis_missing} missing`}
+        />
       </MListInset>
     </>
   )
@@ -297,4 +305,8 @@ function formatAge(seconds: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`
   return `${Math.floor(seconds / 86_400)}d`
+}
+
+function isDispatchConfigured(config: { projectkit_dispatch_configured?: boolean; mesh_dispatch_configured: boolean }) {
+  return config.projectkit_dispatch_configured ?? config.mesh_dispatch_configured
 }

@@ -146,6 +146,7 @@ function NavGroup({
     to: string
     label: string
     icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
+    detail?: string
   }>
 }) {
   return (
@@ -160,6 +161,7 @@ function NavGroup({
                   leading={<r.icon width={18} height={18} strokeWidth={1.8} />}
                   leadingTone="accent"
                   headline={r.label}
+                  supporting={r.detail}
                   chev
                   noBorder={i === rows.length - 1}
                 />

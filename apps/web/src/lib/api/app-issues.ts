@@ -10,6 +10,7 @@ import type { SessionResponse } from './bootstrap'
 import type {
   ContextHandoffEvent,
   ContextWorkItem,
+  DiagnosticCheckStatus,
   WorkItemLane,
   WorkItemStatus,
   WorkRequestSupportPacketSummary,
@@ -37,8 +38,35 @@ export interface AppIssueBoardResponse {
 export interface AppIssueDetailResponse {
   issue: AppIssue
   support_packet: WorkRequestSupportPacketSummary | null
+  diagnostic_manifest: AppIssueDiagnosticManifest
   events: ContextHandoffEvent[]
   events_pagination: { limit: number; offset: number; total: number; has_more: boolean }
+}
+
+export interface AppIssueDiagnosticManifest {
+  schema: 'sitelayer.diagnostic_manifest.v1'
+  generated_at: string
+  subject: {
+    kind: 'app_issue'
+    issue_id: string
+    support_packet_id: string
+    capture_session_id: string | null
+  }
+  operator_next_step: string
+  needs_attention: boolean
+  capture_readiness: {
+    support_packet: 'ready' | 'missing'
+    capture_session: 'ready' | 'not_captured'
+    artifact_analysis: 'ready' | 'pending' | 'failed' | 'missing'
+  }
+  evidence_refs: Array<{ type: string; id: string }>
+  worker_health_refs: Array<{ kind: string; path: string }>
+  checks: Array<{
+    key: string
+    label: string
+    status: DiagnosticCheckStatus
+    detail: string | null
+  }>
 }
 
 export interface AppIssueBoardParams {

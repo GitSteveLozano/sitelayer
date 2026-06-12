@@ -20,6 +20,7 @@ import {
   appendContextHandoffEventTx,
   getContextWorkItemWithEvents,
   listContextWorkItems,
+  type ContextWorkItemDetail,
   type ContextWorkItemRow,
   type WorkItemLane,
   type WorkItemStatus,
@@ -107,6 +108,32 @@ function issueResponse(row: ContextWorkItemRow) {
 
 type IssueApiResponse = ReturnType<typeof issueResponse>
 type IssueBoardGroupBy = 'lane' | 'status_group'
+type IssueDiagnosticCheckStatus = 'ok' | 'pending' | 'warn' | 'error' | 'missing'
+type IssueDiagnosticManifest = {
+  schema: 'sitelayer.diagnostic_manifest.v1'
+  generated_at: string
+  subject: {
+    kind: 'app_issue'
+    issue_id: string
+    support_packet_id: string
+    capture_session_id: string | null
+  }
+  operator_next_step: string
+  needs_attention: boolean
+  capture_readiness: {
+    support_packet: 'ready' | 'missing'
+    capture_session: 'ready' | 'not_captured'
+    artifact_analysis: 'ready' | 'pending' | 'failed' | 'missing'
+  }
+  evidence_refs: Array<{ type: string; id: string }>
+  worker_health_refs: Array<{ kind: string; path: string }>
+  checks: Array<{
+    key: string
+    label: string
+    status: IssueDiagnosticCheckStatus
+    detail: string | null
+  }>
+}
 type IssueBoardColumn = {
   id: string
   title: string
@@ -159,6 +186,107 @@ function buildIssueBoardColumns(rows: IssueApiResponse[], groupBy: IssueBoardGro
     statuses: [...WORK_ITEM_STATUSES],
     work_items: rows.filter((row) => row.lane === lane),
   }))
+}
+
+function issueJsonObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function issueString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function buildIssueDiagnosticManifest(detail: ContextWorkItemDetail): IssueDiagnosticManifest {
+  const item = detail.work_item
+  const support = item.support_packet
+  const captureSessionId = item.capture_session_id
+  const analysis = issueJsonObject(item.metadata?.capture_artifact_analysis)
+  const analysisStatus = issueString(analysis?.status)
+  const artifactAnalysis =
+    analysisStatus === 'ready'
+      ? 'ready'
+      : analysisStatus === 'failed' || analysisStatus === 'error'
+        ? 'failed'
+        : analysisStatus === 'pending' || analysisStatus === 'processing'
+          ? 'pending'
+          : 'missing'
+  const evidenceRefs = [
+    { type: 'support_debug_packet', id: item.support_packet_id },
+    ...(captureSessionId ? [{ type: 'capture_session', id: captureSessionId }] : []),
+  ]
+  const checks: IssueDiagnosticManifest['checks'] = [
+    {
+      key: 'support_packet',
+      label: 'Support packet',
+      status: support ? 'ok' : 'error',
+      detail: support ? item.support_packet_id : 'No live support packet summary is attached.',
+    },
+    {
+      key: 'capture_session',
+      label: 'Capture session',
+      status: captureSessionId ? 'ok' : 'missing',
+      detail: captureSessionId ?? 'This issue was not filed with capture media.',
+    },
+    {
+      key: 'artifact_analysis',
+      label: 'Artifact analysis',
+      status:
+        artifactAnalysis === 'ready'
+          ? 'ok'
+          : artifactAnalysis === 'pending'
+            ? 'pending'
+            : artifactAnalysis === 'failed'
+              ? 'error'
+              : captureSessionId
+                ? 'warn'
+                : 'missing',
+      detail:
+        analysisStatus ?? (captureSessionId ? 'Capture exists, but analyzer readiness has not been recorded.' : null),
+    },
+    {
+      key: 'timeline',
+      label: 'Handoff timeline',
+      status: detail.events_total > 0 ? 'ok' : 'warn',
+      detail: `${detail.events_total} event${detail.events_total === 1 ? '' : 's'} recorded`,
+    },
+  ]
+  const operatorNextStep = !support
+    ? 'repair_support_packet'
+    : artifactAnalysis === 'pending'
+      ? 'wait_for_capture_analysis'
+      : artifactAnalysis === 'failed'
+        ? 'repair_capture_analysis'
+        : item.status === 'review_ready'
+          ? 'review_agent_output'
+          : captureSessionId
+            ? 'triage_capture_context'
+            : 'triage_redacted_context'
+  return {
+    schema: 'sitelayer.diagnostic_manifest.v1',
+    generated_at: new Date().toISOString(),
+    subject: {
+      kind: 'app_issue',
+      issue_id: item.id,
+      support_packet_id: item.support_packet_id,
+      capture_session_id: captureSessionId,
+    },
+    operator_next_step: operatorNextStep,
+    needs_attention: checks.some(
+      (check) => check.status === 'error' || check.status === 'pending' || check.status === 'warn',
+    ),
+    capture_readiness: {
+      support_packet: support ? 'ready' : 'missing',
+      capture_session: captureSessionId ? 'ready' : 'not_captured',
+      artifact_analysis: artifactAnalysis,
+    },
+    evidence_refs: evidenceRefs,
+    worker_health_refs: [
+      { kind: 'dispatch_lane', path: '/api/admin/dispatch-lanes#capture_artifact_analysis' },
+      { kind: 'job_health', path: '/api/admin/jobs#capture_artifact_analysis' },
+    ],
+    checks,
+  }
 }
 
 async function listIssues(ctx: IssueRouteCtx, url: URL) {
@@ -260,6 +388,7 @@ async function getIssue(ctx: IssueRouteCtx, id: string, url: URL) {
   ctx.sendJson(200, {
     issue: issueResponse(detail.work_item),
     support_packet: detail.work_item.support_packet,
+    diagnostic_manifest: buildIssueDiagnosticManifest(detail),
     events: detail.events,
     events_pagination: {
       limit: detail.events_limit,

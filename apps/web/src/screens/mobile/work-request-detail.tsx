@@ -31,7 +31,7 @@ import {
 } from '../../components/work-requests/status.js'
 import {
   appendWorkRequestEvent,
-  dispatchWorkRequestToMesh,
+  dispatchWorkRequest,
   exportWorkRequestHandoffPacket,
   fetchSupportPacket,
   fetchSupportPacketAccessLog,
@@ -40,11 +40,13 @@ import {
   fetchWorkRequestHandoffPacket,
   fetchWorkRequestQueueHealth,
   queryKeys,
-  retryWorkRequestMeshDispatch,
+  retryWorkRequestDispatch,
   reverseWorkRequest,
   type AppendWorkRequestEventInput,
+  type ContextWorkItem,
   type WorkRequestBrief,
   type WorkRequestHandoffPacketAudience,
+  type WorkRequestSupportPacketSummary,
 } from '@/lib/api'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
@@ -83,11 +85,11 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     onSuccess: invalidate,
   })
   const dispatch = useMutation({
-    mutationFn: () => dispatchWorkRequestToMesh(workItemId),
+    mutationFn: () => dispatchWorkRequest(workItemId),
     onSuccess: invalidate,
   })
   const retryDispatch = useMutation({
-    mutationFn: () => retryWorkRequestMeshDispatch(workItemId),
+    mutationFn: () => retryWorkRequestDispatch(workItemId),
     onSuccess: invalidate,
   })
   const reverse = useMutation({
@@ -174,9 +176,10 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const canRetryDispatch = canDispatch && (dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead')
   const canResolve = canTriage && !isClosed
   const dispatchUnavailable = Boolean(
-    health.data && (!health.data.config.mesh_dispatch_configured || !health.data.config.scoped_callbacks_enabled),
+    health.data && (!isDispatchConfigured(health.data.config) || !health.data.config.scoped_callbacks_enabled),
   )
   const hasActions = canDispatch || canReopen || canResolve || canReverse
+  const captureSessionId = workItem?.capture_session_id ?? detail.data?.support_packet?.capture_session_id ?? null
 
   return (
     <>
@@ -232,6 +235,18 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               ) : null}
             </div>
 
+            <DiagnoseFirstStrip
+              workItem={workItem}
+              captureSessionId={captureSessionId}
+              replayLoaded={Boolean(fullSupportPacket.data)}
+            />
+
+            <ReporterReceiptStrip
+              workItem={workItem}
+              supportPacket={detail.data.support_packet}
+              captureSessionId={captureSessionId}
+            />
+
             {appendEvent.error || dispatch.error || retryDispatch.error || reverse.error ? (
               <div style={{ padding: '8px 16px' }}>
                 <MBanner
@@ -283,7 +298,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                     <MBanner
                       tone="warn"
                       title="Agent dispatch unavailable"
-                      body="Mesh dispatch is not configured for this environment. Keep this in human review or use the GitHub export."
+                      body="Projectkit dispatch is not configured for this environment. Keep this in human review or use the GitHub export."
                     />
                   ) : null}
                   <MButtonStack>
@@ -610,8 +625,126 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   )
 }
 
+function DiagnoseFirstStrip({
+  workItem,
+  captureSessionId,
+  replayLoaded,
+}: {
+  workItem: ContextWorkItem
+  captureSessionId: string | null
+  replayLoaded: boolean
+}) {
+  const guidance = isAwaitingReview(workItem.status)
+    ? 'Review agent output and replay before approving.'
+    : workItem.status === 'agent_running'
+      ? 'Watch callbacks and context before changing state.'
+      : 'Check receipt, context, and replay before dispatching or closing.'
+  const facts = [
+    workItem.route ? 'route pinned' : null,
+    captureSessionId ? 'capture attached' : 'no capture',
+    replayLoaded ? 'replay loaded' : 'load packet for replay',
+  ]
+    .filter(Boolean)
+    .join(' - ')
+  return (
+    <div style={{ padding: '12px 16px 0' }}>
+      <div
+        style={{
+          display: 'grid',
+          gap: 6,
+          padding: '10px 12px',
+          border: '2px solid var(--m-ink)',
+          background: 'var(--m-accent)',
+          color: 'var(--m-accent-ink)',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          Diagnose first
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.35 }}>{guidance}</div>
+        <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>
+          {facts}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReporterReceiptStrip({
+  workItem,
+  supportPacket,
+  captureSessionId,
+}: {
+  workItem: ContextWorkItem
+  supportPacket: WorkRequestSupportPacketSummary | null
+  captureSessionId: string | null
+}) {
+  const consent = captureSessionId
+    ? 'Capture consent stored on the capture session.'
+    : 'No capture session attached; redacted request context only.'
+  return (
+    <div style={{ padding: '10px 16px 0' }}>
+      <div
+        style={{
+          display: 'grid',
+          gap: 8,
+          padding: 12,
+          border: '1.5px solid var(--m-line)',
+          borderRadius: 8,
+          background: 'var(--m-card)',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-3)',
+          }}
+        >
+          Reporter receipt
+        </div>
+        <ReceiptLine label="Reporter" value={workItem.created_by_user_id ?? 'Unknown'} />
+        <ReceiptLine label="Work item" value={workItem.id} mono />
+        <ReceiptLine label="Support packet" value={supportPacket?.id ?? workItem.support_packet_id} mono />
+        {supportPacket?.request_id ? <ReceiptLine label="Request" value={supportPacket.request_id} mono /> : null}
+        {captureSessionId ? <ReceiptLine label="Capture" value={captureSessionId} mono /> : null}
+        <ReceiptLine label="Consent" value={consent} />
+      </div>
+    </div>
+  )
+}
+
+function ReceiptLine({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 10, fontSize: 12 }}>
+      <span style={{ color: 'var(--m-ink-3)' }}>{label}</span>
+      <span
+        style={{
+          fontFamily: mono ? 'var(--m-num)' : undefined,
+          color: 'var(--m-ink-2)',
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  )
+}
+
 function WorkRequestAgentBrief({ brief }: { brief: WorkRequestBrief }) {
   const diagnostics = brief.diagnostics
+  const manifest = brief.diagnostic_manifest
   const supporting = [
     diagnostics.route,
     diagnostics.entity_type && diagnostics.entity_id ? `${diagnostics.entity_type}:${diagnostics.entity_id}` : null,
@@ -643,6 +776,16 @@ function WorkRequestAgentBrief({ brief }: { brief: WorkRequestBrief }) {
               {brief.timeline_truncated ? '+' : ''}
             </span>
           }
+        />
+        <MListRow
+          leading={<MI.AlertTri size={18} />}
+          leadingTone={manifest.needs_attention ? 'amber' : 'green'}
+          headline="Diagnostics"
+          supporting={[
+            formatBriefAction(manifest.operator_next_step),
+            `capture ${manifest.readiness.capture_session}`,
+            `analysis ${manifest.readiness.artifact_analysis}`,
+          ].join(' - ')}
         />
       </MListInset>
       <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
@@ -705,4 +848,8 @@ function formatAccessLogEntry(entry: { created_at: string; route: string | null;
   ]
     .filter(Boolean)
     .join(' - ')
+}
+
+function isDispatchConfigured(config: { projectkit_dispatch_configured?: boolean; mesh_dispatch_configured: boolean }) {
+  return config.projectkit_dispatch_configured ?? config.mesh_dispatch_configured
 }

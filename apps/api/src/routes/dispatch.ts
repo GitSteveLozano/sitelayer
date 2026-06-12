@@ -50,6 +50,7 @@ import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleCostLibraryRoutes } from './cost-library.js'
 import { handleCaptureSessionRoutes } from './capture-sessions.js'
+import { handleOpsDiagnosticsRoutes } from './ops-diagnostics.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
 import { handleIssueRoutes } from './issues.js'
@@ -322,6 +323,15 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         sendJson,
         setHeader: ctx.setHeader,
         send304: ctx.send304,
+      }),
+
+    // Operator-only onsite diagnostics. Read-only aggregation over local
+    // control-plane/capture primitives; gated on app_issue.view because it can
+    // reveal platform health and desktop-capture posture.
+    () =>
+      handleOpsDiagnosticsRoutes(req, url, {
+        requireCapability: ctx.requireCapability,
+        sendJson,
       }),
 
     // Agent-tools discovery — self-describing catalog of the deterministic

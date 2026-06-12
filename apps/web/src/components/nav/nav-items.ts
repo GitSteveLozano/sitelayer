@@ -6,6 +6,7 @@ import {
   CheckSquare,
   ClipboardList,
   Clock,
+  Crosshair,
   DollarSign,
   FileText,
   Home,
@@ -75,6 +76,7 @@ export const PRIMARY_NAV: ReadonlyArray<NavItem> = [
 ]
 
 export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
+  { key: 'ops', to: '/ops', label: 'Ops', detail: 'Phone diagnostics and routing', icon: Crosshair },
   { key: 'work', to: '/work', label: 'Work queue', icon: ScrollText },
   { key: 'takeoff', to: '/projects?focus=takeoff', label: 'Measurements', icon: Layers },
   { key: 'estimates', to: '/projects?focus=estimate', label: 'Estimates', icon: FileText },
