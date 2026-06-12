@@ -11,7 +11,7 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   appendWorkRequestEvent: vi.fn(),
-  dispatchWorkRequestToMesh: vi.fn(),
+  dispatchWorkRequest: vi.fn(),
   exportWorkRequestHandoffPacket: vi.fn(),
   fetchSupportPacket: vi.fn(),
   fetchSupportPacketAccessLog: vi.fn(),
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   fetchWorkRequestGithubExport: vi.fn(),
   fetchWorkRequestHandoffPacket: vi.fn(),
   fetchWorkRequestQueueHealth: vi.fn(),
-  retryWorkRequestMeshDispatch: vi.fn(),
+  retryWorkRequestDispatch: vi.fn(),
   reverseWorkRequest: vi.fn(),
 }))
 
@@ -28,7 +28,7 @@ vi.mock('@/lib/api', async () => {
   return {
     ...actual,
     appendWorkRequestEvent: mocks.appendWorkRequestEvent,
-    dispatchWorkRequestToMesh: mocks.dispatchWorkRequestToMesh,
+    dispatchWorkRequest: mocks.dispatchWorkRequest,
     exportWorkRequestHandoffPacket: mocks.exportWorkRequestHandoffPacket,
     fetchSupportPacket: mocks.fetchSupportPacket,
     fetchSupportPacketAccessLog: mocks.fetchSupportPacketAccessLog,
@@ -36,7 +36,7 @@ vi.mock('@/lib/api', async () => {
     fetchWorkRequestGithubExport: mocks.fetchWorkRequestGithubExport,
     fetchWorkRequestHandoffPacket: mocks.fetchWorkRequestHandoffPacket,
     fetchWorkRequestQueueHealth: mocks.fetchWorkRequestQueueHealth,
-    retryWorkRequestMeshDispatch: mocks.retryWorkRequestMeshDispatch,
+    retryWorkRequestDispatch: mocks.retryWorkRequestDispatch,
     reverseWorkRequest: mocks.reverseWorkRequest,
   }
 })
@@ -69,6 +69,7 @@ const detailResponse: WorkRequestDetailResponse = {
     lane: 'triage',
     severity: 'high',
     route: '/financial/estimate-pushes/ep-1',
+    capture_session_id: 'capture-session-1',
     entity_type: 'estimate_push',
     entity_id: 'ep-1',
     assignee_user_id: null,
@@ -86,6 +87,7 @@ const detailResponse: WorkRequestDetailResponse = {
     route: '/financial/estimate-pushes/ep-1',
     problem: 'Estimate push failed',
     request_id: 'req-1',
+    capture_session_id: 'capture-session-1',
     build_sha: 'test-build',
     created_at: '2026-05-21T12:00:00.000Z',
     expires_at: '2026-05-22T12:00:00.000Z',
@@ -129,6 +131,7 @@ const detailResponse: WorkRequestDetailResponse = {
       route: '/financial/estimate-pushes/ep-1',
       problem: 'Estimate push failed',
       request_id: 'req-1',
+      capture_session_id: 'capture-session-1',
       build_sha: 'test-build',
       created_at: '2026-05-21T12:00:00.000Z',
       expires_at: '2026-05-22T12:00:00.000Z',
@@ -144,6 +147,50 @@ const detailResponse: WorkRequestDetailResponse = {
       entity_id: 'ep-1',
       dispatch_outbox_status: null,
       evidence_refs: [{ type: 'support_debug_packet', id: '00000000-0000-4000-8000-000000000002' }],
+    },
+    diagnostic_manifest: {
+      schema: 'sitelayer.work_request_diagnostic_manifest.v1',
+      generated_at: '2026-05-21T12:06:00.000Z',
+      work_item_id: '00000000-0000-4000-8000-000000000001',
+      capture_session_id: 'capture-session-1',
+      operator_next_step: 'dispatch_agent',
+      needs_attention: true,
+      readiness: {
+        support_packet: 'ready',
+        capture_session: 'ready',
+        artifact_analysis: 'pending',
+        dispatch: 'not_queued',
+        callback: 'available_after_dispatch',
+      },
+      source: {
+        route: '/financial/estimate-pushes/ep-1',
+        request_id: 'req-1',
+        build_sha: 'test-build',
+        entity_type: 'estimate_push',
+        entity_id: 'ep-1',
+      },
+      evidence: {
+        refs: [{ type: 'support_debug_packet', id: '00000000-0000-4000-8000-000000000002' }],
+        timeline_total: 0,
+        timeline_truncated: false,
+        artifact_analysis: {
+          status: 'pending',
+          eligible_artifact_count: 1,
+          processed_artifact_count: 0,
+          pending_artifact_count: 1,
+          audio_mode: 'off',
+          video_mode: 'off',
+          updated_at: '2026-05-21T12:06:00.000Z',
+        },
+      },
+      checks: [
+        {
+          key: 'artifact_analysis',
+          label: 'Artifact analysis',
+          status: 'pending',
+          detail: 'pending',
+        },
+      ],
     },
     timeline: [],
     timeline_total: 0,
@@ -179,6 +226,13 @@ const disabledHealth: WorkRequestQueueHealthResponse = {
     dead: 0,
     oldest_pending_age_seconds: null,
   },
+  capture: {
+    captured_work_items: 1,
+    analysis_ready: 0,
+    analysis_pending: 1,
+    analysis_failed: 0,
+    analysis_missing: 0,
+  },
 }
 
 const handoffPacket: WorkRequestHandoffPacket = {
@@ -202,6 +256,7 @@ const handoffPacket: WorkRequestHandoffPacket = {
   state: detailResponse.work_request_brief.state,
   work_item: detailResponse.work_request_brief.work_item,
   diagnostics: detailResponse.work_request_brief.diagnostics,
+  diagnostic_manifest: detailResponse.work_request_brief.diagnostic_manifest,
   support_packet: null,
   evidence_refs: detailResponse.work_request_brief.diagnostics.evidence_refs,
   timeline: detailResponse.work_request_brief.timeline,
@@ -237,7 +292,7 @@ beforeEach(() => {
       actor_user_id: 'admin-1',
       request_id: 'req-1',
       route: '/financial/estimate-pushes/ep-1',
-      capture_session_id: null,
+      capture_session_id: 'capture-session-1',
       build_sha: 'test-build',
       problem: 'Estimate push failed',
       client: {},
@@ -282,12 +337,16 @@ afterEach(() => {
 })
 
 describe('MobileWorkRequestDetail', () => {
-  it('blocks Mesh dispatch and shows packet access history when dispatch is disabled', async () => {
+  it('blocks projectkit dispatch and shows packet access history when dispatch is disabled', async () => {
     const Wrapper = makeWrapper()
     render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
 
     expect(await screen.findByRole('heading', { name: 'Estimate push failed', level: 1 })).toBeTruthy()
     expect(await screen.findByText('Agent dispatch unavailable')).toBeTruthy()
+    expect(await screen.findByText('Diagnose first')).toBeTruthy()
+    expect(await screen.findByText('Reporter receipt')).toBeTruthy()
+    expect(await screen.findByText('Capture consent stored on the capture session.')).toBeTruthy()
+    expect(await screen.findByText('capture-session-1')).toBeTruthy()
     expect((screen.getByText('Dispatch agent') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByText('Agent Prompt by admin-1')).toBeTruthy()
     expect(mocks.fetchSupportPacketAccessLog).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000002')

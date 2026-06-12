@@ -128,6 +128,51 @@ export interface WorkRequestBriefTimelineEntry {
   payload_keys: string[]
 }
 
+export type DiagnosticCheckStatus = 'ok' | 'pending' | 'warn' | 'error' | 'missing'
+
+export interface WorkRequestDiagnosticManifest {
+  schema: 'sitelayer.work_request_diagnostic_manifest.v1'
+  generated_at: string
+  work_item_id: string
+  capture_session_id: string | null
+  operator_next_step: string
+  needs_attention: boolean
+  readiness: {
+    support_packet: 'ready' | 'missing'
+    capture_session: 'ready' | 'not_captured'
+    artifact_analysis: 'ready' | 'pending' | 'failed' | 'missing'
+    dispatch: string
+    callback: 'available_after_dispatch' | 'scoped_callback_ready'
+  }
+  source: {
+    route: string | null
+    request_id: string | null
+    build_sha: string | null
+    entity_type: string | null
+    entity_id: string | null
+  }
+  evidence: {
+    refs: Array<{ type: string; id: string }>
+    timeline_total: number
+    timeline_truncated: boolean
+    artifact_analysis: {
+      status: string | null
+      eligible_artifact_count: number | null
+      processed_artifact_count: number | null
+      pending_artifact_count: number | null
+      audio_mode: string | null
+      video_mode: string | null
+      updated_at: string | null
+    }
+  }
+  checks: Array<{
+    key: string
+    label: string
+    status: DiagnosticCheckStatus
+    detail: string | null
+  }>
+}
+
 export interface WorkRequestBrief {
   schema: 'sitelayer.work_request_brief.v1'
   generated_at: string
@@ -152,6 +197,7 @@ export interface WorkRequestBrief {
     dispatch_outbox_status: string | null
     evidence_refs: Array<{ type: string; id: string }>
   }
+  diagnostic_manifest: WorkRequestDiagnosticManifest
   timeline: WorkRequestBriefTimelineEntry[]
   timeline_total: number
   timeline_truncated: boolean
@@ -191,6 +237,7 @@ export interface WorkRequestHandoffPacket {
   state: WorkRequestBrief['state']
   work_item: WorkRequestBrief['work_item']
   diagnostics: WorkRequestBrief['diagnostics']
+  diagnostic_manifest: WorkRequestBrief['diagnostic_manifest']
   support_packet: WorkRequestSupportPacketSummary | null
   evidence_refs: WorkRequestBrief['diagnostics']['evidence_refs']
   timeline: WorkRequestBrief['timeline']
@@ -285,6 +332,7 @@ export interface WorkRequestDetailResponse {
 export interface WorkRequestQueueHealthResponse {
   config: {
     mesh_dispatch_configured: boolean
+    projectkit_dispatch_configured?: boolean
     callback_configured: boolean
     scoped_callbacks_enabled: boolean
     callback_fallback_configured: boolean
@@ -301,6 +349,13 @@ export interface WorkRequestQueueHealthResponse {
     failed: number
     dead: number
     oldest_pending_age_seconds: number | null
+  }
+  capture: {
+    captured_work_items: number
+    analysis_ready: number
+    analysis_pending: number
+    analysis_failed: number
+    analysis_missing: number
   }
 }
 
@@ -419,18 +474,29 @@ export function appendWorkRequestEvent(
   })
 }
 
-export function dispatchWorkRequestToMesh(id: string): Promise<DispatchWorkRequestResponse> {
-  return request<DispatchWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/dispatch/mesh`, {
+export function dispatchWorkRequest(id: string): Promise<DispatchWorkRequestResponse> {
+  return request<DispatchWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/dispatch/projectkit`, {
     method: 'POST',
     json: {},
   })
 }
 
+export function retryWorkRequestDispatch(id: string): Promise<DispatchWorkRequestResponse> {
+  return request<DispatchWorkRequestResponse>(
+    `/api/work-requests/${encodeURIComponent(id)}/dispatch/projectkit/retry`,
+    {
+      method: 'POST',
+      json: {},
+    },
+  )
+}
+
+export function dispatchWorkRequestToMesh(id: string): Promise<DispatchWorkRequestResponse> {
+  return dispatchWorkRequest(id)
+}
+
 export function retryWorkRequestMeshDispatch(id: string): Promise<DispatchWorkRequestResponse> {
-  return request<DispatchWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/dispatch/mesh/retry`, {
-    method: 'POST',
-    json: {},
-  })
+  return retryWorkRequestDispatch(id)
 }
 
 export function fetchWorkRequestGithubExport(id: string): Promise<WorkRequestGithubExportResponse> {

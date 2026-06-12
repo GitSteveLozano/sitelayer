@@ -13,6 +13,8 @@ type JsonRecord = Record<string, unknown>
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const TEST_MESH_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+const ORIGINAL_PROJECTKIT_DISPATCH_URL = process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+const ORIGINAL_PROJECTKIT_DISPATCH_TOKEN = process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
 const ORIGINAL_MESH_DISPATCH_URL = process.env.MESH_WORK_REQUEST_DISPATCH_URL
 const ORIGINAL_MESH_DISPATCH_TOKEN = process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
 const ORIGINAL_MESH_API_URL = process.env.MESH_API_URL
@@ -714,6 +716,8 @@ const clientContext = {
 
 describe('handleWorkRequestRoutes', () => {
   beforeEach(() => {
+    delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+    delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
     process.env.MESH_WORK_REQUEST_DISPATCH_URL = TEST_MESH_DISPATCH_URL
     delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
     delete process.env.MESH_API_URL
@@ -723,6 +727,10 @@ describe('handleWorkRequestRoutes', () => {
   })
 
   afterEach(() => {
+    if (ORIGINAL_PROJECTKIT_DISPATCH_URL === undefined) delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+    else process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL = ORIGINAL_PROJECTKIT_DISPATCH_URL
+    if (ORIGINAL_PROJECTKIT_DISPATCH_TOKEN === undefined) delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
+    else process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN = ORIGINAL_PROJECTKIT_DISPATCH_TOKEN
     if (ORIGINAL_MESH_DISPATCH_URL === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     else process.env.MESH_WORK_REQUEST_DISPATCH_URL = ORIGINAL_MESH_DISPATCH_URL
     if (ORIGINAL_MESH_DISPATCH_TOKEN === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
@@ -1132,6 +1140,17 @@ describe('handleWorkRequestRoutes', () => {
         support_packet_id: pool.workItems[0]!.support_packet_id,
         route: '/projects/p-1/estimate-push/push-1',
       },
+      diagnostic_manifest: {
+        schema: 'sitelayer.work_request_diagnostic_manifest.v1',
+        work_item_id: workItemId,
+        operator_next_step: 'triage',
+        readiness: {
+          support_packet: 'ready',
+          capture_session: 'not_captured',
+          artifact_analysis: 'missing',
+          dispatch: 'not_queued',
+        },
+      },
     })
     expect(body.work_request_brief.agent_brief_markdown).toContain(`Work item: ${workItemId}`)
     expect(body.work_request_brief.agent_brief_markdown).toContain('Support packet:')
@@ -1396,7 +1415,32 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.handoffEvents.map((event) => event.event_type)).toContain('agent.dispatch_requested')
   })
 
-  it('rejects Mesh dispatch when dispatch is not configured without mutating the work item', async () => {
+  it('accepts the projectkit dispatch route alias while keeping the mesh adapter outbox key', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Projectkit alias task', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const dispatch = makeCtx(pool, {})
+
+    await handleWorkRequestRoutes(
+      buildReq('POST', { host: 'sitelayer.test', 'x-forwarded-proto': 'https' }),
+      buildUrl(`/api/work-requests/${workItemId}/dispatch/projectkit`),
+      dispatch.ctx,
+    )
+
+    expect(dispatch.responses[0]?.status).toBe(202)
+    expect(pool.mutationOutbox[0]).toMatchObject({
+      mutation_type: 'dispatch_mesh_work_request',
+      idempotency_key: `context_work_item:dispatch_mesh:${workItemId}`,
+    })
+    const dispatchEvent = pool.handoffEvents.find((event) => event.event_type === 'agent.dispatch_requested')
+    expect(dispatchEvent?.metadata).toMatchObject({
+      dispatch_surface: 'projectkit',
+      dispatch_adapter: 'mesh',
+    })
+  })
+
+  it('rejects projectkit dispatch when dispatch is not configured without mutating the work item', async () => {
     delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Unavailable dispatch', client: clientContext })
@@ -1410,7 +1454,7 @@ describe('handleWorkRequestRoutes', () => {
       dispatch.ctx,
     )
 
-    expect(dispatch.responses[0]).toEqual({ status: 503, body: { error: 'mesh dispatch is not configured' } })
+    expect(dispatch.responses[0]).toEqual({ status: 503, body: { error: 'projectkit dispatch is not configured' } })
     expect(pool.workItems[0]).toMatchObject({ status: 'new', lane: 'triage' })
     expect(pool.mutationOutbox).toHaveLength(0)
     expect(pool.handoffEvents.map((event) => event.event_type)).toEqual(['work_item.created'])
@@ -1440,7 +1484,7 @@ describe('handleWorkRequestRoutes', () => {
     }
   })
 
-  it('rejects new Mesh dispatch when the pending dispatch backlog is full', async () => {
+  it('rejects new projectkit dispatch when the pending dispatch backlog is full', async () => {
     process.env.WORK_REQUEST_DISPATCH_MAX_PENDING = '1'
     const pool = new FakePool()
     await handleWorkRequestRoutes(
@@ -1469,7 +1513,7 @@ describe('handleWorkRequestRoutes', () => {
 
     expect(dispatch.responses[0]?.status).toBe(429)
     expect(dispatch.responses[0]?.body).toMatchObject({
-      error: 'mesh dispatch backlog is full',
+      error: 'projectkit dispatch backlog is full',
       dispatch_outbox: {
         pending_count: 1,
         pending_limit: 1,
@@ -1570,7 +1614,7 @@ describe('handleWorkRequestRoutes', () => {
     ])
   })
 
-  it('rejects Mesh dispatch retries when dispatch is not configured without resetting backoff', async () => {
+  it('rejects projectkit dispatch retries when dispatch is not configured without resetting backoff', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Retry config missing', client: clientContext })
     await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
@@ -1593,7 +1637,7 @@ describe('handleWorkRequestRoutes', () => {
       retry.ctx,
     )
 
-    expect(retry.responses[0]).toEqual({ status: 503, body: { error: 'mesh dispatch is not configured' } })
+    expect(retry.responses[0]).toEqual({ status: 503, body: { error: 'projectkit dispatch is not configured' } })
     expect(pool.mutationOutbox[0]).toMatchObject({
       status: 'failed',
       attempt_count: 5,

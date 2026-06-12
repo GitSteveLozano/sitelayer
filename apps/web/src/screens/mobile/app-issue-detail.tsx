@@ -1,7 +1,17 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
-import { MBanner, MBody, MButton, MButtonRow, MSectionH, MTopBar } from '../../components/m/index.js'
+import {
+  MBanner,
+  MBody,
+  MButton,
+  MButtonRow,
+  MI,
+  MListInset,
+  MListRow,
+  MSectionH,
+  MTopBar,
+} from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
 import { AgentSupervisionPanel } from '../../components/work-requests/AgentSupervisionPanel.js'
@@ -12,6 +22,7 @@ import {
   useAppIssueCostLedger,
   useAppIssueDetail,
   useEscalateAppIssue,
+  type AppIssueDiagnosticManifest,
   type AppIssueCostLedgerEntry,
   type AppIssueEscalateTier,
 } from '@/lib/api'
@@ -52,6 +63,7 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
   const navigate = useNavigate()
   const detail = useAppIssueDetail(issueId)
   const issue = detail.data?.issue
+  const diagnosticManifest = detail.data?.diagnostic_manifest
   const supportPacketId = detail.data?.support_packet?.id ?? issue?.support_packet_id ?? null
   const ledger = useAppIssueCostLedger(supportPacketId)
   const escalate = useEscalateAppIssue(issueId)
@@ -122,6 +134,8 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
                   .toUpperCase()}
               </div>
             </section>
+
+            {diagnosticManifest ? <AppIssueDiagnosticPanel manifest={diagnosticManifest} /> : null}
 
             {/* Agent supervision: read-only replay + agent-output-vs-context. The
                 app-issue surface escalates rather than approves, so no review row. */}
@@ -236,6 +250,49 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
   )
 }
 
+function AppIssueDiagnosticPanel({ manifest }: { manifest: AppIssueDiagnosticManifest }) {
+  const failedOrPending = manifest.checks.filter(
+    (check) => check.status === 'error' || check.status === 'pending' || check.status === 'warn',
+  )
+  return (
+    <section style={{ padding: '0 16px' }}>
+      <MSectionH>Diagnostics</MSectionH>
+      <MListInset>
+        <MListRow
+          leading={<MI.AlertTri size={18} />}
+          leadingTone={manifest.needs_attention ? 'amber' : 'green'}
+          headline="Next step"
+          supporting={formatToken(manifest.operator_next_step)}
+        />
+        <MListRow
+          leading={<MI.Camera size={18} />}
+          leadingTone={manifest.capture_readiness.capture_session === 'ready' ? 'blue' : 'accent'}
+          headline="Capture"
+          supporting={[
+            `session ${manifest.capture_readiness.capture_session}`,
+            `analysis ${manifest.capture_readiness.artifact_analysis}`,
+          ].join(' - ')}
+        />
+        <MListRow
+          leading={<MI.FileText size={18} />}
+          leadingTone={manifest.capture_readiness.support_packet === 'ready' ? 'green' : 'red'}
+          headline="Evidence"
+          supporting={`${manifest.evidence_refs.length} ref${manifest.evidence_refs.length === 1 ? '' : 's'} - ${manifest.checks.length} checks`}
+        />
+      </MListInset>
+      {failedOrPending.length > 0 ? (
+        <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+          {failedOrPending.slice(0, 3).map((check) => (
+            <div key={check.key} style={{ fontSize: 12, color: 'var(--m-ink-2)' }}>
+              <strong>{check.label}</strong>: {check.detail ?? check.status}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 function CostLedgerRow({ entry }: { entry: AppIssueCostLedgerEntry }) {
   const label = entry.source ?? entry.access_type
   return (
@@ -280,4 +337,11 @@ function relativeAge(iso: string): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 48) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
+}
+
+function formatToken(value: string): string {
+  return value
+    .split('_')
+    .map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(' ')
 }

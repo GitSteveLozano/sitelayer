@@ -22,6 +22,7 @@ const SERVICES = [
   'llama-swap.service',
   'gpu-backlog-drainer.service',
   'sitelayer-capture-media-worker.service',
+  'sitelayer-capture-media-worker-prod.service',
 ] as const
 
 const REQUIRED_ENV = ['DATABASE_URL', 'DO_SPACES_BUCKET', 'DO_SPACES_KEY', 'DO_SPACES_SECRET'] as const
@@ -117,12 +118,16 @@ async function main() {
   const envPresence = await readEnvPresence(envFile)
   const requiredEnvReady = Object.values(envPresence).every(Boolean)
   const services = Object.fromEntries(serviceEntries)
+  const mediaWorkerActive =
+    services['sitelayer-capture-media-worker.service'] === 'active' ||
+    services['sitelayer-capture-media-worker-prod.service'] === 'active'
   const healthy =
     whisper.ok &&
     llama.ok &&
     requiredEnvReady &&
     services['voice-tools-whisper.service'] === 'active' &&
-    services['llama-swap.service'] === 'active'
+    services['llama-swap.service'] === 'active' &&
+    mediaWorkerActive
 
   console.log(
     JSON.stringify(

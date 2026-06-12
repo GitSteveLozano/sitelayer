@@ -53,6 +53,7 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 | `DATABASE_CA_CERT`           | `/app/sitelayer/.env` on the prod droplet (PEM CA bundle)            | DO managed Postgres → Connection Details → Download CA cert | § 9             |
 | `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32`                                   | § 5             |
 | `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana                  | `openssl rand -base64 32`                                   | § 5             |
+| `AGENT_FEED_TOKENS`          | `/app/sitelayer/.env` on the prod droplet                            | `openssl rand -base64 32` per audience                      | § 5             |
 | `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet                            | DO Console → API → Spaces Keys                              | § 4             |
 | `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet                            | DO Console → Spaces                                         | § 4             |
 
@@ -230,7 +231,7 @@ curl -fsS -H "Authorization: Bearer $JWT" -F file=@/tmp/test.pdf \
 
 ---
 
-## 5. Internal API tokens — `DEBUG_TRACE_TOKEN` / `API_METRICS_TOKEN`
+## 5. Internal API tokens — `DEBUG_TRACE_TOKEN` / `API_METRICS_TOKEN` / `AGENT_FEED_TOKENS`
 
 **Grants:** `DEBUG_TRACE_TOKEN` unlocks `GET /api/debug/traces/:traceId` (Sentry trace proxy + queue join). `API_METRICS_TOKEN` unlocks `/api/metrics` (Prom scrape). Both are bearer-checked in `apps/api/src/server.ts`.
 **Stored in:** `/app/sitelayer/.env` and Grafana scrape config.
@@ -253,6 +254,42 @@ curl -fsS -H "Authorization: Bearer $NEW_TOKEN" https://sitelayer.sandolab.xyz/a
 ```
 
 Same pattern for `DEBUG_TRACE_TOKEN`. Both are random-bearers — no external system to revoke against; the rotation IS the revocation.
+
+**`AGENT_FEED_TOKENS`** grants machine clients access to
+`/api/agent-feed/*` for the audiences in its JSON map. A token only grants its
+own audience, but leaked tokens let an agent pull assigned Concerns and fetch
+authorized artifacts for that audience. Rotate per audience:
+
+```bash
+# 1. Generate a replacement token on the fleet box.
+NEW_FEED_TOKEN=$(openssl rand -base64 32 | tr -d "=+/" | head -c 48)
+
+# 2. Patch only the affected JSON key in /app/sitelayer/.env.
+#    Replace NEW_FEED_TOKEN in a private shell before running; keep the real
+#    JSON out of shared logs and tickets.
+doctl compute ssh sitelayer --ssh-command='
+  sudo -u sitelayer bash -c "
+    cp /app/sitelayer/.env /app/sitelayer/.env.bak.$(date -u +%Y%m%dT%H%M%SZ) &&
+    sed -i \"s|^AGENT_FEED_TOKENS=.*|AGENT_FEED_TOKENS={\\\"onsite-diagnostics\\\":\\\"NEW_FEED_TOKEN\\\"}|\" /app/sitelayer/.env
+  "
+'
+
+# 3. Recreate api; worker/web do not read this variable.
+doctl compute ssh sitelayer --ssh-command='
+  cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api
+'
+
+# 4. Update the pull executor's PULL_FEED_TOKEN, then verify the audience.
+curl -fsS \
+  -H "Authorization: Bearer $PULL_FEED_TOKEN" \
+  "https://sitelayer.sandolab.xyz/api/agent-feed/concerns?audience=$PULL_AUDIENCE" \
+  | jq '.concerns | length'
+```
+
+If `SITELAYER_OPS_DIAGNOSTIC_AGENT_AUDIENCE` points at the rotated audience,
+restart the API after changing either variable and verify the Mobile Ops action
+response reports `accepted_action.agent_feed.queued=true`.
 
 ---
 

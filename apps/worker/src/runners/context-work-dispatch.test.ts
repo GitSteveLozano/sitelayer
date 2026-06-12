@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import { createContextWorkDispatchRunner } from './context-work-dispatch.js'
 
@@ -66,12 +66,23 @@ function makePool(
 
 describe('createContextWorkDispatchRunner', () => {
   const originalFetch = globalThis.fetch
+  const originalProjectkitUrl = process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+  const originalProjectkitToken = process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
   const originalUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL
   const originalToken = process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
   const originalAutoDispatch = process.env.CONTEXT_WORK_DISPATCH_AUTO_DISPATCH
 
+  beforeEach(() => {
+    delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+    delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
+  })
+
   afterEach(() => {
     globalThis.fetch = originalFetch
+    if (originalProjectkitUrl === undefined) delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL
+    else process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL = originalProjectkitUrl
+    if (originalProjectkitToken === undefined) delete process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN
+    else process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN = originalProjectkitToken
     if (originalUrl === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     else process.env.MESH_WORK_REQUEST_DISPATCH_URL = originalUrl
     if (originalToken === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
@@ -217,6 +228,36 @@ describe('createContextWorkDispatchRunner', () => {
       calls.some((call) => call.sql.startsWith("update mutation_outbox\n             set status = 'applied'")),
     ).toBe(true)
     expect(released).toEqual([true])
+  })
+
+  it('prefers projectkit dispatch env aliases over legacy mesh env names', async () => {
+    process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL = 'https://projectkit.example.test/dispatch'
+    process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN = 'projectkit-secret'
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+    process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = 'mesh-secret'
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ task_id: 987 }), { status: 202 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const { pool } = makePool([
+      {
+        id: 'outbox-projectkit-alias',
+        payload: {
+          payload_version: 'sitelayer.context_work_dispatch.v1',
+          work_item_id: '00000000-0000-4000-8000-0000000000a1',
+          support_packet_id: '00000000-0000-4000-8000-0000000000a2',
+          capture_session_id: '00000000-0000-4000-8000-0000000000a3',
+          title: 'Dispatch through projectkit alias',
+          lane: 'agent',
+        },
+      },
+    ])
+    const runner = createContextWorkDispatchRunner({ pool })
+
+    const summary = await runner('company-1')
+
+    expect(summary).toEqual({ processed: 1, insightsCreated: 0, failed: 0 })
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://projectkit.example.test/dispatch')
+    expect(init.headers).toMatchObject({ authorization: 'Bearer projectkit-secret' })
   })
 
   it('routes lane=agent dispatches to the sitelayer_implementation steerer + counsel class', async () => {

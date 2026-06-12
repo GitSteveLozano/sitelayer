@@ -61,7 +61,7 @@ export function createContextWorkDispatchRunner(deps: { pool: Pool }) {
   const { pool } = deps
 
   return async function drainContextWorkDispatch(companyId: string): Promise<AgentDrainSummary> {
-    if (!process.env.MESH_WORK_REQUEST_DISPATCH_URL) {
+    if (!workRequestDispatchUrl()) {
       return { processed: 0, insightsCreated: 0, failed: 0 }
     }
     return drainAgentMutations<ContextWorkDispatchPayload>(
@@ -91,9 +91,9 @@ async function processContextWorkDispatch(
   }
   const captureSessionId = cleanString(payload.capture_session_id)
 
-  const dispatchUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL
+  const dispatchUrl = workRequestDispatchUrl()
   if (!dispatchUrl) {
-    throw new Error('MESH_WORK_REQUEST_DISPATCH_URL is not configured')
+    throw new Error('PROJECTKIT_WORK_REQUEST_DISPATCH_URL is not configured')
   }
 
   const gate = await client.query<{ status: string }>(
@@ -118,7 +118,7 @@ async function processContextWorkDispatch(
         companyId,
         workItemId,
         JSON.stringify({ skipped: true, reason: 'terminal_work_item', status }),
-        JSON.stringify({ dispatcher: 'mesh' }),
+        JSON.stringify({ dispatch_surface: 'projectkit', dispatch_adapter: 'mesh' }),
         `context_work_item:dispatch_skip_terminal:${workItemId}`,
         captureSessionId,
       ],
@@ -153,7 +153,7 @@ async function processContextWorkDispatch(
         mesh_task_id: meshTaskId,
         response: responseText ? responseText.slice(0, 1000) : null,
       }),
-      JSON.stringify({ dispatcher: 'mesh' }),
+      JSON.stringify({ dispatch_surface: 'projectkit', dispatch_adapter: 'mesh' }),
       `context_work_item:dispatch_mesh_ack:${workItemId}`,
       captureSessionId,
     ],
@@ -450,6 +450,12 @@ function cleanString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+function workRequestDispatchUrl(): string {
+  return (
+    process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_URL?.trim() || process.env.MESH_WORK_REQUEST_DISPATCH_URL?.trim() || ''
+  )
+}
+
 function readBriefSchema(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const schema = (value as Record<string, unknown>).schema
@@ -460,7 +466,7 @@ function buildDispatchHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     'content-type': 'application/json; charset=utf-8',
   }
-  const token = process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
+  const token = process.env.PROJECTKIT_WORK_REQUEST_DISPATCH_TOKEN || process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
   if (token) headers.authorization = `Bearer ${token}`
   return headers
 }

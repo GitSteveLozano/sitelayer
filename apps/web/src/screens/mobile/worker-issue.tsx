@@ -60,6 +60,7 @@ type IssueCategory = {
 }
 
 type Severity = 'question' | 'slowing' | 'stopped'
+const VOICE_NOTE_MAX_MS = 30_000
 
 const CATEGORIES: ReadonlyArray<IssueCategory> = [
   {
@@ -121,9 +122,9 @@ const CATEGORIES: ReadonlyArray<IssueCategory> = [
 export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [category, setCategory] = useState<IssueCategory | null>(null)
-  // UI-only highlight for the v2 tile grid before the worker hits SEND.
-  // Tapping a tile selects it (accent fill); SEND advances to the compose
-  // step via the existing setCategory transition. No data wiring touched.
+  // UI-only highlight for the v2 tile grid before the worker opens compose.
+  // Tapping a tile selects it (accent fill); the primary action advances to
+  // details. The foreman ping is sent only from the compose screen.
   const [picked, setPicked] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
   const [severity, setSeverity] = useState<Severity>('question')
@@ -325,7 +326,7 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
             letterSpacing: '0.06em',
           }}
         >
-          {picked ? `SELECTED · ${picked.glyph} · FOREMAN GETS THE PING` : 'PICK A TILE TO FLAG IT'}
+          {picked ? `SELECTED · ${picked.glyph} · NO PING SENT YET` : 'PICK A TILE TO FLAG IT'}
         </div>
         <div style={{ marginTop: 16 }}>
           <MButton
@@ -336,7 +337,7 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
               if (picked) setCategory(picked)
             }}
           >
-            Send to foreman
+            Add details
           </MButton>
         </div>
       </MBody>
@@ -432,10 +433,12 @@ function VoiceRecorder({
   const chunksRef = useRef<BlobPart[]>([])
   const startedAtRef = useRef(0)
   const tickRef = useRef<number | null>(null)
+  const maxTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     return () => {
       if (tickRef.current !== null) window.clearInterval(tickRef.current)
+      if (maxTimerRef.current !== null) window.clearTimeout(maxTimerRef.current)
       if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop()
     }
   }, [])
@@ -455,14 +458,20 @@ function VoiceRecorder({
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
         const url = URL.createObjectURL(blob)
-        onChange({ blob, url, durationMs: Date.now() - startedAtRef.current })
+        onChange({ blob, url, durationMs: Math.min(Date.now() - startedAtRef.current, VOICE_NOTE_MAX_MS) })
         for (const track of stream.getTracks()) track.stop()
       }
       recorder.start()
       recorderRef.current = recorder
       startedAtRef.current = Date.now()
       setElapsedMs(0)
-      tickRef.current = window.setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 200)
+      tickRef.current = window.setInterval(
+        () => setElapsedMs(Math.min(Date.now() - startedAtRef.current, VOICE_NOTE_MAX_MS)),
+        200,
+      )
+      maxTimerRef.current = window.setTimeout(() => {
+        if (recorderRef.current && recorderRef.current.state !== 'inactive') stop()
+      }, VOICE_NOTE_MAX_MS)
       setRecording(true)
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Could not start recording.')
@@ -474,6 +483,10 @@ function VoiceRecorder({
     if (tickRef.current !== null) {
       window.clearInterval(tickRef.current)
       tickRef.current = null
+    }
+    if (maxTimerRef.current !== null) {
+      window.clearTimeout(maxTimerRef.current)
+      maxTimerRef.current = null
     }
     setRecording(false)
   }

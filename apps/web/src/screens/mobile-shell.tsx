@@ -146,6 +146,7 @@ const MobileQuickInvoice = lazy(() =>
 const MobileWorkRequests = lazy(() =>
   import('./mobile/work-requests.js').then((m) => ({ default: m.MobileWorkRequests })),
 )
+const MobileOps = lazy(() => import('./mobile/ops.js').then((m) => ({ default: m.MobileOps })))
 const MobileIssueBoard = lazy(() => import('./mobile/issue-board.js').then((m) => ({ default: m.MobileIssueBoard })))
 const MobileAppIssues = lazy(() => import('./mobile/app-issues.js').then((m) => ({ default: m.MobileAppIssuesGate })))
 const MobileAppIssueDetail = lazy(() =>
@@ -444,6 +445,7 @@ export function MobileShell({
             <Route path="invoice-sent/:projectId" element={<MobileInvoiceSent bootstrap={bootstrap} />} />
             <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
             <Route path="chat" element={<MobileChatList bootstrap={bootstrap} />} />
+            <Route path="ops" element={<MobileOps companyRole={companyRole} companySlug={companySlug} />} />
             <Route
               path="work"
               element={<MobileWorkRequests companyRole={companyRole} currentUserId={currentUserId} />}

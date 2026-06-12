@@ -147,7 +147,11 @@ async function reconcileLostDispatchCallbacks(
             dispatch_acknowledged_at: row.dispatch_acknowledged_at,
             callback_missing_hours: callbackMissingHours,
           }),
-          JSON.stringify({ reason: 'lost_callback_reconciler', dispatcher: 'mesh' }),
+          JSON.stringify({
+            reason: 'lost_callback_reconciler',
+            dispatch_surface: 'projectkit',
+            dispatch_adapter: 'mesh',
+          }),
           eventKey,
           row.capture_session_id,
         ],
