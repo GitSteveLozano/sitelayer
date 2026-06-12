@@ -233,6 +233,27 @@ check_lockfile_sync() {
   return 0
 }
 
+# The merge verifier checks out a clean worktree, so node_modules may be
+# absent even when package-lock.json is perfectly valid. Run a real install
+# before npm-backed static/build/test stages, but avoid clobbering an already
+# prepared developer checkout on every local verify run.
+ensure_dependencies_installed() {
+  if [ "${VERIFY_SKIP_NPM_CI:-0}" = "1" ]; then
+    loud "VERIFY_SKIP_NPM_CI=1 set — assuming node_modules is already valid."
+    return 0
+  fi
+
+  if [ -f node_modules/.package-lock.json ] \
+    && [ -x node_modules/.bin/eslint ] \
+    && [ -d node_modules/@eslint/js ] \
+    && [ -x node_modules/.bin/tsc ]; then
+    return 0
+  fi
+
+  echo "  -> dependency install (npm ci)"
+  npm ci --ignore-scripts --no-audit --no-fund || return 1
+}
+
 # ============================================================================
 # Stage: static — shell syntax, lockfile-sync, migration immutability,
 #        dockerfile-import guard, prettier --check, eslint, typecheck
@@ -258,6 +279,8 @@ stage_static() {
     MIGRATION_GUARD_OVERRIDE="${MIGRATION_GUARD_OVERRIDE:-0}" \
       bash scripts/check-migrations-immutable.sh || return 1
   fi
+
+  ensure_dependencies_installed || return 1
 
   echo "  -> dockerfile-import guard"
   npm run check:dockerfile-imports || return 1

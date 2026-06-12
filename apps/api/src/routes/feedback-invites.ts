@@ -151,16 +151,14 @@ function copyCaptureMetadataValue(value: unknown): unknown {
   return null
 }
 
-export function feedbackInviteCaptureMetadata(
-  invite: {
-    id: string
-    reviewer_ref: string
-    source: string
-    target_route: string | null
-    allowed_capture_modes: readonly string[]
-    metadata: Record<string, unknown>
-  },
-): Record<string, unknown> {
+export function feedbackInviteCaptureMetadata(invite: {
+  id: string
+  reviewer_ref: string
+  source: string
+  target_route: string | null
+  allowed_capture_modes: readonly string[]
+  metadata: Record<string, unknown>
+}): Record<string, unknown> {
   const metadata = inviteMetadataRecord(invite.metadata)
   const contextual: Record<string, unknown> = {}
   for (const key of FEEDBACK_INVITE_CAPTURE_METADATA_KEYS) {
