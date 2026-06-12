@@ -16,28 +16,44 @@ import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
 import { AgentSupervisionPanel } from '../../components/work-requests/AgentSupervisionPanel.js'
 import {
+  appIssueTriageActionAllowed,
   fetchSupportPacket,
   queryKeys,
+  readAppIssueCaptureAnalysis,
+  readAppIssueCaptureAnalysisReadiness,
   useAppIssueCapabilities,
   useAppIssueCostLedger,
   useAppIssueDetail,
   useEscalateAppIssue,
+  useTriageAppIssue,
+  type AppIssueCaptureAnalysis,
+  type AppIssueCaptureAnalysisReadiness,
   type AppIssueDiagnosticManifest,
   type AppIssueCostLedgerEntry,
   type AppIssueEscalateTier,
+  type WorkItemStatus,
 } from '@/lib/api'
 
 /**
- * APP-ISSUE detail (STEP6-UI). Read-only issue view plus two triage affordances
- * for callers who hold the PLATFORM capability `app_issue.triage`:
+ * APP-ISSUE detail (STEP6-UI). Issue view plus the triage affordances for
+ * callers who hold the PLATFORM capability `app_issue.triage`:
+ *   - the triage write surface (POST /api/issues/:id/events
+ *     {action: accept|resolve|wont_do}) — accept pulls a fresh/bounced issue
+ *     into triage; resolve is the "human accepts to resolve" leg agents can
+ *     never take themselves (they only ever reach review_ready),
  *   - a "go deeper" escalation control (POST /api/issues/:id/escalate {tier})
  *     that re-runs tier-2/3 enrichment around the bundle's ALREADY-PINNED
  *     anchors, and
  *   - a per-issue cost ledger projected from support_packet_access_log.
  *
- * Gated server-side by `app_issue.view` (board) + `app_issue.triage` (escalate);
- * the SPA mirrors the gate so a non-triager never sees the "go deeper" button,
- * but the API enforces it regardless.
+ * It also renders the capture-analyzer write-back (metadata.capture_analysis —
+ * the transcript/analysis markdown the agent-feed RETURN leg stored) plus the
+ * analyzer readiness strip, so the capture→analyze loop's payoff is visible on
+ * the card instead of buried in work-item metadata.
+ *
+ * Gated server-side by `app_issue.view` (board) + `app_issue.triage`
+ * (escalate/triage); the SPA mirrors the gate so a non-triager never sees the
+ * write controls, but the API enforces it regardless.
  */
 export function MobileAppIssueDetailGate() {
   const caps = useAppIssueCapabilities()
@@ -67,7 +83,10 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
   const supportPacketId = detail.data?.support_packet?.id ?? issue?.support_packet_id ?? null
   const ledger = useAppIssueCostLedger(supportPacketId)
   const escalate = useEscalateAppIssue(issueId)
+  const triage = useTriageAppIssue(issueId)
   const [tier, setTier] = useState<AppIssueEscalateTier>(2)
+  const captureAnalysis = readAppIssueCaptureAnalysis(issue?.metadata)
+  const analysisReadiness = readAppIssueCaptureAnalysisReadiness(issue?.metadata)
   // Full packet (app_issue.view gates the GET) powers the supervision REPLAY view
   // — the deterministic server_context.anchors + in-window timeline. Read-only on
   // this surface: app-issues escalate / triage rather than approve/reject.
@@ -137,15 +156,37 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
 
             {diagnosticManifest ? <AppIssueDiagnosticPanel manifest={diagnosticManifest} /> : null}
 
-            {/* Agent supervision: read-only replay + agent-output-vs-context. The
-                app-issue surface escalates rather than approves, so no review row. */}
+            {/* Capture analysis — the analyzer's write-back transcript/analysis
+                (metadata.capture_analysis) plus the readiness strip, rendered
+                inline so the capture→analyze loop's payoff is on the card. */}
+            {captureAnalysis || analysisReadiness ? (
+              <CaptureAnalysisPanel analysis={captureAnalysis} readiness={analysisReadiness} />
+            ) : null}
+
+            {/* Agent supervision: replay + agent-output-vs-context. For triagers
+                the fast-review row maps onto the app_issue triage verbs: approve
+                = resolve (the human-accepts leg), reject = wont_do. */}
             <AgentSupervisionPanel
               workItem={issue}
               events={detail.data?.events ?? []}
               supportPacket={detail.data?.support_packet}
               serverContext={fullPacket.data ? fullPacket.data.support_packet.server_context : null}
               agentPrompt={fullPacket.data?.agent_prompt ?? null}
+              review={
+                canTriage
+                  ? {
+                      onApprove: () => triage.mutate({ action: 'resolve' }),
+                      onReject: () => triage.mutate({ action: 'wont_do' }),
+                      busy: triage.isPending,
+                      error: triage.error instanceof Error ? triage.error.message : null,
+                    }
+                  : undefined
+              }
             />
+
+            {/* Triage transitions — only for triagers; each verb is offered only
+                when the server's transition gate would accept it. */}
+            {canTriage ? <AppIssueTriagePanel status={issue.status} triage={triage} /> : null}
 
             {/* "Go deeper" escalation — only for triagers. */}
             {canTriage ? (
@@ -247,6 +288,162 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
         )}
       </MBody>
     </>
+  )
+}
+
+/**
+ * The analyzer's evidence on the card: a readiness strip (how many eligible
+ * capture artifacts have been analyzed) and the write-back analysis markdown
+ * the agent-feed RETURN leg stored on the work item. Rendered as pre-wrapped
+ * text — the markdown is agent output, never interpreted as HTML.
+ */
+export function CaptureAnalysisPanel({
+  analysis,
+  readiness,
+}: {
+  analysis: AppIssueCaptureAnalysis | null
+  readiness: AppIssueCaptureAnalysisReadiness | null
+}) {
+  const readinessTone = readiness?.status === 'ready' ? 'var(--m-green, #15803d)' : 'var(--m-amber, #b7791f)'
+  return (
+    <section style={{ padding: '0 16px' }} data-testid="capture-analysis-panel">
+      <MSectionH>Capture analysis</MSectionH>
+      {readiness ? (
+        <div
+          data-testid="capture-analysis-readiness"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginTop: 6,
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            color: 'var(--m-ink-3)',
+            textTransform: 'uppercase',
+          }}
+        >
+          <span style={{ color: readinessTone }}>{readiness.status}</span>
+          {readiness.eligible_artifact_count != null ? (
+            <span>
+              {readiness.processed_artifact_count ?? 0}/{readiness.eligible_artifact_count} artifacts analyzed
+            </span>
+          ) : null}
+          {readiness.pending_artifact_count ? <span>{readiness.pending_artifact_count} pending</span> : null}
+          {readiness.updated_at ? <span>{relativeAge(readiness.updated_at)}</span> : null}
+        </div>
+      ) : null}
+      {analysis ? (
+        <>
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--m-ink-3)' }}>
+            {[
+              analysis.completed_at ? `Analyzed ${relativeAge(analysis.completed_at)}` : null,
+              analysis.artifacts.length
+                ? `${analysis.artifacts.length} artifact${analysis.artifacts.length === 1 ? '' : 's'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+          <pre
+            data-testid="capture-analysis-markdown"
+            style={{
+              marginTop: 8,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily:
+                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+              fontSize: 12,
+              lineHeight: 1.45,
+              color: 'var(--m-ink)',
+              maxHeight: 360,
+              overflow: 'auto',
+              padding: 12,
+              borderRadius: 8,
+              border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+              background: 'var(--m-surface-2, #fbfaf6)',
+            }}
+          >
+            {analysis.markdown}
+          </pre>
+        </>
+      ) : (
+        <div style={{ marginTop: 8, fontSize: 13, color: 'var(--m-ink-3)' }}>
+          {readiness?.status === 'ready'
+            ? 'Artifacts analyzed — the analyzer transcript has not been written back yet.'
+            : 'Analysis is still running. The transcript lands here when the analyzer reports back.'}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * The triage write surface (POST /api/issues/:id/events). Each verb is shown
+ * only when the server's transition gate would accept it from the current
+ * status, so the UI can never offer a 409.
+ */
+function AppIssueTriagePanel({
+  status,
+  triage,
+}: {
+  status: WorkItemStatus
+  triage: ReturnType<typeof useTriageAppIssue>
+}) {
+  const canAccept = appIssueTriageActionAllowed('accept', status)
+  const canClose = appIssueTriageActionAllowed('resolve', status)
+  if (!canAccept && !canClose) return null
+  return (
+    <section style={{ padding: '0 16px' }} data-testid="app-issue-triage-panel">
+      <MSectionH>Triage</MSectionH>
+      <div style={{ marginTop: 6, fontSize: 13, color: 'var(--m-ink-2)' }}>
+        Agents only ever reach review-ready — a human accepts to resolve.
+      </div>
+      {triage.error ? (
+        <div style={{ marginTop: 10 }}>
+          <MBanner
+            tone="error"
+            title="Triage failed"
+            body={triage.error instanceof Error ? triage.error.message : 'Request failed.'}
+          />
+        </div>
+      ) : null}
+      <div style={{ marginTop: 12 }}>
+        <MButtonRow>
+          {canAccept ? (
+            <MButton
+              variant="primary"
+              size="sm"
+              disabled={triage.isPending}
+              onClick={() => triage.mutate({ action: 'accept' })}
+            >
+              Accept
+            </MButton>
+          ) : null}
+          {canClose ? (
+            <MButton
+              variant={canAccept ? 'ghost' : 'primary'}
+              size="sm"
+              disabled={triage.isPending}
+              onClick={() => triage.mutate({ action: 'resolve' })}
+            >
+              Resolve
+            </MButton>
+          ) : null}
+          {canClose ? (
+            <MButton
+              variant="ghost"
+              size="sm"
+              disabled={triage.isPending}
+              onClick={() => triage.mutate({ action: 'wont_do' })}
+            >
+              Won&apos;t do
+            </MButton>
+          ) : null}
+        </MButtonRow>
+      </div>
+    </section>
   )
 }
 

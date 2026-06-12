@@ -197,6 +197,144 @@ export function useEscalateAppIssue(id: string) {
   })
 }
 
+// --- Triage write surface (POST /api/issues/:id/events) ----------------------
+
+/**
+ * The three human triage verbs over the app_issue status vocabulary — the
+ * narrow write surface issues.ts exposes (gated server-side on the PLATFORM
+ * capability `app_issue.triage`, same boundary as escalate). Agents only ever
+ * reach review_ready; `resolve` is the doc-promised "human accepts to resolve"
+ * leg (resolution.accepted). Never a free-form status write.
+ */
+export type AppIssueTriageAction = 'accept' | 'resolve' | 'wont_do'
+
+/** Mirrors issues.ts ACCEPT_FROM_STATUSES — accept pulls a fresh/bounced issue into triage. */
+export const APP_ISSUE_ACCEPT_FROM_STATUSES: readonly WorkItemStatus[] = [
+  'new',
+  'reopened',
+  'review_stale',
+  'proposal_expired',
+]
+
+/** Mirrors issues.ts CLOSE_FROM_STATUSES — resolve / wont_do close any non-terminal issue. */
+export const APP_ISSUE_CLOSE_FROM_STATUSES: readonly WorkItemStatus[] = [
+  'new',
+  'triaged',
+  'human_assigned',
+  'reopened',
+  'agent_running',
+  'review_ready',
+  'review_stale',
+  'proposal_expired',
+]
+
+/**
+ * Client-side mirror of the server's transition gate so the SPA only offers a
+ * verb the API would accept (the API re-checks under FOR UPDATE regardless).
+ */
+export function appIssueTriageActionAllowed(action: AppIssueTriageAction, status: WorkItemStatus): boolean {
+  const allowed = action === 'accept' ? APP_ISSUE_ACCEPT_FROM_STATUSES : APP_ISSUE_CLOSE_FROM_STATUSES
+  return allowed.includes(status)
+}
+
+export interface AppIssueTriageInput {
+  action: AppIssueTriageAction
+  message?: string | null
+  idempotency_key?: string | null
+}
+
+export interface AppIssueTriageResponse {
+  issue: AppIssue
+  event: ContextHandoffEvent | null
+}
+
+export function triageAppIssue(id: string, input: AppIssueTriageInput): Promise<AppIssueTriageResponse> {
+  return request<AppIssueTriageResponse>(`/api/issues/${encodeURIComponent(id)}/events`, {
+    method: 'POST',
+    json: input,
+  })
+}
+
+/**
+ * Triage mutation (accept / resolve / wont_do). On success it invalidates the
+ * issue detail plus every board query so the moved card leaves its column
+ * immediately. Hidden client-side without `app_issue.triage`; the API enforces
+ * the capability regardless.
+ */
+export function useTriageAppIssue(id: string) {
+  const qc = useQueryClient()
+  return useMutation<AppIssueTriageResponse, Error, AppIssueTriageInput>({
+    mutationFn: (input) => triageAppIssue(id, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: appIssueKeys.detail(id) })
+      qc.invalidateQueries({ queryKey: ['app-issues', 'board'] })
+    },
+  })
+}
+
+// --- Capture analysis (analyzer write-back) ----------------------------------
+
+/**
+ * The analyzer RETURN leg's write-back (agent-feed.ts applyTerminalCallbackEffects):
+ * a succeeded capture-analyzer callback stores its markdown transcript/analysis
+ * into the work item's `metadata.capture_analysis`. The issues detail API
+ * returns the full metadata, so the card can render the loop's payoff inline.
+ */
+export interface AppIssueCaptureAnalysis {
+  markdown: string
+  completed_at: string | null
+  artifacts: Array<Record<string, unknown>>
+}
+
+/**
+ * Analyzer READINESS (worker capture-artifact-analysis.ts): how many eligible
+ * capture artifacts have an analysis event yet — the evidence-status strip.
+ */
+export interface AppIssueCaptureAnalysisReadiness {
+  status: string
+  eligible_artifact_count: number | null
+  processed_artifact_count: number | null
+  pending_artifact_count: number | null
+  updated_at: string | null
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+export function readAppIssueCaptureAnalysis(
+  metadata: Record<string, unknown> | null | undefined,
+): AppIssueCaptureAnalysis | null {
+  const raw = jsonObject(metadata?.capture_analysis)
+  if (!raw || typeof raw.markdown !== 'string' || !raw.markdown.trim()) return null
+  return {
+    markdown: raw.markdown,
+    completed_at: typeof raw.completed_at === 'string' ? raw.completed_at : null,
+    artifacts: Array.isArray(raw.artifacts)
+      ? raw.artifacts.filter((entry): entry is Record<string, unknown> => Boolean(jsonObject(entry)))
+      : [],
+  }
+}
+
+export function readAppIssueCaptureAnalysisReadiness(
+  metadata: Record<string, unknown> | null | undefined,
+): AppIssueCaptureAnalysisReadiness | null {
+  const raw = jsonObject(metadata?.capture_artifact_analysis)
+  if (!raw || typeof raw.status !== 'string' || !raw.status.trim()) return null
+  return {
+    status: raw.status,
+    eligible_artifact_count: numberOrNull(raw.eligible_artifact_count),
+    processed_artifact_count: numberOrNull(raw.processed_artifact_count),
+    pending_artifact_count: numberOrNull(raw.pending_artifact_count),
+    updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : null,
+  }
+}
+
 // --- STEP6: per-issue cost ledger -------------------------------------------
 
 /**

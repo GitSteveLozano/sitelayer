@@ -19,6 +19,7 @@ import { getProjectSignal } from '@/lib/project-signal'
 import {
   FeedbackCaptureController,
   FeedbackCaptureQueuedError,
+  FeedbackCaptureStaleSessionError,
   type FeedbackCaptureBackend,
   type FeedbackCaptureControllerDeps,
 } from '@/lib/feedback-capture-controller'
@@ -807,6 +808,18 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         setOpen(false)
         setState('queued')
         window.setTimeout(() => setState('idle'), 4000)
+        return
+      }
+      // 409 — the session went stale server-side (already finalized/discarded/
+      // expired). The controller has already cleared its own state; drop the
+      // local session pointer too so the user can start fresh instead of the
+      // dock wedging on a retry that can never succeed.
+      if (err instanceof FeedbackCaptureStaleSessionError) {
+        clearLocalCaptureSession()
+        controllerRef.current = null
+        setRecordingKind(null)
+        setState('error')
+        setError('That capture session expired — your recording was dropped. Start a new one.')
         return
       }
       setState('error')

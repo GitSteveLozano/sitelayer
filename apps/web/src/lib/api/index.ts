@@ -119,20 +119,29 @@ export {
 } from './work-requests'
 
 export {
+  APP_ISSUE_ACCEPT_FROM_STATUSES,
+  APP_ISSUE_CLOSE_FROM_STATUSES,
+  appIssueTriageActionAllowed,
   escalateAppIssue,
   fetchAppIssueBoard,
   fetchAppIssueCostLedger,
   fetchAppIssueDetail,
+  readAppIssueCaptureAnalysis,
+  readAppIssueCaptureAnalysisReadiness,
+  triageAppIssue,
   useAppIssueBoard,
   useAppIssueCapabilities,
   useAppIssueCostLedger,
   useAppIssueDetail,
   useEscalateAppIssue,
+  useTriageAppIssue,
   type AppIssue,
   type AppIssueBoardColumn,
   type AppIssueBoardGroupBy,
   type AppIssueBoardParams,
   type AppIssueBoardResponse,
+  type AppIssueCaptureAnalysis,
+  type AppIssueCaptureAnalysisReadiness,
   type AppIssueCostLedgerEntry,
   type AppIssueCostLedgerResponse,
   type AppIssueDiagnosticManifest,
@@ -141,6 +150,9 @@ export {
   type AppIssueEscalatePull,
   type AppIssueEscalateResponse,
   type AppIssueEscalateTier,
+  type AppIssueTriageAction,
+  type AppIssueTriageInput,
+  type AppIssueTriageResponse,
 } from './app-issues'
 
 export {
@@ -192,6 +204,7 @@ export {
   normalizeAdminIssueBoardFilters,
   useAdminIssueBoard,
   type AdminIssueBoardColumn,
+  type AdminIssueBoardDomain,
   type AdminIssueBoardFilters,
   type AdminIssueBoardItem,
   type AdminIssueBoardResponse,
