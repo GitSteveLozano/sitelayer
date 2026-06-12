@@ -78,6 +78,16 @@ export const HANDOFF_EVENT_TYPES = [
   'agent.dispatch_retried',
   'agent.dispatch_cancel_requested',
   'agent.callback_missing',
+  // Sitelayer-local lifecycle extensions (same class as agent.callback_missing —
+  // not in projectkit's published WORK_LIFECYCLE_EVENT_TYPES, which keeps
+  // agent.message_received a pure annotation). They name the two return-leg
+  // failure modes so a status move is never smuggled onto an annotation event:
+  //   agent.failed           — a terminal failed/cancelled Callback from the
+  //                            dispatch lane (agent_running -> proposal_expired)
+  //   agent.dispatch_expired — the claim-lease sweep requeued a concern whose
+  //                            executor went silent past the lease window
+  'agent.failed',
+  'agent.dispatch_expired',
   'agent.message_received',
   'agent.artifact_attached',
   'agent.proposal_ready',

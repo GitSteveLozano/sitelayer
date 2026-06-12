@@ -25,14 +25,17 @@ import { isValidUuid } from '../http-utils.js'
  *   POST /api/agent-feed/callbacks               body: projectkit Callback JSON
  *        - 'accepted' = the CLAIM (lease): pending -> claimed -> 202;
  *          already claimed / terminal -> 409; unknown concern_ref -> 404.
- *          A claim also acknowledges the dispatch on the linked work item
- *          (agent.dispatch_acknowledged + status agent_running), which is
- *          what makes the work-dispatch-reconciler safety net see it.
+ *          A WORK-DISPATCH claim also acknowledges the dispatch on the linked
+ *          work item (agent.dispatch_acknowledged + status agent_running),
+ *          which is what makes the work-dispatch-reconciler safety net see
+ *          it; the capture-analyzer ENRICHMENT lane gets the ack event only —
+ *          it never owns the item's status.
  *        - terminal 'succeeded'|'failed'|'cancelled': stores the Callback,
  *          marks the row, stamps completed_at -> 202, then post-processes
- *          (work-item metadata.capture_analysis + context_handoff_events +
- *          the lifecycle advance: succeeded -> review_ready, failed ->
- *          proposal_expired off agent_running).
+ *          (work-item metadata.capture_analysis + context_handoff_events +,
+ *          for the work-dispatch lanes only, the lifecycle advance:
+ *          succeeded -> review_ready via agent.completed, failed ->
+ *          proposal_expired via agent.failed off agent_running).
  *   GET  /api/agent-feed/artifacts/:artifactId   streams capture_artifacts
  *        bytes (rrweb/audio/video/screenshot evidence) with the same auth.
  *
@@ -283,24 +286,44 @@ function callbackOutputs(callback: Callback): Record<string, unknown> {
 /**
  * Post-process a successful CLAIM after the lease has been durably taken on
  * the concern row. Best-effort (a failure here never un-claims the lease):
- * appends `agent.dispatch_acknowledged` and advances the linked work item to
- * `agent_running` / lane `agent` — exactly the (status, event) pair the
- * worker's work-dispatch-reconciler keys on, so an agent-feed dispatch whose
- * executor goes silent is covered by the same L4 safety net as a mesh
- * dispatch. Never reverses a terminal human decision (resolve/wont_do/
- * reverse): in that case the ack still lands on the timeline, status stays.
+ * appends `agent.dispatch_acknowledged` and — for the WORK-DISPATCH lanes
+ * (e.g. 'steve') only — advances the linked work item to `agent_running`,
+ * exactly the (status, event) pair the worker's work-dispatch-reconciler keys
+ * on, so an agent-feed dispatch whose executor goes silent is covered by the
+ * same L4 safety net as a mesh dispatch. The lane mirrors projectkit's
+ * deriveTransition for agent.dispatch_acknowledged: stay 'both' when a human
+ * is co-watching, else 'agent'.
+ *
+ * The capture-analyzer ENRICHMENT lane never owns the item: its claim appends
+ * the ack event for the timeline but never touches status/lane (the
+ * pull-executor claims with 'accepted' before working, so an analyzer claim
+ * advancing a fresh item to agent_running would strand it there — the
+ * analyzer's terminal callback is a metadata write-back only).
+ *
+ * Never reverses a terminal human decision (resolve/wont_do/reverse): in that
+ * case the ack still lands on the timeline, status stays.
+ *
+ * `claimedAt` is the lease instance stamp from the durable claim UPDATE: it
+ * salts the ack idempotency key so a RE-claim after a lease-sweep requeue
+ * records its own auditable ack event, while a duplicate delivery of the SAME
+ * claim instance stays idempotent.
  */
-export async function applyClaimEffects(row: AgentFeedConcernRow): Promise<void> {
+export async function applyClaimEffects(row: AgentFeedConcernRow, claimedAt: string | null): Promise<void> {
   if (!row.work_item_id) return
   const workItemId = row.work_item_id
   await withMutationTx(row.company_id, async (c) => {
-    const current = await c.query<{ status: WorkItemStatus }>(
-      `select status from context_work_items where company_id = $1 and id = $2 for update`,
+    const current = await c.query<{ status: WorkItemStatus; lane: WorkItemLane }>(
+      `select status, lane from context_work_items where company_id = $1 and id = $2 for update`,
       [row.company_id, workItemId],
     )
-    const status = current.rows[0]?.status
-    if (!status) return
-    const advance = !TERMINAL_WORK_ITEM_STATUSES.has(status)
+    const currentRow = current.rows[0]
+    if (!currentRow) return
+    const { status, lane } = currentRow
+    const isAnalyzer = row.audience === CAPTURE_ANALYZER_AUDIENCE
+    const advance = !isAnalyzer && !TERMINAL_WORK_ITEM_STATUSES.has(status)
+    // projectkit deriveTransition(agent.dispatch_acknowledged): keep lane
+    // 'both' when a human co-watches, else pure 'agent'.
+    const nextLane: WorkItemLane = lane === 'both' ? 'both' : 'agent'
     await updateContextWorkItemWithEventTx(c, {
       companyId: row.company_id,
       workItemId,
@@ -311,7 +334,7 @@ export async function applyClaimEffects(row: AgentFeedConcernRow): Promise<void>
         audience: row.audience,
         concern_ref: row.concern_ref,
         previous_status: status,
-        ...(advance ? { status: 'agent_running', lane: 'agent' } : {}),
+        ...(advance ? { status: 'agent_running', lane: nextLane } : {}),
       },
       metadata: {
         source: 'agent_feed_claim',
@@ -320,8 +343,8 @@ export async function applyClaimEffects(row: AgentFeedConcernRow): Promise<void>
         concern_ref: row.concern_ref,
         ...(row.capture_session_id ? { capture_session_id: row.capture_session_id } : {}),
       },
-      ...(advance ? { status: 'agent_running' as const, lane: 'agent' as const } : {}),
-      idempotencyKey: `agent_feed:${row.concern_ref}:claim`,
+      ...(advance ? { status: 'agent_running' as const, lane: nextLane } : {}),
+      idempotencyKey: `agent_feed:${row.concern_ref}:claim:${claimedAt ?? 'unknown'}`,
     })
   })
 }
@@ -332,17 +355,22 @@ export async function applyClaimEffects(row: AgentFeedConcernRow): Promise<void>
  * callback (the 202 to the executor is keyed off the durable store, exactly
  * like notifyCaptureWorkItem after finalize).
  *
- * - audience 'capture-analyzer' + succeeded + work_item_id: writes the
- *   analysis markdown (callback.outputs.stdout, capped) into the work item's
+ * - audience 'capture-analyzer' (the ENRICHMENT lane) NEVER moves the item:
+ *   succeeded + work_item_id writes the analysis markdown
+ *   (callback.outputs.stdout, capped) into the work item's
  *   metadata.capture_analysis and appends an `agent.artifact_attached`
- *   handoff event (the analysis is enrichment evidence — it never moves the
- *   item; debug-bundle enrichment attaches an artifact the same way).
+ *   handoff event (the analysis is enrichment evidence — debug-bundle
+ *   enrichment attaches an artifact the same way); failed/cancelled appends
+ *   an `agent.message_received` annotation with the error detail. Status and
+ *   lane are untouched in BOTH cases — the analyzer never owns the item.
  * - any other audience (e.g. 'steve'): the RETURN leg must ADVANCE the work
  *   item, not just decorate the timeline. succeeded → `agent.completed` +
- *   status `review_ready` / lane `both` (agents only ever reach review_ready;
- *   a human accepts to resolve). failed/cancelled → `agent.message_received`
- *   with the error detail + status `proposal_expired` / lane `both` — the
- *   same triage-able state the reconciler/stale sweeps use — but only off
+ *   status `review_ready` / lane `both` (projectkit's canonical transition —
+ *   agents only ever reach review_ready; a human accepts to resolve).
+ *   failed/cancelled → `agent.failed` (the sitelayer-local lifecycle
+ *   extension; agent.message_received stays a pure annotation per the
+ *   published reducer) + status `proposal_expired` / lane `both` — the same
+ *   triage-able state the reconciler/stale sweeps use — but only off
  *   `agent_running`, so a human decision is never clobbered.
  */
 export async function applyTerminalCallbackEffects(row: AgentFeedConcernRow, callback: Callback): Promise<void> {
@@ -354,30 +382,34 @@ export async function applyTerminalCallbackEffects(row: AgentFeedConcernRow, cal
   const succeeded = callback.status === 'succeeded'
 
   await withMutationTx(row.company_id, async (c) => {
-    if (isAnalyzer && succeeded) {
-      const stdout = typeof outputs.stdout === 'string' ? outputs.stdout : ''
-      const markdown = stdout.slice(0, CAPTURE_ANALYSIS_MARKDOWN_MAX_BYTES)
-      await c.query(
-        `update context_work_items
-            set metadata = metadata || $3::jsonb,
-                updated_at = now()
-          where company_id = $1 and id = $2`,
-        [
-          row.company_id,
-          workItemId,
-          JSON.stringify({
-            capture_analysis: {
-              markdown,
-              completed_at: completedAt,
-              artifacts: Array.isArray(callback.artifacts) ? callback.artifacts : [],
-            },
-          }),
-        ],
-      )
+    if (isAnalyzer) {
+      // The enrichment lane never owns the item: write-backs and annotations
+      // only, status/lane untouched whatever the callback outcome.
+      if (succeeded) {
+        const stdout = typeof outputs.stdout === 'string' ? outputs.stdout : ''
+        const markdown = stdout.slice(0, CAPTURE_ANALYSIS_MARKDOWN_MAX_BYTES)
+        await c.query(
+          `update context_work_items
+              set metadata = metadata || $3::jsonb,
+                  updated_at = now()
+            where company_id = $1 and id = $2`,
+          [
+            row.company_id,
+            workItemId,
+            JSON.stringify({
+              capture_analysis: {
+                markdown,
+                completed_at: completedAt,
+                artifacts: Array.isArray(callback.artifacts) ? callback.artifacts : [],
+              },
+            }),
+          ],
+        )
+      }
       await appendContextHandoffEventTx(c, {
         companyId: row.company_id,
         workItemId,
-        eventType: 'agent.artifact_attached',
+        eventType: succeeded ? 'agent.artifact_attached' : 'agent.message_received',
         actorKind: 'agent',
         actorRef: `agent-feed:${row.audience}`,
         payload: {
@@ -385,7 +417,9 @@ export async function applyTerminalCallbackEffects(row: AgentFeedConcernRow, cal
           concern_ref: row.concern_ref,
           callback_status: callback.status,
           completed_at: completedAt,
-          capture_analysis_attached: true,
+          ...(succeeded ? { capture_analysis_attached: true } : {}),
+          ...(typeof callback.error === 'string' ? { error: callback.error } : {}),
+          ...(typeof callback.error_code === 'string' ? { error_code: callback.error_code } : {}),
           ...(Array.isArray(callback.artifacts) ? { artifacts: callback.artifacts } : {}),
         },
         metadata: {
@@ -400,15 +434,15 @@ export async function applyTerminalCallbackEffects(row: AgentFeedConcernRow, cal
       return
     }
 
-    // Non-analyzer terminal (or analyzer failed/cancelled): advance the work
-    // item through the same helper every other lifecycle writer uses.
+    // Work-dispatch terminal: advance the work item through the same helper
+    // every other lifecycle writer uses.
     const current = await c.query<{ status: WorkItemStatus }>(
       `select status from context_work_items where company_id = $1 and id = $2 for update`,
       [row.company_id, workItemId],
     )
     const currentStatus = current.rows[0]?.status
     if (!currentStatus) return
-    const eventType: HandoffEventType = succeeded ? 'agent.completed' : 'agent.message_received'
+    const eventType: HandoffEventType = succeeded ? 'agent.completed' : 'agent.failed'
     const next: { status?: WorkItemStatus; lane?: WorkItemLane } =
       succeeded && !TERMINAL_WORK_ITEM_STATUSES.has(currentStatus)
         ? { status: 'review_ready', lane: 'both' }
@@ -476,11 +510,11 @@ async function handleCallback(deps: AgentFeedRouteDeps, audience: string): Promi
   if (callback.status === 'accepted') {
     // THE CLAIM: the first accepted callback wins the lease. Guarded by the
     // status='pending' predicate so a concurrent second claim updates 0 rows.
-    const claimed = await deps.pool.query<{ id: string }>(
+    const claimed = await deps.pool.query<{ id: string; claimed_at: string | null }>(
       `update agent_feed_concerns
           set status = 'claimed', claimed_at = now(), updated_at = now()
         where id = $1 and company_id = $2 and status = 'pending'
-        returning id`,
+        returning id, claimed_at::text as claimed_at`,
       [row.id, row.company_id],
     )
     if (!claimed.rows[0]) {
@@ -490,7 +524,7 @@ async function handleCallback(deps: AgentFeedRouteDeps, audience: string): Promi
     // Best-effort AFTER the durable claim — the ack event + agent_running
     // move must never be able to un-claim the lease.
     try {
-      await applyClaimEffects(row)
+      await applyClaimEffects(row, claimed.rows[0].claimed_at)
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : String(err), concern_ref: row.concern_ref, audience },

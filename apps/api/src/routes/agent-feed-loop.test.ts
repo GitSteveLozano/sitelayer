@@ -197,7 +197,7 @@ class LoopPool {
       if (!row) return { rows: [], rowCount: 0 }
       row.status = 'claimed'
       row.claimed_at = '2026-06-09T12:01:00.000Z'
-      return { rows: [{ id: row.id }], rowCount: 1 }
+      return { rows: [{ id: row.id, claimed_at: row.claimed_at }], rowCount: 1 }
     }
     if (normalized.startsWith('update agent_feed_concerns') && normalized.includes('callback = $4::jsonb')) {
       const row = this.concerns.find((r) => r.id === params[0] && (r.status === 'pending' || r.status === 'claimed'))

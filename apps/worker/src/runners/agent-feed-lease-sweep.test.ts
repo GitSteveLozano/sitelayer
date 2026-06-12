@@ -77,7 +77,9 @@ describe('createAgentFeedLeaseSweepRunner', () => {
     expect(update?.sql).toContain('claimed_at = null')
     expect(update?.params).toEqual(['company-1', '00000000-0000-4000-c000-000000000001'])
     const insert = calls.find((call) => call.sql.includes('insert into context_handoff_events'))
-    expect(insert?.sql).toContain("'agent.callback_missing'")
+    // The lease-expiry lifecycle vocabulary (HANDOFF_EVENT_TYPES extension),
+    // not the reconciler's agent.callback_missing.
+    expect(insert?.sql).toContain("'agent.dispatch_expired'")
     expect(insert?.params[1]).toBe('00000000-0000-4000-9000-000000000001')
     expect(insert?.params[4]).toBe(
       'agent_feed:wi:00000000-0000-4000-9000-000000000001:steve:lease_expired:2026-06-09 12:00:00+00',
@@ -114,12 +116,16 @@ describe('createAgentFeedLeaseSweepRunner', () => {
     expect(calls.some((call) => call.sql.includes('insert into context_handoff_events'))).toBe(false)
   })
 
-  it('throttles repeated sweeps inside the configured interval', async () => {
+  it('throttles repeated sweeps inside the configured interval PER COMPANY', async () => {
     const { pool, calls } = makePool([])
     const runner = createAgentFeedLeaseSweepRunner({ pool })
 
     expect(await runner.maybeSweep('company-1')).toEqual({ ran: true, requeued: 0, failed: 0 })
     expect(await runner.maybeSweep('company-1')).toEqual({ ran: false, requeued: 0, failed: 0 })
-    expect(calls.filter((call) => call.sql.toLowerCase() === 'begin')).toHaveLength(1)
+    // A different tenant is on its OWN cadence: company-1 draining first must
+    // not consume company-2's interval (multi-tenant starvation guard).
+    expect(await runner.maybeSweep('company-2')).toEqual({ ran: true, requeued: 0, failed: 0 })
+    expect(await runner.maybeSweep('company-2')).toEqual({ ran: false, requeued: 0, failed: 0 })
+    expect(calls.filter((call) => call.sql.toLowerCase() === 'begin')).toHaveLength(2)
   })
 })

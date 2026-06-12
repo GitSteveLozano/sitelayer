@@ -113,6 +113,7 @@ class FakeFeedPool {
   handoffEvents: JsonRecord[] = []
   private concernCounter = 0
   private handoffCounter = 0
+  private claimCounter = 0
 
   attach() {
     attachMutationTx({
@@ -217,10 +218,13 @@ class FakeFeedPool {
       const [id, companyId] = params as [string, string]
       const row = this.concerns.find((r) => r.id === id && r.company_id === companyId && r.status === 'pending')
       if (!row) return { rows: [], rowCount: 0 }
+      this.claimCounter += 1
       row.status = 'claimed'
-      row.claimed_at = '2026-06-09T12:01:00.000Z'
-      row.updated_at = '2026-06-09T12:01:00.000Z'
-      return { rows: [{ id: row.id }], rowCount: 1 }
+      // Distinct per claim instance, like Postgres now() — the re-claim
+      // idempotency-key test depends on a fresh stamp per lease generation.
+      row.claimed_at = `2026-06-09T12:01:${String(this.claimCounter).padStart(2, '0')}.000Z`
+      row.updated_at = row.claimed_at
+      return { rows: [{ id: row.id, claimed_at: row.claimed_at }], rowCount: 1 }
     }
 
     if (normalized.startsWith('update agent_feed_concerns') && normalized.includes('callback = $4::jsonb')) {
@@ -251,7 +255,14 @@ class FakeFeedPool {
       return { rows: [], rowCount: 1 }
     }
 
-    // applyClaimEffects / applyTerminalCallbackEffects status pre-read.
+    // applyClaimEffects locked status/lane pre-read.
+    if (normalized.startsWith('select status, lane from context_work_items')) {
+      const [companyId, workItemId] = params as [string, string]
+      const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
+      return { rows: item ? [{ status: item.status, lane: item.lane }] : [], rowCount: item ? 1 : 0 }
+    }
+
+    // applyTerminalCallbackEffects status pre-read.
     if (normalized.startsWith('select status from context_work_items')) {
       const [companyId, workItemId] = params as [string, string]
       const item = this.workItems.find((w) => w.company_id === companyId && w.id === workItemId)
@@ -558,8 +569,85 @@ describe('POST /api/agent-feed/callbacks — claim semantics', () => {
       event_type: 'agent.dispatch_acknowledged',
       actor_kind: 'agent',
       actor_ref: 'agent-feed:steve',
-      idempotency_key: `agent_feed:${row.concern_ref}:claim`,
+      // Salted with the lease instance (claimed_at) so a re-claim after a
+      // lease-sweep requeue stamps its OWN auditable ack event.
+      idempotency_key: `agent_feed:${row.concern_ref}:claim:${pool.concerns[0]?.claimed_at}`,
     })
+  })
+
+  it("a claim preserves lane 'both' when a human co-watches (projectkit deriveTransition)", async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'proposal_expired', lane: 'both' })
+    const row = pool.seedConcern({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      work_item_id: WORK_ITEM_ID,
+    })
+    const { deps, responses } = makeDeps(pool, {
+      body: { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' },
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.workItems[0]?.status).toBe('agent_running')
+    // Canonical agent.dispatch_acknowledged: lane stays 'both' when a human
+    // is co-watching — never clobbered to 'agent'.
+    expect(pool.workItems[0]?.lane).toBe('both')
+  })
+
+  it('an analyzer claim appends the ack event but never advances the work item (enrichment lane)', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'new', lane: 'triage' })
+    const row = pool.seedConcern({ work_item_id: WORK_ITEM_ID, capture_session_id: SESSION_ID })
+    const { deps, responses } = makeDeps(pool, {
+      body: { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' },
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.concerns[0]?.status).toBe('claimed')
+    // The enrichment lane never owns the item: a fresh capture issue must NOT
+    // flip to agent_running just because the analyzer claimed its concern.
+    expect(pool.workItems[0]?.status).toBe('new')
+    expect(pool.workItems[0]?.lane).toBe('triage')
+    expect(pool.handoffEvents).toHaveLength(1)
+    expect(pool.handoffEvents[0]).toMatchObject({
+      event_type: 'agent.dispatch_acknowledged',
+      actor_ref: 'agent-feed:capture-analyzer',
+    })
+    expect((pool.handoffEvents[0]?.payload as JsonRecord).status).toBeUndefined()
+  })
+
+  it('a re-claim after a lease-sweep requeue records its own ack event (distinct idempotency key)', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'triaged', lane: 'triage' })
+    const row = pool.seedConcern({
+      audience: 'steve',
+      concern_ref: `wi:${WORK_ITEM_ID}:steve`,
+      work_item_id: WORK_ITEM_ID,
+    })
+    const claim = { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' }
+
+    const first = makeDeps(pool, { body: claim })
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), first.deps)
+    expect(first.responses[0]?.status).toBe(202)
+    const firstKey = pool.handoffEvents[0]?.idempotency_key
+
+    // The lease sweep requeues the wedged claim: pending again, lease cleared.
+    pool.concerns[0]!.status = 'pending'
+    pool.concerns[0]!.claimed_at = null
+
+    const second = makeDeps(pool, { body: claim })
+    await handleAgentFeedRoutes(req('POST', bearer('tok-steve')), url('/api/agent-feed/callbacks'), second.deps)
+    expect(second.responses[0]?.status).toBe(202)
+
+    // The second lease generation is auditable: a NEW ack event, not an
+    // idempotency-conflict no-op against the first claim's key.
+    expect(pool.handoffEvents).toHaveLength(2)
+    expect(pool.handoffEvents[1]?.idempotency_key).not.toBe(firstKey)
+    expect(pool.handoffEvents[1]).toMatchObject({ event_type: 'agent.dispatch_acknowledged' })
   })
 
   it('a claim on a work item a human already resolved keeps the resolution (event only)', async () => {
@@ -650,6 +738,58 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect(pool.workItems[0]?.status).toBe('new')
   })
 
+  it('REGRESSION: analyzer claim + succeeded callback leaves status untouched while writing capture_analysis', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'new', lane: 'triage' })
+    const row = pool.seedConcern({ work_item_id: WORK_ITEM_ID, capture_session_id: SESSION_ID })
+
+    // 1. The pull-executor claims with 'accepted' BEFORE working.
+    const claim = makeDeps(pool, {
+      body: { schema_version: '1.4.0', concern_ref: row.concern_ref, status: 'accepted' },
+    })
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), claim.deps)
+    expect(claim.responses[0]?.status).toBe(202)
+    expect(pool.workItems[0]?.status).toBe('new')
+
+    // 2. The analyzer succeeds: write-back only, no lifecycle move needed.
+    const terminal = makeDeps(pool, {
+      body: terminalCallback(row.concern_ref, { outputs: { stdout: '# Analysis' } }),
+    })
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), terminal.deps)
+    expect(terminal.responses[0]?.status).toBe(202)
+    expect(pool.concerns[0]?.status).toBe('succeeded')
+
+    // The item never visited agent_running and is NOT stranded there: it is
+    // still triage-able exactly where the capture finalize left it.
+    expect(pool.workItems[0]?.status).toBe('new')
+    expect(pool.workItems[0]?.lane).toBe('triage')
+    expect((pool.workItems[0]?.metadata.capture_analysis as JsonRecord).markdown).toBe('# Analysis')
+    expect(pool.handoffEvents.map((e) => e.event_type)).toEqual([
+      'agent.dispatch_acknowledged',
+      'agent.artifact_attached',
+    ])
+  })
+
+  it('a failed analyzer callback annotates the timeline without moving the work item', async () => {
+    const pool = new FakeFeedPool()
+    pool.seedWorkItem({ status: 'new', lane: 'triage' })
+    const row = pool.seedConcern({ status: 'claimed', work_item_id: WORK_ITEM_ID })
+    const { deps, responses } = makeDeps(pool, {
+      body: terminalCallback(row.concern_ref, { status: 'failed', error: 'analyzer crashed' }),
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.concerns[0]?.status).toBe('failed')
+    // A failed enrichment leg is NOT a proposal_expired work item.
+    expect(pool.workItems[0]?.status).toBe('new')
+    expect(pool.workItems[0]?.lane).toBe('triage')
+    expect(pool.workItems[0]?.metadata.capture_analysis).toBeUndefined()
+    expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.message_received' })
+    expect((pool.handoffEvents[0]?.payload as JsonRecord).error).toBe('analyzer crashed')
+  })
+
   it('caps the persisted analysis markdown at ~64KB', async () => {
     const pool = new FakeFeedPool()
     pool.seedWorkItem({ status: 'new', lane: 'triage' })
@@ -695,7 +835,7 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect((pool.handoffEvents[0]?.payload as JsonRecord).status).toBe('review_ready')
   })
 
-  it('a failed callback appends agent.message_received with the error and un-strands agent_running', async () => {
+  it('a failed callback appends agent.failed with the error and un-strands agent_running', async () => {
     const pool = new FakeFeedPool()
     pool.seedWorkItem({ status: 'agent_running', lane: 'agent' })
     const row = pool.seedConcern({
@@ -716,7 +856,9 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     // reconciler/stale sweeps use for a dead agent leg.
     expect(pool.workItems[0]?.status).toBe('proposal_expired')
     expect(pool.workItems[0]?.lane).toBe('both')
-    expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.message_received' })
+    // The failure is its own lifecycle event — agent.message_received stays a
+    // pure annotation per the projectkit reducer; the move rides agent.failed.
+    expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.failed' })
     expect((pool.handoffEvents[0]?.payload as JsonRecord).error).toBe('agent blew up')
     expect((pool.handoffEvents[0]?.payload as JsonRecord).error_code).toBe('execution')
   })

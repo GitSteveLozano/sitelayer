@@ -10,15 +10,18 @@ import { setCompanyGuc } from '../runner-utils.js'
  * executor can claim it and no terminal Callback will ever arrive. This
  * runner requeues concerns stuck in 'claimed' past the lease window back to
  * 'pending' (claimed_at cleared) so the next poll can re-serve them, and
- * stamps an `agent.callback_missing` event on the linked work item's timeline
- * (the existing "executor went silent" vocabulary — see the
- * work-dispatch-reconciler) so the requeue is visible to triage.
+ * stamps an `agent.dispatch_expired` event on the linked work item's timeline
+ * (the lease-expiry lifecycle vocabulary in context-handoff.ts
+ * HANDOFF_EVENT_TYPES — a sitelayer-local extension alongside
+ * agent.callback_missing) so the requeue is visible to triage.
  *
  * Lease window: AGENT_FEED_CLAIM_LEASE_MINUTES (default 30). Cadence:
- * AGENT_FEED_CLAIM_SWEEP_INTERVAL_MS (default 5 min), same shape as the other
- * work-request sweeps. The work item's status is intentionally left alone —
- * a re-claim re-acknowledges it, and the 24h work-dispatch-reconciler stays
- * the L4 backstop for an item that never gets re-claimed.
+ * AGENT_FEED_CLAIM_SWEEP_INTERVAL_MS (default 5 min), throttled PER COMPANY
+ * (a Map keyed by company id) so the multi-tenant drain loop sweeps every
+ * company on its own cadence instead of rotating one company per interval.
+ * The work item's status is intentionally left alone — a re-claim
+ * re-acknowledges it, and the 24h work-dispatch-reconciler stays the L4
+ * backstop for an item that never gets re-claimed.
  */
 
 export type AgentFeedLeaseSweepSummary = {
@@ -33,14 +36,15 @@ export type AgentFeedLeaseSweepDeps = {
 
 export function createAgentFeedLeaseSweepRunner(deps: AgentFeedLeaseSweepDeps) {
   const { pool } = deps
-  let lastRunAt = 0
+  const lastRunAtByCompany = new Map<string, number>()
 
   return {
     async maybeSweep(companyId: string): Promise<AgentFeedLeaseSweepSummary> {
       const intervalMs = readPositiveInt('AGENT_FEED_CLAIM_SWEEP_INTERVAL_MS', 300_000)
       const now = Date.now()
+      const lastRunAt = lastRunAtByCompany.get(companyId) ?? 0
       if (now - lastRunAt < intervalMs) return { ran: false, requeued: 0, failed: 0 }
-      lastRunAt = now
+      lastRunAtByCompany.set(companyId, now)
       return sweepExpiredClaims(pool, companyId)
     },
   }
@@ -95,7 +99,7 @@ async function sweepExpiredClaims(pool: Pool, companyId: string): Promise<AgentF
              company_id, work_item_id, event_type, actor_kind, actor_ref,
              source_system, payload, metadata, idempotency_key, capture_session_id,
              redaction_version
-           ) values ($1, $2, 'agent.callback_missing', 'system', 'agent_feed_lease_sweep',
+           ) values ($1, $2, 'agent.dispatch_expired', 'system', 'agent_feed_lease_sweep',
              'sitelayer-worker', $3::jsonb, $4::jsonb, $5, $6::uuid,
              'context-handoff-v1')
            on conflict (company_id, idempotency_key) where idempotency_key is not null do nothing`,

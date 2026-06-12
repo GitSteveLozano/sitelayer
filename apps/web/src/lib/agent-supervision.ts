@@ -153,7 +153,9 @@ const AGENT_CALLBACK_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent.artifact_attached',
   'agent.proposal_ready',
   'agent.completed',
+  'agent.failed',
   'agent.callback_missing',
+  'agent.dispatch_expired',
   'human.review_requested',
 ])
 
