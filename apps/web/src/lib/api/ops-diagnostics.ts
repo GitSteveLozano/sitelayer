@@ -68,6 +68,13 @@ export type OpsOnsiteDiagnosticSessionCreateResponse = {
   control_token: string
 }
 
+export type OpsOnsiteDiagnosticAgentFeedResult = {
+  audience: string
+  concern_ref: string
+  queued: boolean
+  id: string | null
+}
+
 export type OpsOnsiteDiagnosticActionRequestInput = {
   action_key: OpsOnsiteDiagnosticActionKey
   control_token: string
@@ -79,6 +86,7 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
 }
 

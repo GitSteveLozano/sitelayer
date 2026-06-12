@@ -150,6 +150,7 @@ export {
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsDiagnosticsResponse,
+  type OpsOnsiteDiagnosticAgentFeedResult,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionCreateInput,

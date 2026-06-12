@@ -2,8 +2,10 @@ import type http from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { Capability } from '@sitelayer/domain'
+import { CONTRACT_VERSION, type Concern } from '@operator/projectkit'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { insertAgentFeedConcernTx } from './agent-feed.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -74,7 +76,15 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   accepted_action: {
     key: OpsOnsiteDiagnosticActionKey
     effect: 'audit_only'
+    agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
+}
+
+export type OpsOnsiteDiagnosticAgentFeedResult = {
+  audience: string
+  concern_ref: string
+  queued: boolean
+  id: string | null
 }
 
 export type OpsDiagnosticsResponse = {
@@ -114,6 +124,8 @@ const SESSION_TTL_MS = 60 * 60 * 1000
 const MAX_ACTIVE_SESSIONS = 100
 const APP_ISSUE_VIEW: Capability = 'app_issue.view'
 const APP_ISSUE_CAPTURE: Capability = 'app_issue.capture'
+// Optional agent-feed lane for routed onsite actions. Unset means audit-only.
+const OPS_DIAGNOSTIC_AGENT_AUDIENCE_ENV = 'SITELAYER_OPS_DIAGNOSTIC_AGENT_AUDIENCE'
 
 type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
   control_token?: string
@@ -442,8 +454,12 @@ async function recordOnsiteDiagnosticAction(
       ok: true,
       value: {
         schema: 'sitelayer.ops_diagnostic_session_action.v1',
-        session: publicSession(persisted),
-        accepted_action: { key: actionKey, effect: 'audit_only' },
+        session: publicSession(persisted.session),
+        accepted_action: {
+          key: actionKey,
+          effect: 'audit_only',
+          ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
+        },
       },
     }
   }
@@ -483,7 +499,7 @@ async function recordPersistentOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
-): Promise<StoredOnsiteDiagnosticSession | null> {
+): Promise<{ session: StoredOnsiteDiagnosticSession; agentFeed: OpsOnsiteDiagnosticAgentFeedResult | null } | null> {
   const at = new Date().toISOString()
   const event: OpsOnsiteDiagnosticAuditEvent = {
     id: randomUUID(),
@@ -494,24 +510,96 @@ async function recordPersistentOnsiteDiagnosticAction(
     effect: 'audit_only',
     summary: `Requested ${actionLabel}.`,
   }
-  const updated = await withMutationTx(companyId, async (client: PoolClient) => {
+  const result = await withMutationTx(companyId, async (client: PoolClient) => {
     const update = await client.query(
       `update ops_diagnostic_sessions
           set updated_at = $3
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3`,
       [companyId, session.id, at],
     )
-    if (update.rowCount !== 1) return false
+    if (update.rowCount !== 1) return null
     await client.query(
       `insert into ops_diagnostic_session_events (
          id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
        ) values ($1, $2, $3, $4, $5, $6, 'audit_only', $7, $8)`,
       [event.id, companyId, session.id, actorUserId, event.type, actionKey, event.summary, at],
     )
-    return true
+    const agentFeed = await enqueueOnsiteDiagnosticConcernTx(client, {
+      companyId,
+      session,
+      event,
+      actionKey,
+      actionLabel,
+      actorUserId,
+      requestedAt: at,
+    })
+    return { agentFeed }
   })
-  if (!updated) return null
-  return { ...session, audit_events: [...session.audit_events, event] }
+  if (!result) return null
+  return { session: { ...session, audit_events: [...session.audit_events, event] }, agentFeed: result.agentFeed }
+}
+
+async function enqueueOnsiteDiagnosticConcernTx(
+  client: PoolClient,
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+    requestedAt: string
+  },
+): Promise<OpsOnsiteDiagnosticAgentFeedResult | null> {
+  if (!routesToAgentFeed(args.actionKey)) return null
+  const audience = opsDiagnosticAgentAudience()
+  if (!audience) return null
+  const concernRef = `opsdiag:${args.session.id}:${args.actionKey}`
+  const concern: Concern = {
+    schema_version: CONTRACT_VERSION,
+    project_key: 'sitelayer',
+    dispatched_at: args.requestedAt,
+    concern_ref: concernRef,
+    kind: 'execute',
+    title: `${args.actionLabel} for onsite diagnostics`,
+    summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
+    audience,
+    assignee: audience,
+    source_event_ref: `ops_diagnostic_session:${args.session.id}`,
+    priority: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    acceptance: [
+      'Inspect the onsite diagnostic session plan and blockers.',
+      'Return a callback with the next phone-safe operator action or a clear reason no action is possible.',
+    ],
+    inputs: {
+      ops_diagnostic_session_id: args.session.id,
+      action_event_id: args.event.id,
+      requested_action: args.actionKey,
+      requested_by: args.actorUserId,
+      plan_status: args.session.plan.status,
+      control_level: args.session.plan.control_level,
+      recommended_entry: args.session.plan.recommended_entry,
+      can_capture_desktop: args.session.plan.can_capture_desktop,
+      can_route_work: args.session.plan.can_route_work,
+      can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
+      blockers: args.session.plan.blockers,
+      ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
+    },
+  }
+  const id = await insertAgentFeedConcernTx(client, {
+    companyId: args.companyId,
+    audience,
+    concern,
+  })
+  return { audience, concern_ref: concernRef, queued: Boolean(id), id }
+}
+
+function routesToAgentFeed(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
+  return actionKey === 'route_support_packet' || actionKey === 'dispatch_agent_review'
+}
+
+function opsDiagnosticAgentAudience(): string | null {
+  return boundedString(process.env[OPS_DIAGNOSTIC_AGENT_AUDIENCE_ENV], 80)
 }
 
 async function lookupSession(
