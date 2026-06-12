@@ -64,6 +64,14 @@ type FeedbackInviteLookupResult =
   | { ok: true; row: FeedbackInvitePublicRow }
   | { ok: false; status: number; error: string }
 
+const FEEDBACK_INVITE_CAPTURE_METADATA_KEYS = [
+  'created_from',
+  'company_slug',
+  'ops_diagnostic_session_id',
+  'ops_diagnostic_control_level',
+  'ops_diagnostic_state',
+] as const
+
 const CreateFeedbackInviteSchema = z
   .object({
     reviewer_ref: z.string().trim().min(1).max(120).optional(),
@@ -129,6 +137,46 @@ function publicShape(row: FeedbackInvitePublicRow) {
   }
 }
 
+function inviteMetadataRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function copyCaptureMetadataValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed ? trimmed.slice(0, 240) : null
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'boolean') return value
+  return null
+}
+
+export function feedbackInviteCaptureMetadata(
+  invite: {
+    id: string
+    reviewer_ref: string
+    source: string
+    target_route: string | null
+    allowed_capture_modes: readonly string[]
+    metadata: Record<string, unknown>
+  },
+): Record<string, unknown> {
+  const metadata = inviteMetadataRecord(invite.metadata)
+  const contextual: Record<string, unknown> = {}
+  for (const key of FEEDBACK_INVITE_CAPTURE_METADATA_KEYS) {
+    const value = copyCaptureMetadataValue(metadata[key])
+    if (value !== null) contextual[key] = value
+  }
+  return {
+    feedback_invite_id: invite.id,
+    reviewer_ref: invite.reviewer_ref,
+    source: invite.source,
+    target_route: invite.target_route,
+    allowed_capture_modes: invite.allowed_capture_modes,
+    ...contextual,
+  }
+}
+
 function buildFeedbackInviteUrl(baseUrl: string, token: string): string {
   const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
   const url = new URL('/feedback', base)
@@ -179,24 +227,20 @@ async function loadFeedbackInviteByToken(
 }
 
 function actorForFeedbackInvite(invite: FeedbackInvitePublicRow): PortalCaptureActor {
+  const captureMetadata = feedbackInviteCaptureMetadata(invite)
   return {
     companyId: invite.company_id,
     actorRef: invite.id,
     authority: 'signed_feedback_invite_token',
     surface: 'feedback_invite',
-    metadata: {
-      feedback_invite_id: invite.id,
-      reviewer_ref: invite.reviewer_ref,
-      source: invite.source,
-      target_route: invite.target_route,
-      allowed_capture_modes: invite.allowed_capture_modes,
-    },
+    metadata: captureMetadata,
     consentScope: {
       feedback_invite_id: invite.id,
       reviewer_ref: invite.reviewer_ref,
       source: invite.source,
       target_route: invite.target_route,
       allowed_capture_modes: invite.allowed_capture_modes,
+      ...captureMetadata,
     },
   }
 }

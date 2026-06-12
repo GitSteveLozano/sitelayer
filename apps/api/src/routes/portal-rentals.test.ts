@@ -799,12 +799,18 @@ describe('handlePortalRentalRoutes — capture sessions', () => {
       metadata: {
         source: 'capture_session_finalize',
         portal_surface: 'rental_portal',
+        rental_share_link_id: 'rental-share-1',
+        customer_id: 'cust-1',
         event_count: 1,
       },
     })
     expect(pool.handoffEvents[0]).toMatchObject({
       actor_kind: 'external',
       actor_ref: 'portal_guest:signed_rental_share_token:rental-share-1',
+      metadata: {
+        rental_share_link_id: 'rental-share-1',
+        customer_id: 'cust-1',
+      },
     })
     expect(pool.captureSessions[0]).toMatchObject({
       status: 'stopped',

@@ -95,12 +95,40 @@ type CaptureFinalizeSnapshot = {
   private_artifact_count: number
 }
 
+const PORTAL_ACTOR_WORK_ITEM_METADATA_KEYS = [
+  'estimate_share_link_id',
+  'project_id',
+  'rental_share_link_id',
+  'customer_id',
+  'feedback_invite_id',
+  'reviewer_ref',
+  'target_route',
+  'allowed_capture_modes',
+  'created_from',
+  'company_slug',
+  'ops_diagnostic_session_id',
+  'ops_diagnostic_control_level',
+  'ops_diagnostic_state',
+] as const
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
+}
+
+function portalActorWorkItemMetadata(actor: PortalCaptureActor): JsonRecord {
+  const actorMetadata = supportJsonRecord(actor.metadata ?? {})
+  const routed: JsonRecord = {}
+  for (const key of PORTAL_ACTOR_WORK_ITEM_METADATA_KEYS) {
+    if (actorMetadata[key] !== undefined && actorMetadata[key] !== null) routed[key] = actorMetadata[key]
+  }
+  if (actorMetadata.source !== undefined && actorMetadata.source !== null) {
+    routed.portal_actor_source = actorMetadata.source
+  }
+  return routed
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -742,6 +770,7 @@ export async function finalizePortalCaptureSession(
   const clientRequestId = optionalText(body.client_request_id, 160) ?? `portal_capture_session_finalize:${id}`
   const category = optionalText(body.category, 120) ?? 'portal_capture_session'
   const buildSha = snapshot.session.app_build_sha ?? ctx.buildSha ?? null
+  const actorWorkItemMetadata = portalActorWorkItemMetadata(actor)
   const rawClient: JsonRecord = {
     capture_session_id: id,
     path: route ? { route } : null,
@@ -749,7 +778,7 @@ export async function finalizePortalCaptureSession(
       surface: actor.surface,
       authority: actor.authority,
       actor_ref: actor.actorRef,
-      ...(actor.metadata ?? {}),
+      ...supportJsonRecord(actor.metadata ?? {}),
     },
     capture_session: {
       id,
@@ -817,6 +846,7 @@ export async function finalizePortalCaptureSession(
         captureSessionId: id,
         createdByUserId: actorUserId,
         metadata: {
+          ...actorWorkItemMetadata,
           category,
           source: 'capture_session_finalize',
           capture_session_id: id,
@@ -848,8 +878,10 @@ export async function finalizePortalCaptureSession(
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
           portal_surface: actor.surface,
+          portal_actor_metadata: actorWorkItemMetadata,
         },
         metadata: {
+          ...actorWorkItemMetadata,
           category,
           source: 'capture_session_finalize',
           capture_session_id: id,
@@ -928,6 +960,7 @@ export async function finalizePortalCaptureSession(
       lane: result.item.lane,
       severity: result.item.severity,
       portal_surface: actor.surface,
+      ...actorWorkItemMetadata,
     },
   })
 

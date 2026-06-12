@@ -2,16 +2,20 @@ import { describe, expect, it } from 'vitest'
 import {
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
+  buildLeaveBehindCaptureInviteInput,
   canOpenDesktopEvidence,
   desktopEvidenceTone,
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
   formatDesktopEvidenceSummary,
+  resolveLatestDesktopEvidence,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
   OpsOnsiteDiagnosticAgentFeedDelivery,
   OpsOnsiteDiagnosticDesktopEvidenceResult,
+  OpsOnsiteDiagnosticSessionActionResponse,
+  OpsOnsiteDiagnosticSessionRecord,
   OpsOnsiteDiagnosticSessionPlan,
 } from '@/lib/api'
 
@@ -73,6 +77,36 @@ function plan(overrides: Partial<OpsOnsiteDiagnosticSessionPlan> = {}): OpsOnsit
   }
 }
 
+function session(overrides: Partial<OpsOnsiteDiagnosticSessionRecord> = {}): OpsOnsiteDiagnosticSessionRecord {
+  return {
+    id: 'diag-session-1',
+    state: 'active',
+    created_at: '2026-06-12T12:00:00.000Z',
+    expires_at: '2026-06-12T13:00:00.000Z',
+    operator_user_id: 'user_42',
+    label: 'Mobile ops',
+    intent: 'capture_desktop_context',
+    plan: plan(),
+    audit_events: [],
+    agent_feed_deliveries: [],
+    ...overrides,
+  }
+}
+
+function actionResponse(
+  overrides: Partial<OpsOnsiteDiagnosticSessionActionResponse['accepted_action']> = {},
+): OpsOnsiteDiagnosticSessionActionResponse {
+  return {
+    schema: 'sitelayer.ops_diagnostic_session_action.v1',
+    session: session(),
+    accepted_action: {
+      key: 'capture_desktop_context',
+      effect: 'audit_only',
+      ...overrides,
+    },
+  }
+}
+
 describe('MobileOps agent-feed delivery copy', () => {
   it('shows no-callback state for stale claimed onsite actions', () => {
     const state = delivery({
@@ -118,6 +152,23 @@ describe('MobileOps desktop evidence copy', () => {
     expect(formatDesktopEvidenceSummary(desktopEvidence({ status: 'failed', error: 'screen capture timeout' }))).toBe(
       'Attach failed: screen capture timeout',
     )
+  })
+
+  it('falls back to rehydrated session desktop evidence after refresh', () => {
+    const persisted = desktopEvidence({ artifact_id: 'persisted-artifact' })
+    const fresh = desktopEvidence({ artifact_id: 'fresh-artifact' })
+
+    expect(resolveLatestDesktopEvidence(null, session({ desktop_evidence: persisted }))?.artifact_id).toBe(
+      'persisted-artifact',
+    )
+    expect(
+      resolveLatestDesktopEvidence(
+        actionResponse({
+          desktop_evidence: fresh,
+        }),
+        session({ desktop_evidence: persisted }),
+      )?.artifact_id,
+    ).toBe('fresh-artifact')
   })
 })
 
@@ -191,5 +242,34 @@ describe('MobileOps field readiness checklist', () => {
     expect(rows.find((row) => row.key === 'capture-route')?.supporting).toBe('Capture router has no active sink.')
     expect(rows.find((row) => row.key === 'agent-lane')?.tone).toBe('amber')
     expect(rows.find((row) => row.key === 'agent-lane')?.supporting).toBe('Agent feed ready; route still blocked.')
+  })
+})
+
+describe('MobileOps leave-behind capture invite', () => {
+  it('builds a signed guest-capture invite without diagnostic control credentials', () => {
+    const payload = buildLeaveBehindCaptureInviteInput({
+      companySlug: 'acme',
+      session: session({
+        id: 'diag-session-9',
+        state: 'active',
+        plan: plan({ control_level: 'route' }),
+      }),
+    })
+
+    expect(payload).toMatchObject({
+      reviewer_ref: 'onsite-worker',
+      source: 'mobile_ops_leavebehind',
+      target_route: '/ops',
+      expires_in_days: 7,
+      allowed_capture_modes: ['text', 'audio', 'state', 'screen'],
+      metadata: {
+        created_from: 'mobile_ops',
+        company_slug: 'acme',
+        ops_diagnostic_session_id: 'diag-session-9',
+        ops_diagnostic_control_level: 'route',
+        ops_diagnostic_state: 'active',
+      },
+    })
+    expect(JSON.stringify(payload)).not.toContain('control_token')
   })
 })

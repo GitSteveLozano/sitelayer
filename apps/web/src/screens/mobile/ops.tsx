@@ -41,6 +41,8 @@ import {
 } from '@/lib/api'
 import { fetchCaptureArtifactBlob } from '@/lib/api/capture-sessions'
 import { ApiError, getBuildSha } from '@/lib/api/client'
+import { useActiveCompanyId } from '@/lib/api/active-company'
+import { useCreateFeedbackInvite, type CreateFeedbackInviteRequest } from '@/lib/api/feedback-invites'
 import { useOnlineStatus } from '@/lib/offline/online-status'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
@@ -79,12 +81,15 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const qc = useQueryClient()
   const online = useOnlineStatus()
   const canTriage = canTriageWorkRequests(companyRole)
+  const companyId = useActiveCompanyId()
   const buildSha = getBuildSha()
   const [activeDiagnosticSession, setActiveDiagnosticSession] = useState<OpsOnsiteDiagnosticSessionRecord | null>(null)
   const [diagnosticControlToken, setDiagnosticControlToken] = useState<string | null>(null)
   const [lastDiagnosticAction, setLastDiagnosticAction] = useState<OpsOnsiteDiagnosticSessionActionResponse | null>(
     null,
   )
+  const [leaveBehindCaptureUrl, setLeaveBehindCaptureUrl] = useState<string | null>(null)
+  const [leaveBehindCaptureCopied, setLeaveBehindCaptureCopied] = useState(false)
 
   const work = useQuery({
     queryKey: queryKeys.workRequests.list({ limit: 75 }),
@@ -150,6 +155,8 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     setActiveDiagnosticSession(null)
     setDiagnosticControlToken(null)
     setLastDiagnosticAction(null)
+    setLeaveBehindCaptureUrl(null)
+    setLeaveBehindCaptureCopied(false)
   }, [companySlug])
   useEffect(() => {
     if (!canCaptureAppIssues) return
@@ -203,6 +210,28 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       }
     },
   })
+  const createLeaveBehindCaptureInvite = useCreateFeedbackInvite(companyId ?? '')
+  const copyLeaveBehindCaptureInvite = useMutation({
+    mutationFn: async () => {
+      if (!companyId) throw new Error('company is not loaded')
+      const inviteUrl =
+        leaveBehindCaptureUrl ??
+        (
+          await createLeaveBehindCaptureInvite.mutateAsync(
+            buildLeaveBehindCaptureInviteInput({ companySlug, session: displayedDiagnosticSession }),
+          )
+        ).invite_url
+      setLeaveBehindCaptureUrl(inviteUrl)
+      setLeaveBehindCaptureCopied(false)
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+      await navigator.clipboard.writeText(inviteUrl)
+      return inviteUrl
+    },
+    onSuccess: (inviteUrl) => {
+      setLeaveBehindCaptureUrl(inviteUrl)
+      setLeaveBehindCaptureCopied(true)
+    },
+  })
   const openDesktopEvidence = useMutation({
     mutationFn: async (evidence: OpsOnsiteDiagnosticDesktopEvidenceResult) => {
       if (!evidence.capture_session_id || !evidence.artifact_id) {
@@ -245,9 +274,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         null)
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
-  const latestDesktopEvidence = lastDiagnosticAction?.accepted_action.desktop_evidence ?? null
+  const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
+  const canCreateLeaveBehindCapture = companyRole === 'admin' && Boolean(companyId)
   const fieldReadinessItems = buildFieldReadinessItems({
     online,
     hasDiagnosticControl,
@@ -529,6 +559,40 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
             onTap={() => navigate(onsiteAction.to)}
             chev
           />
+          {canCreateLeaveBehindCapture ? (
+            <MListRow
+              leading={
+                copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending ? (
+                  <MI.Clock size={18} />
+                ) : leaveBehindCaptureCopied ? (
+                  <MI.Check size={18} />
+                ) : (
+                  <MI.Users size={18} />
+                )
+              }
+              leadingTone={
+                copyLeaveBehindCaptureInvite.isError || createLeaveBehindCaptureInvite.isError
+                  ? 'red'
+                  : copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending
+                    ? 'blue'
+                    : leaveBehindCaptureCopied
+                      ? 'green'
+                      : 'accent'
+              }
+              headline={leaveBehindCaptureCopied ? 'Leave-behind link copied' : 'Copy leave-behind capture link'}
+              supporting={formatLeaveBehindCaptureSummary({
+                pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
+                copied: leaveBehindCaptureCopied,
+                error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
+                hasSession: Boolean(displayedDiagnosticSession),
+              })}
+              onTap={
+                copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending
+                  ? undefined
+                  : () => copyLeaveBehindCaptureInvite.mutate()
+              }
+            />
+          ) : null}
           <MListRow
             leading={<MI.Plus size={18} />}
             leadingTone="accent"
@@ -651,6 +715,46 @@ export function buildFieldReadinessItems({
             : (agentFeed?.detail ?? 'Agent feed pending.'),
     },
   ]
+}
+
+export function buildLeaveBehindCaptureInviteInput({
+  companySlug,
+  session,
+}: {
+  companySlug: string
+  session: OpsOnsiteDiagnosticSessionRecord | null
+}): CreateFeedbackInviteRequest {
+  return {
+    reviewer_ref: 'onsite-worker',
+    source: 'mobile_ops_leavebehind',
+    target_route: '/ops',
+    expires_in_days: 7,
+    allowed_capture_modes: ['text', 'audio', 'state', 'screen'],
+    metadata: {
+      created_from: 'mobile_ops',
+      company_slug: companySlug,
+      ops_diagnostic_session_id: session?.id ?? null,
+      ops_diagnostic_control_level: session?.plan.control_level ?? null,
+      ops_diagnostic_state: session?.state ?? null,
+    },
+  }
+}
+
+function formatLeaveBehindCaptureSummary({
+  pending,
+  copied,
+  error,
+  hasSession,
+}: {
+  pending: boolean
+  copied: boolean
+  error: unknown
+  hasSession: boolean
+}): string {
+  if (pending) return 'Creating a signed guest capture link.'
+  if (error) return error instanceof Error ? error.message : 'Could not create the link.'
+  if (copied) return hasSession ? 'Guest capture is tied to this onsite session.' : 'Guest capture is tied to Ops.'
+  return hasSession ? 'Guest can send text, audio, state, or screen evidence.' : 'Works without starting control.'
 }
 
 function countStatus(items: readonly ContextWorkItem[], status: WorkItemStatus): number {
@@ -920,6 +1024,13 @@ export function canOpenDesktopEvidence(evidence: OpsOnsiteDiagnosticDesktopEvide
   return Boolean(
     evidence.capture_session_id && evidence.artifact_id && evidence.file_path && evidence.status === 'attached',
   )
+}
+
+export function resolveLatestDesktopEvidence(
+  action: OpsOnsiteDiagnosticSessionActionResponse | null,
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): OpsOnsiteDiagnosticDesktopEvidenceResult | null {
+  return action?.accepted_action.desktop_evidence ?? session?.desktop_evidence ?? null
 }
 
 function captureRouteTone(route: OpsOnsiteDiagnosticCaptureRouteResult): 'amber' | 'blue' | 'green' | 'red' {

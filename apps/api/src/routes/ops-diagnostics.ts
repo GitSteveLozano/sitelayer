@@ -70,6 +70,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
+  desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult | null
 }
 
 export type OpsOnsiteDiagnosticSessionCreateResponse = {
@@ -526,7 +527,7 @@ async function recordOnsiteDiagnosticAction(
       ok: true,
       value: {
         schema: 'sitelayer.ops_diagnostic_session_action.v1',
-        session: publicSession(persisted.session),
+        session: publicSession(sessionWithDesktopEvidence(persisted.session, desktopEvidence)),
         accepted_action: {
           key: actionKey,
           effect: 'audit_only',
@@ -1229,7 +1230,8 @@ async function lookupPersistentSession(
     if (!row) return null
     const events = await listPersistentEvents(client, companyId, row.id)
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
-    return persistentSessionFromRow(row, events, deliveries)
+    const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
+    return persistentSessionFromRow(row, events, deliveries, desktopEvidence)
   })
   if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
   return { ok: true, value: session }
@@ -1249,7 +1251,8 @@ async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promis
     for (const row of result.rows) {
       const events = await listPersistentEvents(client, companyId, row.id)
       const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
-      sessions.push(publicSession(persistentSessionFromRow(row, events, deliveries)))
+      const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
+      sessions.push(publicSession(persistentSessionFromRow(row, events, deliveries, desktopEvidence)))
     }
     return sessions
   })
@@ -1286,6 +1289,14 @@ type PersistentAgentFeedDeliveryRow = {
   claimed_at: string | Date | null
   completed_at: string | Date | null
   created_at: string | Date
+}
+
+type PersistentDesktopEvidenceRow = {
+  capture_session_id: string
+  artifact_id: string
+  storage_key: string | null
+  content_type: string | null
+  byte_size: string | number | null
 }
 
 async function listPersistentEvents(
@@ -1336,6 +1347,7 @@ function persistentSessionFromRow(
   row: PersistentSessionRow,
   events: OpsOnsiteDiagnosticAuditEvent[],
   deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[] = [],
+  desktopEvidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null = null,
 ): StoredOnsiteDiagnosticSession {
   return {
     id: row.id,
@@ -1348,6 +1360,7 @@ function persistentSessionFromRow(
     plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
     audit_events: events,
     agent_feed_deliveries: deliveries,
+    ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
     control_token_hash: row.control_token_hash,
   }
 }
@@ -1355,6 +1368,62 @@ function persistentSessionFromRow(
 function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnosticSessionRecord {
   const { control_token: _controlToken, control_token_hash: _controlTokenHash, ...rest } = session
   return { ...rest, agent_feed_deliveries: rest.agent_feed_deliveries ?? [] }
+}
+
+async function latestPersistentDesktopEvidence(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+): Promise<OpsOnsiteDiagnosticDesktopEvidenceResult | null> {
+  const result = await client.query<PersistentDesktopEvidenceRow>(
+    `select s.id::text as capture_session_id,
+            a.id::text as artifact_id,
+            a.storage_key,
+            a.content_type,
+            a.byte_size::text as byte_size
+       from capture_artifacts a
+       join capture_sessions s
+         on s.company_id = a.company_id
+        and s.id = a.capture_session_id
+      where a.company_id = $1
+        and a.deleted_at is null
+        and a.storage_key is not null
+        and a.metadata->>'source' = 'ops_diagnostic_desktop_capture'
+        and (
+          s.metadata->>'ops_diagnostic_session_id' = $2
+          or a.metadata->>'ops_diagnostic_session_id' = $2
+        )
+        and (a.retention_expires_at is null or a.retention_expires_at > now())
+        and (s.retention_expires_at is null or s.retention_expires_at > now())
+      order by a.created_at desc, a.id desc
+      limit 1`,
+    [companyId, sessionId],
+  )
+  return desktopEvidenceFromRow(result.rows[0] ?? null)
+}
+
+function desktopEvidenceFromRow(
+  row: PersistentDesktopEvidenceRow | null,
+): OpsOnsiteDiagnosticDesktopEvidenceResult | null {
+  if (!row?.capture_session_id || !row.artifact_id) return null
+  return {
+    capture_session_id: row.capture_session_id,
+    artifact_id: row.artifact_id,
+    storage_key: row.storage_key,
+    file_path: captureArtifactFilePath(row.capture_session_id, row.artifact_id),
+    status: 'attached',
+    content_type: row.content_type,
+    byte_size: numberFromUnknown(row.byte_size),
+    error: null,
+  }
+}
+
+function sessionWithDesktopEvidence(
+  session: StoredOnsiteDiagnosticSession,
+  desktopEvidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null,
+): StoredOnsiteDiagnosticSession {
+  if (desktopEvidence?.status !== 'attached') return session
+  return { ...session, desktop_evidence: desktopEvidence }
 }
 
 async function readRequestBody(
@@ -1441,6 +1510,18 @@ export function __agentFeedDeliveryFromRowForTests(
   nowMs = Date.now(),
 ): OpsOnsiteDiagnosticAgentFeedDelivery | null {
   return agentFeedDeliveryFromRow(row, nowMs)
+}
+
+export function __desktopEvidenceFromRowForTests(
+  row: {
+    capture_session_id: string
+    artifact_id: string
+    storage_key: string | null
+    content_type: string | null
+    byte_size: string | number | null
+  } | null,
+): OpsOnsiteDiagnosticDesktopEvidenceResult | null {
+  return desktopEvidenceFromRow(row)
 }
 
 function summarizeGatewayDiagnostics(probe: ProbeResult): OpsDiagnosticComponent {
@@ -1783,6 +1864,13 @@ function statusValue(value: unknown): string | null {
 
 function numberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function numberFromUnknown(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value !== 'string') return null
+  const parsed = Number(value.trim())
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function booleanValue(value: unknown): boolean | null {

@@ -7,6 +7,7 @@ import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../
 import {
   __captureOnsiteDesktopEvidenceForTests,
   __agentFeedDeliveryFromRowForTests,
+  __desktopEvidenceFromRowForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
@@ -594,6 +595,28 @@ describe('ops diagnostics', () => {
     expect(JSON.stringify(artifactInsert?.params)).toContain('ops_diagnostic_desktop_capture')
     expect(JSON.stringify(queries)).not.toContain('/tmp/')
     expect(JSON.stringify(queries)).not.toContain('/mnt/')
+  })
+
+  it('maps persisted desktop evidence rows back to reopenable session state', () => {
+    const evidence = __desktopEvidenceFromRowForTests({
+      capture_session_id: '33333333-3333-4333-8333-333333333333',
+      artifact_id: '44444444-4444-4444-8444-444444444444',
+      storage_key: 'company-1/capture-sessions/33333333-3333-4333-8333-333333333333/clip.mp4',
+      content_type: 'video/mp4',
+      byte_size: '1572864',
+    })
+
+    expect(evidence).toMatchObject({
+      status: 'attached',
+      capture_session_id: '33333333-3333-4333-8333-333333333333',
+      artifact_id: '44444444-4444-4444-8444-444444444444',
+      file_path:
+        '/api/capture-sessions/33333333-3333-4333-8333-333333333333/artifacts/44444444-4444-4444-8444-444444444444/file',
+      content_type: 'video/mp4',
+      byte_size: 1572864,
+      error: null,
+    })
+    expect(__desktopEvidenceFromRowForTests(null)).toBeNull()
   })
 
   it('maps onsite agent-feed delivery rows into phone-safe session state', () => {
