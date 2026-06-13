@@ -90,6 +90,7 @@ export async function uploadRegisteredCaptureStateSnapshots(
         kind: snapshot.kind ?? 'state_snapshot',
         file: stateSnapshotBlob(id, options.reason, snapshot),
         fileName: `${safeFilePart(id)}-${snapshot.kind ?? 'state_snapshot'}.json`,
+        client_upload_id: `state:${captureSessionId}:${options.reason}:${safeFilePart(id)}`,
         pii_level: snapshot.piiLevel ?? 'internal',
         access_policy: 'support_only',
         metadata: {

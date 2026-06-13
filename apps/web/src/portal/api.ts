@@ -185,14 +185,17 @@ async function portalCaptureArtifactUploadRequest(
   initHeaders?: HeadersInit,
 ): Promise<CaptureArtifactUploadResponse> {
   const form = new FormData()
+  const fileName = fileNameForPortalArtifact(input.kind, input.file, input.fileName)
   form.append('kind', input.kind)
+  if (input.client_upload_id) form.append('client_upload_id', input.client_upload_id)
   if (input.duration_ms !== undefined) form.append('duration_ms', String(Math.max(0, Math.trunc(input.duration_ms))))
   if (input.pii_level) form.append('pii_level', input.pii_level)
   if (input.access_policy) form.append('access_policy', input.access_policy)
   if (input.metadata) form.append('metadata', JSON.stringify(input.metadata))
-  form.append('file', input.file, fileNameForPortalArtifact(input.kind, input.file, input.fileName))
+  form.append('file', input.file, fileName)
 
   const headers = buildPortalRequestHeaders(initHeaders, false)
+  if (input.client_upload_id) headers.set('idempotency-key', input.client_upload_id)
   const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
   const contentType = response.headers.get('content-type') ?? ''
   let body: unknown

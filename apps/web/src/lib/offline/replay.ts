@@ -351,6 +351,7 @@ function captureUploadInputFromPayload(payload: Record<string, unknown>): Captur
     file,
   }
   if (typeof payload.fileName === 'string') input.fileName = payload.fileName
+  if (typeof payload.client_upload_id === 'string') input.client_upload_id = payload.client_upload_id
   if (typeof payload.duration_ms === 'number') input.duration_ms = payload.duration_ms
   if (isCapturePiiLevel(payload.pii_level)) input.pii_level = payload.pii_level
   if (isCaptureAccessPolicy(payload.access_policy)) input.access_policy = payload.access_policy

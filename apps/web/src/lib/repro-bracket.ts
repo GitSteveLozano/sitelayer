@@ -292,6 +292,7 @@ export class ReproBracketController {
       kind: 'repro_bracket',
       file: new Blob([JSON.stringify(summary)], { type: 'application/json' }),
       fileName: 'repro-bracket.json',
+      client_upload_id: `repro_bracket:${captureSessionId}:summary`,
       pii_level: 'internal',
       access_policy: 'support_only',
       metadata: {

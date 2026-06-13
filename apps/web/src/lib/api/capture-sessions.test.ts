@@ -162,6 +162,7 @@ describe('capture session API client', () => {
         kind: 'audio',
         file,
         fileName: 'field-note.webm',
+        client_upload_id: 'upload-audio-1',
         duration_ms: 1234.9,
         pii_level: 'private',
         metadata: { source: 'mic' },
@@ -173,8 +174,10 @@ describe('capture session API client', () => {
     expect(url).toBe('https://api.test/api/capture-sessions/00000000-0000-4000-8000-000000000123/artifacts/upload')
     expect(init.method).toBe('POST')
     expect((init.headers as Headers).get('x-request-id')).toBe('web-test-request')
+    expect((init.headers as Headers).get('idempotency-key')).toBe('upload-audio-1')
     const body = init.body as FormData
     expect(body.get('kind')).toBe('audio')
+    expect(body.get('client_upload_id')).toBe('upload-audio-1')
     expect(body.get('duration_ms')).toBe('1234')
     expect(body.get('pii_level')).toBe('private')
     expect(body.get('metadata')).toBe(JSON.stringify({ source: 'mic' }))

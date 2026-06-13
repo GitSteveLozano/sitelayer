@@ -134,6 +134,7 @@ export class CaptureReplayRecorder {
           kind: 'rrweb',
           file: blob,
           fileName: 'replay.json',
+          client_upload_id: `capture_replay:${captureSessionId}:rrweb`,
           pii_level: 'private',
           access_policy: 'support_only',
           metadata: {

@@ -119,6 +119,7 @@ export async function uploadCanvasGeometryArtifact(
     kind: 'canvas_geometry',
     file: canvasGeometryArtifactBlob(payload),
     fileName: 'canvas-geometry.json',
+    client_upload_id: `canvas_geometry:${captureSessionId}:${payload.active_draft_id ?? payload.active_blueprint_id ?? 'session'}`,
     pii_level: 'internal',
     access_policy: 'support_only',
     metadata: {
