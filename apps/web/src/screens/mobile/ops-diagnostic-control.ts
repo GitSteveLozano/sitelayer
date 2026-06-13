@@ -130,7 +130,10 @@ function encodeTransferPayload(payload: OpsDiagnosticControlTransfer): string {
 
 function decodeTransferPayload(raw: string): string | null {
   try {
-    const base64 = raw.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(raw.length / 4) * 4, '=')
+    const base64 = raw
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(raw.length / 4) * 4, '=')
     const binary = atob(base64)
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
     return new TextDecoder().decode(bytes)

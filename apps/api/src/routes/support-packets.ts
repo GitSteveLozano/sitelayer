@@ -111,10 +111,7 @@ const SENSITIVE_KEY =
 const SENSITIVE_VALUE_KEY =
   /password|passwd|secret|token|jwt|session|csrf|api[-_]?key|access[-_]?token|refresh[-_]?token/i
 const SENSITIVE_VALUE_NAME = String.raw`(?:[A-Za-z0-9_-]*[-_])?(?:${SENSITIVE_VALUE_KEY.source})`
-const SENSITIVE_ASSIGNMENT_RE = new RegExp(
-  String.raw`\b((${SENSITIVE_VALUE_NAME})\s*[:=]\s*)(["']?)[^"',\s;&)]+`,
-  'gi',
-)
+const SENSITIVE_ASSIGNMENT_RE = new RegExp(String.raw`\b((${SENSITIVE_VALUE_NAME})\s*[:=]\s*)(["']?)[^"',\s;&)]+`, 'gi')
 const SENSITIVE_QUERY_PARAM_RE = new RegExp(String.raw`([?&]${SENSITIVE_VALUE_NAME}=)[^&#\s]+`, 'gi')
 const BEARER_TOKEN_RE = /\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi
 const BASIC_TOKEN_RE = /\b(Basic\s+)[A-Za-z0-9+/=]{8,}/gi

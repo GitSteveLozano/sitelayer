@@ -150,9 +150,7 @@ function portalActorWorkItemMetadata(actor: PortalCaptureActor): JsonRecord {
 function portalActorWorkItemBinding(actor: PortalCaptureActor): { entityType?: string; entityId?: string } {
   const actorMetadata = jsonRecord(actor.metadata)
   const opsDiagnosticSessionId = optionalText(actorMetadata.ops_diagnostic_session_id, 160)
-  return opsDiagnosticSessionId
-    ? { entityType: 'ops_diagnostic_session', entityId: opsDiagnosticSessionId }
-    : {}
+  return opsDiagnosticSessionId ? { entityType: 'ops_diagnostic_session', entityId: opsDiagnosticSessionId } : {}
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -212,10 +210,7 @@ function captureModesFromScope(scope: Record<string, unknown> | undefined): Set<
   )
 }
 
-function portalConsentAllowsMode(
-  scope: Record<string, unknown> | undefined,
-  mode: (typeof MODES)[number],
-): boolean {
+function portalConsentAllowsMode(scope: Record<string, unknown> | undefined, mode: (typeof MODES)[number]): boolean {
   const allowedModes = captureModesFromScope(scope)
   if (!allowedModes) return true
   if (mode === 'trace') return allowedModes.has('trace')
@@ -1250,7 +1245,10 @@ function parseMetadataField(value: string | undefined): Record<string, unknown> 
   }
 }
 
-function captureArtifactUploadResponse(row: CaptureArtifactUploadRow, fallback: { storagePath: string; byteSize: number; contentHash: string }) {
+function captureArtifactUploadResponse(
+  row: CaptureArtifactUploadRow,
+  fallback: { storagePath: string; byteSize: number; contentHash: string },
+) {
   return {
     id: row.id,
     kind: row.kind,

@@ -470,7 +470,7 @@ async function uploadQueuedWorkerIssueAttachment(
     try {
       body = contentType.includes('application/json') ? await response.json() : await response.text()
     } catch {
-      body = null
+      // Keep the null fallback when the error body cannot be parsed.
     }
     throw new ApiError({ status: response.status, path, method: 'POST', requestId: null, body })
   }

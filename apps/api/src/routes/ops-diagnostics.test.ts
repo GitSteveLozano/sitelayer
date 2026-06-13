@@ -1584,13 +1584,7 @@ describe('ops diagnostics', () => {
       })
 
       const supportInsert = client.calls.find((call) => call.sql.startsWith('insert into support_debug_packets'))
-      expect(supportInsert?.params.slice(0, 5)).toEqual([
-        'company-1',
-        'user_99',
-        null,
-        '/ops',
-        OPS_CAPTURE_SESSION_ID,
-      ])
+      expect(supportInsert?.params.slice(0, 5)).toEqual(['company-1', 'user_99', null, '/ops', OPS_CAPTURE_SESSION_ID])
       expect(JSON.stringify(supportInsert?.params)).toContain(OPS_SESSION_ID)
       expect(JSON.stringify(supportInsert?.params)).toContain(OPS_WORKER_ISSUE_ID)
 
@@ -1672,11 +1666,7 @@ describe('ops diagnostics', () => {
 
   it('surfaces newest onsite work while keeping routed agent work anchored', async () => {
     const latestClient = new PersistentOpsClient()
-    await __latestPersistentOnsiteWorkLinkForTests(
-      latestClient as unknown as PoolClient,
-      'company-1',
-      OPS_SESSION_ID,
-    )
+    await __latestPersistentOnsiteWorkLinkForTests(latestClient as unknown as PoolClient, 'company-1', OPS_SESSION_ID)
     const latestLookup = latestClient.calls.find((call) =>
       call.sql.startsWith('select id::text as context_work_item_id'),
     )
@@ -1684,11 +1674,7 @@ describe('ops diagnostics', () => {
     expect(latestLookup?.sql).not.toContain('for update')
 
     const anchorClient = new PersistentOpsClient()
-    await __anchorPersistentOnsiteWorkLinkForTests(
-      anchorClient as unknown as PoolClient,
-      'company-1',
-      OPS_SESSION_ID,
-    )
+    await __anchorPersistentOnsiteWorkLinkForTests(anchorClient as unknown as PoolClient, 'company-1', OPS_SESSION_ID)
     const anchorLookup = anchorClient.calls.find((call) =>
       call.sql.startsWith('select id::text as context_work_item_id'),
     )
@@ -1761,7 +1747,7 @@ describe('ops diagnostics', () => {
 
   it('replays persistent onsite action retries without duplicating work evidence', async () => {
     const client = new PersistentOpsClient()
-    const runTx = async <T,>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+    const runTx = async <T>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
       expect(companyId).toBe('company-1')
       return fn(client as unknown as PoolClient)
     }
@@ -1796,9 +1782,9 @@ describe('ops diagnostics', () => {
         context_work_item_id: OPS_WORK_ITEM_ID,
       },
     })
-    expect(client.calls.filter((call) => call.sql.startsWith('insert into ops_diagnostic_session_events'))).toHaveLength(
-      1,
-    )
+    expect(
+      client.calls.filter((call) => call.sql.startsWith('insert into ops_diagnostic_session_events')),
+    ).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into support_debug_packets'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_work_items'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_handoff_events'))).toHaveLength(1)
@@ -1807,7 +1793,7 @@ describe('ops diagnostics', () => {
 
   it('hydrates persistent action replays from durable child results when the parent result is missing', async () => {
     const client = new PersistentOpsClient()
-    const runTx = async <T,>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+    const runTx = async <T>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
       expect(companyId).toBe('company-1')
       return fn(client as unknown as PoolClient)
     }
@@ -1884,15 +1870,15 @@ describe('ops diagnostics', () => {
         },
       },
     })
-    expect(client.calls.filter((call) => call.sql.startsWith('insert into ops_diagnostic_session_events'))).toHaveLength(
-      1,
-    )
+    expect(
+      client.calls.filter((call) => call.sql.startsWith('insert into ops_diagnostic_session_events')),
+    ).toHaveLength(1)
     expect(client.mutationOutbox).toHaveLength(1)
   })
 
   it('summarizes persistent action delivery status from client action id and outbox retry state', async () => {
     const client = new PersistentOpsClient()
-    const runTx = async <T,>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+    const runTx = async <T>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
       expect(companyId).toBe('company-1')
       return fn(client as unknown as PoolClient)
     }

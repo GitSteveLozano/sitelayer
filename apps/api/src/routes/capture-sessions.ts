@@ -1027,7 +1027,10 @@ function parseMetadataField(value: string | undefined): Record<string, unknown> 
   }
 }
 
-function captureArtifactUploadResponse(row: CaptureArtifactUploadRow, fallback: { storagePath: string; byteSize: number; contentHash: string }) {
+function captureArtifactUploadResponse(
+  row: CaptureArtifactUploadRow,
+  fallback: { storagePath: string; byteSize: number; contentHash: string },
+) {
   return {
     id: row.id,
     kind: row.kind,

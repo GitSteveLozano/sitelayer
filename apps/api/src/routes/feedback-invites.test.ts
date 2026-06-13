@@ -227,8 +227,7 @@ class FakePool {
           {
             artifact_count: String(rows.length),
             private_artifact_count: String(
-              rows.filter((artifact) => artifact.pii_level === 'private' || artifact.pii_level === 'restricted')
-                .length,
+              rows.filter((artifact) => artifact.pii_level === 'private' || artifact.pii_level === 'restricted').length,
             ),
           },
         ],
@@ -361,7 +360,8 @@ class FakePool {
     if (normalized.includes('from context_handoff_events') && normalized.includes('count(*)::text')) {
       return { rows: [{ count: String(this.handoffEvents.length) }], rowCount: 1 }
     }
-    if (normalized.includes('from context_handoff_events')) return { rows: this.handoffEvents, rowCount: this.handoffEvents.length }
+    if (normalized.includes('from context_handoff_events'))
+      return { rows: this.handoffEvents, rowCount: this.handoffEvents.length }
     if (normalized.startsWith('update capture_sessions set status = case')) {
       const [captureSessionId, companyId, metadataRaw, actorRef] = params as [string, string, string, string]
       const row = this.captureSessions.find(

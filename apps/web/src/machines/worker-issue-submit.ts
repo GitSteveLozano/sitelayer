@@ -150,7 +150,7 @@ async function uploadAttachment(input: UploadInput): Promise<void> {
   let response: Response
   try {
     response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
-  } catch (err) {
+  } catch {
     await enqueueOfflineMutation('worker_issue_attachment_upload', {
       companySlug: input.companySlug,
       issueId: input.issueId,

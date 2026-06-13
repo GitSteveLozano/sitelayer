@@ -416,8 +416,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
   const latestDiagnosticManifest =
     lastDiagnosticAction?.session.diagnostic_manifest ?? displayedDiagnosticSession?.diagnostic_manifest ?? null
-  const linkedAppIssueId = latestDiagnosticManifest?.context_work_item_id ?? displayedDiagnosticSession?.context_work_item_id ?? null
-  const linkedSupportPacketId = latestDiagnosticManifest?.support_packet_id ?? displayedDiagnosticSession?.support_packet_id ?? null
+  const linkedAppIssueId =
+    latestDiagnosticManifest?.context_work_item_id ?? displayedDiagnosticSession?.context_work_item_id ?? null
+  const linkedSupportPacketId =
+    latestDiagnosticManifest?.support_packet_id ?? displayedDiagnosticSession?.support_packet_id ?? null
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
   const latestActionStatus = diagnosticActionStatus.data?.action_status ?? null
@@ -518,9 +520,9 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                   ? () => navigate(onsiteSessionRoute(activeDiagnosticSession.plan))
                   : displayedDiagnosticSession
                     ? () => navigate(onsiteSessionRoute(displayedDiagnosticSession.plan))
-                  : startDiagnosticSession.isPending
-                    ? undefined
-                    : () => startDiagnosticSession.mutate()
+                    : startDiagnosticSession.isPending
+                      ? undefined
+                      : () => startDiagnosticSession.mutate()
               }
               chev={Boolean(displayedDiagnosticSession)}
             />
@@ -709,12 +711,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 key={action.key}
                 leading={<Icon size={18} />}
                 leadingTone={requestDiagnosticAction.isPending ? 'blue' : action.enabled ? 'blue' : 'amber'}
-                headline={
-                  requestDiagnosticAction.isPending ? 'Recording action' : `Record ${lowerFirst(action.label)}`
-                }
+                headline={requestDiagnosticAction.isPending ? 'Recording action' : `Record ${lowerFirst(action.label)}`}
                 supporting={formatDiagnosticActionSummary(action, requestDiagnosticAction.isPending)}
                 onTap={
-                  action.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending && activeDiagnosticSession
+                  action.enabled &&
+                  diagnosticControlToken &&
+                  !requestDiagnosticAction.isPending &&
+                  activeDiagnosticSession
                     ? () =>
                         requestDiagnosticAction.mutate({
                           actionKey: action.key,
@@ -731,11 +734,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'green'}
               headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'Extend control window'}
               supporting={`Keep phone control until ${formatClock(activeDiagnosticSession.expires_at)} or extend another hour.`}
-              onTap={
-                controlDiagnosticSession.isPending
-                  ? undefined
-                  : () => controlDiagnosticSession.mutate('extend')
-              }
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('extend')}
             />
           ) : null}
           {hasDiagnosticControl && activeDiagnosticSession ? (
@@ -760,18 +759,18 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                       : 'Create control handoff'
               }
               supporting={
-                diagnosticControlTransferUrl
-                  ? (
-                      <ManualLinkSupporting
-                        message={
-                          diagnosticControlTransferCopied
-                            ? 'Link shared or copied. Open it on another phone to import control.'
-                            : 'Use this short-lived link on another phone to import control.'
-                        }
-                        url={diagnosticControlTransferUrl}
-                      />
-                    )
-                  : 'Rotate the token and create a short-lived handoff link.'
+                diagnosticControlTransferUrl ? (
+                  <ManualLinkSupporting
+                    message={
+                      diagnosticControlTransferCopied
+                        ? 'Link shared or copied. Open it on another phone to import control.'
+                        : 'Use this short-lived link on another phone to import control.'
+                    }
+                    url={diagnosticControlTransferUrl}
+                  />
+                ) : (
+                  'Rotate the token and create a short-lived handoff link.'
+                )
               }
               onTap={
                 controlDiagnosticSession.isPending
@@ -788,11 +787,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
               headline={controlDiagnosticSession.isPending ? 'Updating control token' : 'Revoke this phone'}
               supporting="Invalidate this phone's token while leaving the diagnostic session visible."
-              onTap={
-                controlDiagnosticSession.isPending
-                  ? undefined
-                  : () => controlDiagnosticSession.mutate('revoke')
-              }
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('revoke')}
             />
           ) : null}
           {hasDiagnosticControl && activeDiagnosticSession ? (
@@ -801,11 +796,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
               headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'End phone control'}
               supporting="Close this diagnostic window and clear the control token on this phone."
-              onTap={
-                controlDiagnosticSession.isPending
-                  ? undefined
-                  : () => controlDiagnosticSession.mutate('cancel')
-              }
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('cancel')}
             />
           ) : null}
           <MListRow
@@ -1430,9 +1421,7 @@ export function actionStatusTone(
   return 'blue'
 }
 
-function formatActionStatusHeadline(
-  status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null,
-): string {
+function formatActionStatusHeadline(status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null): string {
   if (!status) return 'Action status'
   return `${diagnosticActionName(status.action_key)} status`
 }
@@ -1444,9 +1433,7 @@ export function formatActionStatusSummary(
   if (!status) return pending ? 'Checking latest action status.' : 'No action status reported.'
   const routeStatus = status.capture_route?.outbox_status
   if (status.state === 'retrying') {
-    return routeStatus
-      ? `${status.summary} Route row is ${routeStatus}.`
-      : status.summary
+    return routeStatus ? `${status.summary} Route row is ${routeStatus}.` : status.summary
   }
   if (status.state === 'failed') {
     const error = status.capture_route?.error ?? status.agent_feed?.callback_error

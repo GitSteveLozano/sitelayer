@@ -248,12 +248,7 @@ async function deliverRoute(
   }
 }
 
-function permanentFailure(
-  outboxId: string,
-  requestRef: string,
-  deliveryId: string,
-  error: string,
-): DeliveryOutcome {
+function permanentFailure(outboxId: string, requestRef: string, deliveryId: string, error: string): DeliveryOutcome {
   return {
     result: {
       request_ref: requestRef,
@@ -314,7 +309,9 @@ function isRetryableRouteResult(result: OpsDiagnosticCaptureRouteResult): boolea
 
 function isPermanentRouteResult(result: OpsDiagnosticCaptureRouteResult): boolean {
   if (result.http_status == null) return false
-  return result.http_status >= 400 && result.http_status < 500 && result.http_status !== 408 && result.http_status !== 429
+  return (
+    result.http_status >= 400 && result.http_status < 500 && result.http_status !== 408 && result.http_status !== 429
+  )
 }
 
 function resolveCaptureRouterUrl(override: string | null | undefined): string {

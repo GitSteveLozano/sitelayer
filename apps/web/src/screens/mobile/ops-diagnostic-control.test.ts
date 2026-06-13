@@ -80,12 +80,7 @@ describe('ops diagnostic control storage', () => {
     expect(url).not.toContain('?ops_control=')
     expect(url).not.toContain('handoff-token')
 
-    const imported = importOpsDiagnosticControlFromUrl(
-      'acme',
-      Date.parse('2026-06-12T16:30:00.000Z'),
-      url ?? '',
-      false,
-    )
+    const imported = importOpsDiagnosticControlFromUrl('acme', Date.parse('2026-06-12T16:30:00.000Z'), url ?? '', false)
 
     expect(imported).toMatchObject({
       session_id: 'opsdiag_1',

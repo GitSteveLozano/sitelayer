@@ -87,9 +87,7 @@ function makePool(claimedRows: FakeRow[]): { pool: Pool; calls: FakeCall[]; rele
 describe('createOpsDiagnosticCaptureRouteRunner', () => {
   it('posts claimed capture-route envelopes and marks accepted rows applied', async () => {
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ routed: true, accepted: 1 }), { status: 202 }))
-    const { pool, calls, released } = makePool([
-      { id: 'outbox-1', payload: makePayload(), attempt_count: 1 },
-    ])
+    const { pool, calls, released } = makePool([{ id: 'outbox-1', payload: makePayload(), attempt_count: 1 }])
     const runner = createOpsDiagnosticCaptureRouteRunner({
       pool,
       logger: makeLogger(),

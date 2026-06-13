@@ -10,11 +10,7 @@ import {
   buildWorkRequestSnapshot,
 } from '@sitelayer/projectkit-bridge'
 import type { ActiveCompany } from '../auth-types.js'
-import {
-  appendContextHandoffEventTx,
-  createContextWorkItemTx,
-  type ContextWorkItemRow,
-} from '../context-handoff.js'
+import { appendContextHandoffEventTx, createContextWorkItemTx, type ContextWorkItemRow } from '../context-handoff.js'
 import { recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
 import {
@@ -370,9 +366,7 @@ export async function handleOpsDiagnosticsRoutes(
     return true
   }
 
-  const sessionControlRedeemMatch = url.pathname.match(
-    /^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/control\/redeem$/,
-  )
+  const sessionControlRedeemMatch = url.pathname.match(/^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/control\/redeem$/)
   if (sessionControlRedeemMatch) {
     if (req.method !== 'POST') {
       ctx.sendJson(405, { error: 'method not allowed' })
@@ -434,9 +428,7 @@ export async function handleOpsDiagnosticsRoutes(
     return true
   }
 
-  const sessionActionStatusMatch = url.pathname.match(
-    /^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/actions\/status$/,
-  )
+  const sessionActionStatusMatch = url.pathname.match(/^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/actions\/status$/)
   if (sessionActionStatusMatch) {
     if (req.method !== 'GET') {
       ctx.sendJson(405, { error: 'method not allowed' })
@@ -1100,8 +1092,7 @@ async function recordOnsiteDiagnosticControl(
   body: Record<string, unknown>,
   actorUserId: string | null,
 ): Promise<
-  | { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse }
-  | { ok: false; status: number; error: string }
+  { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse } | { ok: false; status: number; error: string }
 > {
   const token = boundedString(body.control_token, 200)
   if (!token || !controlTokenMatches(session, token)) return { ok: false, status: 403, error: 'invalid control token' }
@@ -1136,8 +1127,7 @@ async function redeemOnsiteDiagnosticControl(
   body: Record<string, unknown>,
   actorUserId: string | null,
 ): Promise<
-  | { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse }
-  | { ok: false; status: number; error: string }
+  { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse } | { ok: false; status: number; error: string }
 > {
   const token = boundedString(body.transfer_token ?? body.control_token, 200)
   if (!token) return { ok: false, status: 403, error: 'invalid transfer token' }
@@ -1269,16 +1259,12 @@ async function recordPersistentOnsiteDiagnosticControl(
   const nextExpiresAt = action === 'extend' ? new Date(at.getTime() + SESSION_TTL_MS).toISOString() : session.expires_at
   const nextState: OpsOnsiteDiagnosticSessionState = action === 'cancel' ? 'cancelled' : 'active'
   const transferToken = action === 'transfer' ? randomUUID() : null
-  const nextControlTokenHash =
-    action === 'revoke'
-        ? hashControlToken(randomUUID())
-        : session.control_token_hash
-  const nextPendingTransferHash =
-    transferToken
-      ? hashControlToken(transferToken)
-      : action === 'revoke' || action === 'cancel'
-        ? null
-        : (session.pending_control_transfer_hash ?? null)
+  const nextControlTokenHash = action === 'revoke' ? hashControlToken(randomUUID()) : session.control_token_hash
+  const nextPendingTransferHash = transferToken
+    ? hashControlToken(transferToken)
+    : action === 'revoke' || action === 'cancel'
+      ? null
+      : (session.pending_control_transfer_hash ?? null)
   const event: OpsOnsiteDiagnosticAuditEvent = {
     id: randomUUID(),
     at: atIso,
@@ -3320,13 +3306,7 @@ export async function __persistOnsiteDiagnosticActionResultForTests(
   },
   runTx: OpsDiagnosticsTxRunner,
 ): Promise<void> {
-  return persistOnsiteDiagnosticActionResult(
-    args.companyId,
-    args.sessionId,
-    args.eventId,
-    args.acceptedAction,
-    runTx,
-  )
+  return persistOnsiteDiagnosticActionResult(args.companyId, args.sessionId, args.eventId, args.acceptedAction, runTx)
 }
 
 export async function __lookupPersistentOnsiteDiagnosticActionStatusForTests(
