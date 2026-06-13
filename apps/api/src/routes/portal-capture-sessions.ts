@@ -189,6 +189,24 @@ function requiresExplicitConsent(mode: (typeof MODES)[number]): boolean {
   return mode !== 'trace'
 }
 
+function captureModesFromScope(scope: Record<string, unknown> | undefined): Set<string> | null {
+  if (!scope || !Array.isArray(scope.allowed_capture_modes)) return null
+  return new Set(
+    scope.allowed_capture_modes.filter((mode): mode is string => typeof mode === 'string' && Boolean(mode.trim())),
+  )
+}
+
+function portalConsentAllowsMode(
+  scope: Record<string, unknown> | undefined,
+  mode: (typeof MODES)[number],
+): boolean {
+  const allowedModes = captureModesFromScope(scope)
+  if (!allowedModes) return true
+  if (mode === 'trace') return allowedModes.has('trace')
+  if (mode === 'desktop' || mode === 'native') return allowedModes.has('screen')
+  return ['text', 'audio', 'screen', 'state'].some((allowed) => allowedModes.has(allowed))
+}
+
 function responseRow(row: CaptureSessionRow): CaptureSessionRow {
   return row
 }
@@ -413,6 +431,10 @@ export async function startPortalCaptureSession(ctx: PortalCaptureRouteCtx, acto
   const mode = parseMode(body.mode)
   if (!mode) {
     ctx.sendJson(400, { error: 'invalid capture session mode' })
+    return
+  }
+  if (!portalConsentAllowsMode(actor.consentScope, mode)) {
+    ctx.sendJson(403, { error: `feedback invite does not allow ${mode} capture sessions` })
     return
   }
   const consentVersion = optionalText(body.consent_version, 80) ?? ''

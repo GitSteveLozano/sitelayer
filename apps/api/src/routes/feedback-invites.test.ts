@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { captureConsentAllowsArtifactKind } from '../capture-consent-policy.js'
 import { attachMutationTx } from '../mutation-tx.js'
 import {
   feedbackInviteCaptureMetadata,
@@ -550,6 +551,88 @@ describe('handleFeedbackInviteRoutes', () => {
         entity_id: 'diag-session-9',
       },
     })
+  })
+
+  it('enforces feedback invite capture modes on portal capture sessions', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, {
+      reviewer_ref: 'onsite-worker',
+      source: 'mobile_ops_leavebehind',
+      target_route: '/ops',
+      allowed_capture_modes: ['text', 'state'],
+    })
+    await handleFeedbackInviteRoutes(
+      buildReq('POST'),
+      buildUrl('/api/companies/11111111-1111-4111-8111-111111111111/feedback-invites'),
+      create.ctx,
+    )
+    const token = (create.responses[0]?.body as { token: string }).token
+
+    const start = makeCtx(pool, {
+      token,
+      capture_session_id: '99999999-9999-4999-8999-999999999999',
+      mode: 'feedback',
+      consent_version: 'feedback-invite-v1',
+      route_path: '/ops',
+      consent_scope: {
+        streams: ['audio', 'screen_video', 'registered_artifacts', 'text_note'],
+        artifacts: { audio: true, video: true, state_snapshot: true, text_note: true },
+        event_classes: ['feedback_invite'],
+        audio: true,
+        screen_video: true,
+        text_note: true,
+        registered_artifacts: true,
+      },
+    })
+    await handleFeedbackInviteRoutes(
+      buildReq('POST'),
+      buildUrl('/api/portal/feedback-invites/capture-sessions'),
+      start.ctx,
+    )
+
+    expect(start.responses[0]?.status).toBe(200)
+    expect(pool.captureSessions).toHaveLength(1)
+    const consentScope = pool.captureSessions[0]?.consent_scope as Record<string, unknown>
+    expect(consentScope).toMatchObject({
+      allowed_capture_modes: ['text', 'state'],
+      streams: ['text_note', 'registered_artifacts'],
+      artifacts: {
+        audio: false,
+        transcript: false,
+        text_note: true,
+        video: false,
+        video_clip_manifest: false,
+        state_snapshot: true,
+        screen_context: true,
+      },
+      event_classes: ['feedback_invite'],
+      audio: false,
+      screen_video: false,
+      text_note: true,
+      registered_artifacts: true,
+    })
+    expect(captureConsentAllowsArtifactKind(consentScope, 'audio')).toBe(false)
+    expect(captureConsentAllowsArtifactKind(consentScope, 'video')).toBe(false)
+    expect(captureConsentAllowsArtifactKind(consentScope, 'state_snapshot')).toBe(true)
+
+    const denied = makeCtx(pool, {
+      token,
+      capture_session_id: '99999999-9999-4999-8999-999999999998',
+      mode: 'desktop',
+      consent_version: 'feedback-invite-v1',
+      route_path: '/ops',
+    })
+    await handleFeedbackInviteRoutes(
+      buildReq('POST'),
+      buildUrl('/api/portal/feedback-invites/capture-sessions'),
+      denied.ctx,
+    )
+
+    expect(denied.responses[0]).toEqual({
+      status: 403,
+      body: { error: 'feedback invite does not allow desktop capture sessions' },
+    })
+    expect(pool.captureSessions).toHaveLength(1)
   })
 
   it('ignores unrelated routes', async () => {
