@@ -5,6 +5,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type InventoryServiceTicketRouteCtx = {
   pool: Pool
@@ -286,4 +287,24 @@ export async function handleInventoryServiceTicketRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `inventory-service-tickets` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const inventoryServiceTicketsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'inventory-service-tickets',
+  order: 670,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleInventoryServiceTicketRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

@@ -7,96 +7,12 @@ import type { Identity } from '../auth.js'
 import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
 
-import { handleAnalyticsRoutes } from './analytics.js'
-import { handleAuditEscrowRoutes } from './audit-escrow.js'
-import { handleAuditEventRoutes } from './audit-events.js'
-import { handleCompanyExportRoutes } from './company-export.js'
-import { handleDispatchLaneRoutes } from './dispatch-lanes.js'
-import { handleBonusRuleRoutes } from './bonus-rules.js'
-import { handleBlueprintRoutes } from './blueprints.js'
-import { handleClockRoutes } from './clock.js'
-import { handleCustomerRoutes } from './customers.js'
-import { handleDailyLogRoutes } from './daily-logs.js'
-import { handleLaborBurdenRoutes } from './labor-burden.js'
-import { handleEstimateRoutes } from './estimate.js'
-import { handleEstimatePushRoutes } from './estimate-pushes.js'
-import { handleBudgetRoutes } from './budget.js'
-import { handleLaborEntryRoutes } from './labor-entries.js'
-import { handleMaterialBillRoutes } from './material-bills.js'
-import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
-import { handleNotificationRoutes } from './notifications.js'
-import { handlePricingProfileRoutes } from './pricing-profiles.js'
-import { handlePricingOverrideRoutes } from './pricing-overrides.js'
-import { handleProjectAssignmentRoutes } from './project-assignments.js'
-import { handleProjectRoutes } from './projects.js'
-import { handleVoiceIntentRoutes } from './voice-intent.js'
-import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
-import { handleQboMappingRoutes } from './qbo-mappings.js'
-import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
-import { handleRentalInventoryRoutes } from './rental-inventory.js'
-import { handleScaffoldOpsRoutes } from './scaffold-ops.js'
-import { handleScaffoldTagRoutes } from './scaffold-tags.js'
-import { handleDamageChargeRoutes } from './damage-charges.js'
-import { handleShipmentRoutes } from './shipments.js'
-import { handlePayrollExportRoutes } from './payroll-exports.js'
-import { handleCustomerPortalRoutes } from './customer-portal-links.js'
-import { handleRentalShareAdminRoutes } from './rental-shares-admin.js'
-import { handleCompanyCamRoutes } from './companycam.js'
-import { handleRentalEventRoutes } from './rental-events.js'
-import { handleRentalRequestRoutes } from './rental-requests.js'
-import { handleRentalRoutes } from './rentals.js'
-import { handleScheduleRoutes } from './schedules.js'
-import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
-import { handleServiceItemRoutes } from './service-items.js'
-import { handleCostLibraryRoutes } from './cost-library.js'
-import { handleCaptureSessionRoutes } from './capture-sessions.js'
-import { handleOpsDiagnosticsRoutes } from './ops-diagnostics.js'
-import { handleSupportPacketRoutes } from './support-packets.js'
-import { handleWorkRequestRoutes } from './work-requests.js'
-import { handleIssueRoutes } from './issues.js'
-import { handleObstructionsRoutes } from './obstructions.js'
-import { handleSyncRoutes } from './sync.js'
-import { handleAssemblyRoutes } from './assemblies.js'
-import { handleBlueprintPageRoutes } from './blueprint-pages.js'
-import { handleBlueprintDiffRoutes } from './blueprint-diffs.js'
-import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
-import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
-import { handleBidAccuracyRoutes } from './bid-accuracy.js'
-import { handleAiInsightRoutes } from './ai-insights.js'
-import { handleAiChatRoutes } from './ai-chat.js'
-import { handleTakeoffImportRoutes } from './takeoff-import.js'
-import { handleTakeoffDraftRoutes } from './takeoff-drafts.js'
-import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
-import { handleTakeoffTagRoutes } from './takeoff-tags.js'
-import { handleConditionRoutes } from './conditions.js'
-import { handleTakeoffWriteRoutes } from './takeoff-write.js'
-import { handleTimeReviewRunRoutes } from './time-review-runs.js'
-import { handleWorkerIssueRoutes } from './worker-issues.js'
-import { handleProjectBriefRoutes } from './project-briefs.js'
-import { handleWorkerRoutes } from './workers.js'
-import { handlePaymentReminderRoutes } from './payment-reminders.js'
-import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
+import type { IntegrationMappingRow } from './qbo.js'
 import { handleAdminRoutes } from './admin.js'
 import { handleAdminJobsRoutes } from './admin-jobs.js'
 import { handlePlatformGrantRoutes } from './platform-grants.js'
-import { handleCompanyRoleRoutes } from './company-roles.js'
 import { makeScenarioApplyRunner } from '../admin-scenarios.js'
 import { seedCompanyDefaults } from '../onboarding.js'
-import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
-import { handleChangeOrderRoutes } from './change-orders.js'
-import { handleGuardrailRoutes } from './guardrails.js'
-import { handleInventoryServiceTicketRoutes } from './inventory-service-tickets.js'
-import { handleProjectBillingMilestoneRoutes } from './project-billing-milestones.js'
-import { handleProjectLostReasonRoutes } from './project-lost-reasons.js'
-import { handleMessagingRoutes } from './messaging.js'
-import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
-import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
-import { handleInventoryForecastRoutes } from './inventory-forecast.js'
-import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
-import { handleAnchorRoutes } from './anchors.js'
-import { handleAgentToolsRoutes } from './agent-tools.js'
-import { getBuildSha } from '../lib/build-sha.js'
-import { rasterizePdfPageToPng } from '../blueprint-rasterize.js'
 
 /**
  * Cross-cutting deps the route cascade needs from server.ts. Constructed
@@ -360,6 +276,94 @@ export async function dispatchPlatformAdminRoutes(ctx: PlatformAdminDispatchCont
   return false
 }
 
+// Per-module dispatch descriptors (Campaign E): each route module owns its
+// own { name, order, handle } descriptor; the registry below is just the
+// assembly point. Adding a route = a new descriptor in its module + one
+// import line here. Order/identity stays locked by dispatch.test.ts.
+import { companyRolesRouteDescriptor } from './company-roles.js'
+import { systemRouteDescriptor, debugTraceRouteDescriptor } from './system.js'
+import { opsDiagnosticsRouteDescriptor } from './ops-diagnostics.js'
+import { agentToolsRouteDescriptor } from './agent-tools.js'
+import { customersRouteDescriptor } from './customers.js'
+import { workersRouteDescriptor } from './workers.js'
+import { paymentRemindersRouteDescriptor } from './payment-reminders.js'
+import { pricingProfilesRouteDescriptor } from './pricing-profiles.js'
+import { pricingOverridesRouteDescriptor } from './pricing-overrides.js'
+import { bonusRulesRouteDescriptor } from './bonus-rules.js'
+import { auditEventsRouteDescriptor } from './audit-events.js'
+import { companyExportRouteDescriptor } from './company-export.js'
+import { dispatchLanesRouteDescriptor } from './dispatch-lanes.js'
+import { auditEscrowRouteDescriptor } from './audit-escrow.js'
+import { workerIssuesRouteDescriptor } from './worker-issues.js'
+import { projectBriefsRouteDescriptor } from './project-briefs.js'
+import { captureSessionsRouteDescriptor } from './capture-sessions.js'
+import { supportPacketsRouteDescriptor } from './support-packets.js'
+import { obstructionsRouteDescriptor } from './obstructions.js'
+import { workRequestsRouteDescriptor } from './work-requests.js'
+import { issuesRouteDescriptor } from './issues.js'
+import { qboMappingsRouteDescriptor } from './qbo-mappings.js'
+import { syncRouteDescriptor } from './sync.js'
+import { qboRouteDescriptor } from './qbo.js'
+import { serviceItemsRouteDescriptor } from './service-items.js'
+import { costLibraryRouteDescriptor } from './cost-library.js'
+import { voiceIntentRouteDescriptor } from './voice-intent.js'
+import { projectsRouteDescriptor } from './projects.js'
+import { projectAssignmentsRouteDescriptor } from './project-assignments.js'
+import { materialBillsRouteDescriptor } from './material-bills.js'
+import { takeoffDraftsRouteDescriptor } from './takeoff-drafts.js'
+import { takeoffMeasurementsRouteDescriptor } from './takeoff-measurements.js'
+import { takeoffTagsRouteDescriptor } from './takeoff-tags.js'
+import { conditionsRouteDescriptor } from './conditions.js'
+import { blueprintPagesRouteDescriptor } from './blueprint-pages.js'
+import { blueprintDiffsRouteDescriptor } from './blueprint-diffs.js'
+import { takeoffImportRouteDescriptor } from './takeoff-import.js'
+import { assembliesRouteDescriptor } from './assemblies.js'
+import { qboCustomFieldsRouteDescriptor } from './qbo-custom-fields.js'
+import { inventoryUtilizationRouteDescriptor } from './inventory-utilization.js'
+import { bidAccuracyRouteDescriptor } from './bid-accuracy.js'
+import { aiInsightsRouteDescriptor } from './ai-insights.js'
+import { aiChatRouteDescriptor } from './ai-chat.js'
+import { rentalInventoryRouteDescriptor } from './rental-inventory.js'
+import { scaffoldOpsRouteDescriptor } from './scaffold-ops.js'
+import { scaffoldTagsRouteDescriptor } from './scaffold-tags.js'
+import { damageChargesRouteDescriptor } from './damage-charges.js'
+import { shipmentsRouteDescriptor } from './shipments.js'
+import { payrollExportsRouteDescriptor } from './payroll-exports.js'
+import { customerPortalLinksRouteDescriptor } from './customer-portal-links.js'
+import { rentalSharesAdminRouteDescriptor } from './rental-shares-admin.js'
+import { companycamRouteDescriptor } from './companycam.js'
+import { rentalEventsRouteDescriptor } from './rental-events.js'
+import { rentalsRouteDescriptor } from './rentals.js'
+import { rentalRequestsRouteDescriptor } from './rental-requests.js'
+import { schedulesRouteDescriptor } from './schedules.js'
+import { crewScheduleEventsRouteDescriptor } from './crew-schedule-events.js'
+import { laborEntriesRouteDescriptor } from './labor-entries.js'
+import { clockRouteDescriptor } from './clock.js'
+import { dailyLogsRouteDescriptor } from './daily-logs.js'
+import { laborBurdenRouteDescriptor } from './labor-burden.js'
+import { timeReviewRunsRouteDescriptor } from './time-review-runs.js'
+import { projectLifecycleRouteDescriptor } from './project-lifecycle.js'
+import { changeOrdersRouteDescriptor } from './change-orders.js'
+import { guardrailsRouteDescriptor } from './guardrails.js'
+import { inventoryServiceTicketsRouteDescriptor } from './inventory-service-tickets.js'
+import { projectBillingMilestonesRouteDescriptor } from './project-billing-milestones.js'
+import { projectLostReasonsRouteDescriptor } from './project-lost-reasons.js'
+import { messagingRouteDescriptor } from './messaging.js'
+import { laborPayrollRunsRouteDescriptor } from './labor-payroll-runs.js'
+import { estimateSharesAdminRouteDescriptor } from './estimate-shares-admin.js'
+import { inventoryForecastRouteDescriptor } from './inventory-forecast.js'
+import { pushSubscriptionsRouteDescriptor } from './push-subscriptions.js'
+import { notificationPreferencesRouteDescriptor } from './notification-preferences.js'
+import { notificationsRouteDescriptor } from './notifications.js'
+import { takeoffWriteRouteDescriptor } from './takeoff-write.js'
+import { estimateRouteDescriptor } from './estimate.js'
+import { estimatePushesRouteDescriptor } from './estimate-pushes.js'
+import { budgetRouteDescriptor } from './budget.js'
+import { workflowEventLogRouteDescriptor } from './workflow-event-log.js'
+import { analyticsRouteDescriptor } from './analytics.js'
+import { blueprintsRouteDescriptor } from './blueprints.js'
+import { anchorsRouteDescriptor } from './anchors.js'
+
 /**
  * The route registry. Every dispatchable route is a descriptor here with an
  * explicit `order` — see DispatchRouteDescriptor for the ordering contract
@@ -375,1392 +379,90 @@ const DISPATCH_ROUTE_REGISTRY: readonly DispatchRouteDescriptor[] = [
     handle: ({ req, url, pool, identity, ctx, sendJson, readBody }) =>
       dispatchPlatformAdminRoutes({ req, url, pool, identity, tier: ctx.tier, sendJson, readBody }),
   },
-
-  // Custom-role management API (admin-gated CRUD for custom_roles +
-  // custom_role_grants; GET surfaces the read-only built-in matrix). The
-  // editable half of the RBAC-A overhaul — see permission-seam.ts for the
-  // LAYER 1/LAYER 2 enforcement that consumes these rows. Namespace
-  // (/api/companies/:id/roles, /memberships/:id/role) is distinct.
-  {
-    name: 'company-roles',
-    order: 20,
-    handle: ({ req, url, pool, currentUserId, sendJson, readBody }) =>
-      handleCompanyRoleRoutes(req, url, {
-        pool,
-        userId: currentUserId,
-        sendJson,
-        readBody,
-      }),
-  },
-
-  // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
-  {
-    name: 'system',
-    order: 30,
-    handle: ({ req, url, pool, company, currentUserId, identity, ctx, sendJson }) =>
-      handleSystemRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        actorUserId: identity.actorUserId ?? null,
-        authMode: identity.mode ?? 'self',
-        resolveAppIssueCapabilities: ctx.resolveAppIssueCapabilities,
-        sendJson,
-        setHeader: ctx.setHeader,
-        send304: ctx.send304,
-      }),
-  },
-
-  // Operator-only onsite diagnostics. Read-only aggregation over local
-  // control-plane/capture primitives; gated on app_issue.view because it can
-  // reveal platform health and desktop-capture posture.
-  {
-    name: 'ops-diagnostics',
-    order: 40,
-    handle: ({ req, url, pool, ctx, sendJson, company, readBody, currentUserId }) =>
-      handleOpsDiagnosticsRoutes(req, url, {
-        requireCapability: ctx.requireCapability,
-        sendJson,
-        pool,
-        company,
-        storage: ctx.storage,
-        buildSha: getBuildSha(),
-        readBody,
-        getCurrentUserId: () => currentUserId,
-      }),
-  },
-
-  // Agent-tools discovery — self-describing catalog of the deterministic
-  // workflows as agent-callable tools (instrument-your-own-app surface).
-  {
-    name: 'agent-tools',
-    order: 50,
-    handle: ({ req, url, sendJson }) => handleAgentToolsRoutes(req, url, { sendJson }),
-  },
-
-  // Customer routes
-  {
-    name: 'customers',
-    order: 60,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
-      handleCustomerRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-        backfillCustomerMapping: ctx.backfillCustomerMapping,
-      }),
-  },
-
-  // Worker routes
-  {
-    name: 'workers',
-    order: 70,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
-      handleWorkerRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Payment-reminder bulk send (owner-money)
-  {
-    name: 'payment-reminders',
-    order: 80,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handlePaymentReminderRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Pricing-profile routes
-  {
-    name: 'pricing-profiles',
-    order: 90,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion }) =>
-      handlePricingProfileRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Per-project / per-customer pricing override routes
-  {
-    name: 'pricing-overrides',
-    order: 100,
-    handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson }) =>
-      handlePricingOverrideRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Bonus-rule routes
-  {
-    name: 'bonus-rules',
-    order: 110,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion }) =>
-      handleBonusRuleRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Audit events (admin-only GET /api/audit-events)
-  {
-    name: 'audit-events',
-    order: 120,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleAuditEventRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Per-tenant data export (admin-only GET /api/company/export) — portability /
-  // offboarding bundle (JSON | CSV). Strictly company-scoped via the GUC +
-  // explicit company_id predicate. See ./company-export.ts.
-  {
-    name: 'company-export',
-    order: 130,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson, ctx }) =>
-      handleCompanyExportRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-        res: ctx.res,
-      }),
-  },
-
-  // Dispatch lanes (admin-only GET / POST /api/admin/dispatch-lanes)
-  // Wedge 5 kill-switch primitive — see migration 094 and
-  // apps/worker/src/dispatch-lanes.ts for the runtime gate.
-  {
-    name: 'dispatch-lanes',
-    order: 140,
-    handle: ({ req, url, pool, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleDispatchLaneRoutes(req, url, {
-        pool,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        getCurrentUserId: ctx.getCurrentUserId,
-      }),
-  },
-
-  // Audit Escrow verification (admin-only GET /api/audit/escrow/...)
-  // Wedge 2 of the proving-ground plan — see migration 095 and
-  // packages/queue/src/audit-escrow.ts for the primitive.
-  {
-    name: 'audit-escrow',
-    order: 150,
-    handle: ({ req, url, pool, requireRoleStr, sendJson }) =>
-      handleAuditEscrowRoutes(req, url, {
-        pool,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Worker issues — wk-issue ping (any role POSTs; admin/foreman/office GET)
-  {
-    name: 'worker-issues',
-    order: 160,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
-      handleWorkerIssueRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        storage: ctx.storage,
-        maxAttachmentBytes: Number(process.env.MAX_WORKER_ISSUE_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
-        attachmentDownloadPresigned: ctx.blueprintDownloadPresigned,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-      }),
-  },
-
-  // Foreman morning brief — fm-brief upsert + read.
-  {
-    name: 'project-briefs',
-    order: 170,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleProjectBriefRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Capture sessions — correlation spine for product trace, feedback, and artifacts.
-  {
-    name: 'capture-sessions',
-    order: 180,
-    handle: ({ req, url, pool, company, identity, ctx, requireRole, readBody, sendJson }) =>
-      handleCaptureSessionRoutes(req, url, {
-        pool,
-        company,
-        identity,
-        tier: ctx.tier,
-        buildSha: getBuildSha(),
-        storage: ctx.storage,
-        maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
-        artifactDownloadPresigned: ctx.blueprintDownloadPresigned,
-        requireRole,
-        // app_issue.capture gates finalize; app_issue.view gates the artifact
-        // download — both on the platform boundary. See capture-sessions.ts.
-        requireCapability: ctx.requireCapability,
-        readBody,
-        sendJson,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-      }),
-  },
-
-  // Support / debug packets — bounded redacted client timeline + audit/queue join.
-  {
-    name: 'support-packets',
-    order: 190,
-    handle: ({ req, url, pool, company, identity, ctx, readBody, sendJson }) =>
-      handleSupportPacketRoutes(req, url, {
-        pool,
-        company,
-        identity,
-        tier: ctx.tier,
-        buildSha: getBuildSha(),
-        // app_issue.view gates the read paths (get/list/access-log); the POST
-        // producer path stays open. See support-packets.ts.
-        requireCapability: ctx.requireCapability,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Obstruction signals — first-class queryable view over work items
-  // that are stuck (review_stale / proposal_expired / wont_do / dispatch
-  // outbox dead). Ordered BEFORE handleWorkRequestRoutes so the
-  // /api/work-requests/obstructions GET wins against the
-  // /api/work-requests/:id detail matcher (which would otherwise treat
-  // 'obstructions' as a work-item id and return 400).
-  {
-    name: 'obstructions',
-    order: 200,
-    handle: ({ req, url, pool, company, identity, requireRole, sendJson }) =>
-      handleObstructionsRoutes(req, url, {
-        pool,
-        company,
-        identity,
-        requireRole,
-        sendJson,
-      }),
-  },
-
-  // Work Requests — context-aware support/task handoff timeline.
-  {
-    name: 'work-requests',
-    order: 210,
-    handle: ({ req, url, pool, company, identity, currentUserId, ctx, readBody, sendJson }) =>
-      handleWorkRequestRoutes(req, url, {
-        pool,
-        company,
-        // Act-as-aware identity: created_by / actor attribution and the
-        // member-scoped read filters inside the handler key off
-        // identity.userId. Under the dev RoleSwitcher the raw identity is the
-        // demo-user, so override userId with the impersonated user id while
-        // preserving source/role. `currentUserId` resolves to the act-as
-        // override only when tier !== 'prod', so prod attribution is unchanged.
-        identity: { ...identity, userId: currentUserId },
-        tier: ctx.tier,
-        buildSha: getBuildSha(),
-        // field_request.* capability gate (migration 009). Resolves on the
-        // company boundary from resolvedCompany.active.role ∪ custom_role_grants
-        // — the act-as override above only re-attributes actor/userId, not the
-        // role the cap resolves against. See work-requests.ts + capability.ts.
-        requireCapability: ctx.requireCapability,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Internal APP-ISSUE surface — read-only board/list/detail over the
-  // `app_issue` half of context_work_items (migration 009 `domain`). Every
-  // route gates on the PLATFORM capability `app_issue.view` (superadmin ∪
-  // platform_admin_grants over the RAW identity), so the captured internal
-  // data is unreachable via a company role / dev act-as / header fallback.
-  // Distinct /api/issues/* namespace; does not overlap /api/work-requests/*.
-  {
-    name: 'issues',
-    order: 220,
-    handle: ({ req, url, pool, company, identity, ctx, readBody, sendJson }) =>
-      handleIssueRoutes(req, url, {
-        pool,
-        company,
-        identity,
-        buildSha: getBuildSha(),
-        requireCapability: ctx.requireCapability,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // QBO mapping CRUD
-  {
-    name: 'qbo-mappings',
-    order: 230,
-    handle: ({ req, url, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
-      handleQboMappingRoutes(req, url, {
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-        listMappings: ctx.listIntegrationMappings,
-        upsertMapping: ctx.upsertIntegrationMapping,
-      }),
-  },
-
-  // Sync queue inspection + manual drain
-  {
-    name: 'sync',
-    order: 240,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson }) =>
-      handleSyncRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // QBO auth + connection + sync
-  {
-    name: 'qbo',
-    order: 250,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, sendRedirect, ctx }) =>
-      handleQboRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        sendRedirect,
-        qboConfig: ctx.qboConfig,
-      }),
-  },
-
-  // Service-item mutations (code-keyed) and list
-  {
-    name: 'service-items',
-    order: 260,
-    handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
-      handleServiceItemRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Shared cost library (Takeoff Deep Dive M5) — company + shared-catalog
-  // list/search, single create, and CSV/.xlsx price-book import. Additive:
-  // the pricing resolver consults this only as the lowest-priority fallback
-  // (pricing.ts layer 6), so an empty library changes nothing.
-  {
-    name: 'cost-library',
-    order: 270,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleCostLibraryRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Voice-driven project setup (v1) — voice PROPOSES proposed fields, the
-  // human CONFIRMS via the regular POST /api/projects. Must precede the
-  // project handler so the /api/projects/voice-intent* paths win over the
-  // project handler's GET /^\/api\/projects\/[^/]+$/ matcher. Gated by
-  // isAiChatEnabled() — no-ops clean (200 disabled) on a non-AI instance.
-  {
-    name: 'voice-intent',
-    order: 280,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
-      handleVoiceIntentRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Project mutations (POST/PATCH/closeout/summary)
-  {
-    name: 'projects',
-    order: 290,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
-      handleProjectRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Per-project foreman/worker assignments.
-  {
-    name: 'project-assignments',
-    order: 300,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleProjectAssignmentRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        getCurrentUserId: ctx.getCurrentUserId,
-      }),
-  },
-
-  // Material-bill CRUD
-  {
-    name: 'material-bills',
-    order: 310,
-    handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
-      handleMaterialBillRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Takeoff drafts (multi-draft per project)
-  {
-    name: 'takeoff-drafts',
-    order: 320,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, currentUserId, ctx }) =>
-      handleTakeoffDraftRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        currentUserId,
-        storage: ctx.storage,
-        maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
-      }),
-  },
-
-  // Takeoff measurement read + LWW-gated PATCH/DELETE
-  {
-    name: 'takeoff-measurements',
-    order: 330,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
-      handleTakeoffMeasurementRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-        assertBlueprintDocumentsBelongToProject: ctx.assertBlueprintDocumentsBelongToProject,
-      }),
-  },
-
-  // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
-  {
-    name: 'takeoff-tags',
-    order: 340,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleTakeoffTagRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Condition layer (Takeoff Deep Dive H1) — company-scoped reusable typed
-  // templates. Additive: measurements may record condition_id, the tag flow
-  // above remains the fallback.
-  {
-    name: 'conditions',
-    order: 350,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleConditionRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Blueprint pages + per-page calibration (Phase 3B/C)
-  {
-    name: 'blueprint-pages',
-    order: 360,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleBlueprintPageRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        storage: ctx.storage,
-        blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-      }),
-  },
-
-  // Plan-revision diffs (H3) — serve stored blueprint_page_diffs +
-  // affected_measurement_ids so the takeoff surface can render the
-  // "N measurements affected" badge. Read-only; diff population is a
-  // follow-up slice.
-  {
-    name: 'blueprint-diffs',
-    order: 370,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleBlueprintDiffRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Takeoff CSV import (Phase 3G)
-  {
-    name: 'takeoff-import',
-    order: 380,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleTakeoffImportRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Assemblies (Phase 3F)
-  {
-    name: 'assemblies',
-    order: 390,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleAssemblyRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // QBO custom field mappings (Phase 3H — sqft on QBO entities)
-  {
-    name: 'qbo-custom-fields',
-    order: 400,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson }) =>
-      handleQboCustomFieldRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Inventory utilization rollup (Phase 4 — must precede the catalog
-  // CRUD handler so the more-specific path matches first).
-  {
-    name: 'inventory-utilization',
-    order: 410,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleInventoryUtilizationRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // AI Layer — bid accuracy cohort stats (Phase 5).
-  {
-    name: 'bid-accuracy',
-    order: 420,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleBidAccuracyRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // AI Layer — insights CRUD + agent triggers (Phase 5).
-  {
-    name: 'ai-insights',
-    order: 430,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleAiInsightRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // AI Layer — operator-context chat staging (consumer of the
-  // browser-bridge operator-context handshake; see
-  // digital-ontology/operator-context-handshake-design.md).
-  {
-    name: 'ai-chat',
-    order: 440,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, res }) =>
-      handleAiChatRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        // Raw response handle for the SSE stream route. JSON endpoints
-        // ignore this; the streaming endpoint refuses to start without
-        // it (defense in depth — it can never legitimately be missing
-        // through dispatch.ts).
-        res,
-      }),
-  },
-
-  // Rental inventory + billing workflow
-  {
-    name: 'rental-inventory',
-    order: 450,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
-      handleRentalInventoryRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-        storage: ctx.storage,
-        maxMovementPhotoBytes: Number(process.env.MAX_MOVEMENT_PHOTO_BYTES ?? 25 * 1024 * 1024),
-        movementPhotoDownloadPresigned: ctx.blueprintDownloadPresigned,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-      }),
-  },
-
-  // Branches, cross-hire, scaffold catalog + BOM bridge
-  {
-    name: 'scaffold-ops',
-    order: 460,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleScaffoldOpsRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // QR scaffold tags + inspections
-  {
-    name: 'scaffold-tags',
-    order: 470,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleScaffoldTagRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Damage / loss / late-return billing
-  {
-    name: 'damage-charges',
-    order: 480,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleDamageChargeRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Shipments: estimate-to-fulfillment workflow
-  {
-    name: 'shipments',
-    order: 490,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleShipmentRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Payroll exports: XLSX / Xero / Payworks
-  {
-    name: 'payroll-exports',
-    order: 500,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
-      handlePayrollExportRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        res: ctx.res,
-      }),
-  },
-
-  // Customer portal links
-  {
-    name: 'customer-portal-links',
-    order: 510,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleCustomerPortalRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Rental share-link owner admin (revoke + access audit; LANE A)
-  {
-    name: 'rental-shares-admin',
-    order: 520,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, sendJson }) =>
-      handleRentalShareAdminRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // CompanyCam one-way photo mirror
-  {
-    name: 'companycam',
-    order: 530,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleCompanyCamRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Rental workflow event-API surface (GET /:id snapshot, POST /:id/events).
-  // Ordered before handleRentalRoutes so the canonical workflow paths
-  // short-circuit the generic CRUD routes; the legacy POST /return and
-  // POST /transfer routes remain handled by handleRentalRoutes for
-  // back-compat with the rental-return-sheet and rental-transfer-sheet
-  // SPA flows.
-  {
-    name: 'rental-events',
-    order: 540,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleRentalEventRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Avontus-style rentals
-  {
-    name: 'rentals',
-    order: 550,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
-      handleRentalRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Operator-side approval queue for portal rental_requests submissions
-  // (see routes/portal-rentals.ts for the public create path).
-  {
-    name: 'rental-requests',
-    order: 560,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleRentalRequestRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Crew schedules
-  {
-    name: 'schedules',
-    order: 570,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
-      handleScheduleRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Crew schedule workflow snapshot + events (GET /:id, POST /:id/events,
-  // PATCH /:id) — mirrors rental-billing-state and time-review-runs.
-  {
-    name: 'crew-schedule-events',
-    order: 580,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
-      handleCrewScheduleEventRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        checkVersion,
-      }),
-  },
-
-  // Labor entries
-  {
-    name: 'labor-entries',
-    order: 590,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleLaborEntryRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        assertDivisionAllowedForServiceItem: ctx.assertDivisionAllowedForServiceItem,
-      }),
-  },
-
-  // Clock in/out + timeline
-  {
-    name: 'clock',
-    order: 600,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
-      handleClockRoutes(req, url, {
-        pool,
-        company,
-        // Act-as-aware (matches every other dispatch entry, e.g. daily-logs):
-        // clock in/out must attribute to the impersonated user under the dev
-        // RoleSwitcher, not the raw demo-user identity.
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        storage: ctx.storage,
-        // Reuse the blueprint upload cap until ops asks for a separate knob.
-        maxPhotoBytes: ctx.maxBlueprintUploadBytes,
-      }),
-  },
-
-  // Daily logs (Sitemap.html § fm-log) — incl. photo upload + fetch
-  {
-    name: 'daily-logs',
-    order: 610,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
-      handleDailyLogRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-        checkVersion,
-        storage: ctx.storage,
-        maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
-        photoDownloadPresigned: ctx.blueprintDownloadPresigned,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-      }),
-  },
-
-  // Labor burden rollup (fm-today-v2 dark card)
-  {
-    name: 'labor-burden',
-    order: 620,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleLaborBurdenRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Time review runs (Sitemap.html § t-approve) — workflow snapshot + events
-  {
-    name: 'time-review-runs',
-    order: 630,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
-      handleTimeReviewRunRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        requirePermission: ctx.requirePermission,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Project lifecycle workflow (single 7-state machine: draft → … → archived)
-  {
-    name: 'project-lifecycle',
-    order: 640,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleProjectLifecycleRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Change orders (v2) — list/create + per-CO workflow snapshot + events
-  {
-    name: 'change-orders',
-    order: 650,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleChangeOrderRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Guardrails (v2) — per-project monitors + company-wide active + snooze/mute/clear
-  {
-    name: 'guardrails',
-    order: 660,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleGuardrailRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Inventory service tickets — maintenance lifecycle (open → in_service → done)
-  {
-    name: 'inventory-service-tickets',
-    order: 670,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleInventoryServiceTicketRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Project billing milestones (v2) — deposit/progress/final schedule with manual paid status
-  {
-    name: 'project-billing-milestones',
-    order: 680,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleProjectBillingMilestoneRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Project lost reasons (v2) — get + upsert the categorised lost-bid capture
-  {
-    name: 'project-lost-reasons',
-    order: 690,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleProjectLostReasonRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Cross-role comms (v2) — project chat threads + owner broadcasts
-  {
-    name: 'messaging',
-    order: 700,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleMessagingRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Labor payroll runs (QBO TimeActivity export) — workflow snapshot + events
-  {
-    name: 'labor-payroll-runs',
-    order: 710,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleLaborPayrollRunRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Authenticated estimate share-link routes (POST /api/projects/:id/estimate/share, list, revoke)
-  {
-    name: 'estimate-shares-admin',
-    order: 720,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleEstimateShareRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        shareSecret: ctx.estimateShareConfig.secret,
-        portalBaseUrl: ctx.estimateShareConfig.portalBaseUrl,
-      }),
-  },
-
-  // Inventory demand forecast — GET /api/inventory-items/:id/forecast
-  {
-    name: 'inventory-forecast',
-    order: 730,
-    handle: ({ req, url, company, sendJson }) =>
-      handleInventoryForecastRoutes(req, url, {
-        company,
-        sendJson,
-      }),
-  },
-
-  // Web Push subscription registration (read VAPID key, upsert/delete subs)
-  {
-    name: 'push-subscriptions',
-    order: 740,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handlePushSubscriptionRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() || null,
-      }),
-  },
-
-  // Per-user notification channel preferences
-  {
-    name: 'notification-preferences',
-    order: 750,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleNotificationPreferenceRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Per-user notification feed (list unread + mark read). Used by wk-today's
-  // "Foreman replied" banner to drain the worker's queue of Loop 2
-  // resolution messages. Scoped via WHERE recipient_clerk_user_id = currentUserId.
-  {
-    name: 'notifications',
-    order: 760,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleNotificationRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Takeoff measurement writes (POST single + replace set)
-  {
-    name: 'takeoff-write',
-    order: 770,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleTakeoffWriteRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Estimate flow (recompute, scope-vs-bid, PDF, forecast hours, divisions xref)
-  {
-    name: 'estimate',
-    order: 780,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
-      handleEstimateRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        sendPdf: ctx.sendPdf,
-        sendFileContent: ctx.sendFileContent,
-      }),
-  },
-
-  // Estimate-push workflow snapshots/events
-  {
-    name: 'estimate-pushes',
-    order: 790,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleEstimatePushRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Budget freeze + per-cost-code variance (Deep Dive §4 — bid/budget/actuals).
-  // Explicit operator freeze of the live estimate_lines into an immutable
-  // budget_snapshots row (change orders mint a new version), plus BUDGET vs
-  // ACTUALS (material_bills + labor_entries) rolled by service_item_code.
-  // estimate_lines stays the live bid. Ordered near the estimate family; its
-  // /api/projects/:id/budget* paths don't overlap the project CRUD matchers.
-  {
-    name: 'budget',
-    order: 800,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
-      handleBudgetRoutes(req, url, {
-        pool,
-        company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-      }),
-  },
-
-  // Workflow event-log tail — read-only GET for the SiteLayer Probe
-  // (ADR-0019). Operator-tier read access, company-scoped.
-  {
-    name: 'workflow-event-log',
-    order: 810,
-    handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
-      handleWorkflowEventLogRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Analytics dashboards
-  {
-    name: 'analytics',
-    order: 820,
-    handle: ({ req, url, pool, company, currentUserId, requireRoleStr, sendJson }) =>
-      handleAnalyticsRoutes(req, url, {
-        pool,
-        company,
-        // Act-as-aware: the /divisions + /service-item-productivity role
-        // lookups must read the impersonated user's membership under the dev
-        // RoleSwitcher, not the raw identity (which would skip the gate).
-        currentUserId,
-        requireRole: requireRoleStr,
-        sendJson,
-      }),
-  },
-
-  // Blueprint document CRUD + streaming upload + presigned download
-  {
-    name: 'blueprints',
-    order: 830,
-    handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
-      handleBlueprintRoutes(req, url, {
-        pool,
-        company,
-        requireRole: requireRoleStr,
-        readBody,
-        sendJson,
-        checkVersion,
-        storage: ctx.storage,
-        maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
-        blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
-        sendFileContent: ctx.sendFileContent,
-        sendFileRedirect: ctx.sendFileRedirect,
-        rasterizePdfPage: rasterizePdfPageToPng,
-      }),
-  },
-
-  // Debug trace lookup (Bearer DEBUG_TRACE_TOKEN, prod-gated)
-  {
-    name: 'debug-trace',
-    order: 840,
-    handle: ({ req, url, pool, company, currentUserId, sendJson, ctx }) =>
-      handleDebugTraceRoute({
-        req,
-        url,
-        pool,
-        company,
-        currentUserId,
-        sendJson,
-        setHeader: ctx.setHeader,
-        send304: ctx.send304,
-        requestId: ctx.requestId,
-        tier: ctx.tier,
-      }),
-  },
-
-  // Statechart-anchor lookup — incident-tracking surface, same gate as
-  // debug-trace (Bearer DEBUG_TRACE_TOKEN, prod-gated). Resolves a one-string
-  // transition anchor (or a from/to pair) to its workflow_event_log row(s),
-  // linked capture session + artifacts, sentry_trace, and deterministic replay.
-  {
-    name: 'anchors',
-    order: 850,
-    handle: ({ req, url, pool, company, ctx, sendJson }) =>
-      handleAnchorRoutes({
-        req,
-        url,
-        pool,
-        company,
-        tier: ctx.tier,
-        requestId: ctx.requestId,
-        sendJson,
-        setHeader: ctx.setHeader,
-      }),
-  },
+  companyRolesRouteDescriptor,
+  systemRouteDescriptor,
+  opsDiagnosticsRouteDescriptor,
+  agentToolsRouteDescriptor,
+  customersRouteDescriptor,
+  workersRouteDescriptor,
+  paymentRemindersRouteDescriptor,
+  pricingProfilesRouteDescriptor,
+  pricingOverridesRouteDescriptor,
+  bonusRulesRouteDescriptor,
+  auditEventsRouteDescriptor,
+  companyExportRouteDescriptor,
+  dispatchLanesRouteDescriptor,
+  auditEscrowRouteDescriptor,
+  workerIssuesRouteDescriptor,
+  projectBriefsRouteDescriptor,
+  captureSessionsRouteDescriptor,
+  supportPacketsRouteDescriptor,
+  obstructionsRouteDescriptor,
+  workRequestsRouteDescriptor,
+  issuesRouteDescriptor,
+  qboMappingsRouteDescriptor,
+  syncRouteDescriptor,
+  qboRouteDescriptor,
+  serviceItemsRouteDescriptor,
+  costLibraryRouteDescriptor,
+  voiceIntentRouteDescriptor,
+  projectsRouteDescriptor,
+  projectAssignmentsRouteDescriptor,
+  materialBillsRouteDescriptor,
+  takeoffDraftsRouteDescriptor,
+  takeoffMeasurementsRouteDescriptor,
+  takeoffTagsRouteDescriptor,
+  conditionsRouteDescriptor,
+  blueprintPagesRouteDescriptor,
+  blueprintDiffsRouteDescriptor,
+  takeoffImportRouteDescriptor,
+  assembliesRouteDescriptor,
+  qboCustomFieldsRouteDescriptor,
+  inventoryUtilizationRouteDescriptor,
+  bidAccuracyRouteDescriptor,
+  aiInsightsRouteDescriptor,
+  aiChatRouteDescriptor,
+  rentalInventoryRouteDescriptor,
+  scaffoldOpsRouteDescriptor,
+  scaffoldTagsRouteDescriptor,
+  damageChargesRouteDescriptor,
+  shipmentsRouteDescriptor,
+  payrollExportsRouteDescriptor,
+  customerPortalLinksRouteDescriptor,
+  rentalSharesAdminRouteDescriptor,
+  companycamRouteDescriptor,
+  rentalEventsRouteDescriptor,
+  rentalsRouteDescriptor,
+  rentalRequestsRouteDescriptor,
+  schedulesRouteDescriptor,
+  crewScheduleEventsRouteDescriptor,
+  laborEntriesRouteDescriptor,
+  clockRouteDescriptor,
+  dailyLogsRouteDescriptor,
+  laborBurdenRouteDescriptor,
+  timeReviewRunsRouteDescriptor,
+  projectLifecycleRouteDescriptor,
+  changeOrdersRouteDescriptor,
+  guardrailsRouteDescriptor,
+  inventoryServiceTicketsRouteDescriptor,
+  projectBillingMilestonesRouteDescriptor,
+  projectLostReasonsRouteDescriptor,
+  messagingRouteDescriptor,
+  laborPayrollRunsRouteDescriptor,
+  estimateSharesAdminRouteDescriptor,
+  inventoryForecastRouteDescriptor,
+  pushSubscriptionsRouteDescriptor,
+  notificationPreferencesRouteDescriptor,
+  notificationsRouteDescriptor,
+  takeoffWriteRouteDescriptor,
+  estimateRouteDescriptor,
+  estimatePushesRouteDescriptor,
+  budgetRouteDescriptor,
+  workflowEventLogRouteDescriptor,
+  analyticsRouteDescriptor,
+  blueprintsRouteDescriptor,
+  debugTraceRouteDescriptor,
+  anchorsRouteDescriptor,
 ]
 
 /**

@@ -25,6 +25,7 @@ import {
   snapshotEstimate,
   type EstimateShareRow,
 } from '../estimate-share-helpers.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /** Map a DB share row to the estimate_share workflow snapshot the reducer
  * expects. The `status` column may be null on a row written before migration
@@ -509,4 +510,26 @@ export async function handleEstimateShareRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `estimate-shares-admin` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const estimateSharesAdminRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'estimate-shares-admin',
+  order: 720,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
+    handleEstimateShareRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      shareSecret: ctx.estimateShareConfig.secret,
+      portalBaseUrl: ctx.estimateShareConfig.portalBaseUrl,
+    }),
 }

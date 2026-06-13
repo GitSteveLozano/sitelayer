@@ -18,6 +18,7 @@ import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type ProjectLifecycleRouteCtx = {
   pool: Pool
@@ -342,4 +343,24 @@ export async function handleProjectLifecycleRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `project-lifecycle` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const projectLifecycleRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'project-lifecycle',
+  order: 640,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleProjectLifecycleRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

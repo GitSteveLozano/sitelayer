@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { withCompanyClient } from '../mutation-tx.js'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Read-only GET endpoint for the workflow_event_log tail.
@@ -222,4 +223,22 @@ export async function handleWorkflowEventLogRoutes(
 
   ctx.sendJson(200, { events })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `workflow-event-log` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const workflowEventLogRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'workflow-event-log',
+  order: 810,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
+    handleWorkflowEventLogRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

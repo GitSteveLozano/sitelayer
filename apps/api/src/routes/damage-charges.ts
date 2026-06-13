@@ -47,6 +47,7 @@ import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Damage / loss / late-return / cleanup charges.
@@ -542,4 +543,24 @@ export async function handleDamageChargeRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `damage-charges` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const damageChargesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'damage-charges',
+  order: 480,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleDamageChargeRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

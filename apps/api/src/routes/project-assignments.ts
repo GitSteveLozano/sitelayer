@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/assignments wire-format. Both fields are validated
 // downstream (clerk_user_id non-empty; role ∈ foreman|worker) — the schema
@@ -194,4 +195,24 @@ async function projectBelongsToCompany(pool: Pool, companyId: string, projectId:
     projectId,
   ])
   return result.rows.length > 0
+}
+
+/**
+ * Self-registered dispatch descriptor for the `project-assignments` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const projectAssignmentsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'project-assignments',
+  order: 300,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, ctx }) =>
+    handleProjectAssignmentRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      getCurrentUserId: ctx.getCurrentUserId,
+    }),
 }

@@ -5,6 +5,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { assertKeyInCompany, getBlueprintMimeType, StorageError, type BlueprintStorage } from '../storage.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Permissive wire-format schemas. Numerics are string-or-number (the handlers
 // run their own Number()/Number.isFinite + range checks downstream); `.loose()`
@@ -395,4 +396,28 @@ function assertBlueprintPageFilePath(companyId: string, storagePath: string): st
     if (err instanceof StorageError) throw new HttpError(err.status, err.message)
     throw err
   }
+}
+
+/**
+ * Self-registered dispatch descriptor for the `blueprint-pages` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const blueprintPagesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'blueprint-pages',
+  order: 360,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
+    handleBlueprintPageRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      storage: ctx.storage,
+      blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    }),
 }

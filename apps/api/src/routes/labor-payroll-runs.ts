@@ -19,6 +19,7 @@ import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/labor-payroll-runs wire-format. The route already enforces
 // YYYY-MM-DD on period_start/period_end and a uuid-shaped
@@ -671,4 +672,24 @@ export async function handleLaborPayrollRunRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `labor-payroll-runs` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const laborPayrollRunsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'labor-payroll-runs',
+  order: 710,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleLaborPayrollRunRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

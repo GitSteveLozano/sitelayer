@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import { listWorkflows } from '@sitelayer/workflows'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Agent-tools discovery surface — the "instrument your own app" / WebMCP-spirit
@@ -71,4 +72,16 @@ export async function handleAgentToolsRoutes(
   if (url.pathname !== '/api/agent-tools' && url.pathname !== '/api/agent-tools/manifest') return false
   ctx.sendJson(200, buildAgentToolsManifest())
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `agent-tools` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const agentToolsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'agent-tools',
+  order: 50,
+  handle: ({ req, url, sendJson }) => handleAgentToolsRoutes(req, url, { sendJson }),
 }

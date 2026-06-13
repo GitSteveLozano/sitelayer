@@ -19,6 +19,7 @@ import {
   type DailyLogWorkflowState,
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type DailyLogRouteCtx = {
   pool: Pool
@@ -951,4 +952,31 @@ function inferMimeFromName(name: string): string {
   if (ext === 'heic') return 'image/heic'
   if (ext === 'heif') return 'image/heif'
   return 'application/octet-stream'
+}
+
+/**
+ * Self-registered dispatch descriptor for the `daily-logs` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const dailyLogsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'daily-logs',
+  order: 610,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
+    handleDailyLogRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      checkVersion,
+      storage: ctx.storage,
+      maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
+      photoDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    }),
 }

@@ -21,6 +21,8 @@ import {
   type AgentFeedAudienceLiveness,
 } from './agent-feed.js'
 import { insertSupportPacket, supportJsonRecord } from './support-packets.js'
+import { getBuildSha } from '../lib/build-sha.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -3745,4 +3747,26 @@ function statusDetail(probe: ProbeResult): string {
   if (probe.status === 'unauthorized') return 'Unauthorized.'
   if (probe.status === 'error') return probe.http_status ? `Error: HTTP ${probe.http_status}.` : 'Probe failed.'
   return 'Probe pending.'
+}
+
+/**
+ * Self-registered dispatch descriptor for the `ops-diagnostics` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const opsDiagnosticsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'ops-diagnostics',
+  order: 40,
+  handle: ({ req, url, pool, ctx, sendJson, company, readBody, currentUserId }) =>
+    handleOpsDiagnosticsRoutes(req, url, {
+      requireCapability: ctx.requireCapability,
+      sendJson,
+      pool,
+      company,
+      storage: ctx.storage,
+      buildSha: getBuildSha(),
+      readBody,
+      getCurrentUserId: () => currentUserId,
+    }),
 }

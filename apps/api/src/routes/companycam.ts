@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/integrations/companycam/pins wire-format. The handler trims
 // every field via `s()` and enforces the required pair below; the schema only
@@ -124,4 +125,24 @@ export async function handleCompanyCamRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `companycam` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const companycamRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'companycam',
+  order: 530,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleCompanyCamRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

@@ -50,6 +50,7 @@ import {
 } from '../qbo-sync-run.js'
 import { parseQboSyncRunEventRequest, type QboSyncRunWorkflowState } from '@sitelayer/workflows'
 import { getSyncStatus } from './sync.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Re-exports so existing consumers (server.ts, dispatch.ts) keep working.
 // The implementations live in the sibling modules above.
@@ -1360,4 +1361,26 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `qbo` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const qboRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'qbo',
+  order: 250,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, sendRedirect, ctx }) =>
+    handleQboRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      sendRedirect,
+      qboConfig: ctx.qboConfig,
+    }),
 }

@@ -10,6 +10,7 @@ import {
   parseJsonBody,
   parsePagination,
 } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Numeric fields flow through the pg driver verbatim or via coalesce; tag them
 // string-or-number to match the legacy `body.x ?? default` binding.
@@ -352,4 +353,24 @@ export async function handleLaborEntryRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `labor-entries` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const laborEntriesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'labor-entries',
+  order: 590,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, ctx }) =>
+    handleLaborEntryRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      assertDivisionAllowedForServiceItem: ctx.assertDivisionAllowedForServiceItem,
+    }),
 }

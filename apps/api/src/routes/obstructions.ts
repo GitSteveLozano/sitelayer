@@ -4,6 +4,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { withCompanyClient } from '../mutation-tx.js'
 import { WORK_ITEM_LANES, type WorkItemLane, type WorkItemSeverity } from '../context-handoff.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Wedge 4 — Obstruction signals as first-class queryable rows.
 //
@@ -313,4 +314,23 @@ export const __testHooks = {
   // Help downstream tests reason about lanes consistently with the
   // canonical enum without importing context-handoff just to assert.
   WORK_ITEM_LANES,
+}
+
+/**
+ * Self-registered dispatch descriptor for the `obstructions` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const obstructionsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'obstructions',
+  order: 200,
+  handle: ({ req, url, pool, company, identity, requireRole, sendJson }) =>
+    handleObstructionsRoutes(req, url, {
+      pool,
+      company,
+      identity,
+      requireRole,
+      sendJson,
+    }),
 }

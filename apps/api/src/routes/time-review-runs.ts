@@ -23,6 +23,7 @@ import {
   type LaborEntryInput,
   type TimeAnomaly,
 } from '../lib/time-anomalies.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type TimeReviewRouteCtx = {
   pool: Pool
@@ -621,4 +622,25 @@ export async function handleTimeReviewRunRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `time-review-runs` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const timeReviewRunsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'time-review-runs',
+  order: 630,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
+    handleTimeReviewRunRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+    }),
 }

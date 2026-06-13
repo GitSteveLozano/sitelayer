@@ -17,6 +17,7 @@ import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/change-orders wire-format. The handler trims
 // `description`, requires a finite `value_delta`, and defaults
@@ -411,4 +412,24 @@ export async function handleChangeOrderRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `change-orders` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const changeOrdersRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'change-orders',
+  order: 650,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleChangeOrderRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

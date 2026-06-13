@@ -2,6 +2,7 @@ import type http from 'node:http'
 import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type BidAccuracyRouteCtx = {
   pool: Pool
@@ -140,4 +141,22 @@ export async function handleBidAccuracyRoutes(
     },
   })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `bid-accuracy` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const bidAccuracyRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'bid-accuracy',
+  order: 420,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
+    handleBidAccuracyRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

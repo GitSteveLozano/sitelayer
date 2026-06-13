@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { enqueueNotificationRow } from '../notifications.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/payment-reminders wire-format. `project_ids` is the only
 // field; typed as an optional array of strings so a malformed shape
@@ -87,4 +88,24 @@ export async function handlePaymentReminderRoutes(
     return true
   }
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `payment-reminders` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const paymentRemindersRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'payment-reminders',
+  order: 80,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handlePaymentReminderRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

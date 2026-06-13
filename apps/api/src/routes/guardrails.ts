@@ -6,6 +6,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/guardrails/:id/snooze wire-format. The route still validates
 // snoozed_until is a parseable ISO date; the schema only rejects a non-string
@@ -366,4 +367,24 @@ async function applyGuardrailMutation(
   } catch (err) {
     ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to update guardrail' })
   }
+}
+
+/**
+ * Self-registered dispatch descriptor for the `guardrails` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const guardrailsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'guardrails',
+  order: 660,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleGuardrailRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

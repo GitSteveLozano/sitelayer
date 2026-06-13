@@ -4,6 +4,7 @@ import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // PUT /api/qbo/custom-fields wire-format. entity_type is further checked
 // against ALLOWED_ENTITIES, field_name + qbo_definition_id are required
@@ -145,4 +146,23 @@ export async function handleQboCustomFieldRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `qbo-custom-fields` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const qboCustomFieldsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'qbo-custom-fields',
+  order: 400,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson }) =>
+    handleQboCustomFieldRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

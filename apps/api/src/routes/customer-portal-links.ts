@@ -5,6 +5,7 @@ import type { Pool } from 'pg'
 import { randomBytes } from 'node:crypto'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/customer-portal-links wire-format. The handler keeps its own
 // coercion (`s()` trim-to-null, the `allows` map/filter against
@@ -141,4 +142,24 @@ export async function handleCustomerPortalRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `customer-portal-links` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const customerPortalLinksRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'customer-portal-links',
+  order: 510,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleCustomerPortalRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

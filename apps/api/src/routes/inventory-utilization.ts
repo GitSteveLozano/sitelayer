@@ -2,6 +2,7 @@ import type http from 'node:http'
 import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type InventoryUtilizationRouteCtx = {
   pool: Pool
@@ -285,4 +286,22 @@ export async function handleInventoryUtilizationRoutes(
 
   ctx.sendJson(200, { items: result.rows, totals })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `inventory-utilization` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const inventoryUtilizationRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'inventory-utilization',
+  order: 410,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
+    handleInventoryUtilizationRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

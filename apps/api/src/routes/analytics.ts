@@ -4,6 +4,7 @@ import type { Pool } from 'pg'
 import { DEFAULT_BONUS_RULE, calculateBonusPayout, computeProductivity, sumMoney } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { listLaborByItem, listLaborByWeek, listLaborByWorker, parseLaborReportFilters } from '../labor-reports.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type AnalyticsRouteCtx = {
   pool: Pool
@@ -477,4 +478,26 @@ export async function handleAnalyticsRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `analytics` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const analyticsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'analytics',
+  order: 820,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, sendJson }) =>
+    handleAnalyticsRoutes(req, url, {
+      pool,
+      company,
+      // Act-as-aware: the /divisions + /service-item-productivity role
+      // lookups must read the impersonated user's membership under the dev
+      // RoleSwitcher, not the raw identity (which would skip the gate).
+      currentUserId,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

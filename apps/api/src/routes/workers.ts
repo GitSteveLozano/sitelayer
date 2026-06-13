@@ -6,6 +6,7 @@ import { buildPaginationMeta, parseJsonBody, parsePagination } from '../http-uti
 import { enqueueNotificationRow } from '../notifications.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/workers — name required (matches the existing 400 path).
 // role defaults to 'crew' in the insert; the schema accepts any string
@@ -273,4 +274,25 @@ export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ct
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `workers` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const workersRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'workers',
+  order: 70,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
+    handleWorkerRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

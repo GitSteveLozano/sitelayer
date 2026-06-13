@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Permissive wire-format schemas. Every field stays optional/nullish; only the
 // scalar control fields actually read by each handler are type-constrained, and
@@ -509,4 +510,24 @@ The crew at Sitelayer`
     customer_name: project.customer_name,
     confidence: 'med',
   }
+}
+
+/**
+ * Self-registered dispatch descriptor for the `ai-insights` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const aiInsightsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'ai-insights',
+  order: 430,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleAiInsightRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

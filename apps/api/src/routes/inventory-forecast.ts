@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import { withCompanyClient } from '../mutation-tx.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * The forecast route only reads `company` + `sendJson`, so it takes a
@@ -144,4 +145,20 @@ export async function handleInventoryForecastRoutes(
     })),
   })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `inventory-forecast` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const inventoryForecastRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'inventory-forecast',
+  order: 730,
+  handle: ({ req, url, company, sendJson }) =>
+    handleInventoryForecastRoutes(req, url, {
+      company,
+      sendJson,
+    }),
 }

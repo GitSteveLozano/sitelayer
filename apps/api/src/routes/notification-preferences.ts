@@ -4,6 +4,7 @@ import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type NotificationPreferenceRouteCtx = {
   pool: Pool
@@ -257,4 +258,24 @@ export async function handleNotificationPreferenceRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `notification-preferences` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const notificationPreferencesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'notification-preferences',
+  order: 750,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleNotificationPreferenceRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

@@ -8,6 +8,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { dispatchVoiceIntentToMesh, isAiChatEnabled } from '../mesh-dispatcher.js'
 import { wrapUntrusted } from '../untrusted-content.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Voice-driven project setup (v1) — voice PROPOSES, the human CONFIRMS.
@@ -481,4 +482,25 @@ async function handleVoiceIntentRespondWebhook(
     parent_intent_id: intentId,
   })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `voice-intent` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const voiceIntentRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'voice-intent',
+  order: 280,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
+    handleVoiceIntentRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+    }),
 }

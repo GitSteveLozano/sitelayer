@@ -52,6 +52,8 @@ import {
   mapCaptureArtifactsToConcernRefs,
   type CaptureArtifactSummaryRow,
 } from './agent-feed.js'
+import { getBuildSha } from '../lib/build-sha.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type CaptureSessionRouteCtx = {
   pool: Pool
@@ -1908,4 +1910,34 @@ export async function handleCaptureSessionRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `capture-sessions` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const captureSessionsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'capture-sessions',
+  order: 180,
+  handle: ({ req, url, pool, company, identity, ctx, requireRole, readBody, sendJson }) =>
+    handleCaptureSessionRoutes(req, url, {
+      pool,
+      company,
+      identity,
+      tier: ctx.tier,
+      buildSha: getBuildSha(),
+      storage: ctx.storage,
+      maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+      artifactDownloadPresigned: ctx.blueprintDownloadPresigned,
+      requireRole,
+      // app_issue.capture gates finalize; app_issue.view gates the artifact
+      // download — both on the platform boundary. See capture-sessions.ts.
+      requireCapability: ctx.requireCapability,
+      readBody,
+      sendJson,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    }),
 }

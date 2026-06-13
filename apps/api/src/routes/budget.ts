@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/budget/freeze wire-format — the only body-bearing
 // route here (variance + list are GETs). `note` is optional/nullish; the
@@ -486,4 +487,24 @@ export async function handleBudgetRoutes(req: http.IncomingMessage, url: URL, ct
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `budget` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const budgetRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'budget',
+  order: 800,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleBudgetRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

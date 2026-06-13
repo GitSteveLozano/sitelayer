@@ -11,6 +11,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type DispatchLaneRouteCtx = {
   pool: Pool
@@ -238,3 +239,22 @@ export async function handleDispatchLaneRoutes(
 }
 
 export { LaneState as DispatchLaneStateSchema }
+
+/**
+ * Self-registered dispatch descriptor for the `dispatch-lanes` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const dispatchLanesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'dispatch-lanes',
+  order: 140,
+  handle: ({ req, url, pool, requireRoleStr, readBody, sendJson, ctx }) =>
+    handleDispatchLaneRoutes(req, url, {
+      pool,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      getCurrentUserId: ctx.getCurrentUserId,
+    }),
+}

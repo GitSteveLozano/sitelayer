@@ -36,6 +36,7 @@ import { z } from 'zod'
 import { HttpError, isValidUuid, parseExpectedVersion, parseJsonBody, parseOptionalNumber } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects wire-format. The route already enforces non-empty
 // name + customer_name and a uuid-shaped customer_id; the schema adds
@@ -1279,4 +1280,26 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `projects` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const projectsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'projects',
+  order: 290,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
+    handleProjectRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

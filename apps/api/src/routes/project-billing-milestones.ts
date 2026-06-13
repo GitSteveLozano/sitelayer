@@ -5,6 +5,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Wire-format for the milestone routes. Both bodies are multi-alias: POST
 // dispatches on milestones[] / label / (default ladder) and PATCH builds a
@@ -473,4 +474,24 @@ export async function handleProjectBillingMilestoneRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `project-billing-milestones` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const projectBillingMilestonesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'project-billing-milestones',
+  order: 680,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleProjectBillingMilestoneRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

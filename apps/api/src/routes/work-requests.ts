@@ -47,6 +47,8 @@ import {
   isTerminalCallbackStatus,
   workItemStatusToCallbackStatus,
 } from '@sitelayer/projectkit-bridge'
+import { getBuildSha } from '../lib/build-sha.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type WorkRequestRouteCtx = {
   pool: Pool
@@ -3165,4 +3167,36 @@ export async function handleWorkRequestRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `work-requests` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const workRequestsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'work-requests',
+  order: 210,
+  handle: ({ req, url, pool, company, identity, currentUserId, ctx, readBody, sendJson }) =>
+    handleWorkRequestRoutes(req, url, {
+      pool,
+      company,
+      // Act-as-aware identity: created_by / actor attribution and the
+      // member-scoped read filters inside the handler key off
+      // identity.userId. Under the dev RoleSwitcher the raw identity is the
+      // demo-user, so override userId with the impersonated user id while
+      // preserving source/role. `currentUserId` resolves to the act-as
+      // override only when tier !== 'prod', so prod attribution is unchanged.
+      identity: { ...identity, userId: currentUserId },
+      tier: ctx.tier,
+      buildSha: getBuildSha(),
+      // field_request.* capability gate (migration 009). Resolves on the
+      // company boundary from resolvedCompany.active.role ∪ custom_role_grants
+      // — the act-as override above only re-attributes actor/userId, not the
+      // role the cap resolves against. See work-requests.ts + capability.ts.
+      requireCapability: ctx.requireCapability,
+      readBody,
+      sendJson,
+    }),
 }

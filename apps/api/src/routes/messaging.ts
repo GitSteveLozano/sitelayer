@@ -7,6 +7,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/messages wire-format. `body` is the required
 // message text (the route trims + rejects empty); `author_role` is a
@@ -313,4 +314,24 @@ export async function handleMessagingRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `messaging` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const messagingRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'messaging',
+  order: 700,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleMessagingRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

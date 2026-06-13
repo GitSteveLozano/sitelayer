@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Per-tenant data export — admin-only, strictly company-scoped.
@@ -216,4 +217,23 @@ export async function handleCompanyExportRoutes(
   ctx.res.setHeader('Cache-Control', 'private, no-store')
   ctx.res.end(body)
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `company-export` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const companyExportRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'company-export',
+  order: 130,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson, ctx }) =>
+    handleCompanyExportRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+      res: ctx.res,
+    }),
 }

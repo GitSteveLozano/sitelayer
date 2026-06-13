@@ -12,6 +12,7 @@ import {
   type ResolvedAnchor,
   type ResolvedAnchorCapture,
 } from '../anchor-resolve.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 const logger = createLogger('api:anchors')
 
@@ -238,4 +239,26 @@ export async function handleAnchorRoutes(ctx: AnchorRouteCtx): Promise<boolean> 
     sendJson(500, { error: message, request_id: requestId })
     return true
   }
+}
+
+/**
+ * Self-registered dispatch descriptor for the `anchors` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const anchorsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'anchors',
+  order: 850,
+  handle: ({ req, url, pool, company, ctx, sendJson }) =>
+    handleAnchorRoutes({
+      req,
+      url,
+      pool,
+      company,
+      tier: ctx.tier,
+      requestId: ctx.requestId,
+      sendJson,
+      setHeader: ctx.setHeader,
+    }),
 }

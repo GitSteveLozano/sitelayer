@@ -17,6 +17,7 @@ import { HttpError, isValidUuid } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // ---------------------------------------------------------------------------
 // Rental workflow event-API surface — completes Phase 2 of the rental
@@ -268,4 +269,24 @@ export async function handleRentalEventRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `rental-events` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const rentalEventsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'rental-events',
+  order: 540,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleRentalEventRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

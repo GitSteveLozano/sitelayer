@@ -5,6 +5,7 @@ import type { PermissionAction } from '@sitelayer/domain'
 import { z } from 'zod'
 import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // PUT/DELETE wire-format. `service_item_code` is required downstream (the
 // handlers 400 on a blank one); `rate` is string-or-number to match the
@@ -279,4 +280,24 @@ export async function handlePricingOverrideRoutes(
     return true
   }
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `pricing-overrides` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const pricingOverridesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'pricing-overrides',
+  order: 100,
+  handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson }) =>
+    handlePricingOverrideRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+    }),
 }

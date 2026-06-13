@@ -17,6 +17,7 @@ import { HttpError, isValidUuid } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Operator-side approval queue for rental requests submitted by customers
@@ -1013,4 +1014,24 @@ export async function handleRentalRequestRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `rental-requests` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const rentalRequestsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'rental-requests',
+  order: 560,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleRentalRequestRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

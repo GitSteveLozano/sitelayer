@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Wire-format for the takeoff-condition CRUD bodies. Both create and PATCH
 // keep their own field-level coercion (parseOptionalDriver, Number(...),
@@ -435,4 +436,24 @@ export async function handleConditionRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `conditions` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const conditionsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'conditions',
+  order: 350,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleConditionRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

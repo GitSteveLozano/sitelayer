@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseConfigPayload, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // pricing_profiles.config is a free-form JSONB blob parsed separately by
 // parseConfigPayload (accepts already-parsed object OR JSON string). The
@@ -216,4 +217,24 @@ export async function handlePricingProfileRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `pricing-profiles` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const pricingProfilesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'pricing-profiles',
+  order: 90,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion }) =>
+    handlePricingProfileRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

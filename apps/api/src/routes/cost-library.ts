@@ -5,6 +5,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { CostLibraryImportError, parsePriceBook, type ParsedCostLibraryRow } from '../cost-library-import.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Wire-format for the cost-library JSON bodies. Both handlers keep their own
 // field-level coercion (optionalString / optionalRate / parsePriceBook); these
@@ -309,4 +310,24 @@ async function upsertRows(ctx: CostLibraryRouteCtx, rows: readonly ParsedCostLib
     })
     return saved
   })
+}
+
+/**
+ * Self-registered dispatch descriptor for the `cost-library` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const costLibraryRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'cost-library',
+  order: 270,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleCostLibraryRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

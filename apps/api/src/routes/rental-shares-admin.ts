@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import { recordAudit } from '../audit.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Owner-side admin surface for rental share links (LANE A — portal-link
@@ -129,4 +130,23 @@ export async function handleRentalShareAdminRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `rental-shares-admin` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const rentalSharesAdminRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'rental-shares-admin',
+  order: 520,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, sendJson }) =>
+    handleRentalShareAdminRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

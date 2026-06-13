@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/scaffold-tags wire-format. Mirrors the inline
 // `s()` / `n()` coercers — text fields are string-or-null, numerics are
@@ -250,4 +251,24 @@ export async function handleScaffoldTagRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `scaffold-tags` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const scaffoldTagsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'scaffold-tags',
+  order: 470,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleScaffoldTagRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

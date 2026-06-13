@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { buildPaginationMeta, parseJsonBody, parsePagination } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/customers — `name` is required (the route already rejects an
 // empty string with a specific message; we keep that path). external_id
@@ -230,4 +231,25 @@ export async function handleCustomerRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `customers` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const customersRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'customers',
+  order: 60,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
+    handleCustomerRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+      backfillCustomerMapping: ctx.backfillCustomerMapping,
+    }),
 }

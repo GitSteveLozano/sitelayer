@@ -31,6 +31,7 @@ import {
   type AuditEscrowVerificationReport,
 } from '@sitelayer/queue'
 import type { Logger } from '@sitelayer/logger'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type AuditEscrowRouteCtx = {
   pool: Pool
@@ -186,4 +187,21 @@ export async function handleAuditEscrowRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `audit-escrow` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const auditEscrowRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'audit-escrow',
+  order: 150,
+  handle: ({ req, url, pool, requireRoleStr, sendJson }) =>
+    handleAuditEscrowRoutes(req, url, {
+      pool,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

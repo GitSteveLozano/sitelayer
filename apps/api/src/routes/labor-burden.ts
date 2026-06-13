@@ -10,6 +10,7 @@ import {
 } from '@sitelayer/domain'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type LaborBurdenRouteCtx = {
   pool: Pool
@@ -182,4 +183,22 @@ export async function handleLaborBurdenRoutes(
   }
   ctx.sendJson(200, body)
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `labor-burden` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const laborBurdenRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'labor-burden',
+  order: 620,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
+    handleLaborBurdenRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

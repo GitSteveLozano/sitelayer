@@ -10,6 +10,8 @@ import { parseJsonBody } from '../http-utils.js'
 import { parseTraceIdFromSentryTraceHeader } from '../debug-trace.js'
 import { observeSupportPacket } from '../metrics.js'
 import { wrapUntrusted } from '../untrusted-content.js'
+import { getBuildSha } from '../lib/build-sha.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/support-packets wire-format. The body is deliberately
 // free-form: `client` carries an arbitrary client-side diagnostic blob
@@ -1086,4 +1088,28 @@ export async function handleSupportPacketRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `support-packets` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const supportPacketsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'support-packets',
+  order: 190,
+  handle: ({ req, url, pool, company, identity, ctx, readBody, sendJson }) =>
+    handleSupportPacketRoutes(req, url, {
+      pool,
+      company,
+      identity,
+      tier: ctx.tier,
+      buildSha: getBuildSha(),
+      // app_issue.view gates the read paths (get/list/access-log); the POST
+      // producer path stays open. See support-packets.ts.
+      requireCapability: ctx.requireCapability,
+      readBody,
+      sendJson,
+    }),
 }

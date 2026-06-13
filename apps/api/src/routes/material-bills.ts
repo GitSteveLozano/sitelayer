@@ -6,6 +6,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { buildPaginationMeta, parseExpectedVersion, parseJsonBody, parsePagination } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import type { PermissionAction } from '@sitelayer/domain'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Coerce a bill `amount` (the schema accepts number-or-string dollars) into
@@ -313,4 +314,25 @@ export async function handleMaterialBillRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `material-bills` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const materialBillsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'material-bills',
+  order: 310,
+  handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
+    handleMaterialBillRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

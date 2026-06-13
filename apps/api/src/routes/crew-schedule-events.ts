@@ -19,6 +19,7 @@ import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // PATCH /api/schedules/:id wire-format (drag-to-reschedule). The handler keeps
 // its own coercion (isValidDateInput, parseExpectedVersion); the schema only
@@ -466,4 +467,26 @@ export async function handleCrewScheduleEventRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `crew-schedule-events` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const crewScheduleEventsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'crew-schedule-events',
+  order: 580,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
+    handleCrewScheduleEventRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

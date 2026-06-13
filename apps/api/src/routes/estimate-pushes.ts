@@ -18,6 +18,7 @@ import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { recordAudit } from '../audit.js'
 import { HttpError } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Route handlers for the estimate-push workflow.
@@ -558,4 +559,24 @@ export async function handleEstimatePushRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `estimate-pushes` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const estimatePushesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'estimate-pushes',
+  order: 790,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleEstimatePushRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

@@ -24,6 +24,7 @@ import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
 import { withMutationTx } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Custom-role management API (the editable half of the RBAC-A overhaul — see
@@ -1033,4 +1034,22 @@ export async function handleCompanyRoleRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `company-roles` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const companyRolesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'company-roles',
+  order: 20,
+  handle: ({ req, url, pool, currentUserId, sendJson, readBody }) =>
+    handleCompanyRoleRoutes(req, url, {
+      pool,
+      userId: currentUserId,
+      sendJson,
+      readBody,
+    }),
 }

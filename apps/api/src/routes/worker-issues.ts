@@ -24,6 +24,7 @@ import {
   type FieldEventWorkflowSnapshot,
   type FieldEventWorkflowState,
 } from '@sitelayer/workflows'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Routes for `wk-issue` from Sitemap §11 — worker "Flag a problem" pings.
@@ -877,4 +878,30 @@ export async function handleWorkerIssueRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `worker-issues` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const workerIssuesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'worker-issues',
+  order: 160,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
+    handleWorkerIssueRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      storage: ctx.storage,
+      maxAttachmentBytes: Number(process.env.MAX_WORKER_ISSUE_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
+      attachmentDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    }),
 }

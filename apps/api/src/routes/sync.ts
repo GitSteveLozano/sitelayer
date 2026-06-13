@@ -3,6 +3,7 @@ import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
 import type { ActiveCompany } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type SyncRouteCtx = {
   pool: Pool
@@ -141,4 +142,23 @@ export async function handleSyncRoutes(req: http.IncomingMessage, url: URL, ctx:
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `sync` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const syncRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'sync',
+  order: 240,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson }) =>
+    handleSyncRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

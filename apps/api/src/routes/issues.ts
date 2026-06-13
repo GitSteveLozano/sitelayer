@@ -28,6 +28,8 @@ import {
   type WorkItemStatus,
 } from '../context-handoff.js'
 import { sanitizeSupportJson } from './support-packets.js'
+import { getBuildSha } from '../lib/build-sha.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * The internal APP-ISSUE surface — board/list/detail plus the narrow triage
@@ -760,4 +762,25 @@ export async function handleIssueRoutes(req: http.IncomingMessage, url: URL, ctx
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `issues` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const issuesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'issues',
+  order: 220,
+  handle: ({ req, url, pool, company, identity, ctx, readBody, sendJson }) =>
+    handleIssueRoutes(req, url, {
+      pool,
+      company,
+      identity,
+      buildSha: getBuildSha(),
+      requireCapability: ctx.requireCapability,
+      readBody,
+      sendJson,
+    }),
 }

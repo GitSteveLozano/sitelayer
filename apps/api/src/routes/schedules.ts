@@ -13,6 +13,7 @@ import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import { HttpError, isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/schedules wire-format validation. Mirrors the
 // workflow-event parser pattern (see packages/workflows/src/*.ts) so
@@ -584,4 +585,25 @@ export async function handleScheduleRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `schedules` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const schedulesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'schedules',
+  order: 570,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
+    handleScheduleRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

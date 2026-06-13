@@ -7,6 +7,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { isValidUuid, parseJsonBody } from '../http-utils.js'
 import { dispatchChatResponseToMesh, isAiChatEnabled } from '../mesh-dispatcher.js'
 import { publish as publishChatResponse, subscribe as subscribeChatResponse } from '../chat-response-bus.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Permissive wire-format schemas. The chat body is structured-but-deep; the
 // handler already does its own array/length/origin-allowlist validation, so the
@@ -732,4 +733,29 @@ async function handleAiChatRespondWebhook(
     parent_audit_event_id: auditId,
   })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `ai-chat` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const aiChatRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'ai-chat',
+  order: 440,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, res }) =>
+    handleAiChatRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      // Raw response handle for the SSE stream route. JSON endpoints
+      // ignore this; the streaming endpoint refuses to start without
+      // it (defense in depth — it can never legitimately be missing
+      // through dispatch.ts).
+      res,
+    }),
 }

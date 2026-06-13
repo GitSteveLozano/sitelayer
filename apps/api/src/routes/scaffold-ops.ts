@@ -184,6 +184,7 @@ import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 /**
  * Branches, rental vendors, external (cross-hire) rentals, scaffold
@@ -1151,4 +1152,24 @@ export async function handleScaffoldOpsRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `scaffold-ops` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const scaffoldOpsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'scaffold-ops',
+  order: 460,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleScaffoldOpsRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

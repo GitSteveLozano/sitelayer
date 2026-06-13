@@ -8,6 +8,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { explodeMeasurement, type LoadedAssembly } from '../assembly-explode.js'
 import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Permissive wire-format schemas. Numerics are string-or-number, the formula /
 // driver fields stay `unknown` because `parseFormulaFields` / `parseDriversBody`
@@ -856,4 +857,24 @@ export async function handleAssemblyRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `assemblies` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const assembliesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'assemblies',
+  order: 390,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleAssemblyRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

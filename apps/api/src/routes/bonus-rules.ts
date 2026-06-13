@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseConfigPayload, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // bonus_rules.config is a free-form JSONB blob parsed separately by
 // parseConfigPayload. The schema validates the wire shape around it.
@@ -204,4 +205,24 @@ export async function handleBonusRuleRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `bonus-rules` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const bonusRulesRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'bonus-rules',
+  order: 110,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion }) =>
+    handleBonusRuleRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

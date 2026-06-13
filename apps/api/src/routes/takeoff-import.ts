@@ -5,6 +5,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/takeoff/import wire-format. The endpoint accepts
 // JSON-shaped rows (the client parses CSV in the browser). Only the
@@ -232,4 +233,24 @@ export async function handleTakeoffImportRoutes(
 
   ctx.sendJson(201, { imported: result.length, measurements: result, source_label: sourceLabel })
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `takeoff-import` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const takeoffImportRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'takeoff-import',
+  order: 380,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleTakeoffImportRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

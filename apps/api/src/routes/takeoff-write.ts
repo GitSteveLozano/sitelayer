@@ -12,6 +12,7 @@ import {
 } from '../catalog.js'
 import { createEstimateFromMeasurements, getScopeVsBid } from './estimate.js'
 import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type TakeoffWriteRouteCtx = {
   pool: Pool
@@ -692,4 +693,24 @@ export async function handleTakeoffWriteRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `takeoff-write` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const takeoffWriteRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'takeoff-write',
+  order: 770,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleTakeoffWriteRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

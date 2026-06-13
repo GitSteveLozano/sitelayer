@@ -19,6 +19,7 @@ import {
 } from '@sitelayer/workflows'
 import { z } from 'zod'
 import { parseJsonBody } from '../http-utils.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/projects/:id/shipments wire-format. Mirrors the inline `s()`
 // coercer — every field is string-or-null and trimmed/defaulted downstream.
@@ -645,4 +646,24 @@ export async function handleShipmentRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `shipments` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const shipmentsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'shipments',
+  order: 490,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleShipmentRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

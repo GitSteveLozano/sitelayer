@@ -8,6 +8,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { HttpError, isValidUuid, parseJsonBody, parseOptionalNumber } from '../http-utils.js'
 import { parseClockEventPhotoMultipart, ClockEventPhotoUploadError } from '../clock-event-photo-upload.js'
 import type { BlueprintStorage } from '../storage.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Wire-format schemas for the JSON clock routes. Every field is optional or
 // nullish to preserve the existing permissive coercion (parseOptionalNumber,
@@ -846,4 +847,31 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `clock` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const clockRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'clock',
+  order: 600,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, ctx, readBody, sendJson }) =>
+    handleClockRoutes(req, url, {
+      pool,
+      company,
+      // Act-as-aware (matches every other dispatch entry, e.g. daily-logs):
+      // clock in/out must attribute to the impersonated user under the dev
+      // RoleSwitcher, not the raw demo-user identity.
+      currentUserId,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      storage: ctx.storage,
+      // Reuse the blueprint upload cap until ops asks for a separate knob.
+      maxPhotoBytes: ctx.maxBlueprintUploadBytes,
+    }),
 }

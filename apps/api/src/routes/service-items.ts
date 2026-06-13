@@ -6,6 +6,7 @@ import type { PermissionAction } from '@sitelayer/domain'
 import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/service-items — code + name required (matches the existing
 // 400). default_rate is numeric (DB column is numeric); accept
@@ -361,4 +362,25 @@ export async function handleServiceItemRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `service-items` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const serviceItemsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'service-items',
+  order: 260,
+  handle: ({ req, url, pool, company, requireRoleStr, ctx, readBody, sendJson, checkVersion }) =>
+    handleServiceItemRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      requirePermission: ctx.requirePermission,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

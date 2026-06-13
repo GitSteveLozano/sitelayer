@@ -18,6 +18,7 @@ import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { buildPaginationMeta, isValidUuid, parsePagination } from '../http-utils.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type NotificationRouteCtx = {
   pool: Pool
@@ -592,4 +593,24 @@ export async function handleNotificationRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `notifications` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const notificationsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'notifications',
+  order: 760,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson }) =>
+    handleNotificationRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+    }),
 }

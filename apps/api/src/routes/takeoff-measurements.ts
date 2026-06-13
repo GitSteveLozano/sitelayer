@@ -9,6 +9,7 @@ import { HttpError, isValidUuid, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { resolveDefaultDraftId } from './takeoff-drafts.js'
 import { assertBlueprintPagesBelongToProject } from './takeoff-write.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
@@ -456,4 +457,25 @@ export async function handleTakeoffMeasurementRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `takeoff-measurements` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const takeoffMeasurementsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'takeoff-measurements',
+  order: 330,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
+    handleTakeoffMeasurementRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+      assertBlueprintDocumentsBelongToProject: ctx.assertBlueprintDocumentsBelongToProject,
+    }),
 }

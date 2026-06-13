@@ -23,6 +23,7 @@ import {
   resolveBlueprintVisionProvider,
 } from '../takeoff-capture-pipelines/blueprint-vision.js'
 import { defaultCaptureName } from '../takeoff-capture-pipelines/shared.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type TakeoffDraftRouteCtx = {
   pool: Pool
@@ -1420,4 +1421,26 @@ export async function handleTakeoffDraftRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `takeoff-drafts` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const takeoffDraftsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'takeoff-drafts',
+  order: 320,
+  handle: ({ req, url, pool, company, requireRoleStr, readBody, sendJson, currentUserId, ctx }) =>
+    handleTakeoffDraftRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      currentUserId,
+      storage: ctx.storage,
+      maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
+    }),
 }

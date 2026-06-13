@@ -16,6 +16,7 @@ import { recordMutationLedger, withCompanyClient, withMutationTx } from '../muta
 import { HttpError, isValidDateInput, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { dispatchWorkflowEvent } from '../workflow-dispatch.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // Permissive wire-format schemas — fields optional/nullish so the existing
 // partial-create / partial-PATCH semantics are unchanged; downstream String()
@@ -791,4 +792,25 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `rentals` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const rentalsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'rentals',
+  order: 550,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion }) =>
+    handleRentalRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+    }),
 }

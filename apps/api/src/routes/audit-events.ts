@@ -3,6 +3,7 @@ import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { buildPaginationMeta, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
 import { withCompanyClient } from '../mutation-tx.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type AuditEventRouteCtx = {
   pool: Pool
@@ -90,4 +91,22 @@ export async function handleAuditEventRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `audit-events` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const auditEventsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'audit-events',
+  order: 120,
+  handle: ({ req, url, pool, company, requireRoleStr, sendJson }) =>
+    handleAuditEventRoutes(req, url, {
+      pool,
+      company,
+      requireRole: requireRoleStr,
+      sendJson,
+    }),
 }

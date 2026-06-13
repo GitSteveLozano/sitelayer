@@ -15,6 +15,7 @@ import {
 import { HttpError } from '../http-utils.js'
 import { buildListProjectsQuery, parseProjectsQuery } from '../projects-query.js'
 import { getMemberships } from './companies.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 const logger = createLogger('api:system')
 
@@ -524,4 +525,51 @@ export async function handleDebugTraceRoute(ctx: DebugTraceRouteCtx): Promise<bo
     })
   }
   return true
+}
+
+/**
+ * Self-registered dispatch descriptor for the `system` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const systemRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'system',
+  order: 30,
+  handle: ({ req, url, pool, company, currentUserId, identity, ctx, sendJson }) =>
+    handleSystemRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      actorUserId: identity.actorUserId ?? null,
+      authMode: identity.mode ?? 'self',
+      resolveAppIssueCapabilities: ctx.resolveAppIssueCapabilities,
+      sendJson,
+      setHeader: ctx.setHeader,
+      send304: ctx.send304,
+    }),
+}
+
+/**
+ * Self-registered dispatch descriptor for the `debug-trace` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const debugTraceRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'debug-trace',
+  order: 840,
+  handle: ({ req, url, pool, company, currentUserId, sendJson, ctx }) =>
+    handleDebugTraceRoute({
+      req,
+      url,
+      pool,
+      company,
+      currentUserId,
+      sendJson,
+      setHeader: ctx.setHeader,
+      send304: ctx.send304,
+      requestId: ctx.requestId,
+      tier: ctx.tier,
+    }),
 }

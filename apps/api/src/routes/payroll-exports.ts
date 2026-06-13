@@ -6,6 +6,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { parseJsonBody } from '../http-utils.js'
 import { renderXlsxSingleSheet, type XlsxCell } from '../xlsx-writer.js'
 import { splitStraightAndOt, DEFAULT_OVERTIME_HOUR_THRESHOLD } from '@sitelayer/domain'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST /api/labor-payroll-runs/:id/exports wire-format. `format` is the
 // only field; the route validates it against ALLOWED_FORMATS downstream
@@ -368,4 +369,25 @@ export function renderPayrollExport(
     ext: 'csv',
     body: csvJoin([header, ...lines]),
   }
+}
+
+/**
+ * Self-registered dispatch descriptor for the `payroll-exports` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const payrollExportsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'payroll-exports',
+  order: 500,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, ctx }) =>
+    handlePayrollExportRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      res: ctx.res,
+    }),
 }

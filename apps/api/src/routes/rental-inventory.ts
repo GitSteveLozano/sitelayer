@@ -6,6 +6,7 @@ import { handleRentalContractsRoutes } from './rental-contracts.js'
 import { handleRentalInventoryCrudRoutes } from './rental-inventory-crud.js'
 import { handleRentalInventoryCsvRoutes } from './rental-inventory-csv.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 export type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
 
@@ -36,4 +37,30 @@ export async function handleRentalInventoryRoutes(
   if (await handleRentalContractLinesRoutes(req, url, ctx)) return true
   if (await handleRentalBillingStateRoutes(req, url, ctx)) return true
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `rental-inventory` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const rentalInventoryRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'rental-inventory',
+  order: 450,
+  handle: ({ req, url, pool, company, currentUserId, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
+    handleRentalInventoryRoutes(req, url, {
+      pool,
+      company,
+      currentUserId,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+      storage: ctx.storage,
+      maxMovementPhotoBytes: Number(process.env.MAX_MOVEMENT_PHOTO_BYTES ?? 25 * 1024 * 1024),
+      movementPhotoDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    }),
 }

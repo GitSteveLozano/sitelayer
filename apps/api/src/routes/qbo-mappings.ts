@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { buildPaginationMeta, parseJsonBody, parsePagination, type PaginationParams } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import type { DispatchRouteDescriptor } from './dispatch.js'
 
 // POST upsert wire-format. Entity type / local ref / external id are all
 // required strings (existing 400 path) — schema rejects e.g. numeric
@@ -275,4 +276,25 @@ export async function handleQboMappingRoutes(
   }
 
   return false
+}
+
+/**
+ * Self-registered dispatch descriptor for the `qbo-mappings` route (Campaign E:
+ * descriptors live in their route module; dispatch.ts imports them). Keep
+ * `name`/`order` byte-identical — the conformance gate in dispatch.test.ts
+ * locks the assembled table.
+ */
+export const qboMappingsRouteDescriptor: DispatchRouteDescriptor = {
+  name: 'qbo-mappings',
+  order: 230,
+  handle: ({ req, url, company, requireRoleStr, readBody, sendJson, checkVersion, ctx }) =>
+    handleQboMappingRoutes(req, url, {
+      company,
+      requireRole: requireRoleStr,
+      readBody,
+      sendJson,
+      checkVersion,
+      listMappings: ctx.listIntegrationMappings,
+      upsertMapping: ctx.upsertIntegrationMapping,
+    }),
 }
