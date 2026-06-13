@@ -154,6 +154,7 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
 }
 
 type OpsOnsiteDiagnosticAcceptedAction = OpsOnsiteDiagnosticSessionActionResponse['accepted_action']
+type OpsOnsiteDiagnosticActionResultKey = 'desktop_evidence' | 'capture_route' | 'agent_feed'
 
 export type OpsOnsiteDiagnosticSessionControlResponse = {
   schema: 'sitelayer.ops_diagnostic_session_control.v1'
@@ -2276,6 +2277,12 @@ type PersistentEventRow = {
   result: unknown
 }
 
+type PersistentActionResultRow = {
+  event_id: string
+  result_key: string
+  result: unknown
+}
+
 type PersistentAgentFeedDeliveryRow = {
   id: string
   audience: string
@@ -2359,7 +2366,9 @@ async function listPersistentEvents(
       order by created_at asc`,
     [companyId, sessionId],
   )
-  return result.rows.map(persistentEventFromRow)
+  const events = result.rows.map(persistentEventFromRow)
+  await hydratePersistentActionResults(client, companyId, sessionId, events)
+  return events
 }
 
 async function lookupPersistentActionEventByClientActionIdTx(
@@ -2382,7 +2391,10 @@ async function lookupPersistentActionEventByClientActionIdTx(
     [companyId, sessionId, actionKey, clientActionId],
   )
   const row = result.rows[0]
-  return row ? persistentEventFromRow(row) : null
+  if (!row) return null
+  const event = persistentEventFromRow(row)
+  await hydratePersistentActionResults(client, companyId, sessionId, [event])
+  return event
 }
 
 function persistentEventFromRow(row: PersistentEventRow): OpsOnsiteDiagnosticAuditEvent {
@@ -2401,14 +2413,48 @@ function persistentEventFromRow(row: PersistentEventRow): OpsOnsiteDiagnosticAud
   }
 }
 
+async function hydratePersistentActionResults(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  events: OpsOnsiteDiagnosticAuditEvent[],
+): Promise<void> {
+  const eventIds = events
+    .filter((event) => event.type === 'action.requested' && event.action_key)
+    .map((event) => event.id)
+  if (eventIds.length === 0) return
+  const result = await client.query<PersistentActionResultRow>(
+    `select event_id::text as event_id, result_key, result
+       from ops_diagnostic_action_results
+      where company_id = $1
+        and session_id = $2::uuid
+        and event_id = any($3::uuid[])
+      order by updated_at asc, id asc`,
+    [companyId, sessionId, eventIds],
+  )
+  const byEvent = new Map<string, PersistentActionResultRow[]>()
+  for (const row of result.rows) {
+    const rows = byEvent.get(row.event_id) ?? []
+    rows.push(row)
+    byEvent.set(row.event_id, rows)
+  }
+  for (const event of events) {
+    if (!event.action_key) continue
+    const merged = mergeAcceptedActionResult(event.action_result, byEvent.get(event.id) ?? [], event.action_key)
+    if (merged) event.action_result = acceptedActionRecord(merged)
+  }
+}
+
 async function persistOnsiteDiagnosticActionResult(
   companyId: string,
   sessionId: string,
   eventId: string,
   acceptedAction: OpsOnsiteDiagnosticAcceptedAction,
+  runTx: OpsDiagnosticsTxRunner = withMutationTx,
 ): Promise<void> {
+  await persistOnsiteDiagnosticActionChildResults(companyId, sessionId, eventId, acceptedAction, runTx)
   try {
-    await withMutationTx(companyId, async (client: PoolClient) => {
+    await runTx(companyId, async (client: PoolClient) => {
       await client.query(
         `update ops_diagnostic_session_events
             set result = $4::jsonb
@@ -2418,6 +2464,33 @@ async function persistOnsiteDiagnosticActionResult(
     })
   } catch {
     // The action already ran; idempotency result persistence should not mask it.
+  }
+}
+
+async function persistOnsiteDiagnosticActionChildResults(
+  companyId: string,
+  sessionId: string,
+  eventId: string,
+  acceptedAction: OpsOnsiteDiagnosticAcceptedAction,
+  runTx: OpsDiagnosticsTxRunner = withMutationTx,
+): Promise<void> {
+  const children = onsiteDiagnosticActionResultChildren(acceptedAction)
+  if (children.length === 0) return
+  try {
+    await runTx(companyId, async (client: PoolClient) => {
+      for (const child of children) {
+        await client.query(
+          `insert into ops_diagnostic_action_results (
+             company_id, session_id, event_id, result_key, result
+           ) values ($1, $2::uuid, $3::uuid, $4, $5::jsonb)
+           on conflict (company_id, event_id, result_key)
+           do update set result = excluded.result, updated_at = now()`,
+          [companyId, sessionId, eventId, child.key, JSON.stringify(child.result)],
+        )
+      }
+    })
+  } catch {
+    // Parent action replay still has ops_diagnostic_session_events.result.
   }
 }
 
@@ -2770,6 +2843,50 @@ function acceptedActionRecord(action: OpsOnsiteDiagnosticAcceptedAction): Record
   return JSON.parse(JSON.stringify(action)) as Record<string, unknown>
 }
 
+function onsiteDiagnosticActionResultChildren(
+  action: OpsOnsiteDiagnosticAcceptedAction,
+): Array<{ key: OpsOnsiteDiagnosticActionResultKey; result: Record<string, unknown> }> {
+  const children: Array<{ key: OpsOnsiteDiagnosticActionResultKey; result: Record<string, unknown> }> = []
+  if (action.desktop_evidence) {
+    children.push({ key: 'desktop_evidence', result: jsonRecord(action.desktop_evidence) })
+  }
+  if (action.capture_route) {
+    children.push({ key: 'capture_route', result: jsonRecord(action.capture_route) })
+  }
+  if (action.agent_feed) {
+    children.push({ key: 'agent_feed', result: jsonRecord(action.agent_feed) })
+  }
+  return children
+}
+
+function mergeAcceptedActionResult(
+  parentResult: unknown,
+  childRows: PersistentActionResultRow[],
+  fallbackActionKey: OpsOnsiteDiagnosticActionKey,
+): OpsOnsiteDiagnosticAcceptedAction | null {
+  const acceptedAction = acceptedActionFromResult(parentResult, fallbackActionKey) ?? {
+    key: fallbackActionKey,
+    effect: 'audit_only' as const,
+  }
+  let found = Boolean(parentResult)
+  for (const row of childRows) {
+    const child = objectValue(row.result)
+    if (!child) continue
+    const key = actionResultKeyValue(row.result_key)
+    if (key === 'desktop_evidence') {
+      acceptedAction.desktop_evidence = child as unknown as OpsOnsiteDiagnosticDesktopEvidenceResult
+      found = true
+    } else if (key === 'capture_route') {
+      acceptedAction.capture_route = child as unknown as OpsOnsiteDiagnosticCaptureRouteResult
+      found = true
+    } else if (key === 'agent_feed') {
+      acceptedAction.agent_feed = child as unknown as OpsOnsiteDiagnosticAgentFeedResult
+      found = true
+    }
+  }
+  return found ? acceptedAction : null
+}
+
 function acceptedActionFromResult(
   result: unknown,
   fallbackActionKey: OpsOnsiteDiagnosticActionKey,
@@ -2794,6 +2911,14 @@ function acceptedActionFromResult(
     acceptedAction.agent_feed = agentFeed as unknown as OpsOnsiteDiagnosticAgentFeedResult
   }
   return acceptedAction
+}
+
+function actionResultKeyValue(value: unknown): OpsOnsiteDiagnosticActionResultKey | null {
+  return value === 'desktop_evidence' || value === 'capture_route' || value === 'agent_feed' ? value : null
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
 }
 
 function hashControlToken(token: string): string {
@@ -2895,6 +3020,24 @@ export async function __recordPersistentOnsiteDiagnosticActionForTests(
     args.actionLabel,
     args.actorUserId,
     args.clientActionId ?? null,
+    runTx,
+  )
+}
+
+export async function __persistOnsiteDiagnosticActionResultForTests(
+  args: {
+    companyId: string
+    sessionId: string
+    eventId: string
+    acceptedAction: OpsOnsiteDiagnosticAcceptedAction
+  },
+  runTx: OpsDiagnosticsTxRunner,
+): Promise<void> {
+  return persistOnsiteDiagnosticActionResult(
+    args.companyId,
+    args.sessionId,
+    args.eventId,
+    args.acceptedAction,
     runTx,
   )
 }

@@ -14,6 +14,7 @@ import {
   __desktopEvidenceFromRowForTests,
   __enqueueOnsiteDiagnosticConcernForTests,
   __latestPersistentOnsiteWorkLinkForTests,
+  __persistOnsiteDiagnosticActionResultForTests,
   __recordPersistentOnsiteDiagnosticActionForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
@@ -229,6 +230,13 @@ class PersistentOpsClient {
     client_action_id: string | null
     result: unknown
   }> = []
+  actionResults: Array<{
+    company_id: string
+    session_id: string
+    event_id: string
+    result_key: string
+    result: unknown
+  }> = []
 
   async query(sql: string, params: unknown[] = []) {
     const normalized = sql.replace(/\s+/g, ' ').trim()
@@ -279,12 +287,45 @@ class PersistentOpsClient {
       }
       return { rows: this.sessionEvents, rowCount: this.sessionEvents.length }
     }
+    if (normalized.startsWith('select event_id::text as event_id, result_key, result')) {
+      const eventIds = new Set((params[2] as string[] | undefined) ?? [])
+      const rows = this.actionResults
+        .filter((row) => row.company_id === params[0] && row.session_id === params[1] && eventIds.has(row.event_id))
+        .map((row) => ({
+          event_id: row.event_id,
+          result_key: row.result_key,
+          result: row.result,
+        }))
+      return { rows, rowCount: rows.length }
+    }
     if (normalized.startsWith('update ops_diagnostic_session_events set result')) {
       const event = this.sessionEvents.find(
         (candidate) => candidate.id === params[2] && candidate.client_action_id !== undefined,
       )
       if (event) event.result = JSON.parse(String(params[3] ?? 'null'))
       return { rows: [], rowCount: event ? 1 : 0 }
+    }
+    if (normalized.startsWith('insert into ops_diagnostic_action_results')) {
+      const companyId = String(params[0])
+      const sessionId = String(params[1])
+      const eventId = String(params[2])
+      const resultKey = String(params[3])
+      const result = JSON.parse(String(params[4] ?? '{}'))
+      const existing = this.actionResults.find(
+        (row) => row.company_id === companyId && row.event_id === eventId && row.result_key === resultKey,
+      )
+      if (existing) {
+        existing.result = result
+      } else {
+        this.actionResults.push({
+          company_id: companyId,
+          session_id: sessionId,
+          event_id: eventId,
+          result_key: resultKey,
+          result,
+        })
+      }
+      return { rows: [], rowCount: 1 }
     }
     if (normalized.startsWith('select id, audience, concern_ref, status')) return { rows: [], rowCount: 0 }
     if (normalized.startsWith('select s.id::text as capture_session_id')) return { rows: [], rowCount: 0 }
@@ -1728,6 +1769,91 @@ describe('ops diagnostics', () => {
     expect(client.calls.filter((call) => call.sql.startsWith('insert into support_debug_packets'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_work_items'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_handoff_events'))).toHaveLength(1)
+    expect(client.mutationOutbox).toHaveLength(1)
+  })
+
+  it('hydrates persistent action replays from durable child results when the parent result is missing', async () => {
+    const client = new PersistentOpsClient()
+    const runTx = async <T,>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+      expect(companyId).toBe('company-1')
+      return fn(client as unknown as PoolClient)
+    }
+    const first = await __recordPersistentOnsiteDiagnosticActionForTests(
+      {
+        companyId: 'company-1',
+        session: persistentSession(),
+        actionKey: 'dispatch_agent_review',
+        actionLabel: 'Dispatch agent review',
+        actorUserId: 'user_99',
+        clientActionId: 'tap-child-results',
+      },
+      runTx,
+    )
+    const acceptedAction: OpsOnsiteDiagnosticSessionActionResponse['accepted_action'] = {
+      key: 'dispatch_agent_review',
+      effect: 'audit_only',
+      capture_route: {
+        request_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+        delivery_id: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review:${first!.event.id}`,
+        outbox_id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+        status: 'accepted',
+        http_status: 202,
+        routed: true,
+        accepted: 1,
+        error: null,
+      },
+      agent_feed: {
+        audience: 'onsite-diagnostics',
+        concern_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+        queued: true,
+        id: OPS_FEED_ID,
+        support_packet_id: null,
+        context_work_item_id: null,
+      },
+    }
+    await __persistOnsiteDiagnosticActionResultForTests(
+      {
+        companyId: 'company-1',
+        sessionId: OPS_SESSION_ID,
+        eventId: first!.event.id,
+        acceptedAction,
+      },
+      runTx,
+    )
+    expect(client.actionResults.map((row) => row.result_key).sort()).toEqual(['agent_feed', 'capture_route'])
+
+    client.sessionEvents[0]!.result = null
+    const replayed = await __recordPersistentOnsiteDiagnosticActionForTests(
+      {
+        companyId: 'company-1',
+        session: first!.session,
+        actionKey: 'dispatch_agent_review',
+        actionLabel: 'Dispatch agent review',
+        actorUserId: 'user_99',
+        clientActionId: 'tap-child-results',
+      },
+      runTx,
+    )
+
+    expect(replayed).toMatchObject({
+      replayed: true,
+      acceptedAction: {
+        key: 'dispatch_agent_review',
+        capture_route: {
+          outbox_id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+          status: 'accepted',
+          http_status: 202,
+        },
+        agent_feed: {
+          audience: 'onsite-diagnostics',
+          queued: true,
+          id: OPS_FEED_ID,
+        },
+      },
+    })
+    expect(client.calls.filter((call) => call.sql.startsWith('insert into ops_diagnostic_session_events'))).toHaveLength(
+      1,
+    )
     expect(client.mutationOutbox).toHaveLength(1)
   })
 
