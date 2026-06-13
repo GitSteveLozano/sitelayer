@@ -914,14 +914,34 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.completed' })
   })
 
-  it('409s a terminal callback for an already-terminal concern', async () => {
+  it('replays a duplicate terminal callback for an already-terminal concern', async () => {
     const pool = new FakeFeedPool()
     const row = pool.seedConcern({ status: 'succeeded' })
     const { deps, responses } = makeDeps(pool, { body: terminalCallback(row.concern_ref) })
 
     await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
 
+    expect(responses[0]?.status).toBe(202)
+    expect(responses[0]?.body).toMatchObject({
+      ok: true,
+      concern_ref: row.concern_ref,
+      status: 'succeeded',
+      replayed: true,
+    })
+    expect(pool.concerns[0]?.status).toBe('succeeded')
+  })
+
+  it('409s a conflicting terminal callback for an already-terminal concern', async () => {
+    const pool = new FakeFeedPool()
+    const row = pool.seedConcern({ status: 'succeeded' })
+    const { deps, responses } = makeDeps(pool, {
+      body: terminalCallback(row.concern_ref, { status: 'failed', error: 'late conflicting result' }),
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
+
     expect(responses[0]?.status).toBe(409)
+    expect(pool.concerns[0]?.status).toBe('succeeded')
   })
 })
 

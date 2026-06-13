@@ -31,7 +31,10 @@ import { isValidUuid } from '../http-utils.js'
  *          it; the capture-analyzer ENRICHMENT lane gets the ack event only —
  *          it never owns the item's status.
  *        - terminal 'succeeded'|'failed'|'cancelled': stores the Callback,
- *          marks the row, stamps completed_at -> 202, then post-processes
+ *          marks the row, stamps completed_at -> 202, then post-processes.
+ *          A duplicate terminal delivery with the same status returns
+ *          202/replayed without mutating evidence; a conflicting terminal
+ *          status stays 409.
  *          (work-item metadata.capture_analysis + context_handoff_events +,
  *          for the work-dispatch lanes only, the lifecycle advance:
  *          succeeded -> review_ready via agent.completed, failed ->
@@ -612,6 +615,10 @@ async function handleCallback(deps: AgentFeedRouteDeps, audience: string): Promi
     [row.id, row.company_id, callback.status, JSON.stringify(callback), callback.completed_at ?? null],
   )
   if (!completed.rows[0]) {
+    if (TERMINAL_CALLBACK_STATUSES.has(row.status) && row.status === callback.status) {
+      deps.sendJson(202, { ok: true, concern_ref: row.concern_ref, status: row.status, replayed: true })
+      return
+    }
     deps.sendJson(409, { error: `concern is already ${row.status}` })
     return
   }
