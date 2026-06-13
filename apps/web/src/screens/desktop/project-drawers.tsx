@@ -946,19 +946,25 @@ type PdfContentMode = (typeof PDF_CONTENT_MODES)[number]['key']
  *
  * Wired (D10): the content-mode rail is now a real selection (WITH TAKEOFF
  * default), DOWNLOAD opens the estimate PDF (estimatePdfUrl) in a new tab, and
- * SEND TO CLIENT defers to the parent's send flow. Project label + sheet count
- * come from the caller so the head/sheet rail reflect the real project.
+ * SEND TO CLIENT defers to the parent's send flow. Project label, sheet count,
+ * and the preview's quantity rows come from the caller so the thumbnail
+ * reflects the real project. The 240x320 thumbnail is a REPRESENTATIVE preview
+ * (labelled "PREVIEW"), not the actual paginated render — DOWNLOAD produces the
+ * real PDF; when no estimate lines exist yet it shows a neutral placeholder
+ * rather than fabricated quantities.
  */
 export function PdfPreviewModal({
   open,
   onClose,
   projectLabel,
   sheetCount,
+  quantities,
   onDownload,
   onSendToClient,
 }: OverlayProps & {
   projectLabel?: string | undefined
   sheetCount?: number | undefined
+  quantities?: ReadonlyArray<{ label: string; value: string }> | undefined
   onDownload?: ((mode: PdfContentMode) => void) | undefined
   onSendToClient?: (() => void) | undefined
 }) {
@@ -997,13 +1003,9 @@ export function PdfPreviewModal({
               </MButton>
             ))}
           </div>
-          <div style={{ ...sectionLabel, color: 'var(--m-ink-3)', marginTop: 24 }}>SHEETS · {sheetCount ?? 22}</div>
+          <div style={{ ...sectionLabel, color: 'var(--m-ink-3)', marginTop: 24 }}>SHEETS · {sheetCount ?? '—'}</div>
           <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600, lineHeight: 1.6 })}>
-            ALL INCLUDED
-            <br />
-            A-101 · A-201..204
-            <br />
-            M-101..104 · …
+            {sheetCount ? 'ALL SHEETS INCLUDED' : 'No sheets uploaded yet'}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -1017,25 +1019,51 @@ export function PdfPreviewModal({
               padding: 40,
             }}
           >
-            <div style={{ width: 240, height: 320, background: '#fff', border: '2px solid var(--m-ink)', padding: 16 }}>
-              <div style={mono({ fontSize: 8, fontWeight: 700, color: 'var(--m-ink)' })}>{headLabel} · TAKEOFF</div>
+            <div
+              style={{ width: 240, height: 320, background: '#fff', border: '2px solid var(--m-ink)', padding: 16 }}
+              aria-label="Estimate PDF preview (representative layout)"
+            >
+              <div
+                style={mono({
+                  fontSize: 8,
+                  fontWeight: 700,
+                  color: 'var(--m-ink-3)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                })}
+              >
+                <span>{headLabel} · TAKEOFF</span>
+                <span>PREVIEW</span>
+              </div>
               <div style={display({ fontWeight: 800, fontSize: 14, marginTop: 4, color: 'var(--m-ink)' })}>
                 QUANTITIES
               </div>
               <div style={{ marginTop: 14 }}>
-                {['EPS · 4,785 SF', 'BASECOAT · 4,785 SF', 'STONE · 420 SF'].map((r) => (
-                  <div
-                    key={r}
-                    style={mono({
-                      fontSize: 8,
-                      padding: '4px 0',
-                      borderBottom: '1px dashed var(--m-line-2)',
-                      color: 'var(--m-ink)',
-                    })}
-                  >
-                    {r}
+                {quantities && quantities.length > 0 ? (
+                  quantities.map((q) => (
+                    <div
+                      key={`${q.label}-${q.value}`}
+                      style={mono({
+                        fontSize: 8,
+                        padding: '4px 0',
+                        borderBottom: '1px dashed var(--m-line-2)',
+                        color: 'var(--m-ink)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                      })}
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {q.label}
+                      </span>
+                      <span style={{ flexShrink: 0 }}>{q.value}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={mono({ fontSize: 8, padding: '4px 0', color: 'var(--m-ink-3)' })}>
+                    Build the estimate to preview quantities.
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>

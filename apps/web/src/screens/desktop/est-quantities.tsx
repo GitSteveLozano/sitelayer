@@ -222,6 +222,16 @@ export function EstQuantities() {
     })
   }
   const rows: QtyRow[] = useMemo(() => buildGroupedRows(lines, expanded), [lines, expanded])
+  // Top non-component quantity rows for the PDF-preview thumbnail — REAL
+  // project quantities (replaces the old hardcoded EPS/BASECOAT/STONE sample).
+  const pdfPreviewQuantities = useMemo(
+    () =>
+      rows
+        .filter((r) => r.group !== 'child')
+        .slice(0, 3)
+        .map((r) => ({ label: r.code, value: `${r.qty.toLocaleString('en-US')} ${r.unit}`.trim() })),
+    [rows],
+  )
   // H4 staleness: true when a measurement / assembly / rate changed after the
   // last recompute (server-derived flag on the scope-vs-bid snapshot). Drives
   // the persistent "out of date" banner above the quantities table.
@@ -755,6 +765,7 @@ export function EstQuantities() {
         onClose={() => setPdfPreviewOpen(false)}
         projectLabel={summary?.project.name}
         sheetCount={totalSheets || undefined}
+        quantities={pdfPreviewQuantities}
         onDownload={() => handleGeneratePdf()}
         onSendToClient={() => {
           setPdfPreviewOpen(false)
