@@ -1136,8 +1136,19 @@ const server = http.createServer(async (req, res) => {
               // so the membership lands on exactly the tenant getCompany() will
               // re-resolve. (The `x-sitelayer-company-id` path is handled inside
               // getCompany and never reaches here as a slug onboard.)
+              // GATED (audit gap #10): the first-user admin self-claim is a
+              // privilege-escalation footgun because the slug is
+              // attacker-controllable. authConfig.allowFirstUserAdmin defaults
+              // OFF in prod (on in dev/preview/demo/local), so a memberless
+              // slug in prod 404s instead of minting an admin membership.
               const requestedCompanySlug = getCurrentCompanySlug(req)
-              if (!company && !isPublicPath && requestedCompanySlug && identity.userId) {
+              if (
+                authConfig.allowFirstUserAdmin &&
+                !company &&
+                !isPublicPath &&
+                requestedCompanySlug &&
+                identity.userId
+              ) {
                 try {
                   await autoOnboardFirstAdmin(pool, {
                     resolvedCompanySlug: requestedCompanySlug,

@@ -171,6 +171,37 @@ describe('loadAuthConfig', () => {
     const config = loadAuthConfig({ APP_TIER: 'dev', AUTH_ALLOW_HEADER_FALLBACK: '0' })
     expect(config.allowHeaderFallback).toBe(false)
   })
+
+  // --- first-user admin self-claim gate (audit gap #10) -------------------
+  describe('allowFirstUserAdmin (auto-onboard footgun gate)', () => {
+    const prodAuth = {
+      CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+      CLERK_ISSUER: 'https://clerk.sandolab.xyz',
+      AUTH_ALLOW_HEADER_FALLBACK: '0',
+    }
+
+    it('defaults OFF in prod (an attacker-supplied zero-membership slug cannot self-claim admin)', () => {
+      const config = loadAuthConfig({ APP_TIER: 'prod', ...prodAuth })
+      expect(config.allowFirstUserAdmin).toBe(false)
+    })
+
+    it('defaults ON in dev/preview/demo/local (existing onboarding flows unchanged)', () => {
+      expect(loadAuthConfig({ APP_TIER: 'local' }).allowFirstUserAdmin).toBe(true)
+      expect(loadAuthConfig({ APP_TIER: 'dev' }).allowFirstUserAdmin).toBe(true)
+      expect(loadAuthConfig({ APP_TIER: 'preview' }).allowFirstUserAdmin).toBe(true)
+      expect(loadAuthConfig({ APP_TIER: 'demo' }).allowFirstUserAdmin).toBe(true)
+    })
+
+    it('honours an explicit AUTH_ALLOW_FIRST_USER_ADMIN=1 in prod (deliberate first-onboard window)', () => {
+      const config = loadAuthConfig({ APP_TIER: 'prod', ...prodAuth, AUTH_ALLOW_FIRST_USER_ADMIN: '1' })
+      expect(config.allowFirstUserAdmin).toBe(true)
+    })
+
+    it('honours an explicit AUTH_ALLOW_FIRST_USER_ADMIN=0 in dev (opt out of the convenience)', () => {
+      const config = loadAuthConfig({ APP_TIER: 'dev', AUTH_ALLOW_FIRST_USER_ADMIN: '0' })
+      expect(config.allowFirstUserAdmin).toBe(false)
+    })
+  })
 })
 
 describe('resolveActAsOverride', () => {

@@ -33,29 +33,46 @@ export type ChannelKind = 'push' | 'sms' | 'email' | 'console'
 export type ChannelPreference = 'push' | 'sms' | 'email' | 'off'
 
 /**
- * The `kind` values on notifications that map to a preference column.
- * Anything else (legacy 'sync_failure', etc.) falls through to email
- * so existing alert paths keep working.
+ * The four `kind` values that the LEGACY closed-enum notification_preferences
+ * table carries as fixed columns. Retained so the dual-read path can map a
+ * kind back to its legacy column when the new per-kind table has no row yet.
+ *
+ * As of migration 020 the channel-preference model is row-per-(user,kind,
+ * channel) and NO LONGER a closed enum: ANY kind is routable. New kinds
+ * (foreman_assignment, field_request_denied, invoice_paid, …) default to
+ * `push` (which falls back to email when push is unconfigured), and are
+ * mutable per-user via the new table — they are NOT forced email-only.
  */
-export type RoutableNotificationKind =
-  | 'assignment_change'
-  | 'time_review_ready'
-  | 'daily_log_reminder'
-  | 'clock_anomaly'
+export type LegacyEnumKind = 'assignment_change' | 'time_review_ready' | 'daily_log_reminder' | 'clock_anomaly'
 
-const ROUTABLE_KINDS: ReadonlySet<string> = new Set<RoutableNotificationKind>([
+const LEGACY_ENUM_KINDS: ReadonlySet<string> = new Set<LegacyEnumKind>([
   'assignment_change',
   'time_review_ready',
   'daily_log_reminder',
   'clock_anomaly',
 ])
 
-export function isRoutableKind(kind: string): kind is RoutableNotificationKind {
-  return ROUTABLE_KINDS.has(kind)
+export function isLegacyEnumKind(kind: string): kind is LegacyEnumKind {
+  return LEGACY_ENUM_KINDS.has(kind)
 }
 
-/** notification_preferences row shape — see migration 028. */
+/**
+ * Default channel for a kind that has neither a row in the new per-kind table
+ * nor a legacy enum column. Push degrades to email through the router's
+ * fallback ladder, so this is effectively "push, then email" — the
+ * sensible default the audit asked for, never silent.
+ */
+export const DEFAULT_KIND_CHANNEL: ChannelPreference = 'push'
+
+/**
+ * Resolved preferences for one (company, user). `byKind` is the migration-020
+ * per-kind map (the source of truth); the legacy `channel_*` columns are kept
+ * for the dual-read fallback and so a rollback to pre-020 code still finds
+ * preferences (we keep dual-WRITING them on the API side).
+ */
 export interface NotificationPreferences {
+  /** Migration-020 per-kind channel map. Wins over the legacy columns. */
+  byKind: Record<string, ChannelPreference>
   channel_assignment_change: ChannelPreference
   channel_time_review_ready: ChannelPreference
   channel_daily_log_reminder: ChannelPreference
@@ -66,6 +83,7 @@ export interface NotificationPreferences {
 
 /** Default preferences for users who haven't configured any. */
 export const DEFAULT_PREFERENCES: NotificationPreferences = {
+  byKind: {},
   channel_assignment_change: 'push',
   channel_time_review_ready: 'push',
   channel_daily_log_reminder: 'push',
@@ -74,7 +92,15 @@ export const DEFAULT_PREFERENCES: NotificationPreferences = {
   email: null,
 }
 
-function preferenceFor(kind: RoutableNotificationKind, prefs: NotificationPreferences): ChannelPreference {
+/**
+ * Dual-read channel resolution for ANY kind:
+ *   1. the migration-020 per-kind table row (`byKind`) wins;
+ *   2. else the legacy enum column for the four known kinds;
+ *   3. else the push default (new kinds → push, falls back to email).
+ */
+export function preferenceFor(kind: string, prefs: NotificationPreferences): ChannelPreference {
+  const fromNewTable = prefs.byKind[kind]
+  if (fromNewTable) return fromNewTable
   switch (kind) {
     case 'assignment_change':
       return prefs.channel_assignment_change
@@ -84,6 +110,8 @@ function preferenceFor(kind: RoutableNotificationKind, prefs: NotificationPrefer
       return prefs.channel_daily_log_reminder
     case 'clock_anomaly':
       return prefs.channel_clock_anomaly
+    default:
+      return DEFAULT_KIND_CHANNEL
   }
 }
 
@@ -144,18 +172,13 @@ export function decideChannel(
     return { kind: 'broadcast' }
   }
 
-  // Non-routable kinds (sync_failure, etc.) preserve the legacy email-only
-  // behaviour. If email isn't configured, defer.
-  if (!isRoutableKind(kind)) {
-    if (availability.email && target.email) {
-      return { kind: 'send', channel: 'email', target }
-    }
-    if (availability.email && !target.email) {
-      return { kind: 'defer', reason: 'no_recipient_email' }
-    }
-    return { kind: 'defer', reason: 'no_email_provider_configured' }
-  }
-
+  // Migration 020 opened the closed enum: EVERY kind is now routable. The
+  // chosen channel comes from the per-kind table (falling back to the legacy
+  // enum columns for the four known kinds, then to the push default for new
+  // kinds). There is no longer an email-only fallback for "unknown" kinds —
+  // new kinds (foreman_assignment, field_request_denied, invoice_paid, …)
+  // default to push and degrade to email through the ladder below, and are
+  // mutable per-user.
   const choice = preferenceFor(kind, prefs)
 
   if (choice === 'off') {
@@ -767,12 +790,39 @@ export class DefaultNotificationDispatcher implements NotificationDispatcher {
   }
 }
 
+/** Legacy notification_preferences row shape (the four fixed enum columns). */
+interface LegacyPreferenceRow {
+  channel_assignment_change: ChannelPreference
+  channel_time_review_ready: ChannelPreference
+  channel_daily_log_reminder: ChannelPreference
+  channel_clock_anomaly: ChannelPreference
+  sms_phone: string | null
+  email: string | null
+}
+
+const VALID_CHANNEL_PREFERENCES: ReadonlySet<string> = new Set<ChannelPreference>(['push', 'sms', 'email', 'off'])
+
+/**
+ * Dual-read the recipient's preferences (migration 020).
+ *
+ * Reads BOTH the legacy `notification_preferences` enum columns (for the four
+ * known kinds + the sms_phone / email contact fields, which still live only on
+ * the legacy row) AND the new per-kind `notification_channel_preferences`
+ * rows. The per-kind table WINS where it has a row (`byKind`); everything else
+ * falls back to the legacy columns, then the push default — so the read is
+ * safe whether or not 020's backfill / dual-write has populated the new table
+ * yet.
+ *
+ * The new-table query is tolerant of the table not existing yet (a pre-020 DB
+ * during rollout): on any error it logs nothing and proceeds with the legacy
+ * row only.
+ */
 async function loadPreferences(
   client: DispatcherDbClient,
   companyId: string,
   clerkUserId: string,
 ): Promise<NotificationPreferences> {
-  const result = await client.query<NotificationPreferences>(
+  const legacyResult = await client.query<LegacyPreferenceRow>(
     `select channel_assignment_change, channel_time_review_ready,
             channel_daily_log_reminder, channel_clock_anomaly,
             sms_phone, email
@@ -781,7 +831,40 @@ async function loadPreferences(
       limit 1`,
     [companyId, clerkUserId],
   )
-  return result.rows[0] ?? DEFAULT_PREFERENCES
+  const legacy = legacyResult.rows[0]
+
+  const byKind: Record<string, ChannelPreference> = {}
+  try {
+    const perKind = await client.query<{ kind: string; channel: string }>(
+      `select kind, channel
+         from notification_channel_preferences
+        where company_id = $1 and clerk_user_id = $2`,
+      [companyId, clerkUserId],
+    )
+    for (const row of perKind.rows) {
+      if (typeof row.kind === 'string' && VALID_CHANNEL_PREFERENCES.has(row.channel)) {
+        byKind[row.kind] = row.channel as ChannelPreference
+      }
+    }
+  } catch {
+    // Pre-020 DB (table absent) or a transient read error: fall back to the
+    // legacy columns only. Never let the per-kind read break delivery. byKind
+    // stays {} so the dual-read resolves purely from the legacy columns.
+  }
+
+  if (!legacy && Object.keys(byKind).length === 0) {
+    return DEFAULT_PREFERENCES
+  }
+
+  return {
+    byKind,
+    channel_assignment_change: legacy?.channel_assignment_change ?? DEFAULT_PREFERENCES.channel_assignment_change,
+    channel_time_review_ready: legacy?.channel_time_review_ready ?? DEFAULT_PREFERENCES.channel_time_review_ready,
+    channel_daily_log_reminder: legacy?.channel_daily_log_reminder ?? DEFAULT_PREFERENCES.channel_daily_log_reminder,
+    channel_clock_anomaly: legacy?.channel_clock_anomaly ?? DEFAULT_PREFERENCES.channel_clock_anomaly,
+    sms_phone: legacy?.sms_phone ?? null,
+    email: legacy?.email ?? null,
+  }
 }
 
 async function countPushSubscriptions(

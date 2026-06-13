@@ -126,11 +126,12 @@ describe('qbo-webhook parseQboWebhookPayload', () => {
 })
 
 describe('qbo-webhook mapQboEntityType', () => {
-  it('maps the four canonical names', () => {
+  it('maps the canonical entity names (incl. Payment for the AR audit trail)', () => {
     expect(mapQboEntityType('Customer')).toBe('customer')
     expect(mapQboEntityType('Item')).toBe('service_item')
     expect(mapQboEntityType('Bill')).toBe('material_bill')
     expect(mapQboEntityType('Invoice')).toBe('invoice')
+    expect(mapQboEntityType('Payment')).toBe('payment')
   })
 
   it('lowercases unknown entity names (pass-through)', () => {

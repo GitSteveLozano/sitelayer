@@ -38,8 +38,29 @@ const NotificationPreferenceUpsertBodySchema = z
     channel_clock_anomaly: z.string().optional(),
     sms_phone: z.string().nullish(),
     email: z.string().nullish(),
+    // Migration-020 generic per-kind channel map: `{ kind: channel }` for ANY
+    // notification kind (e.g. foreman_assignment, field_request_denied,
+    // invoice_paid). Optional + backward-compatible — the legacy four named
+    // fields above keep working unchanged for the existing web UI. Values are
+    // coerced/validated below; unknown channel strings are dropped.
+    channels: z.record(z.string(), z.string()).optional(),
   })
   .loose()
+
+/**
+ * The four legacy kinds that ALSO own a fixed column on
+ * notification_preferences. Their channel must stay in sync between the
+ * generic `channels` map and the named legacy column during the dual-write
+ * EXPAND phase (migration 020), so a rollback to pre-020 code still reads the
+ * right preference from the legacy column.
+ */
+const LEGACY_KIND_TO_COLUMN = {
+  assignment_change: 'channel_assignment_change',
+  time_review_ready: 'channel_time_review_ready',
+  daily_log_reminder: 'channel_daily_log_reminder',
+  clock_anomaly: 'channel_clock_anomaly',
+} as const
+type LegacyKind = keyof typeof LEGACY_KIND_TO_COLUMN
 
 function parseChannel(value: unknown, fallback: Channel): Channel {
   if (typeof value === 'string' && (ALLOWED_CHANNELS as readonly string[]).includes(value)) {
@@ -129,20 +150,52 @@ export async function handleNotificationPreferenceRoutes(
       return true
     }
     const body = parsed.value
-    const channels = {
-      channel_assignment_change: parseChannel(body.channel_assignment_change, 'push'),
-      channel_time_review_ready: parseChannel(body.channel_time_review_ready, 'push'),
-      channel_daily_log_reminder: parseChannel(body.channel_daily_log_reminder, 'push'),
-      channel_clock_anomaly: parseChannel(body.channel_clock_anomaly, 'push'),
+
+    // Build the generic per-kind map (migration 020) first. It's the union of
+    // the four legacy named fields and any `channels` map entries; where both
+    // name a legacy kind, the explicit `channels` entry wins, and that winning
+    // value is what we sync back into the legacy column below — so the legacy
+    // column and the new table never disagree.
+    const perKind = new Map<string, Channel>()
+    if (body.channels && typeof body.channels === 'object') {
+      for (const [kind, value] of Object.entries(body.channels)) {
+        const k = kind.trim()
+        if (!k) continue
+        if (typeof value === 'string' && (ALLOWED_CHANNELS as readonly string[]).includes(value)) {
+          perKind.set(k.slice(0, 128), value as Channel)
+        }
+      }
     }
+    // Legacy named fields. When the field is present, it sets/overrides the
+    // per-kind entry only if `channels` did NOT already provide one.
+    for (const [legacyKind, column] of Object.entries(LEGACY_KIND_TO_COLUMN) as [LegacyKind, string][]) {
+      const raw = (body as Record<string, unknown>)[column]
+      if (raw !== undefined && !perKind.has(legacyKind)) {
+        perKind.set(legacyKind, parseChannel(raw, 'push'))
+      }
+    }
+
+    // The four legacy columns are NON-NULL, so resolve each from (in order):
+    // the per-kind map → the existing legacy default 'push'. This keeps the
+    // legacy upsert shape identical for rollback-safety.
+    const channels = {
+      channel_assignment_change: perKind.get('assignment_change') ?? 'push',
+      channel_time_review_ready: perKind.get('time_review_ready') ?? 'push',
+      channel_daily_log_reminder: perKind.get('daily_log_reminder') ?? 'push',
+      channel_clock_anomaly: perKind.get('clock_anomaly') ?? 'push',
+    } satisfies Record<string, Channel>
+
     const smsPhone =
       typeof body.sms_phone === 'string' && body.sms_phone.trim() ? body.sms_phone.trim().slice(0, 32) : null
     const email = typeof body.email === 'string' && body.email.trim() ? body.email.trim().slice(0, 320) : null
 
     // Reject channel selection that requires a contact field that's not set.
     // Better to 400 here than have the worker silently downgrade to push.
-    const usesSms = Object.values(channels).includes('sms')
-    const usesEmail = Object.values(channels).includes('email')
+    // Checks the FULL per-kind set (legacy + generic) so a new kind set to
+    // sms/email is validated the same way.
+    const allChosen = [...perKind.values(), ...Object.values(channels)]
+    const usesSms = allChosen.includes('sms')
+    const usesEmail = allChosen.includes('email')
     if (usesSms && !smsPhone) {
       ctx.sendJson(400, { error: 'sms_phone required when any channel is sms' })
       return true
@@ -152,8 +205,13 @@ export async function handleNotificationPreferenceRoutes(
       return true
     }
 
-    const upsert = await withMutationTx(ctx.company.id, (c) =>
-      c.query<NotificationPreferenceRow>(
+    // DUAL-WRITE (migration 020 EXPAND): write BOTH the legacy
+    // notification_preferences columns (rollback-safe) AND the new
+    // notification_channel_preferences per-kind rows (new code reads these
+    // first). Both happen in one tx so they can never diverge on a partial
+    // failure.
+    const upsert = await withMutationTx(ctx.company.id, async (c) => {
+      const legacy = await c.query<NotificationPreferenceRow>(
         `insert into notification_preferences (
          company_id, clerk_user_id,
          channel_assignment_change, channel_time_review_ready,
@@ -180,8 +238,20 @@ export async function handleNotificationPreferenceRoutes(
           smsPhone,
           email,
         ],
-      ),
-    )
+      )
+
+      for (const [kind, channel] of perKind) {
+        await c.query(
+          `insert into notification_channel_preferences (company_id, clerk_user_id, kind, channel)
+           values ($1, $2, $3, $4)
+           on conflict (company_id, clerk_user_id, kind) do update
+             set channel = excluded.channel, updated_at = now()`,
+          [ctx.company.id, ctx.currentUserId, kind, channel],
+        )
+      }
+
+      return legacy
+    })
     ctx.sendJson(200, { preferences: upsert.rows[0] })
     return true
   }

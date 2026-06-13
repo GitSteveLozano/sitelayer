@@ -64,6 +64,18 @@ export type AuthConfig = {
   internalAuthToken?: string | null
   defaultUserId: string
   allowHeaderFallback: boolean
+  /**
+   * Whether the first authenticated user hitting a company slug with ZERO
+   * memberships may self-claim `admin` (apps/api/src/auto-onboard.ts). This is
+   * a convenience for fresh installs where the Clerk membership-mirroring
+   * webhook isn't wired, but it's a privilege-escalation footgun: the slug is
+   * attacker-controllable (`x-sitelayer-company-slug`), so any flow that leaves
+   * a company memberless (admin removal, manual row delete, scenario seed)
+   * re-opens an admin self-claim. DEFAULT OFF in prod (tier==='prod' ⇒ off
+   * unless AUTH_ALLOW_FIRST_USER_ADMIN is explicitly enabled); default ON in
+   * dev/preview/demo/local so local onboarding flows keep working.
+   */
+  allowFirstUserAdmin: boolean
 }
 
 export class AuthError extends Error {
@@ -113,6 +125,16 @@ export function loadAuthConfig(
     : !authConfigured
   const breakGlassHeaderFallback =
     env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === '1' || env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === 'true'
+
+  // First-user admin self-claim (auto-onboard). DEFAULT OFF in prod, ON in
+  // every non-prod tier so local/dev/preview/demo onboarding keeps working.
+  // An explicit AUTH_ALLOW_FIRST_USER_ADMIN=1/0 overrides the default on any
+  // tier (so prod CAN opt in for a deliberate first-onboard window, and a
+  // non-prod box CAN opt out).
+  const allowFirstUserAdmin =
+    env.AUTH_ALLOW_FIRST_USER_ADMIN !== undefined && env.AUTH_ALLOW_FIRST_USER_ADMIN !== ''
+      ? env.AUTH_ALLOW_FIRST_USER_ADMIN === '1' || env.AUTH_ALLOW_FIRST_USER_ADMIN === 'true'
+      : tier !== 'prod'
 
   if (tier === 'prod' && !authConfigured) {
     throw new AuthConfigError('APP_TIER=prod requires CLERK_JWT_KEY or INTERNAL_AUTH_TOKEN')
@@ -166,6 +188,7 @@ export function loadAuthConfig(
     internalAuthToken,
     defaultUserId: env.ACTIVE_USER_ID?.trim() || 'demo-user',
     allowHeaderFallback,
+    allowFirstUserAdmin,
   }
 }
 

@@ -58,9 +58,18 @@ export function warnIfQboWebhookVerifierMissing(
 /**
  * Map a QBO entity name to the Sitelayer sync_events entity_type taxonomy.
  *
- * Only the four entity types the WhatsApp thread calls out are mirrored; any
- * other entity name is passed through so we retain the raw name in the
- * sync_events row. A downstream worker can decide whether to ignore it.
+ * The mapped types below are mirrored explicitly so an inbound webhook records
+ * a clean, well-known `entity_type` on the sync_events audit row; any other
+ * entity name is passed through (lowercased) so we still retain the raw name.
+ * A downstream worker can decide whether to ignore it.
+ *
+ * `Payment` is mapped to `payment` so an inbound QBO Payment notification lands
+ * as a typed audit row. NOTE: there is NOT YET a worker that consumes inbound
+ * `payment` sync_events to reconcile a billing-milestone's realized status from
+ * QBO truth — that handler is a sized follow-up (see
+ * docs/RUNBOOK_QBO_CIRCUIT.md / the project-billing-milestones note). Until
+ * then a milestone's `paid` status is a MANUAL assertion, not QBO-confirmed
+ * (see apps/api/src/routes/project-billing-milestones.ts).
  */
 export function mapQboEntityType(qboName: string): string {
   switch (qboName) {
@@ -72,6 +81,8 @@ export function mapQboEntityType(qboName: string): string {
       return 'material_bill'
     case 'Invoice':
       return 'invoice'
+    case 'Payment':
+      return 'payment'
     default:
       return qboName.toLowerCase()
   }

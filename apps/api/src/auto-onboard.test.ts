@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import { autoOnboardFirstAdmin } from './auto-onboard.js'
+import { loadAuthConfig } from './auth.js'
 
 /**
  * MULTI-TENANCY REGRESSION GUARD.
@@ -71,5 +72,86 @@ describe('autoOnboardFirstAdmin', () => {
 
     await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: '  company-b  ', userId: '  u  ' })
     expect(calls[0]!.params).toEqual(['u', 'company-b'])
+  })
+})
+
+/**
+ * GATE BEHAVIOR (audit gap #10). The helper itself is unconditional; the
+ * privilege-escalation gate lives at the server.ts call site
+ * (`authConfig.allowFirstUserAdmin && !company && …`). These tests model that
+ * exact call-site decision: in prod (flag unset) an attacker-supplied
+ * zero-membership slug must NOT reach autoOnboardFirstAdmin at all; in dev /
+ * with the flag on, the existing behavior holds.
+ */
+describe('auto-onboard admin-claim gate (server.ts call site)', () => {
+  // Mirror of the server.ts guard: the onboard fires only when the flag is on
+  // AND the company is unresolved AND the request named a slug + user.
+  function gateFires(opts: {
+    config: ReturnType<typeof loadAuthConfig>
+    company: unknown
+    isPublicPath: boolean
+    requestedCompanySlug: string | null
+    userId: string | null
+  }): boolean {
+    return Boolean(
+      opts.config.allowFirstUserAdmin &&
+      !opts.company &&
+      !opts.isPublicPath &&
+      opts.requestedCompanySlug &&
+      opts.userId,
+    )
+  }
+
+  const PROD_AUTH = {
+    APP_TIER: 'prod',
+    CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----',
+    CLERK_ISSUER: 'https://clerk.sandolab.xyz',
+    AUTH_ALLOW_HEADER_FALLBACK: '0',
+  }
+
+  it('prod + flag unset: attacker zero-membership slug does NOT trigger the admin claim', async () => {
+    const config = loadAuthConfig(PROD_AUTH)
+    const fired = gateFires({
+      config,
+      company: null, // zero-membership slug → getCompany() returned null
+      isPublicPath: false,
+      requestedCompanySlug: 'attacker-controlled-slug',
+      userId: 'user_attacker',
+    })
+    expect(fired).toBe(false)
+
+    // And if it doesn't fire, no membership insert happens.
+    const { executor, query } = makeExecutor()
+    if (fired) await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: 'attacker-controlled-slug', userId: 'u' })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('dev (flag defaults on): the existing first-user admin claim still fires', async () => {
+    const config = loadAuthConfig({ APP_TIER: 'dev' })
+    const fired = gateFires({
+      config,
+      company: null,
+      isPublicPath: false,
+      requestedCompanySlug: 'fresh-co',
+      userId: 'user_1',
+    })
+    expect(fired).toBe(true)
+
+    const { executor, query, calls } = makeExecutor()
+    if (fired) await autoOnboardFirstAdmin(executor, { resolvedCompanySlug: 'fresh-co', userId: 'user_1' })
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(calls[0]!.params).toEqual(['user_1', 'fresh-co'])
+  })
+
+  it('prod + explicit AUTH_ALLOW_FIRST_USER_ADMIN=1: deliberate opt-in re-enables the claim', () => {
+    const config = loadAuthConfig({ ...PROD_AUTH, AUTH_ALLOW_FIRST_USER_ADMIN: '1' })
+    const fired = gateFires({
+      config,
+      company: null,
+      isPublicPath: false,
+      requestedCompanySlug: 'first-onboard',
+      userId: 'owner_1',
+    })
+    expect(fired).toBe(true)
   })
 })

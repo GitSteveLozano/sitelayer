@@ -8,7 +8,8 @@ import {
   TwilioSMSChannel,
   WebPushChannel,
   decideChannel,
-  isRoutableKind,
+  isLegacyEnumKind,
+  preferenceFor,
   loadTwilioConfig,
   loadVapidConfig,
   synthesizeSmsBody,
@@ -34,17 +35,38 @@ function withPrefs(p: Partial<NotificationPreferences> = {}): NotificationPrefer
   return { ...DEFAULT_PREFERENCES, ...p }
 }
 
-describe('isRoutableKind', () => {
-  it('accepts the four channel-routable kinds', () => {
-    expect(isRoutableKind('assignment_change')).toBe(true)
-    expect(isRoutableKind('time_review_ready')).toBe(true)
-    expect(isRoutableKind('daily_log_reminder')).toBe(true)
-    expect(isRoutableKind('clock_anomaly')).toBe(true)
+describe('isLegacyEnumKind', () => {
+  it('accepts the four legacy-enum-column kinds', () => {
+    expect(isLegacyEnumKind('assignment_change')).toBe(true)
+    expect(isLegacyEnumKind('time_review_ready')).toBe(true)
+    expect(isLegacyEnumKind('daily_log_reminder')).toBe(true)
+    expect(isLegacyEnumKind('clock_anomaly')).toBe(true)
   })
-  it('rejects legacy and unknown kinds', () => {
-    expect(isRoutableKind('sync_failure')).toBe(false)
-    expect(isRoutableKind('rental_billing.posted')).toBe(false)
-    expect(isRoutableKind('')).toBe(false)
+  it('rejects new + unknown kinds (which are still routable, just not legacy columns)', () => {
+    expect(isLegacyEnumKind('foreman_assignment')).toBe(false)
+    expect(isLegacyEnumKind('field_request_denied')).toBe(false)
+    expect(isLegacyEnumKind('invoice_paid')).toBe(false)
+    expect(isLegacyEnumKind('')).toBe(false)
+  })
+})
+
+describe('preferenceFor — dual-read resolution (migration 020)', () => {
+  it('new per-kind table wins over the legacy column', () => {
+    const prefs = withPrefs({ byKind: { assignment_change: 'sms' }, channel_assignment_change: 'email' })
+    expect(preferenceFor('assignment_change', prefs)).toBe('sms')
+  })
+  it('falls back to the legacy column when the new table has no row', () => {
+    const prefs = withPrefs({ byKind: {}, channel_assignment_change: 'email' })
+    expect(preferenceFor('assignment_change', prefs)).toBe('email')
+  })
+  it('new kinds default to push (mutable per the new table)', () => {
+    expect(preferenceFor('foreman_assignment', DEFAULT_PREFERENCES)).toBe('push')
+    expect(preferenceFor('field_request_denied', DEFAULT_PREFERENCES)).toBe('push')
+    expect(preferenceFor('invoice_paid', DEFAULT_PREFERENCES)).toBe('push')
+  })
+  it('a new kind can be muted (off) via the per-kind table', () => {
+    const prefs = withPrefs({ byKind: { foreman_assignment: 'off' } })
+    expect(preferenceFor('foreman_assignment', prefs)).toBe('off')
   })
 })
 
@@ -54,31 +76,40 @@ describe('decideChannel — pure router', () => {
     expect(decision).toEqual({ kind: 'broadcast' })
   })
 
-  it('non-routable kind → email when configured + recipient has email', () => {
+  it('new kind (no prefs) defaults to push → delivers via push when subscriptions exist', () => {
     const decision = decideChannel(
-      'sync_failure',
+      'foreman_assignment',
       true,
       DEFAULT_PREFERENCES,
-      withTarget({ email: 'admin@example.com' }),
+      withTarget({ pushSubscriptionCount: 1, email: 'admin@example.com' }),
+      FULL_AVAIL,
+    )
+    expect(decision.kind).toBe('send')
+    if (decision.kind === 'send') expect(decision.channel).toBe('push')
+  })
+
+  it('new kind defaults to push and falls back to email (NOT email-only forced)', () => {
+    // No push subscriptions: the push default degrades to email through the
+    // ladder — the audit asked for push+email defaults, not email-only.
+    const decision = decideChannel(
+      'field_request_denied',
+      true,
+      DEFAULT_PREFERENCES,
+      withTarget({ pushSubscriptionCount: 0, email: 'admin@example.com' }),
       FULL_AVAIL,
     )
     expect(decision).toEqual({ kind: 'send', channel: 'email', target: withTarget({ email: 'admin@example.com' }) })
   })
 
-  it('non-routable kind without recipient email → defer (no provider known)', () => {
-    const decision = decideChannel('sync_failure', true, DEFAULT_PREFERENCES, withTarget(), FULL_AVAIL)
-    expect(decision).toEqual({ kind: 'defer', reason: 'no_recipient_email' })
-  })
-
-  it('non-routable kind without email provider → defer', () => {
+  it('new kind can be muted (off) via the per-kind table → silent', () => {
     const decision = decideChannel(
-      'sync_failure',
+      'invoice_paid',
       true,
-      DEFAULT_PREFERENCES,
-      withTarget({ email: 'admin@example.com' }),
-      { ...FULL_AVAIL, email: false },
+      withPrefs({ byKind: { invoice_paid: 'off' } }),
+      withTarget({ email: 'a@b.c', pushSubscriptionCount: 1 }),
+      FULL_AVAIL,
     )
-    expect(decision).toEqual({ kind: 'defer', reason: 'no_email_provider_configured' })
+    expect(decision).toEqual({ kind: 'silent', reason: 'preference_off' })
   })
 
   it('preference=off → silent', () => {
@@ -527,11 +558,27 @@ describe('WebPushChannel', () => {
 })
 
 describe('DefaultNotificationDispatcher — integration of decision + send', () => {
-  function fakeClient(rows: Array<Record<string, unknown>>): DispatcherDbClient {
-    let i = 0
+  // Routes queries by table so the dual-read path (legacy
+  // notification_preferences + the new notification_channel_preferences +
+  // the push-subscription count) each resolve to the right canned result,
+  // independent of call order.
+  function fakeClient(opts: {
+    legacy?: Record<string, unknown> | null
+    perKind?: Array<{ kind: string; channel: string }>
+    pushCount?: number
+  }): DispatcherDbClient {
     return {
-      async query() {
-        return { rows: [rows[i++] ?? {}] as never }
+      async query(sql: string) {
+        if (sql.includes('notification_channel_preferences')) {
+          return { rows: (opts.perKind ?? []) as never }
+        }
+        if (sql.includes('from notification_preferences')) {
+          return { rows: (opts.legacy ? [opts.legacy] : []) as never }
+        }
+        if (sql.includes('push_subscriptions')) {
+          return { rows: [{ n: String(opts.pushCount ?? 0) }] as never }
+        }
+        return { rows: [] as never }
       },
     }
   }
@@ -552,12 +599,10 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
   }
 
   it('routes to email when prefs say email and target has address', async () => {
-    const client = fakeClient([
-      // notification_preferences row
-      { ...DEFAULT_PREFERENCES, channel_assignment_change: 'email', email: 'a@b.c' },
-      // push_subscription count
-      { n: '0' },
-    ])
+    const client = fakeClient({
+      legacy: { ...DEFAULT_PREFERENCES, channel_assignment_change: 'email', email: 'a@b.c' },
+      pushCount: 0,
+    })
     const sendEmail = vi.fn().mockResolvedValue({ ok: true, provider: 'console' })
     const email = new EmailChannel({
       emailConfig: { provider: 'console', from: 'x@y.z' },
@@ -575,7 +620,7 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
   })
 
   it('off preference → silent (no send call)', async () => {
-    const client = fakeClient([{ ...DEFAULT_PREFERENCES, channel_assignment_change: 'off' }, { n: '0' }])
+    const client = fakeClient({ legacy: { ...DEFAULT_PREFERENCES, channel_assignment_change: 'off' }, pushCount: 0 })
     const sendEmail = vi.fn()
     const dispatcher = new DefaultNotificationDispatcher({
       channels: {
@@ -607,13 +652,36 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
     })
     const outcome = await dispatcher.dispatch(
       row({ recipient_clerk_user_id: null, recipient_email: null }),
-      fakeClient([]),
+      fakeClient({}),
     )
     expect(outcome).toEqual({ kind: 'broadcast' })
   })
 
+  it('dual-read: per-kind table row (new kind) routes a new kind through push', async () => {
+    const client = fakeClient({
+      legacy: { ...DEFAULT_PREFERENCES, email: 'a@b.c' },
+      perKind: [{ kind: 'foreman_assignment', channel: 'email' }],
+      pushCount: 0,
+    })
+    const sendEmail = vi.fn().mockResolvedValue({ ok: true, provider: 'console' })
+    const email = new EmailChannel({
+      emailConfig: { provider: 'console', from: 'x@y.z' },
+      sendEmail: sendEmail as never,
+    })
+    const dispatcher = new DefaultNotificationDispatcher({
+      channels: { push: null, sms: null, email, console: new ConsoleChannel({ logger }) },
+      buildPushChannel: null,
+      hydrateEmail: null,
+      logger,
+    })
+    // A new kind with an explicit per-kind 'email' preference routes to email.
+    const outcome = await dispatcher.dispatch(row({ kind: 'foreman_assignment' }), client)
+    expect(outcome).toMatchObject({ kind: 'sent', channel: 'email' })
+    expect(sendEmail).toHaveBeenCalled()
+  })
+
   it('hydrates email via Clerk when chosen channel is email but target has none', async () => {
-    const client = fakeClient([{ ...DEFAULT_PREFERENCES, channel_assignment_change: 'email' }, { n: '0' }])
+    const client = fakeClient({ legacy: { ...DEFAULT_PREFERENCES, channel_assignment_change: 'email' }, pushCount: 0 })
     const hydrateEmail = vi.fn().mockResolvedValue('hydrated@example.com')
     const sendEmail = vi.fn().mockResolvedValue({ ok: true, provider: 'console' })
     const email = new EmailChannel({

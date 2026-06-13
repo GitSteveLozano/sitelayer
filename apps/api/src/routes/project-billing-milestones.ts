@@ -193,7 +193,29 @@ function defaultLadder(contractValue: number | null): MilestoneInput[] {
  *                                                 (mark invoiced / mark paid stamps invoiced_at/paid_at)
  *
  * Additive tracking layer ALONGSIDE estimate_push (routes/estimate-pushes.ts);
- * status is set manually — there is no QBO payment-webhook auto-detection.
+ * status is set MANUALLY — there is NO QBO payment-webhook auto-detection.
+ *
+ * AR-HONESTY (audit ITEM 3 / gap "AR milestone free-form toggle"): the
+ * `invoiced` / `paid` status here is a MANUAL operator assertion, NOT a
+ * QBO-confirmed fact. A real reconciliation would consume an inbound QBO
+ * Payment webhook (`mapQboEntityType('Payment') === 'payment'` is now mapped,
+ * so the sync_events audit row lands) and reconcile `paid_at` from QBO truth —
+ * but that worker does not exist yet (see the sized follow-up note below). To
+ * keep the data honest until then, every manual mark-invoiced / mark-paid
+ * transition stamps `realized_source: 'manual'` on its audit row so a
+ * downstream reader can never mistake a hand-flipped toggle for a
+ * QBO-reconciled payment.
+ *
+ * SIZED FOLLOW-UP — real QBO Payment reconciliation (deferred, ~1–2 days):
+ *   1. add an inbound-`sync_events` consumer worker (no such consumer exists
+ *      today — the webhook only RECORDS pending rows);
+ *   2. for each `entity_type='payment'` row, fetch the Payment from QBO
+ *      (Payment.Line[].LinkedTxn → Invoice), resolve the Invoice → milestone
+ *      via integration_mappings / estimate_push_id;
+ *   3. reconcile the milestone to `paid` with `realized_source='qbo'` +
+ *      `paid_at` from QBO, idempotently (sync_events dedupe);
+ *   4. optionally add a `realized_source` column (separate migration) so the
+ *      provenance is queryable, not only in the audit log.
  */
 export async function handleProjectBillingMilestoneRoutes(
   req: http.IncomingMessage,
@@ -423,7 +445,11 @@ export async function handleProjectBillingMilestoneRoutes(
           entityType: 'project_billing_milestone',
           entityId: id,
           before: { status: current.status },
-          after: { status: row.status },
+          // realized_source='manual' makes the AR realization honest: a
+          // mark-invoiced / mark-paid here is an operator assertion, NOT a
+          // QBO-confirmed payment. A future QBO Payment reconciler would stamp
+          // 'qbo' instead (see the module docstring's sized follow-up).
+          after: nextStatus ? { status: row.status, realized_source: 'manual' } : { status: row.status },
         })
         return { kind: 'ok' as const, row }
       })
