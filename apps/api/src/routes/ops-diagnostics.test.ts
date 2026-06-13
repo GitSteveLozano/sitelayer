@@ -369,10 +369,12 @@ function blockedFetch(): typeof fetch {
 function routedFetch(
   deliveries: unknown[],
   routeResponse: Response = json({ routed: true }, { status: 202 }),
+  requestHeaders: Headers[] = [],
 ): typeof fetch {
   return async (input, init) => {
     const url = String(input)
     if (url.endsWith('/ingest')) {
+      requestHeaders.push(new Headers(init?.headers))
       deliveries.push(JSON.parse(String(init?.body ?? '{}')))
       return routeResponse.clone()
     }
@@ -645,7 +647,8 @@ describe('ops diagnostics', () => {
     await withReadyOpsAgentFeed(async () => {
       __resetOpsDiagnosticSessionsForTests()
       const routedEnvelopes: unknown[] = []
-      const fetchImpl = routedFetch(routedEnvelopes)
+      const routedHeaders: Headers[] = []
+      const fetchImpl = routedFetch(routedEnvelopes, undefined, routedHeaders)
       const createdResponses: Array<{ status: number; body: unknown }> = []
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
@@ -717,6 +720,7 @@ describe('ops diagnostics', () => {
       })
       expect(routedEnvelopes).toHaveLength(1)
       const firstAction = actionResponses[0]?.body as OpsOnsiteDiagnosticSessionActionResponse
+      const firstDeliveryId = firstAction.accepted_action.capture_route?.delivery_id
 
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
@@ -735,10 +739,9 @@ describe('ops diagnostics', () => {
       )
       const replayedAction = actionResponses[1]?.body as OpsOnsiteDiagnosticSessionActionResponse
       expect(actionResponses[1]?.status).toBe(202)
-      expect(replayedAction.accepted_action.capture_route?.delivery_id).toBe(
-        firstAction.accepted_action.capture_route?.delivery_id,
-      )
+      expect(replayedAction.accepted_action.capture_route?.delivery_id).toBe(firstDeliveryId)
       expect(routedEnvelopes).toHaveLength(1)
+      expect(routedHeaders[0]?.get('idempotency-key')).toBe(firstDeliveryId)
       expect(routedEnvelopes[0]).toMatchObject({
         contract_version: '1.4.0',
         project_key: 'sitelayer',

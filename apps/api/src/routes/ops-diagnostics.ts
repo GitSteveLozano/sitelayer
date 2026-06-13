@@ -1387,7 +1387,10 @@ async function deliverOnsiteDiagnosticCaptureRoute(
   try {
     const response = await fetchImpl(`${routerUrl}/ingest`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': deliveryId,
+      },
       body: JSON.stringify(envelope),
       signal: controller.signal,
     })
