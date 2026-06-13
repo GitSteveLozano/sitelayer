@@ -24,6 +24,7 @@ import {
   computeActiveContext,
   normalizeRoleMode,
   type ActiveContext,
+  type ContextKind,
   type RoleMode,
 } from '../lib/active-context.js'
 import { MBottomTabs, MChip, MChipRow, MI, MShell } from '../components/m/index.js'
@@ -44,6 +45,11 @@ import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 const MoreRoute = lazy(() => import('../routes/more.js'))
 const AdminHome = lazy(() => import('./mobile/admin-home.js').then((m) => ({ default: m.AdminHome })))
 const OwnerMoney = lazy(() => import('./mobile/owner-money.js').then((m) => ({ default: m.OwnerMoney })))
+// The financial hub is the bookkeeper shell's landing surface (Money tab) —
+// mounted in-shell so the bottom tab bar persists. Its cards already link
+// out to the /financial/* deep routes (estimate-pushes, billing-runs,
+// labor-payroll-runs, payroll-exports) mounted at the App.tsx root.
+const FinancialHub = lazy(() => import('./financial/index.js').then((m) => ({ default: m.FinancialHubScreen })))
 const MobileChatList = lazy(() => import('./mobile/chat.js').then((m) => ({ default: m.MobileChatList })))
 const MobileProjectsList = lazy(() =>
   import('./mobile/projects-list.js').then((m) => ({ default: m.MobileProjectsList })),
@@ -245,6 +251,20 @@ const WORKER_TABS = [
   { id: 'log', label: 'Log', Icon: MI.Camera },
 ] as const
 
+// Bookkeeper shell — finance/payroll-focused. A bookkeeper never clocks in;
+// their landing (`today`) is the financial hub, and the remaining tabs deep-link
+// the QBO-bound approval queues + payroll surfaces under /financial/*. Those
+// tab ids deliberately carry a `financial/...` path so `navigate(${basePath}/${id})`
+// lands on the App.tsx-root financial routes (those screens carry their own
+// back-nav; the bottom bar only persists on the in-shell Money landing).
+const BOOKKEEPER_TABS = [
+  { id: 'today', label: 'Money', Icon: MI.Home },
+  { id: 'financial/estimate-pushes', label: 'Estimates', Icon: MI.FileText },
+  { id: 'financial/billing-runs', label: 'Billing', Icon: MI.Truck },
+  { id: 'financial/labor-payroll-runs', label: 'Payroll', Icon: MI.Clock },
+  { id: 'settings', label: 'More', Icon: MI.Settings },
+] as const
+
 const ROLE_MODE_STORAGE_KEY = 'sitelayer.roleMode'
 const ROLE_MODE_LABEL: Record<RoleMode, string> = {
   admin: 'Admin',
@@ -296,7 +316,14 @@ export function MobileShell({
     })
   }, [companyRole, bootstrap?.projectAssignments, params.projectId, modeOverride])
 
-  const tabs = ctx.kind === 'admin' ? ADMIN_TABS : ctx.kind === 'foreman' ? FOREMAN_TABS : WORKER_TABS
+  const tabs =
+    ctx.kind === 'admin'
+      ? ADMIN_TABS
+      : ctx.kind === 'bookkeeper'
+        ? BOOKKEEPER_TABS
+        : ctx.kind === 'foreman'
+          ? FOREMAN_TABS
+          : WORKER_TABS
 
   const activeTab =
     tabs.find((t) => {
@@ -343,6 +370,8 @@ export function MobileShell({
               element={
                 ctx.kind === 'admin' ? (
                   <AdminHome bootstrap={bootstrap} />
+                ) : ctx.kind === 'bookkeeper' ? (
+                  <FinancialHub />
                 ) : ctx.kind === 'worker' ? (
                   <WorkerToday bootstrap={bootstrap} companySlug={companySlug} />
                 ) : (
@@ -477,6 +506,10 @@ export function MobileShell({
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
             <Route path="invoice-sent/:projectId" element={<MobileInvoiceSent bootstrap={bootstrap} />} />
             <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
+            {/* In-shell financial hub landing — the bookkeeper's Money surface,
+                kept in-shell so the bottom tab bar persists. Its cards link out
+                to the /financial/* deep routes mounted at the App.tsx root. */}
+            <Route path="financial" element={<FinancialHub />} />
             <Route path="chat" element={<MobileChatList bootstrap={bootstrap} />} />
             <Route path="ops" element={<MobileOps companyRole={companyRole} companySlug={companySlug} />} />
             <Route
@@ -544,7 +577,11 @@ function RoleModeSwitcher({
   onSelect,
 }: {
   modes: readonly RoleMode[]
-  active: RoleMode
+  // The active context kind — widened to ContextKind because the shell may
+  // resolve to 'bookkeeper', which is not a toggleable RoleMode (so it never
+  // matches any chip here, and the switcher is only rendered when there are
+  // >1 actual role modes, never for a pure bookkeeper).
+  active: ContextKind
   onSelect: (mode: RoleMode) => void
 }) {
   return (

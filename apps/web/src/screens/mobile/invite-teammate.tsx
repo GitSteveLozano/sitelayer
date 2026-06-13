@@ -4,9 +4,11 @@
  * takeover was missing entirely (only the accept-side screens exist at
  * /invite/{worker,foreman,estimator}). This is the send surface.
  *
- * Full-screen takeover with an X-close MTopBar, a 4-cell ROLE grid
- * (ESTIMATOR / FOREMAN / CREW / OWNER) mirroring owner-onboarding's
- * trade grid, and an email / Clerk-id input. The send is a single
+ * Full-screen takeover with an X-close MTopBar, a ROLE grid
+ * (ESTIMATOR / FOREMAN / CREW / OWNER / BOOKKEEPER) mirroring
+ * owner-onboarding's trade grid, and an email / Clerk-id input. The
+ * grid is a 2-column layout that adapts to the role count (the 5th
+ * BOOKKEEPER cell sits alone on the last row). The send is a single
  * idempotent CRUD write to POST /api/companies/:id/memberships via
  * `useInviteMember`; orchestration lives in the `inviteTeammate` machine
  * (role-grid selection + identifier draft + design-role→COMPANY_ROLE
@@ -29,6 +31,7 @@ const ROLE_LABELS: Record<InviteDesignRole, string> = {
   foreman: 'FOREMAN',
   crew: 'CREW',
   owner: 'OWNER',
+  bookkeeper: 'BOOKKEEPER',
 }
 
 export function InviteTeammateScreen() {
@@ -82,8 +85,12 @@ export function InviteTeammateScreen() {
             >
               {INVITE_DESIGN_ROLES.map((r, i) => {
                 const on = invite.role === r
-                const rightEdge = i % 2 === 1
-                const bottomRow = i >= 2
+                // 2-column grid edge logic, robust to an odd cell count (a
+                // lone trailing cell — e.g. BOOKKEEPER as the 5th role — has
+                // no right neighbor, so it drops its right border too).
+                const lastRowStart = (Math.ceil(INVITE_DESIGN_ROLES.length / 2) - 1) * 2
+                const rightEdge = i % 2 === 1 || i + 1 >= INVITE_DESIGN_ROLES.length
+                const bottomRow = i >= lastRowStart
                 return (
                   <button
                     key={r}

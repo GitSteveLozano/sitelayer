@@ -26,10 +26,10 @@ import type { CompanyRole } from '@sitelayer/domain'
  * a no-op.
  */
 
-/** The four roles the design's 4-cell grid offers. */
-export type InviteDesignRole = 'estimator' | 'foreman' | 'crew' | 'owner'
+/** The roles the design's invite grid offers. */
+export type InviteDesignRole = 'estimator' | 'foreman' | 'crew' | 'owner' | 'bookkeeper'
 
-export const INVITE_DESIGN_ROLES: readonly InviteDesignRole[] = ['estimator', 'foreman', 'crew', 'owner']
+export const INVITE_DESIGN_ROLES: readonly InviteDesignRole[] = ['estimator', 'foreman', 'crew', 'owner', 'bookkeeper']
 
 /**
  * Design-role → `company_memberships.role` (the canonical
@@ -37,12 +37,14 @@ export const INVITE_DESIGN_ROLES: readonly InviteDesignRole[] = ['estimator', 'f
  *
  * ⚠️ SME REVIEW: this mapping encodes a product decision and is locked
  * by a unit test (`invite-teammate.test.ts`). The non-obvious entries:
- *   - CREW      → 'member'  (field crew = the base member role)
- *   - OWNER     → 'admin'   ('office' normalizes to 'admin' on read, so
- *                            admin is the durable owner role)
- *   - ESTIMATOR → 'office'  (office persona = pricing/takeoff; collapses
- *                            to admin on read via normalizeCompanyRole)
- *   - FOREMAN   → 'foreman'
+ *   - CREW       → 'member'     (field crew = the base member role)
+ *   - OWNER      → 'admin'      ('office' normalizes to 'admin' on read, so
+ *                               admin is the durable owner role)
+ *   - ESTIMATOR  → 'office'     (office persona = pricing/takeoff; collapses
+ *                               to admin on read via normalizeCompanyRole)
+ *   - FOREMAN    → 'foreman'
+ *   - BOOKKEEPER → 'bookkeeper' (finance/payroll-only shell; does not clock
+ *                               in and never sees the field surface)
  * If the SME wants estimator to map to 'member' or owner to a distinct
  * role, change the table here + the test in one place.
  */
@@ -51,6 +53,7 @@ export const DESIGN_ROLE_TO_COMPANY_ROLE: Record<InviteDesignRole, CompanyRole> 
   foreman: 'foreman',
   crew: 'member',
   owner: 'admin',
+  bookkeeper: 'bookkeeper',
 }
 
 export interface InviteSubmitPayload {

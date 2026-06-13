@@ -152,7 +152,13 @@ describe('inviteTeammateMachine — design-role → COMPANY_ROLE mapping (SME-lo
       foreman: 'foreman',
       crew: 'member',
       owner: 'admin',
+      bookkeeper: 'bookkeeper',
     })
+  })
+
+  it('offers the bookkeeper cell that maps to the finance-only company role', () => {
+    expect(INVITE_DESIGN_ROLES).toContain('bookkeeper')
+    expect(DESIGN_ROLE_TO_COMPANY_ROLE.bookkeeper).toBe('bookkeeper')
   })
 
   it('every design role maps to a value the submitter receives', async () => {

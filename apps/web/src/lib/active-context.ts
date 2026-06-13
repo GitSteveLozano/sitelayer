@@ -11,11 +11,13 @@
  * Resolution order (first match wins):
  *   1. Valid explicit mode override -> that shell.
  *   2. Company admin / office -> 'admin' shell by default.
- *   3. The caller is in a foreman assignment for the current project -> 'foreman'
- *   4. The caller is in a worker assignment for the current project -> 'worker'
- *   5. The caller has any active foreman assignment -> 'foreman' (their default home)
- *   6. The caller has any active worker assignment -> 'worker'
- *   7. Fallback -> 'worker' (company-level member without assignments;
+ *   3. Company bookkeeper -> 'bookkeeper' shell (finance/payroll surface;
+ *      a bookkeeper never clocks in and never carries a project context).
+ *   4. The caller is in a foreman assignment for the current project -> 'foreman'
+ *   5. The caller is in a worker assignment for the current project -> 'worker'
+ *   6. The caller has any active foreman assignment -> 'foreman' (their default home)
+ *   7. The caller has any active worker assignment -> 'worker'
+ *   8. Fallback -> 'worker' (company-level member without assignments;
  *      field users should never see the admin shell by accident).
  *
  * This is a pure function -- no I/O, no React. Bootstrap response shape
@@ -27,12 +29,22 @@ import type { CompanyRole, ProjectRole } from '@sitelayer/domain'
 export type { CompanyRole, ProjectRole } from '@sitelayer/domain'
 export type RoleMode = ProjectRole
 
+/**
+ * The mobile shell's active context kind. This is the project-role union
+ * (`admin | foreman | worker`) PLUS the company-only `bookkeeper` persona,
+ * which has no project scope and never appears as a `RoleMode` (it is not
+ * a hat you toggle into — it's the company role itself resolving to the
+ * finance/payroll shell).
+ */
+export type ContextKind = ProjectRole | 'bookkeeper'
+
 export type ActiveContext = {
-  kind: ProjectRole
+  kind: ContextKind
   /**
    * The project this context is scoped to, if any. Admin shell typically
    * has no projectId (portfolio view); foreman/worker shell always carries
-   * the project they're acting within.
+   * the project they're acting within. The bookkeeper shell is always
+   * portfolio-wide (no project scope).
    */
   projectId: string | null
 }
@@ -101,6 +113,16 @@ export function computeActiveContext({
   // Office collapses into admin (matches normalizeCompanyRole on the server).
   if (companyRole === 'admin' || companyRole === 'office') {
     return { kind: 'admin', projectId: currentProjectId ?? null }
+  }
+
+  // Bookkeeper resolves to the finance/payroll shell. It is a company role,
+  // not a project-level role mode, so it is never overridable and never
+  // carries a project context — a bookkeeper reviews money portfolio-wide
+  // and does not clock in. Resolved here, BEFORE the project/foreman/worker
+  // fallbacks, so a bookkeeper with a stray assignment still lands in
+  // finance rather than the field/clock-in shell.
+  if (companyRole === 'bookkeeper') {
+    return { kind: 'bookkeeper', projectId: null }
   }
 
   if (currentProjectId) {
