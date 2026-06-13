@@ -80,6 +80,14 @@ const ShipmentDetailScreen = lazy(() =>
 const MobileEstimateReview = lazy(() =>
   import('./mobile/estimate-review.js').then((m) => ({ default: m.MobileEstimateReview })),
 )
+// M05 msg__30/32: quantities summary (canvas DONE → here → pricing) + the
+// PDF deliverable its GENERATE PDF CTA opens.
+const MobileEstQuantitiesSummary = lazy(() =>
+  import('./mobile/est-quantities-summary.js').then((m) => ({ default: m.MobileEstQuantitiesSummary })),
+)
+const MobileEstPdfDeliverable = lazy(() =>
+  import('./mobile/est-pdf-deliverable.js').then((m) => ({ default: m.MobileEstPdfDeliverable })),
+)
 const MobileEstimatePush = lazy(() =>
   import('./mobile/estimate-push.js').then((m) => ({ default: m.MobileEstimatePush })),
 )
@@ -369,6 +377,19 @@ export function MobileShell({
               element={<TakeoffMobileScreen companySlug={companySlug} />}
             />
             <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
+            {/* M05 msg__30: quantities summary — the canvas DONE target,
+                between takeoff and Price&Send. Registered BEFORE the
+                projects/:projectId/* catchall (CLAUDE.md routing rule). */}
+            <Route
+              path="projects/:projectId/quantities"
+              element={<MobileEstQuantitiesSummary companySlug={companySlug} />}
+            />
+            {/* M05 msg__32: PDF deliverable — preview/download/send of the
+                real generated estimate PDF. */}
+            <Route
+              path="projects/:projectId/estimate/pdf"
+              element={<MobileEstPdfDeliverable companySlug={companySlug} />}
+            />
             <Route
               path="projects/:projectId/estimate-push/:pushId"
               element={<MobileEstimatePush companySlug={companySlug} companyRole={companyRole} />}

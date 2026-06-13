@@ -464,6 +464,15 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
             >
               {builder.hasDirtyEdits || builder.isSaving ? 'Saving edits…' : 'Send to client'}
             </MButton>
+            {/* msg__32 footer: "FROM → Price&send → GENERATE PDF" — the PDF
+                deliverable is also reachable from here. */}
+            <MButton
+              variant="ghost"
+              onClick={() => navigate(`/projects/${projectId}/estimate/pdf`)}
+              disabled={editableLines.length === 0}
+            >
+              Generate PDF
+            </MButton>
             <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}`)}>
               Back to project
             </MButton>
@@ -497,7 +506,8 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
 
 // "Hillcrest Mews Phase 4" → "hillcrest-mews-phase-4". Used to derive the
 // deliverable filename shown in the send sheet (the design's HILLCREST-PH4-TO).
-function slugifyFile(name: string): string {
+// Exported: the PDF-deliverable screen derives the same filename.
+export function slugifyFile(name: string): string {
   const slug = name
     .trim()
     .toLowerCase()
@@ -607,8 +617,12 @@ function MarginControl({
  * line-item count), an optional note, the private-share-link explainer, and a
  * SEND · NOTIFY <name> commit. On send it creates an estimate SHARE (a private
  * signable portal link); on success the generated link is surfaced here.
+ *
+ * Exported: the mobile PDF-deliverable screen (est-pdf-deliverable.tsx,
+ * msg__32) reuses this exact sheet for its SEND TO CLIENT action so the
+ * share chain stays single-sourced (createEstimateShare).
  */
-function SendToClientSheet({
+export function SendToClientSheet({
   clientName,
   clientFirstName,
   clientCompany,

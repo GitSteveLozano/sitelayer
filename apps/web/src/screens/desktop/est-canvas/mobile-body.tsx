@@ -1563,7 +1563,10 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                           }`,
                         )
                       }
-                      onDone={() => navigate(`/projects/${projectId}/estimate`)}
+                      /* M05 msg__30: DONE lands on the quantities summary,
+                         which forwards to Price&Send — not straight to
+                         pricing (design-fidelity audit #13). */
+                      onDone={() => navigate(`/projects/${projectId}/quantities`)}
                     />
                   </>
                 ) : null}

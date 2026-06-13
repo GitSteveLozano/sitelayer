@@ -198,9 +198,10 @@ export const ESTIMATE_REPORTS: ReadonlyArray<{ kind: EstimateReportKind; label: 
   { kind: 'cost_vs_sell', label: 'Cost vs sell' },
 ]
 
-/** Build a report PDF download URL for a report kind (rides the estimate.pdf
- * route with ?report=). */
-export function estimateReportUrl(
+/** API-relative path for a report PDF (no API_URL prefix) — the shape
+ * `requestBlob` / `useAuthenticatedObjectUrl` consume for an authenticated
+ * in-app preview fetch. */
+export function estimateReportPath(
   projectId: string,
   report: EstimateReportKind,
   draftId: string | null = null,
@@ -209,5 +210,15 @@ export function estimateReportUrl(
   if (report !== 'summary') params.set('report', report)
   if (draftId) params.set('draft_id', draftId)
   const qs = params.toString()
-  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.pdf${qs ? `?${qs}` : ''}`
+  return `/api/projects/${encodeURIComponent(projectId)}/estimate.pdf${qs ? `?${qs}` : ''}`
+}
+
+/** Build a report PDF download URL for a report kind (rides the estimate.pdf
+ * route with ?report=). */
+export function estimateReportUrl(
+  projectId: string,
+  report: EstimateReportKind,
+  draftId: string | null = null,
+): string {
+  return `${API_URL}${estimateReportPath(projectId, report, draftId)}`
 }
