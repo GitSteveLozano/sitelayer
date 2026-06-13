@@ -10,9 +10,15 @@ import {
   buildWorkRequestSnapshot,
 } from '@sitelayer/projectkit-bridge'
 import type { ActiveCompany } from '../auth-types.js'
+import {
+  appendContextHandoffEventTx,
+  createContextWorkItemTx,
+  type ContextWorkItemRow,
+} from '../context-handoff.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
 import { AGENT_FEED_TOKENS_ENV, insertAgentFeedConcernTx, parseAgentFeedTokens } from './agent-feed.js'
+import { insertSupportPacket, supportJsonRecord } from './support-packets.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
 
@@ -108,6 +114,9 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   operator_user_id: string | null
   label: string | null
   intent: OpsOnsiteDiagnosticActionKey | null
+  worker_issue_id?: string | null
+  support_packet_id?: string | null
+  context_work_item_id?: string | null
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
@@ -148,6 +157,8 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   concern_ref: string
   queued: boolean
   id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
 }
 
 export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
@@ -669,13 +680,15 @@ async function recordPersistentOnsiteDiagnosticAction(
       requestedAt: at,
     })
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
-    return { agentFeed, deliveries }
+    const workLink = await latestPersistentOnsiteWorkLink(client, companyId, session.id, false)
+    return { agentFeed, deliveries, workLink }
   })
   if (!result) return null
+  const linkedSession = result.workLink ? sessionWithWorkLink(session, result.workLink) : session
   return {
     session: {
-      ...session,
-      audit_events: [...session.audit_events, event],
+      ...linkedSession,
+      audit_events: [...linkedSession.audit_events, event],
       agent_feed_deliveries: result.deliveries,
     },
     event,
@@ -699,33 +712,255 @@ async function enqueueOnsiteDiagnosticConcernTx(
   const audience = opsDiagnosticAgentAudience()
   if (!audience) return null
   const concernRef = `opsdiag:${args.session.id}:${args.actionKey}`
+  const workLink = await ensureOnsiteDiagnosticWorkLinkTx(client, args)
+  const linkedSession = sessionWithWorkLink(args.session, workLink)
   // Routed through the validated @sitelayer/projectkit-bridge builder (the
   // single place the published contract is assembled + enforced — the
   // conformance ratchet in apps/api/src/projectkit-concern.test.ts bans
-  // hand-rolled snapshot literals). Ref-only dispatch: no work item exists, so
-  // concernRef carries the producer-stable idempotency key. kind defaults to
-  // 'execute'; severity maps 1:1 onto the published priority vocabulary.
+  // hand-rolled snapshot literals). The concern is linked to the same
+  // session-level app_issue work item the phone board can open and that
+  // agent-feed callbacks mutate.
   const concern = buildConcernSnapshot({
+    workItemId: workLink.context_work_item_id,
     concernRef,
     title: `${args.actionLabel} for onsite diagnostics`,
     summary: `Operator requested ${args.actionLabel} from Mobile Ops.`,
     severity: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    route: '/ops',
+    entityType: 'ops_diagnostic_session',
+    entityId: args.session.id,
+    captureSessionId: workLink.capture_session_id,
+    supportPacketId: workLink.support_packet_id,
     audience,
     assignee: audience,
-    sourceEventRef: `ops_diagnostic_session:${args.session.id}`,
+    sourceEventRef: workLink.support_packet_id,
     dispatchedAt: args.requestedAt,
     acceptance: [
       'Inspect the onsite diagnostic session plan and blockers.',
       'Return a callback with the next phone-safe operator action or a clear reason no action is possible.',
     ],
-    inputs: onsiteDiagnosticExecutorInputs(args),
+    inputs: onsiteDiagnosticExecutorInputs({ ...args, session: linkedSession }),
   })
   const id = await insertAgentFeedConcernTx(client, {
     companyId: args.companyId,
     audience,
     concern,
+    workItemId: workLink.context_work_item_id,
+    captureSessionId: workLink.capture_session_id,
   })
-  return { audience, concern_ref: concernRef, queued: Boolean(id), id }
+  if (id) {
+    await appendContextHandoffEventTx(client, {
+      companyId: args.companyId,
+      workItemId: workLink.context_work_item_id,
+      eventType: 'agent.dispatch_requested',
+      actorKind: 'user',
+      actorUserId: args.actorUserId,
+      payload: { audience, concern_ref: concernRef, dispatch_surface: 'mobile_ops' },
+      metadata: {
+        source: 'ops_diagnostic_agent_feed',
+        dispatch_surface: 'mobile_ops',
+        audience,
+        action_key: args.actionKey,
+        ops_diagnostic_session_id: args.session.id,
+        evidence_refs: [{ type: 'support_debug_packet', id: workLink.support_packet_id }],
+      },
+      idempotencyKey: `agent_feed:${concernRef}:dispatch_requested`,
+      captureSessionId: workLink.capture_session_id,
+    })
+  }
+  return {
+    audience,
+    concern_ref: concernRef,
+    queued: Boolean(id),
+    id,
+    support_packet_id: workLink.support_packet_id,
+    context_work_item_id: workLink.context_work_item_id,
+  }
+}
+
+type OpsOnsiteDiagnosticWorkLink = {
+  support_packet_id: string
+  context_work_item_id: string
+  capture_session_id: string | null
+}
+
+type PersistentOnsiteWorkLinkRow = {
+  context_work_item_id: string
+  support_packet_id: string
+  capture_session_id: string | null
+}
+
+async function ensureOnsiteDiagnosticWorkLinkTx(
+  client: PoolClient,
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+    requestedAt: string
+  },
+): Promise<OpsOnsiteDiagnosticWorkLink> {
+  const existing = await latestPersistentOnsiteWorkLink(client, args.companyId, args.session.id, true)
+  if (existing) return existing
+
+  const captureSessionId = args.session.desktop_evidence?.capture_session_id ?? null
+  const problem = `Operator requested ${args.actionLabel} from Mobile Ops.`
+  const expiresAt = supportPacketExpiresAt()
+  const clientContext = supportJsonRecord({
+    source: 'ops_diagnostic_session',
+    surface: 'mobile_ops',
+    ops_diagnostic_session_id: args.session.id,
+    action_event_id: args.event.id,
+    requested_action: args.actionKey,
+    requested_by: args.actorUserId,
+    plan: args.session.plan,
+    latest_manifest: buildOpsOnsiteDiagnosticManifest(sessionWithAuditEvent(args.session, args.event)),
+  })
+  const serverContext = supportJsonRecord({
+    source: 'ops_diagnostic_session',
+    captured_at: args.requestedAt,
+    route: '/ops',
+    ops_diagnostic_session: {
+      id: args.session.id,
+      created_at: args.session.created_at,
+      expires_at: args.session.expires_at,
+      label: args.session.label,
+      intent: args.session.intent,
+      state: args.session.state,
+      control_level: args.session.plan.control_level,
+      plan_status: args.session.plan.status,
+    },
+    audit_events: args.session.audit_events.concat(args.event).slice(-25),
+    desktop_evidence: args.session.desktop_evidence ?? null,
+  })
+  const packet = await insertSupportPacket(client, {
+    companyId: args.companyId,
+    actorUserId: args.actorUserId ?? 'system',
+    requestId: null,
+    route: '/ops',
+    captureSessionId,
+    buildSha: null,
+    problem,
+    client: clientContext,
+    serverContext,
+    expiresAt,
+    redactionVersion: 'support-packet-v1',
+  })
+  const item = await createContextWorkItemTx(client, {
+    companyId: args.companyId,
+    supportPacketId: packet.id,
+    domain: 'app_issue',
+    title: `${args.actionLabel} for onsite diagnostics`,
+    summary: problem,
+    status: 'new',
+    lane: 'triage',
+    severity: args.actionKey === 'dispatch_agent_review' ? 'high' : 'normal',
+    route: '/ops',
+    captureSessionId,
+    entityType: 'ops_diagnostic_session',
+    entityId: args.session.id,
+    createdByUserId: args.actorUserId,
+    metadata: {
+      category: 'ops_diagnostic_session',
+      source: 'ops_diagnostic_session',
+      ops_diagnostic_session_id: args.session.id,
+      action_event_id: args.event.id,
+      requested_action: args.actionKey,
+      support_packet_expires_at: packet.expires_at ?? expiresAt,
+    },
+  })
+  const link = workLinkFromItem(item)
+  await attachOnsiteDiagnosticConcernMetadataTx(client, args, item, packet.id, link)
+  await appendContextHandoffEventTx(client, {
+    companyId: args.companyId,
+    workItemId: item.id,
+    eventType: 'work_item.created',
+    actorKind: 'user',
+    actorUserId: args.actorUserId,
+    payload: {
+      title: item.title,
+      summary: item.summary,
+      status: item.status,
+      lane: item.lane,
+      severity: item.severity,
+      route: item.route,
+      entity_type: item.entity_type,
+      entity_id: item.entity_id,
+      capture_session_id: item.capture_session_id,
+      support_packet_id: packet.id,
+      ops_diagnostic_session_id: args.session.id,
+      requested_action: args.actionKey,
+    },
+    metadata: {
+      category: 'ops_diagnostic_session',
+      source: 'mobile_ops',
+      action_event_id: args.event.id,
+      evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
+    },
+    idempotencyKey: `ops_diagnostic_session:${args.session.id}:work_item_created`,
+    captureSessionId,
+  })
+  return link
+}
+
+async function attachOnsiteDiagnosticConcernMetadataTx(
+  client: PoolClient,
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+    requestedAt: string
+  },
+  item: ContextWorkItemRow,
+  supportPacketId: string,
+  link: OpsOnsiteDiagnosticWorkLink,
+): Promise<void> {
+  const concern = buildConcernSnapshot({
+    workItemId: item.id,
+    concernRef: `opsdiag:${args.session.id}:${args.actionKey}`,
+    title: item.title,
+    summary: item.summary,
+    severity: item.severity,
+    status: item.status,
+    route: item.route,
+    entityType: item.entity_type,
+    entityId: item.entity_id,
+    captureSessionId: item.capture_session_id,
+    supportPacketId,
+    sourceEventRef: supportPacketId,
+    dispatchedAt: args.requestedAt,
+    inputs: onsiteDiagnosticExecutorInputs({
+      session: sessionWithWorkLink(args.session, link),
+      event: args.event,
+      actionKey: args.actionKey,
+      actorUserId: args.actorUserId,
+    }),
+  })
+  await client.query(
+    `update context_work_items
+        set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('concern', $3::jsonb),
+            updated_at = now()
+      where company_id = $1 and id = $2::uuid`,
+    [args.companyId, item.id, JSON.stringify(concern)],
+  )
+}
+
+function supportPacketExpiresAt(): string {
+  const retentionDays = readBoundedIntegerEnv('SUPPORT_PACKET_RETENTION_DAYS', 30, 1, 90)
+  return new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+}
+
+function workLinkFromItem(item: ContextWorkItemRow): OpsOnsiteDiagnosticWorkLink {
+  return {
+    support_packet_id: item.support_packet_id,
+    context_work_item_id: item.id,
+    capture_session_id: item.capture_session_id,
+  }
 }
 
 function routesToAgentFeed(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
@@ -1284,7 +1519,8 @@ async function lookupPersistentSession(
     const events = await listPersistentEvents(client, companyId, row.id)
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
     const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
-    return persistentSessionFromRow(row, events, deliveries, desktopEvidence)
+    const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
+    return persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
   })
   if (!session) return { ok: false, status: 404, error: 'diagnostic session not found' }
   return { ok: true, value: session }
@@ -1305,7 +1541,8 @@ async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promis
       const events = await listPersistentEvents(client, companyId, row.id)
       const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
       const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
-      sessions.push(publicSession(persistentSessionFromRow(row, events, deliveries, desktopEvidence)))
+      const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
+      sessions.push(publicSession(persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)))
     }
     return sessions
   })
@@ -1350,6 +1587,33 @@ type PersistentDesktopEvidenceRow = {
   storage_key: string | null
   content_type: string | null
   byte_size: string | number | null
+}
+
+async function latestPersistentOnsiteWorkLink(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  forUpdate: boolean,
+): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  const result = await client.query<PersistentOnsiteWorkLinkRow>(
+    `select id::text as context_work_item_id,
+            support_packet_id::text as support_packet_id,
+            capture_session_id::text as capture_session_id
+       from context_work_items
+      where company_id = $1
+        and entity_type = 'ops_diagnostic_session'
+        and entity_id = $2
+      order by created_at asc, id asc
+      limit 1${forUpdate ? ' for update' : ''}`,
+    [companyId, sessionId],
+  )
+  const row = result.rows[0]
+  if (!row?.context_work_item_id || !row.support_packet_id) return null
+  return {
+    context_work_item_id: row.context_work_item_id,
+    support_packet_id: row.support_packet_id,
+    capture_session_id: row.capture_session_id ?? null,
+  }
 }
 
 async function listPersistentEvents(
@@ -1401,20 +1665,36 @@ function persistentSessionFromRow(
   events: OpsOnsiteDiagnosticAuditEvent[],
   deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[] = [],
   desktopEvidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null = null,
+  workLink: OpsOnsiteDiagnosticWorkLink | null = null,
 ): StoredOnsiteDiagnosticSession {
+  return sessionWithWorkLink(
+    {
+      id: row.id,
+      state: 'active',
+      created_at: isoString(row.created_at),
+      expires_at: isoString(row.expires_at),
+      operator_user_id: row.operator_user_id,
+      label: row.label,
+      intent: actionKeyValue(row.intent),
+      plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
+      audit_events: events,
+      agent_feed_deliveries: deliveries,
+      ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
+      control_token_hash: row.control_token_hash,
+    },
+    workLink,
+  )
+}
+
+function sessionWithWorkLink(
+  session: StoredOnsiteDiagnosticSession,
+  workLink: OpsOnsiteDiagnosticWorkLink | null,
+): StoredOnsiteDiagnosticSession {
+  if (!workLink) return session
   return {
-    id: row.id,
-    state: 'active',
-    created_at: isoString(row.created_at),
-    expires_at: isoString(row.expires_at),
-    operator_user_id: row.operator_user_id,
-    label: row.label,
-    intent: actionKeyValue(row.intent),
-    plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
-    audit_events: events,
-    agent_feed_deliveries: deliveries,
-    ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
-    control_token_hash: row.control_token_hash,
+    ...session,
+    support_packet_id: workLink.support_packet_id,
+    context_work_item_id: workLink.context_work_item_id,
   }
 }
 
@@ -1446,8 +1726,8 @@ function buildOpsOnsiteDiagnosticManifest(
     [...session.audit_events].reverse().find((event) => event.type === 'action.requested')?.action_key ?? null
   const agentHandoff = summarizeAgentHandoff(deliveries)
   const captureSessionId = desktopEvidence?.capture_session_id ?? null
-  const supportPacketId = null
-  const contextWorkItemId = null
+  const supportPacketId = session.support_packet_id ?? null
+  const contextWorkItemId = session.context_work_item_id ?? null
   const evidenceRefs: OpsOnsiteDiagnosticManifest['evidence']['refs'] = [
     {
       type: 'ops_diagnostic_session',
@@ -1458,6 +1738,20 @@ function buildOpsOnsiteDiagnosticManifest(
   ]
   if (captureSessionId) {
     evidenceRefs.push({ type: 'capture_session', id: captureSessionId })
+  }
+  if (supportPacketId) {
+    evidenceRefs.push({
+      type: 'support_debug_packet',
+      id: supportPacketId,
+      path: `/api/support-packets/${encodeURIComponent(supportPacketId)}`,
+    })
+  }
+  if (contextWorkItemId) {
+    evidenceRefs.push({
+      type: 'context_work_item',
+      id: contextWorkItemId,
+      path: `/issues/${encodeURIComponent(contextWorkItemId)}`,
+    })
   }
   if (desktopEvidence?.artifact_id) {
     evidenceRefs.push({
@@ -1513,7 +1807,7 @@ function buildOpsOnsiteDiagnosticManifest(
     schema: 'sitelayer.ops_diagnostic_manifest.v1',
     generated_at: new Date().toISOString(),
     ops_diagnostic_session_id: session.id,
-    worker_issue_id: null,
+    worker_issue_id: session.worker_issue_id ?? null,
     capture_session_id: captureSessionId,
     support_packet_id: supportPacketId,
     context_work_item_id: contextWorkItemId,
@@ -1734,6 +2028,27 @@ export function __desktopEvidenceFromRowForTests(
   } | null,
 ): OpsOnsiteDiagnosticDesktopEvidenceResult | null {
   return desktopEvidenceFromRow(row)
+}
+
+export async function __enqueueOnsiteDiagnosticConcernForTests(
+  client: PoolClient,
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+    requestedAt: string
+  },
+): Promise<OpsOnsiteDiagnosticAgentFeedResult | null> {
+  return enqueueOnsiteDiagnosticConcernTx(client, args)
+}
+
+export function __buildOpsOnsiteDiagnosticManifestForTests(
+  session: Omit<OpsOnsiteDiagnosticSessionRecord, 'diagnostic_manifest'>,
+): OpsOnsiteDiagnosticManifest {
+  return buildOpsOnsiteDiagnosticManifest(session)
 }
 
 function summarizeGatewayDiagnostics(probe: ProbeResult): OpsDiagnosticComponent {

@@ -275,6 +275,10 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       : null
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
   const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
+  const latestDiagnosticManifest =
+    lastDiagnosticAction?.session.diagnostic_manifest ?? displayedDiagnosticSession?.diagnostic_manifest ?? null
+  const linkedAppIssueId = latestDiagnosticManifest?.context_work_item_id ?? displayedDiagnosticSession?.context_work_item_id ?? null
+  const linkedSupportPacketId = latestDiagnosticManifest?.support_packet_id ?? displayedDiagnosticSession?.support_packet_id ?? null
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
   const canCreateLeaveBehindCapture = companyRole === 'admin' && Boolean(companyId)
@@ -385,6 +389,20 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
               headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
               supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
+            />
+          ) : null}
+          {linkedAppIssueId ? (
+            <MListRow
+              leading={<MI.Alert size={18} />}
+              leadingTone="blue"
+              headline="Linked app issue"
+              supporting={
+                linkedSupportPacketId
+                  ? `Support packet ${linkedSupportPacketId.slice(0, 8)} is attached.`
+                  : 'Open the routed board item.'
+              }
+              onTap={() => navigate(`/issues/${linkedAppIssueId}`)}
+              chev
             />
           ) : null}
           {latestDesktopEvidence ? (

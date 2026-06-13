@@ -46,6 +46,7 @@ export type OpsOnsiteDiagnosticAuditEvent = {
 }
 
 export type OpsOnsiteDiagnosticAgentFeedDelivery = {
+  id?: string
   action_key: OpsOnsiteDiagnosticActionKey
   audience: string
   concern_ref: string
@@ -58,6 +59,39 @@ export type OpsOnsiteDiagnosticAgentFeedDelivery = {
   stale: boolean
 }
 
+export type OpsOnsiteDiagnosticManifest = {
+  schema: 'sitelayer.ops_diagnostic_manifest.v1'
+  generated_at: string
+  ops_diagnostic_session_id: string
+  worker_issue_id: string | null
+  capture_session_id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
+  operator_next_step: string
+  needs_attention: boolean
+  readiness: {
+    plan: OpsOnsiteDiagnosticSessionPlan['status']
+    control_level: OpsOnsiteDiagnosticSessionPlan['control_level']
+    desktop_evidence: 'attached' | 'failed' | 'not_configured' | 'not_captured'
+    work_evidence: 'work_item_attached' | 'capture_artifact_only' | 'audit_only'
+    agent_handoff: 'not_requested' | 'queued' | 'claimed' | 'succeeded' | 'failed' | 'stale'
+  }
+  evidence: {
+    refs: Array<{ type: string; id: string; path?: string }>
+    audit_events_total: number
+    latest_action: OpsOnsiteDiagnosticActionKey | null
+    desktop_evidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  }
+  agent_handoff: {
+    audiences: string[]
+    deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[]
+    callback_expected: boolean
+    stale: boolean
+  }
+  consent_receipts: Array<Record<string, unknown>>
+  gaps: string[]
+}
+
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
   state: 'active'
@@ -66,10 +100,14 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   operator_user_id: string | null
   label: string | null
   intent: OpsOnsiteDiagnosticActionKey | null
+  worker_issue_id?: string | null
+  support_packet_id?: string | null
+  context_work_item_id?: string | null
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
   desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  diagnostic_manifest?: OpsOnsiteDiagnosticManifest
 }
 
 export type OpsOnsiteDiagnosticSessionCreateInput = {
@@ -93,6 +131,8 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   concern_ref: string
   queued: boolean
   id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
 }
 
 export type OpsOnsiteDiagnosticCaptureRouteResult = {
