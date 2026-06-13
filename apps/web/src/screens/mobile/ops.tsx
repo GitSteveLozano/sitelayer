@@ -17,22 +17,29 @@ import {
 } from '../../components/m/index.js'
 import {
   apiGet,
+  controlOpsDiagnosticSession,
   createOpsDiagnosticSession,
   fetchAppIssueBoard,
   fetchOpsDiagnostics,
+  fetchOpsDiagnosticSessionActionStatus,
   fetchOpsDiagnosticSessions,
   fetchWorkRequestQueueHealth,
   fetchWorkRequests,
   queryKeys,
+  redeemOpsDiagnosticControlTransfer,
   requestOpsDiagnosticSessionAction,
   useAppIssueCapabilities,
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticAction,
+  type OpsOnsiteDiagnosticActionDeliveryState,
   type OpsOnsiteDiagnosticCaptureRouteResult,
   type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticActionStatusResponse,
+  type OpsOnsiteDiagnosticControlAction,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
@@ -48,6 +55,8 @@ import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
 import {
   clearOpsDiagnosticControl,
+  createOpsDiagnosticControlTransferUrl,
+  importOpsDiagnosticControlFromUrl,
   persistOpsDiagnosticControl,
   readOpsDiagnosticControl,
 } from './ops-diagnostic-control'
@@ -88,7 +97,9 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const [lastDiagnosticAction, setLastDiagnosticAction] = useState<OpsOnsiteDiagnosticSessionActionResponse | null>(
     null,
   )
-  const [leaveBehindCaptureUrl, setLeaveBehindCaptureUrl] = useState<string | null>(null)
+  const [diagnosticControlTransferUrl, setDiagnosticControlTransferUrl] = useState<string | null>(null)
+  const [diagnosticControlTransferCopied, setDiagnosticControlTransferCopied] = useState(false)
+  const [leaveBehindCaptureLink, setLeaveBehindCaptureLink] = useState<LeaveBehindCaptureLinkState | null>(null)
   const [leaveBehindCaptureCopied, setLeaveBehindCaptureCopied] = useState(false)
 
   const work = useQuery({
@@ -141,6 +152,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     ? isDispatchConfigured(health.data.config) && health.data.config.scoped_callbacks_enabled
     : null
   const openFieldIssues = (workerIssues.data?.worker_issues ?? []).filter((issue) => !issue.resolved_at)
+  const linkedWorkerIssueId = openFieldIssues[0]?.id
   const appIssueCount = appIssues.data?.issues.length ?? 0
   const systemComponents = opsDiagnostics.data?.components ?? []
   const gateway = componentByKey(systemComponents, 'gateway')
@@ -150,30 +162,97 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const onsiteSession = opsDiagnostics.data?.onsite_session
   const observedDiagnosticSession = diagnosticSessions.data?.sessions[0] ?? null
   const displayedDiagnosticSession = activeDiagnosticSession ?? observedDiagnosticSession
+  const displayedDiagnosticSessionId = displayedDiagnosticSession?.id ?? null
   const hasDiagnosticControl = Boolean(activeDiagnosticSession && diagnosticControlToken)
+  const diagnosticActionStatusLookup = useMemo(
+    () => latestDiagnosticActionStatusLookup(displayedDiagnosticSession),
+    [displayedDiagnosticSession],
+  )
+  const diagnosticActionStatus = useQuery({
+    queryKey: [
+      'ops-diagnostic-action-status',
+      companySlug,
+      diagnosticActionStatusLookup?.sessionId,
+      diagnosticActionStatusLookup?.actionKey,
+      diagnosticActionStatusLookup?.clientActionId,
+    ],
+    queryFn: () =>
+      fetchOpsDiagnosticSessionActionStatus(
+        diagnosticActionStatusLookup!.sessionId,
+        {
+          action_key: diagnosticActionStatusLookup!.actionKey,
+          client_action_id: diagnosticActionStatusLookup!.clientActionId,
+        },
+        companySlug,
+      ),
+    enabled: canViewAppIssues && Boolean(diagnosticActionStatusLookup),
+    refetchInterval: (query) => {
+      const state = query.state.data?.action_status.state
+      return state === 'accepted' || state === 'retrying' || !state ? 5_000 : false
+    },
+  })
   useEffect(() => {
     setActiveDiagnosticSession(null)
     setDiagnosticControlToken(null)
     setLastDiagnosticAction(null)
-    setLeaveBehindCaptureUrl(null)
+    setDiagnosticControlTransferUrl(null)
+    setDiagnosticControlTransferCopied(false)
+    setLeaveBehindCaptureLink(null)
     setLeaveBehindCaptureCopied(false)
   }, [companySlug])
+  useEffect(() => {
+    setLeaveBehindCaptureLink(null)
+    setLeaveBehindCaptureCopied(false)
+  }, [displayedDiagnosticSessionId])
+  useEffect(() => {
+    if (!canCaptureAppIssues) return
+    const importedControl = importOpsDiagnosticControlFromUrl(companySlug)
+    if (!importedControl) return
+    let cancelled = false
+    redeemOpsDiagnosticControlTransfer(
+      importedControl.session_id,
+      { transfer_token: importedControl.transfer_token },
+      companySlug,
+    )
+      .then((response) => {
+        if (cancelled || !response.control.control_token) return
+        setActiveDiagnosticSession(response.session)
+        setDiagnosticControlToken(response.control.control_token)
+        persistOpsDiagnosticControl(companySlug, response.session, response.control.control_token)
+        setDiagnosticControlTransferUrl(null)
+        setDiagnosticControlTransferCopied(false)
+        void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+        void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [canCaptureAppIssues, companySlug, qc])
   useEffect(() => {
     if (!canCaptureAppIssues) return
     const storedControl = readOpsDiagnosticControl(companySlug)
     if (!storedControl) return
+    if (!diagnosticSessions.data) return
     const restoredSession = (diagnosticSessions.data?.sessions ?? []).find(
       (session) => session.id === storedControl.session_id,
     )
-    if (!restoredSession) return
+    if (!restoredSession) {
+      clearOpsDiagnosticControl(companySlug)
+      setActiveDiagnosticSession(null)
+      setDiagnosticControlToken(null)
+      return
+    }
     setActiveDiagnosticSession(restoredSession)
     setDiagnosticControlToken(storedControl.control_token)
   }, [canCaptureAppIssues, companySlug, diagnosticSessions.data?.sessions])
   const startDiagnosticSession = useMutation({
     mutationFn: () => {
-      const input = onsiteSession?.recommended_entry
-        ? { label: 'Mobile ops', intent: onsiteSession.recommended_entry }
-        : { label: 'Mobile ops' }
+      const input = {
+        label: 'Mobile ops',
+        ...(onsiteSession?.recommended_entry ? { intent: onsiteSession.recommended_entry } : {}),
+        ...(linkedWorkerIssueId ? { worker_issue_id: linkedWorkerIssueId } : {}),
+      }
       return createOpsDiagnosticSession(companySlug, input)
     },
     onSuccess: (response) => {
@@ -186,13 +265,17 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     },
   })
   const requestDiagnosticAction = useMutation({
-    mutationFn: (actionKey: OpsOnsiteDiagnosticActionKey) => {
+    mutationFn: (request: { actionKey: OpsOnsiteDiagnosticActionKey; clientActionId: string }) => {
       if (!activeDiagnosticSession || !diagnosticControlToken) {
         return Promise.reject(new Error('diagnostic session is not active'))
       }
       return requestOpsDiagnosticSessionAction(
         activeDiagnosticSession.id,
-        { action_key: actionKey, control_token: diagnosticControlToken },
+        {
+          action_key: request.actionKey,
+          client_action_id: request.clientActionId,
+          control_token: diagnosticControlToken,
+        },
         companySlug,
       )
     },
@@ -210,26 +293,89 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       }
     },
   })
+  const controlDiagnosticSession = useMutation({
+    mutationFn: (action: Exclude<OpsOnsiteDiagnosticControlAction, 'redeem'>) => {
+      if (!activeDiagnosticSession || !diagnosticControlToken) {
+        return Promise.reject(new Error('diagnostic session is not active'))
+      }
+      return controlOpsDiagnosticSession(
+        activeDiagnosticSession.id,
+        { action, control_token: diagnosticControlToken },
+        companySlug,
+      )
+    },
+    onSuccess: async (response, action) => {
+      setLastDiagnosticAction(null)
+      if (action === 'cancel' || action === 'revoke') {
+        clearOpsDiagnosticControl(companySlug)
+        setActiveDiagnosticSession(null)
+        setDiagnosticControlToken(null)
+        setDiagnosticControlTransferUrl(null)
+        setDiagnosticControlTransferCopied(false)
+      } else {
+        const nextControlToken = response.control.control_token ?? diagnosticControlToken
+        setActiveDiagnosticSession(response.session)
+        if (nextControlToken) {
+          setDiagnosticControlToken(nextControlToken)
+          persistOpsDiagnosticControl(companySlug, response.session, nextControlToken)
+        }
+        if (action === 'transfer' && response.control.transfer_token) {
+          const transferUrl = createOpsDiagnosticControlTransferUrl(
+            companySlug,
+            response.session,
+            response.control.transfer_token,
+          )
+          setDiagnosticControlTransferUrl(transferUrl)
+          setDiagnosticControlTransferCopied(false)
+          if (transferUrl) {
+            const shareResult = await shareOrCopyMobileLink(transferUrl, 'Sitelayer onsite control handoff')
+            setDiagnosticControlTransferCopied(shareResult !== 'manual')
+          }
+        } else {
+          setDiagnosticControlTransferUrl(null)
+          setDiagnosticControlTransferCopied(false)
+        }
+      }
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 403) {
+        clearOpsDiagnosticControl(companySlug)
+        setActiveDiagnosticSession(null)
+        setDiagnosticControlToken(null)
+      }
+    },
+  })
+  const copyDiagnosticControlTransferLink = async () => {
+    if (!diagnosticControlTransferUrl) return
+    const shareResult = await shareOrCopyMobileLink(diagnosticControlTransferUrl, 'Sitelayer onsite control handoff')
+    setDiagnosticControlTransferCopied(shareResult !== 'manual')
+  }
   const createLeaveBehindCaptureInvite = useCreateFeedbackInvite(companyId ?? '')
+  const reusableLeaveBehindCaptureLinkUrl = reusableLeaveBehindCaptureUrl(
+    leaveBehindCaptureLink,
+    displayedDiagnosticSession,
+  )
   const copyLeaveBehindCaptureInvite = useMutation({
     mutationFn: async () => {
       if (!companyId) throw new Error('company is not loaded')
+      const sessionId = displayedDiagnosticSession?.id ?? null
       const inviteUrl =
-        leaveBehindCaptureUrl ??
+        reusableLeaveBehindCaptureLinkUrl ??
         (
           await createLeaveBehindCaptureInvite.mutateAsync(
             buildLeaveBehindCaptureInviteInput({ companySlug, session: displayedDiagnosticSession }),
           )
         ).invite_url
-      setLeaveBehindCaptureUrl(inviteUrl)
+      setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
       setLeaveBehindCaptureCopied(false)
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
-      await navigator.clipboard.writeText(inviteUrl)
-      return inviteUrl
+      const shareResult = await shareOrCopyMobileLink(inviteUrl, 'Sitelayer leave-behind capture link')
+      return { inviteUrl, sessionId, shareResult }
     },
-    onSuccess: (inviteUrl) => {
-      setLeaveBehindCaptureUrl(inviteUrl)
-      setLeaveBehindCaptureCopied(true)
+    onSuccess: ({ inviteUrl, sessionId, shareResult }) => {
+      setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
+      setLeaveBehindCaptureCopied(shareResult !== 'manual')
     },
   })
   const openDesktopEvidence = useMutation({
@@ -265,18 +411,18 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     startDiagnosticSession.error ||
     requestDiagnosticAction.error,
   )
-  const activeDiagnosticAction =
-    hasDiagnosticControl && activeDiagnosticSession
-      ? (activeDiagnosticSession.plan.actions.find(
-          (action) => action.key === (activeDiagnosticSession.intent ?? activeDiagnosticSession.plan.recommended_entry),
-        ) ??
-        activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
-        null)
-      : null
+  const diagnosticActions = visibleDiagnosticActions(activeDiagnosticSession, hasDiagnosticControl)
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
   const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
+  const latestDiagnosticManifest =
+    lastDiagnosticAction?.session.diagnostic_manifest ?? displayedDiagnosticSession?.diagnostic_manifest ?? null
+  const linkedAppIssueId =
+    latestDiagnosticManifest?.context_work_item_id ?? displayedDiagnosticSession?.context_work_item_id ?? null
+  const linkedSupportPacketId =
+    latestDiagnosticManifest?.support_packet_id ?? displayedDiagnosticSession?.support_packet_id ?? null
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
+  const latestActionStatus = diagnosticActionStatus.data?.action_status ?? null
   const canCreateLeaveBehindCapture = companyRole === 'admin' && Boolean(companyId)
   const fieldReadinessItems = buildFieldReadinessItems({
     online,
@@ -372,11 +518,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               onTap={
                 hasDiagnosticControl && activeDiagnosticSession
                   ? () => navigate(onsiteSessionRoute(activeDiagnosticSession.plan))
-                  : startDiagnosticSession.isPending
-                    ? undefined
-                    : () => startDiagnosticSession.mutate()
+                  : displayedDiagnosticSession
+                    ? () => navigate(onsiteSessionRoute(displayedDiagnosticSession.plan))
+                    : startDiagnosticSession.isPending
+                      ? undefined
+                      : () => startDiagnosticSession.mutate()
               }
-              chev={hasDiagnosticControl}
+              chev={Boolean(displayedDiagnosticSession)}
             />
           ) : null}
           {latestAgentFeedDelivery ? (
@@ -385,6 +533,28 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
               headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
               supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
+            />
+          ) : null}
+          {latestActionStatus || diagnosticActionStatus.isFetching ? (
+            <MListRow
+              leading={<MI.Clock size={18} />}
+              leadingTone={actionStatusTone(latestActionStatus?.state, diagnosticActionStatus.isFetching)}
+              headline={formatActionStatusHeadline(latestActionStatus)}
+              supporting={formatActionStatusSummary(latestActionStatus, diagnosticActionStatus.isFetching)}
+            />
+          ) : null}
+          {linkedAppIssueId ? (
+            <MListRow
+              leading={<MI.Alert size={18} />}
+              leadingTone="blue"
+              headline="Linked app issue"
+              supporting={
+                linkedSupportPacketId
+                  ? `Support packet ${linkedSupportPacketId.slice(0, 8)} is attached.`
+                  : 'Open the routed board item.'
+              }
+              onTap={() => navigate(`/issues/${linkedAppIssueId}`)}
+              chev
             />
           ) : null}
           {latestDesktopEvidence ? (
@@ -534,21 +704,99 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
 
         <MSectionH>Next actions</MSectionH>
         <MListInset>
-          {activeDiagnosticAction ? (
+          {diagnosticActions.map((action) => {
+            const Icon = diagnosticActionIcon(action.key)
+            return (
+              <MListRow
+                key={action.key}
+                leading={<Icon size={18} />}
+                leadingTone={requestDiagnosticAction.isPending ? 'blue' : action.enabled ? 'blue' : 'amber'}
+                headline={requestDiagnosticAction.isPending ? 'Recording action' : `Record ${lowerFirst(action.label)}`}
+                supporting={formatDiagnosticActionSummary(action, requestDiagnosticAction.isPending)}
+                onTap={
+                  action.enabled &&
+                  diagnosticControlToken &&
+                  !requestDiagnosticAction.isPending &&
+                  activeDiagnosticSession
+                    ? () =>
+                        requestDiagnosticAction.mutate({
+                          actionKey: action.key,
+                          clientActionId: diagnosticClientActionId(activeDiagnosticSession.id, action.key),
+                        })
+                    : undefined
+                }
+              />
+            )
+          })}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
             <MListRow
-              leading={<MI.Camera size={18} />}
-              leadingTone={activeDiagnosticAction.enabled ? 'blue' : 'amber'}
+              leading={<MI.Clock size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'green'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'Extend control window'}
+              supporting={`Keep phone control until ${formatClock(activeDiagnosticSession.expires_at)} or extend another hour.`}
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('extend')}
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.Users size={18} />}
+              leadingTone={
+                controlDiagnosticSession.isPending
+                  ? 'blue'
+                  : diagnosticControlTransferCopied
+                    ? 'green'
+                    : diagnosticControlTransferUrl
+                      ? 'amber'
+                      : 'accent'
+              }
               headline={
-                requestDiagnosticAction.isPending
-                  ? 'Recording action'
-                  : `Record ${lowerFirst(activeDiagnosticAction.label)}`
+                controlDiagnosticSession.isPending
+                  ? 'Preparing handoff'
+                  : diagnosticControlTransferCopied
+                    ? 'Control handoff ready'
+                    : diagnosticControlTransferUrl
+                      ? 'Share control handoff'
+                      : 'Create control handoff'
               }
-              supporting={formatDiagnosticActionSummary(activeDiagnosticAction, requestDiagnosticAction.isPending)}
+              supporting={
+                diagnosticControlTransferUrl ? (
+                  <ManualLinkSupporting
+                    message={
+                      diagnosticControlTransferCopied
+                        ? 'Link shared or copied. Open it on another phone to import control.'
+                        : 'Use this short-lived link on another phone to import control.'
+                    }
+                    url={diagnosticControlTransferUrl}
+                  />
+                ) : (
+                  'Rotate the token and create a short-lived handoff link.'
+                )
+              }
               onTap={
-                activeDiagnosticAction.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
-                  ? () => requestDiagnosticAction.mutate(activeDiagnosticAction.key)
-                  : undefined
+                controlDiagnosticSession.isPending
+                  ? undefined
+                  : diagnosticControlTransferUrl
+                    ? copyDiagnosticControlTransferLink
+                    : () => controlDiagnosticSession.mutate('transfer')
               }
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.X size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control token' : 'Revoke this phone'}
+              supporting="Invalidate this phone's token while leaving the diagnostic session visible."
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('revoke')}
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.ShieldAlert size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'End phone control'}
+              supporting="Close this diagnostic window and clear the control token on this phone."
+              onTap={controlDiagnosticSession.isPending ? undefined : () => controlDiagnosticSession.mutate('cancel')}
             />
           ) : null}
           <MListRow
@@ -579,13 +827,27 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                       ? 'green'
                       : 'accent'
               }
-              headline={leaveBehindCaptureCopied ? 'Leave-behind link copied' : 'Copy leave-behind capture link'}
-              supporting={formatLeaveBehindCaptureSummary({
-                pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
-                copied: leaveBehindCaptureCopied,
-                error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
-                hasSession: Boolean(displayedDiagnosticSession),
-              })}
+              headline={leaveBehindCaptureCopied ? 'Leave-behind link ready' : 'Share leave-behind capture link'}
+              supporting={
+                reusableLeaveBehindCaptureLinkUrl ? (
+                  <ManualLinkSupporting
+                    message={formatLeaveBehindCaptureSummary({
+                      pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
+                      copied: leaveBehindCaptureCopied,
+                      error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
+                      hasSession: Boolean(displayedDiagnosticSession),
+                    })}
+                    url={reusableLeaveBehindCaptureLinkUrl}
+                  />
+                ) : (
+                  formatLeaveBehindCaptureSummary({
+                    pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
+                    copied: leaveBehindCaptureCopied,
+                    error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
+                    hasSession: Boolean(displayedDiagnosticSession),
+                  })
+                )
+              }
               onTap={
                 copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending
                   ? undefined
@@ -643,6 +905,18 @@ type FieldReadinessInput = {
   onsiteSession: OpsOnsiteDiagnosticSessionPlan | undefined
 }
 
+export type LeaveBehindCaptureLinkState = {
+  url: string
+  session_id: string | null
+}
+
+export type MobileLinkShareResult = 'shared' | 'copied' | 'manual'
+
+export type MobileLinkShareDeps = {
+  share?: ((data: ShareData) => Promise<void>) | undefined
+  clipboard?: { writeText?: ((text: string) => Promise<void>) | undefined } | undefined
+}
+
 export function buildFieldReadinessItems({
   online,
   hasDiagnosticControl,
@@ -656,7 +930,7 @@ export function buildFieldReadinessItems({
   const routeSinks =
     typeof captureRouter?.facts.sinks === 'string' ? captureRouter.facts.sinks.split(',').filter(Boolean) : []
   const routerReady = captureRouter?.status === 'ok' && routeSinks.length > 0
-  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_has_token === true
+  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_live === true
   const canRouteWork = onsiteSession?.can_route_work === true
   const canDispatchAgentReview = onsiteSession?.can_dispatch_agent_review === true
 
@@ -717,6 +991,53 @@ export function buildFieldReadinessItems({
   ]
 }
 
+export async function shareOrCopyMobileLink(
+  url: string,
+  title: string,
+  deps: MobileLinkShareDeps = browserMobileLinkShareDeps(),
+): Promise<MobileLinkShareResult> {
+  if (deps.share) {
+    try {
+      await deps.share({ title, url })
+      return 'shared'
+    } catch {
+      /* Fall back to clipboard/manual link display. */
+    }
+  }
+  if (deps.clipboard?.writeText) {
+    try {
+      await deps.clipboard.writeText(url)
+      return 'copied'
+    } catch {
+      return 'manual'
+    }
+  }
+  return 'manual'
+}
+
+function browserMobileLinkShareDeps(): MobileLinkShareDeps {
+  if (typeof navigator === 'undefined') return {}
+  return {
+    share: typeof navigator.share === 'function' ? navigator.share.bind(navigator) : undefined,
+    clipboard: navigator.clipboard,
+  }
+}
+
+export function visibleDiagnosticActions(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+  hasControl: boolean,
+): OpsOnsiteDiagnosticAction[] {
+  return hasControl && session ? session.plan.actions : []
+}
+
+export function reusableLeaveBehindCaptureUrl(
+  link: LeaveBehindCaptureLinkState | null,
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): string | null {
+  if (!link) return null
+  return link.session_id === (session?.id ?? null) ? link.url : null
+}
+
 export function buildLeaveBehindCaptureInviteInput({
   companySlug,
   session,
@@ -755,6 +1076,16 @@ function formatLeaveBehindCaptureSummary({
   if (error) return error instanceof Error ? error.message : 'Could not create the link.'
   if (copied) return hasSession ? 'Guest capture is tied to this onsite session.' : 'Guest capture is tied to Ops.'
   return hasSession ? 'Guest can send text, audio, state, or screen evidence.' : 'Works without starting control.'
+}
+
+function ManualLinkSupporting({ message, url }: { message: string; url: string }) {
+  return (
+    <span>
+      {message}
+      <br />
+      <span style={{ wordBreak: 'break-all', fontFamily: 'var(--m-num)' }}>{url}</span>
+    </span>
+  )
 }
 
 function countStatus(items: readonly ContextWorkItem[], status: WorkItemStatus): number {
@@ -998,7 +1329,7 @@ function formatDiagnosticSessionControl(
   return `Expires ${formatClock(session.expires_at)} · ${session.audit_events.length} event${session.audit_events.length === 1 ? '' : 's'}`
 }
 
-function formatDiagnosticActionSummary(action: { enabled: boolean; reason: string }, pending: boolean): string {
+function formatDiagnosticActionSummary(action: OpsOnsiteDiagnosticAction, pending: boolean): string {
   if (pending) return 'Audit event pending.'
   return action.reason
 }
@@ -1061,6 +1392,56 @@ function latestDiagnosticDelivery(
   return [...deliveries].sort((a, b) => Date.parse(b.queued_at) - Date.parse(a.queued_at))[0] ?? null
 }
 
+type DiagnosticActionStatusLookup = {
+  sessionId: string
+  actionKey: OpsOnsiteDiagnosticActionKey
+  clientActionId: string
+}
+
+export function latestDiagnosticActionStatusLookup(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): DiagnosticActionStatusLookup | null {
+  const events = (session?.audit_events ?? []).filter(
+    (event) => event.type === 'action.requested' && event.action_key && event.client_action_id,
+  )
+  if (!session || events.length === 0) return null
+  const latest = [...events].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0]
+  if (!latest?.action_key || !latest.client_action_id) return null
+  return { sessionId: session.id, actionKey: latest.action_key, clientActionId: latest.client_action_id }
+}
+
+export function actionStatusTone(
+  state: OpsOnsiteDiagnosticActionDeliveryState | undefined,
+  pending = false,
+): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
+  if (pending && !state) return 'blue'
+  if (state === 'delivered') return 'green'
+  if (state === 'failed') return 'red'
+  if (state === 'retrying') return 'amber'
+  return 'blue'
+}
+
+function formatActionStatusHeadline(status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null): string {
+  if (!status) return 'Action status'
+  return `${diagnosticActionName(status.action_key)} status`
+}
+
+export function formatActionStatusSummary(
+  status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null,
+  pending = false,
+): string {
+  if (!status) return pending ? 'Checking latest action status.' : 'No action status reported.'
+  const routeStatus = status.capture_route?.outbox_status
+  if (status.state === 'retrying') {
+    return routeStatus ? `${status.summary} Route row is ${routeStatus}.` : status.summary
+  }
+  if (status.state === 'failed') {
+    const error = status.capture_route?.error ?? status.agent_feed?.callback_error
+    return error ? `${status.summary} ${error}` : status.summary
+  }
+  return status.summary
+}
+
 export function agentFeedDeliveryTone(
   delivery: OpsOnsiteDiagnosticAgentFeedDelivery,
 ): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
@@ -1104,6 +1485,21 @@ function diagnosticActionName(actionKey: OpsOnsiteDiagnosticActionKey): string {
   if (actionKey === 'dispatch_agent_review') return 'Agent review'
   if (actionKey === 'capture_desktop_context') return 'Desktop evidence'
   return 'Field context'
+}
+
+function diagnosticClientActionId(sessionId: string, actionKey: OpsOnsiteDiagnosticActionKey): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `${sessionId}:${actionKey}:${randomId}`.slice(0, 120)
+}
+
+function diagnosticActionIcon(actionKey: OpsOnsiteDiagnosticActionKey): typeof MI.Camera {
+  if (actionKey === 'capture_field_context') return MI.Mic
+  if (actionKey === 'capture_desktop_context') return MI.Camera
+  if (actionKey === 'route_support_packet') return MI.Layers
+  return MI.Alert
 }
 
 function formatSince(value: string, nowMs: number): string {

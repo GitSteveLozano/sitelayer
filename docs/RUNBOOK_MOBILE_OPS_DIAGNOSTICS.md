@@ -12,6 +12,9 @@ phone, without SSHing into the workstation or exposing local debug ports.
   `onsite_session` plan.
 - `GET /api/ops/diagnostics/sessions` shows active sessions, audit events,
   and routed agent-feed delivery state.
+- `GET /api/ops/diagnostics/sessions/:id/actions/status?action_key=...&client_action_id=...`
+  returns the compact phone status for one tap: accepted, retrying, delivered,
+  or failed.
 
 ## Runtime Contract
 
@@ -44,17 +47,28 @@ The audience name must be the same in all three places:
 - `SITELAYER_OPS_DIAGNOSTIC_AGENT_AUDIENCE`
 - the workstation executor `PULL_AUDIENCE`
 
-Run the pull executor on the workstation that should receive onsite actions:
+Run the pull executor on the workstation that should receive onsite actions.
+This is a workstation service/process, not a phone terminal workflow: the
+phone only starts sessions and requests actions from Mobile Ops.
 
 ```bash
+cd /app/sitelayer
 PULL_FEED_URL=https://dev.sitelayer.sandolab.xyz/api/agent-feed \
 PULL_AUDIENCE=onsite-diagnostics \
 PULL_FEED_TOKEN=<token> \
 PULL_STATE_FILE=$HOME/.local/state/sitelayer-onsite-agent/done.json \
 LOCAL_EXECUTOR_TIMEOUT_MS=3600000 \
-LOCAL_EXECUTOR_CMD='claude -p "You are handling a Sitelayer onsite diagnostic Concern. Read inputs.agent_prompt and inputs.artifacts from stdin, inspect only the provided evidence, make a focused diagnosis, and report the next operator action."' \
-npx --yes --package=github:taylorSando/projectkit#v0.9.1 pull-executor
+LOCAL_EXECUTOR_CMD='llmrun claude_work -- claude -p "You are handling a Sitelayer onsite diagnostic Concern. Read inputs.agent_prompt and inputs.artifacts from stdin, inspect only the provided evidence, make a focused diagnosis, and report the next operator action."' \
+npm --workspace @sitelayer/api exec -- pull-executor
 ```
+
+Use the repo-installed `@operator/projectkit` dependency. Do not `npx` a
+network package during an onsite session; the executor should already be
+installed, supervised, and using the same dependency set as the API it serves.
+On Taylor-controlled workstations, launch the LLM command through `llmrun` so
+profile `HOME` and provider auth resolve from `llm-accounts`; on collaborator
+machines, replace `LOCAL_EXECUTOR_CMD` with that machine's approved local
+executor.
 
 ## Diagnosis
 
@@ -92,6 +106,9 @@ Mobile Ops Field checklist should be read before walking onsite:
    action the plan marks disabled.
 2. If the action response shows `accepted_action.capture_route.status=failed`,
    fix the capture-router before assuming the executor saw the request.
+   Use the compact action-status endpoint with the same `client_action_id` to
+   distinguish "worker retrying" from "already delivered" without polling the
+   full session.
 3. If routing is not configured, continue audit-only and copy the support
    packet manually.
 4. If routing is configured but no Concern arrives, verify the audience triplet

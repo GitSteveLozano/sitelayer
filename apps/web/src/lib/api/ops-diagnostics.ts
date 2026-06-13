@@ -16,6 +16,8 @@ export type OpsOnsiteDiagnosticActionKey =
   | 'capture_desktop_context'
   | 'route_support_packet'
   | 'dispatch_agent_review'
+export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer' | 'redeem'
 
 export type OpsOnsiteDiagnosticAction = {
   key: OpsOnsiteDiagnosticActionKey
@@ -41,11 +43,14 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   actor_user_id: string | null
   type: 'session.started' | 'action.requested'
   action_key?: OpsOnsiteDiagnosticActionKey
+  client_action_id?: string | null
   effect: 'audit_only'
   summary: string
+  action_result?: Record<string, unknown> | null
 }
 
 export type OpsOnsiteDiagnosticAgentFeedDelivery = {
+  id?: string
   action_key: OpsOnsiteDiagnosticActionKey
   audience: string
   concern_ref: string
@@ -58,23 +63,61 @@ export type OpsOnsiteDiagnosticAgentFeedDelivery = {
   stale: boolean
 }
 
+export type OpsOnsiteDiagnosticManifest = {
+  schema: 'sitelayer.ops_diagnostic_manifest.v1'
+  generated_at: string
+  ops_diagnostic_session_id: string
+  worker_issue_id: string | null
+  capture_session_id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
+  operator_next_step: string
+  needs_attention: boolean
+  readiness: {
+    plan: OpsOnsiteDiagnosticSessionPlan['status']
+    control_level: OpsOnsiteDiagnosticSessionPlan['control_level']
+    desktop_evidence: 'attached' | 'failed' | 'not_configured' | 'not_captured'
+    work_evidence: 'work_item_attached' | 'capture_artifact_only' | 'audit_only'
+    agent_handoff: 'not_requested' | 'queued' | 'claimed' | 'succeeded' | 'failed' | 'stale'
+  }
+  evidence: {
+    refs: Array<{ type: string; id: string; path?: string }>
+    audit_events_total: number
+    latest_action: OpsOnsiteDiagnosticActionKey | null
+    desktop_evidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  }
+  agent_handoff: {
+    audiences: string[]
+    deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[]
+    callback_expected: boolean
+    stale: boolean
+  }
+  consent_receipts: Array<Record<string, unknown>>
+  gaps: string[]
+}
+
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
-  state: 'active'
+  state: OpsOnsiteDiagnosticSessionState
   created_at: string
   expires_at: string
   operator_user_id: string | null
   label: string | null
   intent: OpsOnsiteDiagnosticActionKey | null
+  worker_issue_id?: string | null
+  support_packet_id?: string | null
+  context_work_item_id?: string | null
   plan: OpsOnsiteDiagnosticSessionPlan
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
   desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  diagnostic_manifest?: OpsOnsiteDiagnosticManifest
 }
 
 export type OpsOnsiteDiagnosticSessionCreateInput = {
   label?: string
   intent?: OpsOnsiteDiagnosticActionKey
+  worker_issue_id?: string
 }
 
 export type OpsOnsiteDiagnosticSessionCreateResponse = {
@@ -93,11 +136,14 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
   concern_ref: string
   queued: boolean
   id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
 }
 
 export type OpsOnsiteDiagnosticCaptureRouteResult = {
   request_ref: string
   delivery_id: string
+  outbox_id?: string | null
   status: 'accepted' | 'failed' | 'not_configured'
   http_status: number | null
   routed: boolean | null
@@ -119,6 +165,7 @@ export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
 export type OpsOnsiteDiagnosticActionRequestInput = {
   action_key: OpsOnsiteDiagnosticActionKey
   control_token: string
+  client_action_id?: string
 }
 
 export type OpsOnsiteDiagnosticSessionActionResponse = {
@@ -130,6 +177,63 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
     desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult
     capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
+  }
+}
+
+export type OpsOnsiteDiagnosticActionDeliveryState = 'accepted' | 'retrying' | 'delivered' | 'failed'
+
+export type OpsOnsiteDiagnosticActionStatusResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_action_status.v1'
+  action_status: {
+    session_id: string
+    action_event_id: string
+    action_key: OpsOnsiteDiagnosticActionKey
+    client_action_id: string | null
+    requested_at: string
+    state: OpsOnsiteDiagnosticActionDeliveryState
+    summary: string
+    accepted_action: OpsOnsiteDiagnosticSessionActionResponse['accepted_action']
+    capture_route?: {
+      outbox_id: string | null
+      outbox_status: string | null
+      attempt_count: number | null
+      next_attempt_at: string | null
+      applied_at: string | null
+      error: string | null
+      result: OpsOnsiteDiagnosticCaptureRouteResult | null
+    }
+    agent_feed?: {
+      concern_ref: string
+      status: OpsOnsiteDiagnosticAgentFeedDelivery['status']
+      callback_status: string | null
+      callback_error: string | null
+      stale: boolean
+    }
+  }
+}
+
+export type OpsOnsiteDiagnosticActionStatusInput = {
+  action_key: OpsOnsiteDiagnosticActionKey
+  client_action_id: string
+}
+
+export type OpsOnsiteDiagnosticSessionControlInput = {
+  action: Exclude<OpsOnsiteDiagnosticControlAction, 'redeem'>
+  control_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionControlRedeemInput = {
+  transfer_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionControlResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_control.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  control: {
+    action: OpsOnsiteDiagnosticControlAction
+    expires_at: string
+    control_token?: string
+    transfer_token?: string
   }
 }
 
@@ -170,6 +274,45 @@ export function requestOpsDiagnosticSessionAction(
 ): Promise<OpsOnsiteDiagnosticSessionActionResponse> {
   return apiPost<OpsOnsiteDiagnosticSessionActionResponse>(
     `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions`,
+    input,
+    companySlug,
+  )
+}
+
+export function fetchOpsDiagnosticSessionActionStatus(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticActionStatusInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticActionStatusResponse> {
+  const params = new URLSearchParams({
+    action_key: input.action_key,
+    client_action_id: input.client_action_id,
+  })
+  return apiGet<OpsOnsiteDiagnosticActionStatusResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions/status?${params.toString()}`,
+    companySlug,
+  )
+}
+
+export function controlOpsDiagnosticSession(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticSessionControlInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticSessionControlResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionControlResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/control`,
+    input,
+    companySlug,
+  )
+}
+
+export function redeemOpsDiagnosticControlTransfer(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticSessionControlRedeemInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticSessionControlResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionControlResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/control/redeem`,
     input,
     companySlug,
   )

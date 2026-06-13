@@ -32,8 +32,26 @@ export interface ParseCaptureArtifactMultipartOptions {
 }
 
 const SAFE_FALLBACK_MIME = 'application/octet-stream'
+const CLIENT_UPLOAD_ID_MAX_LENGTH = 160
 const ALLOWED_PREFIXES = ['audio/', 'video/', 'text/']
 const ALLOWED_EXACT = new Set(['application/json', 'application/octet-stream'])
+
+export function normalizeCaptureArtifactClientUploadId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.length > CLIENT_UPLOAD_ID_MAX_LENGTH ? trimmed.slice(0, CLIENT_UPLOAD_ID_MAX_LENGTH) : trimmed
+}
+
+export function captureArtifactClientUploadIdFromRequest(req: http.IncomingMessage): string | null {
+  const header = req.headers['idempotency-key'] ?? req.headers['x-client-upload-id']
+  const raw = Array.isArray(header) ? header[0] : header
+  return normalizeCaptureArtifactClientUploadId(raw)
+}
+
+export function captureArtifactObjectKeyPrefix(clientUploadId: string | null): string | undefined {
+  return clientUploadId ? `client-${clientUploadId}` : undefined
+}
 
 function inferMimeFromName(name: string): string {
   const ext = name.toLowerCase().split('.').pop() ?? ''

@@ -175,6 +175,46 @@ export function feedbackInviteCaptureMetadata(invite: {
   }
 }
 
+function feedbackInviteConsentScope(invite: FeedbackInvitePublicRow): Record<string, unknown> {
+  const allowedModes = new Set(invite.allowed_capture_modes)
+  const includeText = allowedModes.has('text')
+  const includeAudio = allowedModes.has('audio')
+  const includeScreen = allowedModes.has('screen')
+  const includeState = allowedModes.has('state')
+  const includeTrace = allowedModes.has('trace')
+  return {
+    surface: 'feedback_invite',
+    feedback_invite_id: invite.id,
+    reviewer_ref: invite.reviewer_ref,
+    source: invite.source,
+    target_route: invite.target_route,
+    allowed_capture_modes: invite.allowed_capture_modes,
+    streams: [
+      ...(includeText ? ['text_note'] : []),
+      ...(includeAudio ? ['audio'] : []),
+      ...(includeScreen ? ['screen_video'] : []),
+      ...(includeState ? ['registered_artifacts'] : []),
+    ],
+    artifacts: {
+      audio: includeAudio,
+      transcript: includeAudio,
+      text_note: includeText,
+      video: includeScreen,
+      video_clip_manifest: includeScreen,
+      state_snapshot: includeState,
+      screen_context: includeState,
+    },
+    event_classes: [
+      ...(includeText || includeAudio || includeScreen || includeState ? ['feedback_invite'] : []),
+      ...(includeTrace ? ['portal', 'trace'] : []),
+    ],
+    audio: includeAudio,
+    screen_video: includeScreen,
+    text_note: includeText,
+    registered_artifacts: includeState,
+  }
+}
+
 function buildFeedbackInviteUrl(baseUrl: string, token: string): string {
   const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
   const url = new URL('/feedback', base)
@@ -233,11 +273,7 @@ function actorForFeedbackInvite(invite: FeedbackInvitePublicRow): PortalCaptureA
     surface: 'feedback_invite',
     metadata: captureMetadata,
     consentScope: {
-      feedback_invite_id: invite.id,
-      reviewer_ref: invite.reviewer_ref,
-      source: invite.source,
-      target_route: invite.target_route,
-      allowed_capture_modes: invite.allowed_capture_modes,
+      ...feedbackInviteConsentScope(invite),
       ...captureMetadata,
     },
   }

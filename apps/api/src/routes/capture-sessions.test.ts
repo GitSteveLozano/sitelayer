@@ -70,6 +70,7 @@ type ArtifactRow = {
   pii_level: string
   access_policy: string
   redaction_version: string
+  client_upload_id?: string | null
   metadata: JsonRecord
   retention_expires_at: string | null
   deleted_at: string | null
@@ -315,6 +316,18 @@ class FakeCapturePool {
       return { rows, rowCount: rows.length }
     }
 
+    if (normalized.startsWith('select id, kind, storage_key') && normalized.includes('client_upload_id = $3')) {
+      const [companyId, id, clientUploadId] = params as [string, string, string]
+      const row = this.artifacts.find(
+        (a) =>
+          a.company_id === companyId &&
+          a.capture_session_id === id &&
+          a.client_upload_id === clientUploadId &&
+          !a.deleted_at,
+      )
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+
     // Agent-feed analyzer enqueue — the storage-backed artifact summary select.
     if (normalized.startsWith('select id, kind, content_type, byte_size, duration_ms')) {
       const [companyId, id] = params as [string, string]
@@ -371,7 +384,15 @@ class FakeCapturePool {
       const [companyId, id] = params as [string, string]
       const rows = this.artifacts
         .filter((a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at)
-        .map(({ storage_key: _storageKey, uri: _uri, deleted_at: _deletedAt, ...row }) => row)
+        .map(
+          ({
+            storage_key: _storageKey,
+            uri: _uri,
+            deleted_at: _deletedAt,
+            client_upload_id: _clientUploadId,
+            ...row
+          }) => row,
+        )
       return { rows, rowCount: rows.length }
     }
 
@@ -407,6 +428,21 @@ class FakeCapturePool {
     }
 
     if (normalized.startsWith('insert into capture_artifacts')) {
+      const hasClientUploadId = normalized.includes('client_upload_id')
+      const clientUploadId = hasClientUploadId ? ((params[14] as string | null) ?? null) : null
+      if (
+        normalized.includes('on conflict') &&
+        clientUploadId &&
+        this.artifacts.some(
+          (row) =>
+            row.company_id === params[0] &&
+            row.capture_session_id === params[1] &&
+            row.client_upload_id === clientUploadId &&
+            !row.deleted_at,
+        )
+      ) {
+        return { rows: [], rowCount: 0 }
+      }
       this.artifactCounter += 1
       const row: ArtifactRow = {
         id: `00000000-0000-4000-8000-${String(this.artifactCounter).padStart(12, '0')}`,
@@ -424,10 +460,11 @@ class FakeCapturePool {
         metadata: JSON.parse(params[11] as string) as JsonRecord,
         retention_expires_at: (params[12] as string | null) ?? null,
         redaction_version: params[13] as string,
+        client_upload_id: clientUploadId,
         deleted_at: null,
       }
       this.artifacts.push(row)
-      return { rows: [{ id: row.id }], rowCount: 1 }
+      return { rows: [row], rowCount: 1 }
     }
 
     if (normalized.startsWith('update capture_sessions set last_seen_at')) {
@@ -740,11 +777,12 @@ async function callMultipartRoute(
   path: string,
   parts: Parameters<typeof multipart>[0],
   role: CompanyRole = 'admin',
+  headers: Record<string, string> = {},
 ) {
   const storage = new MemoryStorage()
   const { ctx, responses } = makeCtx(pool, {}, role, storage)
   const { boundary, body } = multipart(parts)
-  const request = req('POST', body, { 'content-type': `multipart/form-data; boundary=${boundary}` })
+  const request = req('POST', body, { 'content-type': `multipart/form-data; boundary=${boundary}`, ...headers })
   const handled = await handleCaptureSessionRoutes(request, url(path), ctx)
   return { handled, responses, storage }
 }
@@ -947,6 +985,53 @@ describe('capture session routes', () => {
         artifact_count: 2,
       },
     })
+  })
+
+  it('replays duplicate multipart artifact uploads by client_upload_id', async () => {
+    const pool = new FakeCapturePool()
+    await callRoute(pool, 'POST', '/api/capture-sessions', {
+      capture_session_id: SESSION_ID,
+      mode: 'feedback',
+      consent_version: 'pilot-v1',
+    })
+
+    const payload = Buffer.from('retryable audio bytes')
+    const parts = [
+      { name: 'kind', value: 'audio' },
+      { name: 'client_upload_id', value: 'upload-audio-1' },
+      { name: 'duration_ms', value: '1250' },
+      { name: 'file', filename: 'audio.webm', contentType: 'audio/webm', body: payload },
+    ]
+    const headers = { 'idempotency-key': 'upload-audio-1' }
+
+    const first = await callMultipartRoute(
+      pool,
+      `/api/capture-sessions/${SESSION_ID}/artifacts/upload`,
+      parts,
+      'admin',
+      headers,
+    )
+    const second = await callMultipartRoute(
+      pool,
+      `/api/capture-sessions/${SESSION_ID}/artifacts/upload`,
+      parts,
+      'admin',
+      headers,
+    )
+
+    const firstBody = first.responses[0]?.body as { artifact: { id: string; storage_key: string } }
+    const secondBody = second.responses[0]?.body as {
+      artifact: { id: string; storage_key: string }
+      replayed?: boolean
+    }
+    expect(first.responses[0]?.status).toBe(201)
+    expect(second.responses[0]?.status).toBe(200)
+    expect(secondBody.replayed).toBe(true)
+    expect(secondBody.artifact.id).toBe(firstBody.artifact.id)
+    expect(secondBody.artifact.storage_key).toBe(firstBody.artifact.storage_key)
+    expect(secondBody.artifact.storage_key).toMatch(/client-upload-audio-1-audio\.webm$/)
+    expect(pool.artifacts).toHaveLength(1)
+    expect(pool.artifacts[0]?.client_upload_id).toBe('upload-audio-1')
   })
 
   it('rejects events and artifacts outside an explicit consent policy', async () => {
@@ -1261,17 +1346,8 @@ describe('capture session routes', () => {
       },
     })
     expect(pool.supportPackets[0]?.server_context).toMatchObject({
-      capture_session_id: SESSION_ID,
-      capture_session: {
-        summary: { id: SESSION_ID, mode: 'feedback' },
-        artifacts: [{ kind: 'transcript', redaction_version: 'capture-session-v1' }],
-      },
-    })
-    expect((pool.supportPackets[0]?.server_context as JsonRecord).capture_session).toMatchObject({
-      recent_events: expect.arrayContaining([
-        expect.objectContaining({ event_type: 'ui.click' }),
-        expect.objectContaining({ event_type: 'session.stopped' }),
-      ]),
+      capture_session_id: '[redacted]',
+      capture_session: '[redacted]',
     })
     // Operators are pinged on finalize, excluding the submitter ('user-1') — so
     // only 'admin-2' from the seeded admins gets a row. (Runs after the tx

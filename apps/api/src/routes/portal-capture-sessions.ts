@@ -1,7 +1,13 @@
 import type http from 'node:http'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
-import { CaptureArtifactUploadError, parseCaptureArtifactMultipart } from '../capture-artifact-upload.js'
+import {
+  CaptureArtifactUploadError,
+  captureArtifactClientUploadIdFromRequest,
+  captureArtifactObjectKeyPrefix,
+  normalizeCaptureArtifactClientUploadId,
+  parseCaptureArtifactMultipart,
+} from '../capture-artifact-upload.js'
 import { captureConsentAllowsArtifactKind, captureConsentAllowsEventClass } from '../capture-consent-policy.js'
 import type { ActiveCompany } from '../auth-types.js'
 import type { Identity } from '../auth.js'
@@ -95,6 +101,16 @@ type CaptureFinalizeSnapshot = {
   private_artifact_count: number
 }
 
+type CaptureArtifactUploadRow = {
+  id: string
+  kind: string
+  storage_key: string | null
+  content_type: string | null
+  byte_size: string | number | null
+  content_hash: string | null
+  redaction_version: string
+}
+
 const PORTAL_ACTOR_WORK_ITEM_METADATA_KEYS = [
   'estimate_share_link_id',
   'project_id',
@@ -129,6 +145,12 @@ function portalActorWorkItemMetadata(actor: PortalCaptureActor): JsonRecord {
     routed.portal_actor_source = actorMetadata.source
   }
   return routed
+}
+
+function portalActorWorkItemBinding(actor: PortalCaptureActor): { entityType?: string; entityId?: string } {
+  const actorMetadata = jsonRecord(actor.metadata)
+  const opsDiagnosticSessionId = optionalText(actorMetadata.ops_diagnostic_session_id, 160)
+  return opsDiagnosticSessionId ? { entityType: 'ops_diagnostic_session', entityId: opsDiagnosticSessionId } : {}
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -179,6 +201,21 @@ function parseMode(value: unknown): (typeof MODES)[number] | null {
 
 function requiresExplicitConsent(mode: (typeof MODES)[number]): boolean {
   return mode !== 'trace'
+}
+
+function captureModesFromScope(scope: Record<string, unknown> | undefined): Set<string> | null {
+  if (!scope || !Array.isArray(scope.allowed_capture_modes)) return null
+  return new Set(
+    scope.allowed_capture_modes.filter((mode): mode is string => typeof mode === 'string' && Boolean(mode.trim())),
+  )
+}
+
+function portalConsentAllowsMode(scope: Record<string, unknown> | undefined, mode: (typeof MODES)[number]): boolean {
+  const allowedModes = captureModesFromScope(scope)
+  if (!allowedModes) return true
+  if (mode === 'trace') return allowedModes.has('trace')
+  if (mode === 'desktop' || mode === 'native') return allowedModes.has('screen')
+  return ['text', 'audio', 'screen', 'state'].some((allowed) => allowedModes.has(allowed))
 }
 
 function responseRow(row: CaptureSessionRow): CaptureSessionRow {
@@ -405,6 +442,10 @@ export async function startPortalCaptureSession(ctx: PortalCaptureRouteCtx, acto
   const mode = parseMode(body.mode)
   if (!mode) {
     ctx.sendJson(400, { error: 'invalid capture session mode' })
+    return
+  }
+  if (!portalConsentAllowsMode(actor.consentScope, mode)) {
+    ctx.sendJson(403, { error: `feedback invite does not allow ${mode} capture sessions` })
     return
   }
   const consentVersion = optionalText(body.consent_version, 80) ?? ''
@@ -638,10 +679,39 @@ export async function uploadPortalCaptureArtifact(
     return
   }
 
+  const requestClientUploadId = captureArtifactClientUploadIdFromRequest(req)
+  if (requestClientUploadId) {
+    const replay = await withCompanyClient(actor.companyId, (client) =>
+      client.query<CaptureArtifactUploadRow>(
+        `select id, kind, storage_key, content_type, byte_size::text as byte_size, content_hash, redaction_version
+           from capture_artifacts
+          where company_id = $1
+            and capture_session_id = $2
+            and client_upload_id = $3
+            and deleted_at is null
+          limit 1`,
+        [actor.companyId, id, requestClientUploadId],
+      ),
+    )
+    const row = replay.rows[0]
+    if (row) {
+      ctx.sendJson(200, {
+        artifact: captureArtifactUploadResponse(row, {
+          storagePath: row.storage_key ?? '',
+          byteSize: Number(row.byte_size ?? 0),
+          contentHash: row.content_hash ?? '',
+        }),
+        replayed: true,
+      })
+      return
+    }
+  }
+  const objectKeyPrefix = captureArtifactObjectKeyPrefix(requestClientUploadId)
   let upload
   try {
     upload = await parseCaptureArtifactMultipart(req, storage, actor.companyId, id, {
       maxFileBytes: ctx.maxArtifactBytes ?? Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+      ...(objectKeyPrefix ? { objectKeyPrefix } : {}),
       allowKind: (kind) => captureConsentAllowsArtifactKind(session.consent_scope, kind),
       disallowedKindMessage: captureConsentArtifactError,
     })
@@ -651,21 +721,31 @@ export async function uploadPortalCaptureArtifact(
     return
   }
 
+  const fieldClientUploadId = normalizeCaptureArtifactClientUploadId(upload.fields.client_upload_id)
+  if (requestClientUploadId && fieldClientUploadId && requestClientUploadId !== fieldClientUploadId) {
+    await storage.deleteObject(upload.storagePath).catch(() => undefined)
+    ctx.sendJson(400, { error: 'client_upload_id does not match idempotency header' })
+    return
+  }
+  const clientUploadId = fieldClientUploadId ?? requestClientUploadId
   const durationMS = optionalNonNegativeInteger(Number(upload.fields.duration_ms))
   const retentionExpiresAt =
     optionalTimestampText(upload.fields.retention_expires_at) ?? session.retention_expires_at ?? null
-  const inserted = await withMutationTx(actor.companyId, async (client) => {
-    const result = await client.query<{ id: string }>(
+  const result = await withMutationTx(actor.companyId, async (client) => {
+    const inserted = await client.query<CaptureArtifactUploadRow>(
       `insert into capture_artifacts (
          company_id, capture_session_id, kind, storage_key, uri, content_type,
          byte_size, content_hash, duration_ms, pii_level, access_policy,
-         metadata, retention_expires_at, redaction_version
+         metadata, retention_expires_at, redaction_version, client_upload_id
        ) values (
          $1, $2, $3, $4, null, $5,
          $6, $7, $8, $9, $10,
-         $11::jsonb, $12::timestamptz, $13
+         $11::jsonb, $12::timestamptz, $13, $14
        )
-       returning id`,
+       on conflict (company_id, capture_session_id, client_upload_id)
+         where client_upload_id is not null and deleted_at is null
+       do nothing
+       returning id, kind, storage_key, content_type, byte_size::text as byte_size, content_hash, redaction_version`,
       [
         actor.companyId,
         id,
@@ -688,28 +768,51 @@ export async function uploadPortalCaptureArtifact(
           upload_source: 'portal_capture_artifact_upload',
           portal_surface: actor.surface,
           consent_authority: actor.authority,
+          ...(clientUploadId ? { client_upload_id: clientUploadId } : {}),
         }),
         retentionExpiresAt,
         CAPTURE_REDACTION_VERSION,
+        clientUploadId,
       ],
     )
+    let row = inserted.rows[0] ?? null
+    let replayed = false
+    if (!row && clientUploadId) {
+      const replay = await client.query<CaptureArtifactUploadRow>(
+        `select id, kind, storage_key, content_type, byte_size::text as byte_size, content_hash, redaction_version
+           from capture_artifacts
+          where company_id = $1
+            and capture_session_id = $2
+            and client_upload_id = $3
+            and deleted_at is null
+          limit 1`,
+        [actor.companyId, id, clientUploadId],
+      )
+      row = replay.rows[0] ?? null
+      replayed = row !== null
+    }
     await client.query(`update capture_sessions set last_seen_at = now() where id = $1 and company_id = $2`, [
       id,
       actor.companyId,
     ])
-    return result.rows[0]
+    return { row, replayed }
   })
 
-  ctx.sendJson(201, {
-    artifact: {
-      id: inserted?.id ?? null,
-      kind: upload.kind,
-      storage_key: upload.storagePath,
-      content_type: upload.mimeType,
-      byte_size: upload.bytes,
-      content_hash: upload.contentHash,
-      redaction_version: CAPTURE_REDACTION_VERSION,
-    },
+  if (!result.row) {
+    await storage.deleteObject(upload.storagePath).catch(() => undefined)
+    ctx.sendJson(500, { error: 'capture artifact insert did not return a row' })
+    return
+  }
+  if (result.replayed && result.row.storage_key !== upload.storagePath) {
+    await storage.deleteObject(upload.storagePath).catch(() => undefined)
+  }
+  ctx.sendJson(result.replayed ? 200 : 201, {
+    artifact: captureArtifactUploadResponse(result.row, {
+      storagePath: upload.storagePath,
+      byteSize: upload.bytes,
+      contentHash: upload.contentHash,
+    }),
+    ...(result.replayed ? { replayed: true } : {}),
   })
 }
 
@@ -771,6 +874,7 @@ export async function finalizePortalCaptureSession(
   const category = optionalText(body.category, 120) ?? 'portal_capture_session'
   const buildSha = snapshot.session.app_build_sha ?? ctx.buildSha ?? null
   const actorWorkItemMetadata = portalActorWorkItemMetadata(actor)
+  const actorWorkItemBinding = portalActorWorkItemBinding(actor)
   const rawClient: JsonRecord = {
     capture_session_id: id,
     path: route ? { route } : null,
@@ -843,6 +947,7 @@ export async function finalizePortalCaptureSession(
         lane: 'triage',
         severity,
         route,
+        ...actorWorkItemBinding,
         captureSessionId: id,
         createdByUserId: actorUserId,
         metadata: {
@@ -875,6 +980,8 @@ export async function finalizePortalCaptureSession(
           route: item.route,
           capture_session_id: id,
           support_packet_id: packet.id,
+          entity_type: item.entity_type,
+          entity_id: item.entity_id,
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
           portal_surface: actor.surface,
@@ -1122,11 +1229,33 @@ export async function discardPortalCaptureSession(
   })
 }
 
+export function __portalActorWorkItemBindingForTests(actor: PortalCaptureActor): {
+  entityType?: string
+  entityId?: string
+} {
+  return portalActorWorkItemBinding(actor)
+}
+
 function parseMetadataField(value: string | undefined): Record<string, unknown> {
   if (!value) return {}
   try {
     return jsonRecord(JSON.parse(value) as unknown)
   } catch {
     return {}
+  }
+}
+
+function captureArtifactUploadResponse(
+  row: CaptureArtifactUploadRow,
+  fallback: { storagePath: string; byteSize: number; contentHash: string },
+) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    storage_key: row.storage_key ?? fallback.storagePath,
+    content_type: row.content_type ?? 'application/octet-stream',
+    byte_size: Number(row.byte_size ?? fallback.byteSize),
+    content_hash: row.content_hash ?? fallback.contentHash,
+    redaction_version: row.redaction_version,
   }
 }

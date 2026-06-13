@@ -551,7 +551,7 @@ class FakePool {
         deleted_at: null,
       }
       this.captureArtifacts.push(row)
-      return { rows: [{ id: row.id }], rowCount: 1 }
+      return { rows: [row], rowCount: 1 }
     }
     if (normalized.startsWith('select * from capture_sessions')) {
       const [companyId, id, actorRef] = params as [string, string, string]

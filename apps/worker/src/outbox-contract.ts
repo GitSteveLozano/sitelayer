@@ -35,6 +35,7 @@ export const DEDICATED_RUNNER_REGISTRY: Readonly<Record<string, string>> = {
   notify_foreman_decline: 'apps/worker/src/crew-schedule-confirm-processor.ts',
   delete_blueprint_storage_object: 'apps/worker/src/runners/blueprint-storage-gc.ts',
   dispatch_mesh_work_request: 'apps/worker/src/runners/context-work-dispatch.ts',
+  ops_diagnostic_capture_route: 'apps/worker/src/runners/ops-diagnostic-capture-route.ts',
   // drainAgentMutations-based runners.
   takeoff_to_bid: 'apps/worker/src/runners/takeoff-to-bid.ts',
   voice_to_log: 'apps/worker/src/runners/voice-to-log.ts',

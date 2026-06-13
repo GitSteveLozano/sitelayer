@@ -411,6 +411,7 @@ export class FeedbackCaptureController {
         kind: 'rrweb',
         file: recorded.blob,
         fileName: 'replay.json',
+        client_upload_id: feedbackCaptureUploadId(captureSessionId, 'rrweb'),
         pii_level: 'private',
         access_policy: 'support_only',
         metadata: {
@@ -443,6 +444,7 @@ export class FeedbackCaptureController {
         kind: 'audio',
         file: pending.audioRecording.blob,
         fileName: fileNameForAudio(pending.audioRecording.mime_type),
+        client_upload_id: feedbackCaptureUploadId(captureSessionId, 'audio'),
         duration_ms: pending.audioRecording.duration_ms,
         pii_level: 'private',
         access_policy: 'support_only',
@@ -461,6 +463,7 @@ export class FeedbackCaptureController {
         kind: 'rrweb',
         file: pending.replayRecording.blob,
         fileName: 'replay.json',
+        client_upload_id: feedbackCaptureUploadId(captureSessionId, 'rrweb'),
         pii_level: 'private',
         access_policy: 'support_only',
         metadata: {
@@ -501,6 +504,7 @@ export class FeedbackCaptureController {
       kind: 'audio',
       file: recorded.blob,
       fileName: fileNameForAudio(recorded.mime_type),
+      client_upload_id: feedbackCaptureUploadId(captureSessionId, 'audio'),
       duration_ms: recorded.duration_ms,
       pii_level: 'private',
       access_policy: 'support_only',
@@ -510,6 +514,10 @@ export class FeedbackCaptureController {
       },
     })
   }
+}
+
+function feedbackCaptureUploadId(captureSessionId: string, artifact: 'audio' | 'rrweb'): string {
+  return `record_feedback:${captureSessionId}:${artifact}`
 }
 
 function createPendingStopState(input: FeedbackCaptureStopInput): PendingStopState {

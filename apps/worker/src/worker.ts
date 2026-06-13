@@ -31,6 +31,7 @@ import { createDebugBundleRunner } from './runners/debug-bundle.js'
 import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
+import { createOpsDiagnosticCaptureRouteRunner } from './runners/ops-diagnostic-capture-route.js'
 import { createWorkDispatchReconcilerRunner } from './runners/work-dispatch-reconciler.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
 import { createAgentFeedLeaseSweepRunner } from './runners/agent-feed-lease-sweep.js'
@@ -155,6 +156,7 @@ const takeoffCaptureRunner = createTakeoffCaptureRunner({
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
+const opsDiagnosticCaptureRouteRunner = createOpsDiagnosticCaptureRouteRunner({ pool, logger })
 const workDispatchReconcilerRunner = createWorkDispatchReconcilerRunner({ pool })
 const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
 // Requeue agent-feed concerns wedged in 'claimed' by a crashed executor
@@ -670,6 +672,23 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
 
+  const opsDiagnosticCaptureRouteSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'ops_diagnostic_capture_route',
+    () =>
+      opsDiagnosticCaptureRouteRunner(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] ops_diagnostic_capture_route drain failed')
+        captureWithEntityContext(error, {
+          scope: 'ops_diagnostic_capture_route',
+          entity_type: 'ops_diagnostic_session',
+          company_id: companyId,
+        })
+        return { processed: 0, delivered: 0, failed: 1, skipped: 0 }
+      }),
+    { processed: 0, delivered: 0, failed: 0, skipped: 0 },
+  )
+
   const workDispatchReconcileSummary = await runIfLaneActive(
     pool,
     logger,
@@ -837,6 +856,10 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     debug_bundle_skipped: debugBundleSummary.skipped,
     context_work_dispatch_processed: contextWorkDispatchSummary.processed,
     context_work_dispatch_failed: contextWorkDispatchSummary.failed,
+    ops_diagnostic_capture_route_processed: opsDiagnosticCaptureRouteSummary.processed,
+    ops_diagnostic_capture_route_delivered: opsDiagnosticCaptureRouteSummary.delivered,
+    ops_diagnostic_capture_route_failed: opsDiagnosticCaptureRouteSummary.failed,
+    ops_diagnostic_capture_route_skipped: opsDiagnosticCaptureRouteSummary.skipped,
     work_dispatch_reconcile_ran: workDispatchReconcileSummary.ran,
     work_dispatch_reconcile_reconciled: workDispatchReconcileSummary.reconciled,
     work_dispatch_reconcile_failed: workDispatchReconcileSummary.failed,
@@ -909,6 +932,7 @@ async function drainCompany(company: ActiveCompany): Promise<{ idle: boolean }> 
     captureArtifactAnalysisSummary.analyzed > 0 ||
     debugBundleSummary.processed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
+    opsDiagnosticCaptureRouteSummary.processed > 0 ||
     workDispatchReconcileSummary.ran ||
     workRequestStaleSummary.ran ||
     agentFeedLeaseSweepSummary.ran ||

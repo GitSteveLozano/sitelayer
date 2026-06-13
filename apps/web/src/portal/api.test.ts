@@ -161,6 +161,7 @@ describe('public portal API capture headers', () => {
       kind: 'audio',
       file: new Blob(['hello'], { type: 'audio/webm' }),
       fileName: 'feedback.webm',
+      client_upload_id: 'portal-upload-audio-1',
       duration_ms: 1200,
       pii_level: 'private',
       metadata: { source: 'portal_mic' },
@@ -174,9 +175,11 @@ describe('public portal API capture headers', () => {
     const headers = init.headers as Headers
     expect(headers.get('content-type')).toBeNull()
     expect(headers.get('authorization')).toBeNull()
+    expect(headers.get('idempotency-key')).toBe('portal-upload-audio-1')
     expect(init.body).toBeInstanceOf(FormData)
     const form = init.body as FormData
     expect(form.get('kind')).toBe('audio')
+    expect(form.get('client_upload_id')).toBe('portal-upload-audio-1')
     expect(form.get('duration_ms')).toBe('1200')
     expect(form.get('pii_level')).toBe('private')
     expect(form.get('metadata')).toBe(JSON.stringify({ source: 'portal_mic' }))

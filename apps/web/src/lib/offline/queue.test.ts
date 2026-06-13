@@ -39,6 +39,21 @@ describe('enqueueOfflineMutation — Blob safety', () => {
     ).rejects.toBeInstanceOf(OfflineQueuePayloadError)
   })
 
+  it('allows worker issue attachment Blobs under the attachments slot', async () => {
+    const blob = new Blob(['photo'], { type: 'image/jpeg' })
+    let error: unknown
+    try {
+      await enqueueOfflineMutation('worker_issue_submit', {
+        companySlug: 'acme',
+        body: { kind: 'safety', message: 'Crew stopped', severity: 'stopped' },
+        attachments: [{ kind: 'photo', payload: blob, fileName: 'site.jpg' }],
+      })
+    } catch (err) {
+      error = err
+    }
+    expect(error).not.toBeInstanceOf(OfflineQueuePayloadError)
+  })
+
   it('attaches the offending path to the error', async () => {
     const blob = new Blob(['x'])
     try {

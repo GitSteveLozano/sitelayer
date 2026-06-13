@@ -1,17 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import {
+  actionStatusTone,
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
   buildLeaveBehindCaptureInviteInput,
   canOpenDesktopEvidence,
   desktopEvidenceTone,
+  formatActionStatusSummary,
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
   formatDesktopEvidenceSummary,
+  latestDiagnosticActionStatusLookup,
+  reusableLeaveBehindCaptureUrl,
   resolveLatestDesktopEvidence,
+  shareOrCopyMobileLink,
+  visibleDiagnosticActions,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
+  OpsOnsiteDiagnosticActionStatusResponse,
   OpsOnsiteDiagnosticAgentFeedDelivery,
   OpsOnsiteDiagnosticDesktopEvidenceResult,
   OpsOnsiteDiagnosticSessionActionResponse,
@@ -139,6 +146,77 @@ describe('MobileOps agent-feed delivery copy', () => {
   })
 })
 
+describe('MobileOps onsite action status', () => {
+  it('derives the latest status lookup from durable audit events', () => {
+    const current = session({
+      audit_events: [
+        {
+          id: 'event-1',
+          at: '2026-06-12T12:05:00.000Z',
+          actor_user_id: 'user_1',
+          type: 'action.requested',
+          action_key: 'capture_field_context',
+          client_action_id: 'tap-old',
+          effect: 'audit_only',
+          summary: 'Requested field context.',
+        },
+        {
+          id: 'event-2',
+          at: '2026-06-12T12:06:00.000Z',
+          actor_user_id: 'user_1',
+          type: 'action.requested',
+          action_key: 'dispatch_agent_review',
+          client_action_id: 'tap-new',
+          effect: 'audit_only',
+          summary: 'Requested agent review.',
+        },
+      ],
+    })
+
+    expect(latestDiagnosticActionStatusLookup(current)).toEqual({
+      sessionId: 'diag-session-1',
+      actionKey: 'dispatch_agent_review',
+      clientActionId: 'tap-new',
+    })
+    expect(latestDiagnosticActionStatusLookup(session())).toBeNull()
+  })
+
+  it('formats retrying and failed compact action status', () => {
+    const retrying: OpsOnsiteDiagnosticActionStatusResponse['action_status'] = {
+      session_id: 'diag-session-1',
+      action_event_id: 'event-1',
+      action_key: 'dispatch_agent_review',
+      client_action_id: 'tap-new',
+      requested_at: '2026-06-12T12:06:00.000Z',
+      state: 'retrying',
+      summary: 'Action accepted; worker delivery is still pending or retrying.',
+      accepted_action: { key: 'dispatch_agent_review', effect: 'audit_only' },
+      capture_route: {
+        outbox_id: 'outbox-1',
+        outbox_status: 'pending',
+        attempt_count: 2,
+        next_attempt_at: '2026-06-12T12:10:00.000Z',
+        applied_at: null,
+        error: 'router unavailable',
+        result: null,
+      },
+    }
+    const failed: OpsOnsiteDiagnosticActionStatusResponse['action_status'] = {
+      ...retrying,
+      state: 'failed',
+      summary: 'Action delivery failed.',
+      capture_route: { ...retrying.capture_route!, outbox_status: 'failed' },
+    }
+
+    expect(actionStatusTone('retrying')).toBe('amber')
+    expect(actionStatusTone('delivered')).toBe('green')
+    expect(formatActionStatusSummary(retrying)).toBe(
+      'Action accepted; worker delivery is still pending or retrying. Route row is pending.',
+    )
+    expect(formatActionStatusSummary(failed)).toBe('Action delivery failed. router unavailable')
+  })
+})
+
 describe('MobileOps desktop evidence copy', () => {
   it('shows whether a desktop evidence clip attached', () => {
     const attached = desktopEvidence()
@@ -191,7 +269,7 @@ describe('MobileOps field readiness checklist', () => {
       agentFeed: component({
         key: 'agent_feed',
         label: 'Agent Feed',
-        facts: { audience_has_token: true },
+        facts: { audience_has_token: true, audience_live: true },
       }),
       onsiteSession: plan(),
     })
@@ -225,7 +303,7 @@ describe('MobileOps field readiness checklist', () => {
         key: 'agent_feed',
         label: 'Agent Feed',
         status: 'ok',
-        facts: { audience_has_token: true },
+        facts: { audience_has_token: true, audience_live: true },
       }),
       onsiteSession: plan({
         status: 'limited',
@@ -271,5 +349,88 @@ describe('MobileOps leave-behind capture invite', () => {
       },
     })
     expect(JSON.stringify(payload)).not.toContain('control_token')
+  })
+
+  it('does not reuse a cached leave-behind invite across diagnostic sessions', () => {
+    const cached = { url: 'https://app.sitelayer.test/guest/old', session_id: 'diag-session-1' }
+
+    expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-1' }))).toBe(cached.url)
+    expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-2' }))).toBeNull()
+    expect(reusableLeaveBehindCaptureUrl(cached, null)).toBeNull()
+    expect(reusableLeaveBehindCaptureUrl({ url: cached.url, session_id: null }, null)).toBe(cached.url)
+  })
+})
+
+describe('MobileOps onsite diagnostic action list', () => {
+  it('shows every planned action only while this phone holds control', () => {
+    const controlledSession = session({
+      plan: plan({
+        actions: [
+          { key: 'capture_field_context', label: 'Capture field context', enabled: true, reason: 'Ready.' },
+          { key: 'capture_desktop_context', label: 'Attach desktop evidence', enabled: true, reason: 'Ready.' },
+          { key: 'route_support_packet', label: 'Route support packet', enabled: false, reason: 'Router offline.' },
+          { key: 'dispatch_agent_review', label: 'Dispatch agent review', enabled: true, reason: 'Ready.' },
+        ],
+      }),
+    })
+
+    expect(visibleDiagnosticActions(controlledSession, true).map((action) => action.key)).toEqual([
+      'capture_field_context',
+      'capture_desktop_context',
+      'route_support_packet',
+      'dispatch_agent_review',
+    ])
+    expect(visibleDiagnosticActions(controlledSession, false)).toEqual([])
+    expect(visibleDiagnosticActions(null, true)).toEqual([])
+  })
+})
+
+describe('MobileOps link sharing', () => {
+  it('uses native share before clipboard when available', async () => {
+    const calls: ShareData[] = []
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        share: async (data) => {
+          calls.push(data)
+        },
+        clipboard: {
+          writeText: async () => {
+            throw new Error('clipboard should not be used')
+          },
+        },
+      }),
+    ).resolves.toBe('shared')
+    expect(calls).toEqual([{ title: 'Handoff', url: 'https://app.sitelayer.test/handoff' }])
+  })
+
+  it('falls back to clipboard and then visible manual links', async () => {
+    const copied: string[] = []
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        share: async () => {
+          throw new Error('share cancelled')
+        },
+        clipboard: {
+          writeText: async (value) => {
+            copied.push(value)
+          },
+        },
+      }),
+    ).resolves.toBe('copied')
+    expect(copied).toEqual(['https://app.sitelayer.test/handoff'])
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        clipboard: {
+          writeText: async () => {
+            throw new Error('clipboard unavailable')
+          },
+        },
+      }),
+    ).resolves.toBe('manual')
+
+    await expect(shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {})).resolves.toBe('manual')
   })
 })

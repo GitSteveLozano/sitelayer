@@ -14,7 +14,7 @@
 // hooks use — auth headers + token provider all run as normal.
 
 import { Sentry } from '@/instrument'
-import { ApiError, NetworkError, request } from '@/lib/api/client'
+import { API_URL, ApiError, NetworkError, buildAuthHeaders, request } from '@/lib/api/client'
 import {
   listOfflineMutations,
   removeOfflineMutation,
@@ -301,6 +301,12 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
     case 'capture_session_finalize':
       await replayCaptureSessionFinalize(row)
       return
+    case 'worker_issue_submit':
+      await replayWorkerIssueSubmit(row)
+      return
+    case 'worker_issue_attachment_upload':
+      await replayWorkerIssueAttachmentUpload(row)
+      return
     default: {
       // Exhaustiveness guard — unknown kinds are dropped after one
       // attempt so a stale queue from an old client doesn't accumulate.
@@ -351,6 +357,7 @@ function captureUploadInputFromPayload(payload: Record<string, unknown>): Captur
     file,
   }
   if (typeof payload.fileName === 'string') input.fileName = payload.fileName
+  if (typeof payload.client_upload_id === 'string') input.client_upload_id = payload.client_upload_id
   if (typeof payload.duration_ms === 'number') input.duration_ms = payload.duration_ms
   if (isCapturePiiLevel(payload.pii_level)) input.pii_level = payload.pii_level
   if (isCaptureAccessPolicy(payload.access_policy)) input.access_policy = payload.access_policy
@@ -404,6 +411,107 @@ async function replayCaptureSessionFinalize(row: OfflineMutation): Promise<void>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+type OfflineWorkerIssueAttachment = {
+  kind: 'voice' | 'photo'
+  file: Blob | File
+  fileName: string
+  client_upload_id: string
+}
+
+function workerIssueAttachmentFromPayload(payload: Record<string, unknown>): OfflineWorkerIssueAttachment {
+  const kind = payload.kind === 'voice' || payload.kind === 'photo' ? payload.kind : null
+  const file = payload.file
+  const clientUploadId =
+    typeof payload.client_upload_id === 'string' && payload.client_upload_id.trim()
+      ? payload.client_upload_id.trim()
+      : null
+  const isFile = typeof File !== 'undefined' && file instanceof File
+  const isBlob = typeof Blob !== 'undefined' && file instanceof Blob
+  if (!kind || !clientUploadId || (!isFile && !isBlob)) {
+    throw new ApiError({
+      status: 400,
+      path: '/api/worker-issues/:id/attachments',
+      method: 'POST',
+      requestId: null,
+      body: { error: 'queued worker issue attachment is missing kind, idempotency key, or blob payload' },
+    })
+  }
+  return {
+    kind,
+    file,
+    fileName: typeof payload.fileName === 'string' ? payload.fileName : kind === 'voice' ? 'voice.webm' : 'photo.jpg',
+    client_upload_id: clientUploadId,
+  }
+}
+
+async function uploadQueuedWorkerIssueAttachment(
+  companySlug: string | undefined,
+  issueId: string,
+  attachment: OfflineWorkerIssueAttachment,
+): Promise<void> {
+  const form = new FormData()
+  form.append('kind', attachment.kind)
+  form.append('client_upload_id', attachment.client_upload_id)
+  form.append('file', attachment.file, attachment.fileName)
+  const headers = await buildAuthHeaders(companySlug ? { companySlug } : {})
+  headers.set('Idempotency-Key', attachment.client_upload_id)
+  const path = `/api/worker-issues/${encodeURIComponent(issueId)}/attachments`
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
+  } catch (err) {
+    throw new NetworkError({ path, method: 'POST', cause: err })
+  }
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    let body: unknown = null
+    try {
+      body = contentType.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      // Keep the null fallback when the error body cannot be parsed.
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId: null, body })
+  }
+}
+
+async function replayWorkerIssueSubmit(row: OfflineMutation): Promise<void> {
+  const companySlug = typeof row.payload.companySlug === 'string' ? row.payload.companySlug : undefined
+  const body = isRecord(row.payload.body) ? row.payload.body : {}
+  const response = await request<{ worker_issue: { id: string } }>('/api/worker-issues', {
+    method: 'POST',
+    json: body,
+    ...(companySlug ? { companySlug } : {}),
+  })
+  const issueId = response.worker_issue?.id
+  if (!issueId) {
+    throw new ApiError({
+      status: 502,
+      path: '/api/worker-issues',
+      method: 'POST',
+      requestId: null,
+      body: { error: 'worker issue replay response missing id' },
+    })
+  }
+  const attachments = Array.isArray(row.payload.attachments) ? row.payload.attachments : []
+  for (const raw of attachments) {
+    if (!isRecord(raw)) continue
+    const attachment = workerIssueAttachmentFromPayload({
+      kind: raw.kind,
+      file: raw.payload ?? raw.file,
+      fileName: raw.fileName,
+      client_upload_id: raw.clientUploadId ?? raw.client_upload_id,
+    })
+    await uploadQueuedWorkerIssueAttachment(companySlug, issueId, attachment)
+  }
+}
+
+async function replayWorkerIssueAttachmentUpload(row: OfflineMutation): Promise<void> {
+  const companySlug = typeof row.payload.companySlug === 'string' ? row.payload.companySlug : undefined
+  const issueId = String(row.payload.issueId ?? '')
+  const attachment = workerIssueAttachmentFromPayload(row.payload)
+  await uploadQueuedWorkerIssueAttachment(companySlug, issueId, attachment)
 }
 
 function isCapturePiiLevel(value: unknown): value is NonNullable<CaptureArtifactUploadInput['pii_level']> {

@@ -845,6 +845,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
         kind: 'video',
         file: recording.blob,
         fileName: 'screen-video.webm',
+        client_upload_id: `screen_recording:${captureSessionId}:video`,
         duration_ms: recording.duration_ms,
         pii_level: 'private',
         access_policy: 'support_only',
@@ -876,6 +877,7 @@ export function AuthenticatedFeedbackDock({ companySlug }: AuthenticatedFeedback
           kind: 'video_clip_manifest',
           file: clipManifest,
           fileName: 'video-clip-manifest.json',
+          client_upload_id: `screen_recording:${captureSessionId}:video_clip_manifest`,
           pii_level: 'internal',
           access_policy: 'support_only',
           metadata: {

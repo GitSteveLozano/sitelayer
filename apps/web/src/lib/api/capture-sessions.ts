@@ -68,6 +68,7 @@ export type CaptureArtifactUploadInput = {
   kind: string
   file: Blob
   fileName?: string
+  client_upload_id?: string
   duration_ms?: number
   pii_level?: CaptureArtifactInput['pii_level']
   access_policy?: CaptureArtifactInput['access_policy']
@@ -84,6 +85,7 @@ export type CaptureArtifactUploadResponse = {
     content_hash: string
     redaction_version: string
   }
+  replayed?: boolean
 }
 
 /**
@@ -315,14 +317,17 @@ export async function uploadCaptureArtifact(
   input: CaptureArtifactUploadInput,
 ): Promise<CaptureArtifactUploadResponse> {
   const form = new FormData()
+  const fileName = fileNameForArtifact(input.kind, input.file, input.fileName)
   form.append('kind', input.kind)
+  if (input.client_upload_id) form.append('client_upload_id', input.client_upload_id)
   if (input.duration_ms !== undefined) form.append('duration_ms', String(Math.max(0, Math.trunc(input.duration_ms))))
   if (input.pii_level) form.append('pii_level', input.pii_level)
   if (input.access_policy) form.append('access_policy', input.access_policy)
   if (input.metadata) form.append('metadata', JSON.stringify(input.metadata))
-  form.append('file', input.file, fileNameForArtifact(input.kind, input.file, input.fileName))
+  form.append('file', input.file, fileName)
 
   const headers = await buildAuthHeaders()
+  if (input.client_upload_id) headers.set('idempotency-key', input.client_upload_id)
   const path = `/api/capture-sessions/${encodeURIComponent(captureSessionId)}/artifacts/upload`
   const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
   if (!response.ok) throw await parseMultipartError(response, path)

@@ -8,6 +8,7 @@ import type { Readable } from 'node:stream'
 import {
   agentFeedBaseUrl,
   handleAgentFeedRoutes,
+  loadAgentFeedAudienceLiveness,
   mapCaptureArtifactsToConcernRefs,
   parseAgentFeedTokens,
   type AgentFeedRouteDeps,
@@ -111,6 +112,7 @@ class FakeFeedPool {
   artifacts: ArtifactRow[] = []
   workItems: WorkItemRow[] = []
   handoffEvents: JsonRecord[] = []
+  liveness = new Map<string, { audience: string; last_poll_at: string; updated_at: string }>()
   private concernCounter = 0
   private handoffCounter = 0
   private claimCounter = 0
@@ -196,6 +198,23 @@ class FakeFeedPool {
       normalized.startsWith('select set_config')
     ) {
       return { rows: [], rowCount: 0 }
+    }
+
+    if (normalized.startsWith('insert into agent_feed_audience_liveness')) {
+      const [audience] = params as [string]
+      const row = {
+        audience,
+        last_poll_at: '2026-06-09T12:00:00.000Z',
+        updated_at: '2026-06-09T12:00:00.000Z',
+      }
+      this.liveness.set(audience, row)
+      return { rows: [], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('select audience, last_poll_at::text as last_poll_at')) {
+      const [audience] = params as [string]
+      const row = this.liveness.get(audience)
+      return { rows: row ? [{ audience: row.audience, last_poll_at: row.last_poll_at }] : [], rowCount: row ? 1 : 0 }
     }
 
     if (normalized.startsWith('select concern from agent_feed_concerns')) {
@@ -521,6 +540,17 @@ describe('GET /api/agent-feed/concerns', () => {
     const body = responses[0]?.body as { concerns: JsonRecord[] }
     expect(body.concerns).toHaveLength(1)
     expect(body.concerns[0]?.concern_ref).toBe(pending.concern_ref)
+    expect(pool.liveness.get('capture-analyzer')).toMatchObject({
+      audience: 'capture-analyzer',
+      last_poll_at: '2026-06-09T12:00:00.000Z',
+    })
+    await expect(
+      loadAgentFeedAudienceLiveness(pool as unknown as Pool, 'capture-analyzer', Date.parse('2026-06-09T12:00:30Z')),
+    ).resolves.toMatchObject({
+      audience: 'capture-analyzer',
+      last_poll_age_seconds: 30,
+      live: true,
+    })
   })
 })
 
@@ -884,14 +914,34 @@ describe('POST /api/agent-feed/callbacks — terminal post-processing', () => {
     expect(pool.handoffEvents[0]).toMatchObject({ event_type: 'agent.completed' })
   })
 
-  it('409s a terminal callback for an already-terminal concern', async () => {
+  it('replays a duplicate terminal callback for an already-terminal concern', async () => {
     const pool = new FakeFeedPool()
     const row = pool.seedConcern({ status: 'succeeded' })
     const { deps, responses } = makeDeps(pool, { body: terminalCallback(row.concern_ref) })
 
     await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
 
+    expect(responses[0]?.status).toBe(202)
+    expect(responses[0]?.body).toMatchObject({
+      ok: true,
+      concern_ref: row.concern_ref,
+      status: 'succeeded',
+      replayed: true,
+    })
+    expect(pool.concerns[0]?.status).toBe('succeeded')
+  })
+
+  it('409s a conflicting terminal callback for an already-terminal concern', async () => {
+    const pool = new FakeFeedPool()
+    const row = pool.seedConcern({ status: 'succeeded' })
+    const { deps, responses } = makeDeps(pool, {
+      body: terminalCallback(row.concern_ref, { status: 'failed', error: 'late conflicting result' }),
+    })
+
+    await handleAgentFeedRoutes(req('POST', bearer('tok-analyzer')), url('/api/agent-feed/callbacks'), deps)
+
     expect(responses[0]?.status).toBe(409)
+    expect(pool.concerns[0]?.status).toBe('succeeded')
   })
 })
 

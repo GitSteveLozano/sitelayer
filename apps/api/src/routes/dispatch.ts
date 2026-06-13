@@ -417,10 +417,11 @@ const DISPATCH_ROUTE_REGISTRY: readonly DispatchRouteDescriptor[] = [
   {
     name: 'ops-diagnostics',
     order: 40,
-    handle: ({ req, url, ctx, sendJson, company, readBody, currentUserId }) =>
+    handle: ({ req, url, pool, ctx, sendJson, company, readBody, currentUserId }) =>
       handleOpsDiagnosticsRoutes(req, url, {
         requireCapability: ctx.requireCapability,
         sendJson,
+        pool,
         company,
         storage: ctx.storage,
         buildSha: getBuildSha(),
