@@ -354,6 +354,11 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // context-work-dispatch.ts so the generic drain cannot mark the
   // Mesh handoff applied before an agent system has actually accepted it.
   'dispatch_mesh_work_request',
+  // Mobile Ops onsite capture-router delivery — drained by
+  // apps/worker/src/runners/ops-diagnostic-capture-route.ts. The API attempts
+  // the route synchronously for phone feedback, but router outages must leave
+  // a retryable row rather than a green applied no-op.
+  'ops_diagnostic_capture_route',
   // Crew-schedule confirm side effects — drained by apps/worker/src/runners/
   // crew-schedule-confirm.ts (processCrewScheduleConfirm), which materializes
   // confirmed labor_entries / bumps projects.version and fans out the foreman

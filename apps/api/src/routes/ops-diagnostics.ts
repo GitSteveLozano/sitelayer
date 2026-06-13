@@ -1583,7 +1583,7 @@ async function enqueueOnsiteDiagnosticCaptureRouteOutboxTx(
     args.companyId,
     'ops_diagnostic_session',
     args.session.id,
-    OPS_CAPTURE_ROUTE_MUTATION_TYPE,
+    'ops_diagnostic_capture_route',
     {
       schema: 'sitelayer.ops_diagnostic_capture_route.v1',
       ops_diagnostic_session_id: args.session.id,
@@ -1624,7 +1624,7 @@ async function markOnsiteDiagnosticCaptureRouteOutbox(
   result: OpsOnsiteDiagnosticCaptureRouteResult | null,
 ): Promise<void> {
   if (!outbox || !result) return
-  const status = result.status === 'accepted' ? 'applied' : 'failed'
+  const status = captureRouteOutboxStatus(result)
   try {
     await withMutationTx(companyId, async (client: PoolClient) => {
       await client.query(
@@ -1634,7 +1634,7 @@ async function markOnsiteDiagnosticCaptureRouteOutbox(
                 applied_at = case when $3 = 'applied' then now() else null end,
                 error = $4,
                 payload = payload || jsonb_build_object('last_result', $5::jsonb),
-                next_attempt_at = now(),
+                next_attempt_at = case when $3 = 'pending' then now() + interval '2 minutes' else now() end,
                 updated_at = now()
           where company_id = $1
             and idempotency_key = $2
@@ -1652,6 +1652,18 @@ async function markOnsiteDiagnosticCaptureRouteOutbox(
   } catch {
     // The phone action already completed; a pending outbox row is still a useful retry/visibility signal.
   }
+}
+
+function captureRouteOutboxStatus(result: OpsOnsiteDiagnosticCaptureRouteResult): 'applied' | 'pending' | 'failed' {
+  if (result.status === 'accepted') return 'applied'
+  if (isRetryableCaptureRouteResult(result)) return 'pending'
+  return 'failed'
+}
+
+function isRetryableCaptureRouteResult(result: OpsOnsiteDiagnosticCaptureRouteResult): boolean {
+  if (result.status === 'not_configured') return true
+  if (result.http_status == null) return true
+  return result.http_status === 408 || result.http_status === 429 || result.http_status >= 500
 }
 
 async function deliverOnsiteDiagnosticCaptureRoute(
@@ -2916,6 +2928,12 @@ export function __buildOpsOnsiteDiagnosticManifestForTests(
   session: Omit<OpsOnsiteDiagnosticSessionRecord, 'diagnostic_manifest'>,
 ): OpsOnsiteDiagnosticManifest {
   return buildOpsOnsiteDiagnosticManifest(session)
+}
+
+export function __captureRouteOutboxStatusForTests(
+  result: OpsOnsiteDiagnosticCaptureRouteResult,
+): 'applied' | 'pending' | 'failed' {
+  return captureRouteOutboxStatus(result)
 }
 
 function summarizeGatewayDiagnostics(probe: ProbeResult): OpsDiagnosticComponent {

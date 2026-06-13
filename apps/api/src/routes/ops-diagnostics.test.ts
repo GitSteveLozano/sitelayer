@@ -7,6 +7,7 @@ import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../
 import {
   __buildOpsOnsiteDiagnosticManifestForTests,
   __captureOnsiteDesktopEvidenceForTests,
+  __captureRouteOutboxStatusForTests,
   __agentFeedDeliveryFromRowForTests,
   __anchorPersistentOnsiteWorkLinkForTests,
   __cancelOnsiteDiagnosticAgentFeedForTests,
@@ -1728,6 +1729,42 @@ describe('ops diagnostics', () => {
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_work_items'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_handoff_events'))).toHaveLength(1)
     expect(client.mutationOutbox).toHaveLength(1)
+  })
+
+  it('keeps retryable capture-router delivery failures pending for the worker drain', () => {
+    expect(
+      __captureRouteOutboxStatusForTests({
+        request_ref: 'opsdiag:session:dispatch_agent_review',
+        delivery_id: 'opsdiag:session:dispatch_agent_review:event',
+        status: 'accepted',
+        http_status: 202,
+        routed: true,
+        accepted: 1,
+        error: null,
+      }),
+    ).toBe('applied')
+    expect(
+      __captureRouteOutboxStatusForTests({
+        request_ref: 'opsdiag:session:dispatch_agent_review',
+        delivery_id: 'opsdiag:session:dispatch_agent_review:event',
+        status: 'failed',
+        http_status: 503,
+        routed: false,
+        accepted: null,
+        error: 'router unavailable',
+      }),
+    ).toBe('pending')
+    expect(
+      __captureRouteOutboxStatusForTests({
+        request_ref: 'opsdiag:session:dispatch_agent_review',
+        delivery_id: 'opsdiag:session:dispatch_agent_review:event',
+        status: 'failed',
+        http_status: 400,
+        routed: false,
+        accepted: null,
+        error: 'bad envelope',
+      }),
+    ).toBe('failed')
   })
 
   it('cancels pending and claimed routed agent-feed work when onsite control is cancelled', async () => {
