@@ -47,6 +47,13 @@ const DENIED_ID = process.env.E2E_FIELD_REQUEST_ID ?? '00000000-0000-4000-8000-0
  *   - /financial/billing-runs   FINANCIAL cluster (R3)
  *   - /rentals/utilization   INVENTORY/rentals cluster (R4)
  *   - /foreman/denied/:id    tonight's owner-denied → foreman loop screen
+ *
+ * Plus the onboarding + role first-run takeovers (A7). These are pre-workspace
+ * full-screen mounts in App.tsx (owner onboarding + the three teammate
+ * first-run primers) — the literal first screen every new pilot user sees, and
+ * previously the one cluster with zero render-crash coverage. They render
+ * without a seeded workspace, so the MOUNT guard is the cheapest catch for a
+ * blind port that lost its render wiring on the first-run path.
  */
 const ROUTES: ReadonlyArray<{ name: string; path: string }> = [
   { name: 'projects-list', path: '/projects' },
@@ -54,6 +61,10 @@ const ROUTES: ReadonlyArray<{ name: string; path: string }> = [
   { name: 'billing-runs', path: '/financial/billing-runs' },
   { name: 'rentals-utilization', path: '/rentals/utilization' },
   { name: 'foreman-denied', path: `/foreman/denied/${DENIED_ID}` },
+  { name: 'owner-onboarding', path: '/owner/onboarding' },
+  { name: 'foreman-first-run', path: '/foreman/first-run' },
+  { name: 'worker-first-run', path: '/worker/first-run' },
+  { name: 'estimator-first-run', path: '/estimator/first-run' },
 ]
 
 async function buildAuthedPage(context: BrowserContext): Promise<Page> {

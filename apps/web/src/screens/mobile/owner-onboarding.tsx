@@ -28,6 +28,11 @@
  *   - Company create → `useCreateCompany` + `setActiveCompanySlug` (same
  *     contract the existing wizard uses, incl. 409 suggested-slug bounce).
  *   - QBO connect → `fetchQboAuthUrl` then `window.location.assign(authUrl)`.
+ *   - Finish → latches `first_run_completed_at` on the owner's OWN membership
+ *     via POST /api/memberships/:id/first-run-complete (the same primitive the
+ *     teammate first-run screens use), then routes to /projects/new. The
+ *     membership id is resolved from /api/session scoped to the new company,
+ *     since `useCreateCompany` doesn't return it. Best-effort + idempotent.
  * Stub / client-only:
  *   - Trade + crew-size selection are presentational (no API field yet) —
  *     TODO(wire) once the company profile carries trade/crew metadata.
@@ -37,7 +42,15 @@ import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MShell, MBody, MButton, MButtonStack, MTopBar, MI } from '@/components/m'
-import { fetchQboAuthUrl, setActiveCompanySlug, suggestedSlugFromError, useCreateCompany } from '@/lib/api'
+import {
+  fetchQboAuthUrl,
+  request,
+  setActiveCompanySlug,
+  suggestedSlugFromError,
+  useCompleteFirstRun,
+  useCreateCompany,
+  type SessionResponse,
+} from '@/lib/api'
 
 type Step = 'company' | 'crew' | 'connect' | 'ready'
 const STEP_ORDER: readonly Step[] = ['company', 'crew', 'connect', 'ready'] as const
@@ -106,6 +119,7 @@ function slugify(name: string): string {
 export function OwnerOnboardingScreen() {
   const navigate = useNavigate()
   const createCompany = useCreateCompany()
+  const completeFirstRun = useCompleteFirstRun()
 
   const [step, setStep] = useState<Step>('company')
 
@@ -116,6 +130,10 @@ export function OwnerOnboardingScreen() {
   const [trade, setTrade] = useState<Trade | null>(null)
   const [companyError, setCompanyError] = useState<string | null>(null)
   const [created, setCreated] = useState(false)
+  // The slug the company was actually created under (post-409 it can differ
+  // from `effectiveSlug`). `finish()` resolves the owner's own membership id
+  // under this slug to latch first-run-complete.
+  const [createdSlug, setCreatedSlug] = useState<string | null>(null)
 
   // Crew step.
   const [crewSize, setCrewSize] = useState<CrewSize | null>(null)
@@ -159,6 +177,7 @@ export function OwnerOnboardingScreen() {
         seed_defaults: true,
       })
       setActiveCompanySlug(result.company.slug)
+      setCreatedSlug(result.company.slug)
       setCreated(true)
       goNext()
     } catch (e) {
@@ -189,8 +208,31 @@ export function OwnerOnboardingScreen() {
     }
   }
 
-  const finish = () => {
-    // TODO(wire): mark owner onboarding complete on the membership/company.
+  // Persist that the owner finished onboarding by latching
+  // `first_run_completed_at` on their OWN membership row via the existing
+  // POST /api/memberships/:id/first-run-complete primitive (the same one the
+  // teammate first-run screens use). `useCreateCompany` doesn't return the
+  // membership id, so we resolve it from /api/session scoped to the company we
+  // just created, then mark complete. Best-effort + idempotent server-side:
+  // a transient failure must never trap the owner out of their first project.
+  //
+  // TODO(wire): trade/crewSize are still client-only — persist them once the
+  // company profile carries trade/crew metadata (no field on the membership or
+  // company today). They already drive the Ready summary in-flow.
+  const finish = async () => {
+    const targetSlug = createdSlug
+    if (targetSlug) {
+      try {
+        const session = await request<SessionResponse>('/api/session', { companySlug: targetSlug })
+        const membershipId = session.memberships.find((m) => m.slug === targetSlug)?.id
+        if (membershipId) {
+          await completeFirstRun.mutateAsync({ membershipId })
+        }
+      } catch {
+        // Swallow — onboarding completion is a non-blocking latch; the owner
+        // must still reach /projects/new even if the persist round-trips fail.
+      }
+    }
     navigate('/projects/new', { replace: true })
   }
 

@@ -43,7 +43,7 @@ import {
   type SessionResponse,
 } from '@/lib/api'
 import { ACTIVE_COMPANY_STORAGE_KEY } from '@/lib/api/client'
-import { normalizeMobileShellRole } from '@/lib/active-context'
+import { normalizeMobileShellRole, type CompanyRole } from '@/lib/active-context'
 import { membershipRoleToPersona, type Role } from '@/lib/role'
 import { useIsDesktop } from '@/lib/use-is-desktop'
 
@@ -129,16 +129,30 @@ function CompanyShell({ activeCompany }: { activeCompany: ActiveCompany }) {
   if (error) return <WorkspaceLoadError error={error} />
 
   const session = sessionQuery.data ?? null
-  const sessionRole =
-    session?.memberships?.find((membership) => membership.slug === companySlug)?.role ??
-    activeCompany.role ??
-    session?.user?.role ??
-    null
+  const activeMembership = session?.memberships?.find((membership) => membership.slug === companySlug) ?? null
+  const sessionRole = activeMembership?.role ?? activeCompany.role ?? session?.user?.role ?? null
   const companyRole = normalizeMobileShellRole(sessionRole)
   const persona: Role =
     companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
+
+  // First-run gate. The membership row carries `first_run_completed_at`, written
+  // once a member finishes their role-specific priming (owner onboarding /
+  // foreman|worker|estimator first-run). When it is EXPLICITLY null on the
+  // active membership, this member has never been primed → send them to their
+  // first-run screen. Scoped to the bare root `/` ONLY (like the desktop bounce
+  // below) so deep links + the e2e nav still resolve for everyone.
+  //
+  // Fail-safe toward the workspace: we redirect ONLY when the field is the
+  // literal `null` we found on a matched membership. An older API that omits
+  // the field (undefined), or a membership we couldn't match, leaves the value
+  // "unknown" → no redirect, so a long-standing user is never trapped in
+  // first-run by a missing-data case.
+  if (location.pathname === '/' && activeMembership && activeMembership.first_run_completed_at === null) {
+    const firstRunPath = firstRunRouteForRole(companyRole)
+    if (firstRunPath) return <Navigate to={firstRunPath} replace />
+  }
 
   // Persona-aware default landing (replaces the former forced `/` → `/desktop`
   // redirect). Owners + foremen on a desktop viewport land on the command-
@@ -206,6 +220,30 @@ function persistActiveCompanySlug(slug: string): void {
 function OnboardingRedirect() {
   const isDesktop = useIsDesktop()
   return <Navigate to={isDesktop ? '/welcome' : '/owner/onboarding'} replace />
+}
+
+/**
+ * The role-specific first-run priming route for a brand-new member whose
+ * membership has never latched `first_run_completed_at`. Returns `null` for
+ * roles with no first-run takeover so the shell falls through to the workspace:
+ *   - `admin` (owner): reaches this shell only AFTER creating a company, and
+ *     owner onboarding's finish() latches the flag — re-routing a company-owning
+ *     admin into the /owner/onboarding company-creation flow would loop, so we
+ *     never gate it here.
+ *   - `bookkeeper`: no dedicated first-run screen exists yet (companion fix).
+ * The teammate personas each have a designed first-run takeover (App.tsx routes).
+ */
+function firstRunRouteForRole(role: CompanyRole): string | null {
+  switch (role) {
+    case 'foreman':
+      return '/foreman/first-run'
+    case 'member':
+      return '/worker/first-run'
+    case 'office':
+      return '/estimator/first-run'
+    default:
+      return null
+  }
 }
 
 function needsOnboarding(error: unknown): boolean {
