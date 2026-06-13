@@ -55,6 +55,11 @@ SKIP_INTEGRATION="${VERIFY_SKIP_INTEGRATION:-0}"
 # same seeded stack. Skip it independently when the local VLM judge / playwright
 # render engine is unavailable on this box.
 SKIP_VISREGRESS="${VERIFY_SKIP_VISREGRESS:-0}"
+# Opt-in: fold the e2e + visregress visual gate into a STANDARD run (default OFF
+# preserves the policy that e2e/visual is a --full opt-in). When 1, a standard
+# `npm run verify` ALSO stands up the seeded stage_e2e stack and runs the visual
+# gate. See docs/RELEASE_GATES.md.
+INCLUDE_VISUAL="${VERIFY_INCLUDE_VISUAL:-0}"
 
 # Distinct, high project name + ports so two runs (or a live local stack)
 # never collide. PID-suffixed by default; overridable for determinism.
@@ -801,14 +806,20 @@ main() {
       run_stage "integration" stage_integration || true
     fi
 
-    # e2e (full ONLY — opt-in, resource-heavy; not part of the default deploy gate)
-    if [ "$VERIFY_LEVEL" != "full" ]; then
+    # e2e (full ONLY — opt-in, resource-heavy; not part of the default deploy gate).
+    # VERIFY_INCLUDE_VISUAL=1 is the opt-in to fold the e2e + visregress visual
+    # gate into a STANDARD run too (stands up the same seeded stage_e2e stack),
+    # WITHOUT changing the default (standard stays static+build+unit+integration).
+    if [ "$VERIFY_LEVEL" != "full" ] && [ "$INCLUDE_VISUAL" != "1" ]; then
       loud "VERIFY_LEVEL=standard — e2e SKIPPED (the default deploy gate is static+build+unit+integration)." \
-           "Run 'verify-local.sh --full' (npm run verify:full) on a quiet/dedicated box for the Playwright e2e suite."
+           "Run 'verify-local.sh --full' (npm run verify:full) for Playwright e2e, or set VERIFY_INCLUDE_VISUAL=1 to fold the visual gate in."
     elif [ "$SKIP_E2E" = "1" ]; then
       loud "e2e stage SKIPPED via --skip-e2e / VERIFY_SKIP_E2E=1." \
            "The docker-compose Playwright suite did NOT run — this is a partial gate."
     else
+      if [ "$VERIFY_LEVEL" != "full" ] && [ "$INCLUDE_VISUAL" = "1" ]; then
+        loud "VERIFY_INCLUDE_VISUAL=1 — folding the e2e + visregress visual gate into this standard run (seeded stack)."
+      fi
       run_stage "e2e" stage_e2e || true
     fi
   fi

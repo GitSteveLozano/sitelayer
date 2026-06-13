@@ -72,6 +72,15 @@ const SCREENS = [
   { id: 'settings-home' },
   { id: 'projects-list' },
   { id: 'rentals-utilization' },
+  // Additional per-cluster coverage (gaps #6/#7). One representative route each
+  // for clusters the gate was blind to. These have NO committed baseline yet,
+  // so they render a candidate and report "no baseline" (a first-run capture
+  // prompt) rather than a failure — capture baselines in the canonical CI env
+  // (re-run top-screens.visual.spec.ts against the seeded stack) to gate them.
+  { id: 'foreman-field' }, // FIELD cluster (/field, foreman)
+  { id: 'owner-money' }, // FINANCIAL/owner cluster (/money, owner)
+  { id: 'foreman-crew' }, // CREW cluster (/crew, foreman)
+  { id: 'worker-hours' }, // WORKER/crew cluster (/hours, member)
 ]
 
 // 1+2. render fresh candidates via this repo's Playwright (unless CI / a test already did).
@@ -98,15 +107,23 @@ if (!SKIP_CAPTURE) {
   console.log('[sitelayer] VISREGRESS_SKIP_CAPTURE=1 — reusing existing __candidates__')
 }
 
-// 3. pair each baseline with its FRESH candidate. Only gate ids that produced a real candidate.
+// 3. pair each baseline with its FRESH candidate. Only gate ids that produced a real candidate
+//    AND have a committed baseline. The two "not gated" reasons are reported distinctly:
+//    - skipped:    no candidate rendered (app not reachable / screen failed to render)
+//    - noBaseline: a candidate rendered but there's no committed baseline yet (a newly added
+//                  cluster screen) — a first-run capture prompt, NOT a failure.
 const pairs = []
 const skipped = []
+const noBaseline = []
 for (const s of SCREENS) {
   const baseline = join(BASELINES, `${s.id}.png`)
   const candidate = join(CANDIDATES, `${s.id}.png`)
-  if (!existsSync(baseline)) continue
   if (!existsSync(candidate)) {
     skipped.push(s.id)
+    continue
+  }
+  if (!existsSync(baseline)) {
+    noBaseline.push(s.id)
     continue
   }
   pairs.push({ id: s.id, baseline, candidate })
@@ -117,8 +134,24 @@ if (skipped.length) {
     `[sitelayer] no fresh candidate for: ${skipped.join(', ')} — not gated this run (app not reachable / screen failed to render).`,
   )
 }
+if (noBaseline.length) {
+  console.warn(
+    `[sitelayer] candidate rendered but NO committed baseline yet for: ${noBaseline.join(', ')} — ` +
+      `first-run / newly added cluster screen; capture a baseline in the canonical env ` +
+      `(re-run e2e/visual/top-screens.visual.spec.ts) to start gating it. NOT a failure.`,
+  )
+}
 
 if (!pairs.length) {
+  if (noBaseline.length) {
+    // Candidates DID render — there's just no committed baseline to gate against
+    // yet. That's a first-run state, not the "app unreachable" failure below.
+    console.warn(
+      '[sitelayer] candidates rendered but no committed baselines to gate against yet — ' +
+        'capture baselines in the canonical env. Not gating this run (exit 0).',
+    )
+    process.exit(0)
+  }
   console.error(
     '[sitelayer] no fresh candidates rendered — refusing to pass on stale pairs.\n' +
       '  start a seeded app and set E2E_BASE_URL (e.g. http://localhost:3000), then re-run.',

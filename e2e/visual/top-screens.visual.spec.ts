@@ -157,3 +157,65 @@ test('baseline: rentals-utilization', { tag: '@visual' }, async ({ context }) =>
   await snap(page, 'rentals-utilization')
   await page.close()
 })
+
+/*
+ * Additional per-cluster coverage (gaps #6/#7). One representative route each
+ * for clusters the gate was previously blind to. Captured best-effort on the
+ * seeded stack; ready-waits never throw, so snap() always runs the settled
+ * capture. These have no committed baseline yet — run.mjs reports them as
+ * "no baseline / first-run" until a canonical baseline is captured here.
+ */
+
+test('baseline: foreman-field', { tag: '@visual' }, async ({ context }) => {
+  // FIELD cluster. `/field` renders the foreman field inbox with a "Field" top
+  // bar (apps/web/src/screens/mobile/foreman-field.tsx).
+  const page = await buildRolePage(context, 'e2e-foreman')
+  await page.goto('/field', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Field', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'foreman-field')
+  await page.close()
+})
+
+test('baseline: owner-money', { tag: '@visual' }, async ({ context }) => {
+  // FINANCIAL/owner cluster. `/money` renders the owner money screen with a
+  // "Money" top bar (apps/web/src/screens/mobile/owner-money.tsx).
+  const page = await buildRolePage(context, 'e2e-admin')
+  await page.goto('/money', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Money', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'owner-money')
+  await page.close()
+})
+
+test('baseline: foreman-crew', { tag: '@visual' }, async ({ context }) => {
+  // CREW cluster. `/crew` renders the foreman crew screen.
+  const page = await buildRolePage(context, 'e2e-foreman')
+  await page.goto('/crew', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByRole('heading')
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'foreman-crew')
+  await page.close()
+})
+
+test('baseline: worker-hours', { tag: '@visual' }, async ({ context }) => {
+  // WORKER/crew cluster. `/hours` renders the worker hours screen.
+  const page = await buildRolePage(context, 'e2e-member')
+  await page.goto('/hours', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByRole('heading')
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'worker-hours')
+  await page.close()
+})

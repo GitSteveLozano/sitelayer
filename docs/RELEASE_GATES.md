@@ -62,8 +62,17 @@ deleted on 2026-06-02 (the deploy workflows had already been removed in
   structurally blind to visual regressions. Skip with `--skip-visregress` /
   `VERIFY_SKIP_VISREGRESS=1`. Baselines: `e2e/visual/__baselines__/` (one
   representative route per ported cluster — settings / projects / financial /
-  inventory). Re-baseline against a seeded app:
+  inventory / field / crew / worker). Re-baseline against a seeded app:
   `E2E_BASE_URL=<seeded-app> npx playwright test -c e2e/visual.config.ts`.
+  The `SCREENS` list in `e2e/visregress/run.mjs` covers ~10 cluster routes; a
+  screen with NO committed baseline yet renders a candidate and reports
+  "no baseline / first-run" (capture a baseline to start gating it) — never a
+  failure.
+- **Opt-in: fold the visual gate into a STANDARD run** — `VERIFY_INCLUDE_VISUAL=1
+npm run verify` stands up the same seeded `stage_e2e` stack and runs the e2e +
+  `visregress` visual gate on a STANDARD run too (default OFF keeps e2e/visual a
+  `--full` opt-in, so the deploy gate's policy is unchanged unless you opt in).
+  Use it on a quiet box to gate visually without the full `--full` ceremony.
 
 There is no PR CI and no status check. GitHub branch protection on `main`
 (PR + review) is optional code-review hygiene only — it is no longer enforced
