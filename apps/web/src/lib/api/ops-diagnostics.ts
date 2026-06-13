@@ -16,6 +16,8 @@ export type OpsOnsiteDiagnosticActionKey =
   | 'capture_desktop_context'
   | 'route_support_packet'
   | 'dispatch_agent_review'
+export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel'
 
 export type OpsOnsiteDiagnosticAction = {
   key: OpsOnsiteDiagnosticActionKey
@@ -94,7 +96,7 @@ export type OpsOnsiteDiagnosticManifest = {
 
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
-  state: 'active'
+  state: OpsOnsiteDiagnosticSessionState
   created_at: string
   expires_at: string
   operator_user_id: string | null
@@ -173,6 +175,20 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   }
 }
 
+export type OpsOnsiteDiagnosticSessionControlInput = {
+  action: OpsOnsiteDiagnosticControlAction
+  control_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionControlResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_control.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  control: {
+    action: OpsOnsiteDiagnosticControlAction
+    expires_at: string
+  }
+}
+
 export type OpsDiagnosticsResponse = {
   schema: 'sitelayer.ops_diagnostics.v1'
   generated_at: string
@@ -210,6 +226,18 @@ export function requestOpsDiagnosticSessionAction(
 ): Promise<OpsOnsiteDiagnosticSessionActionResponse> {
   return apiPost<OpsOnsiteDiagnosticSessionActionResponse>(
     `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions`,
+    input,
+    companySlug,
+  )
+}
+
+export function controlOpsDiagnosticSession(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticSessionControlInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticSessionControlResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionControlResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/control`,
     input,
     companySlug,
   )

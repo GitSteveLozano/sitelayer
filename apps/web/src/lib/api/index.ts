@@ -156,6 +156,7 @@ export {
 } from './app-issues'
 
 export {
+  controlOpsDiagnosticSession,
   createOpsDiagnosticSession,
   fetchOpsDiagnostics,
   fetchOpsDiagnosticSessions,
@@ -167,12 +168,17 @@ export {
   type OpsOnsiteDiagnosticAgentFeedResult,
   type OpsOnsiteDiagnosticActionKey,
   type OpsOnsiteDiagnosticCaptureRouteResult,
+  type OpsOnsiteDiagnosticControlAction,
   type OpsOnsiteDiagnosticDesktopEvidenceResult,
+  type OpsOnsiteDiagnosticManifest,
   type OpsOnsiteDiagnosticSessionActionResponse,
+  type OpsOnsiteDiagnosticSessionControlInput,
+  type OpsOnsiteDiagnosticSessionControlResponse,
   type OpsOnsiteDiagnosticSessionCreateInput,
   type OpsOnsiteDiagnosticSessionCreateResponse,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
+  type OpsOnsiteDiagnosticSessionState,
   type OpsOnsiteDiagnosticSessionsResponse,
 } from './ops-diagnostics'
 

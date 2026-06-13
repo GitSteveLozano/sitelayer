@@ -65,6 +65,9 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   summary: string
 }
 
+export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel'
+
 export type OpsOnsiteDiagnosticManifest = {
   schema: 'sitelayer.ops_diagnostic_manifest.v1'
   generated_at: string
@@ -108,7 +111,7 @@ export type OpsOnsiteDiagnosticManifest = {
 
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
-  state: 'active'
+  state: OpsOnsiteDiagnosticSessionState
   created_at: string
   expires_at: string
   operator_user_id: string | null
@@ -139,6 +142,15 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
     desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult
     capture_route?: OpsOnsiteDiagnosticCaptureRouteResult
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
+  }
+}
+
+export type OpsOnsiteDiagnosticSessionControlResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_control.v1'
+  session: OpsOnsiteDiagnosticSessionRecord
+  control: {
+    action: OpsOnsiteDiagnosticControlAction
+    expires_at: string
   }
 }
 
@@ -298,6 +310,37 @@ export async function handleOpsDiagnosticsRoutes(
       return true
     }
     ctx.sendJson(405, { error: 'method not allowed' })
+    return true
+  }
+
+  const sessionControlMatch = url.pathname.match(/^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/control$/)
+  if (sessionControlMatch) {
+    if (req.method !== 'POST') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return true
+    const session = await lookupSession(ctx, sessionControlMatch[1] ?? '')
+    if (!session.ok) {
+      ctx.sendJson(session.status, { error: session.error })
+      return true
+    }
+    const body = await readRequestBody(ctx)
+    if (!body.ok) {
+      ctx.sendJson(400, { error: body.error })
+      return true
+    }
+    const controlResult = await recordOnsiteDiagnosticControl(
+      ctx,
+      session.value,
+      body.value,
+      ctx.getCurrentUserId?.() ?? null,
+    )
+    if (!controlResult.ok) {
+      ctx.sendJson(controlResult.status, { error: controlResult.error })
+      return true
+    }
+    ctx.sendJson(200, controlResult.value)
     return true
   }
 
@@ -615,6 +658,39 @@ async function recordOnsiteDiagnosticAction(
   }
 }
 
+async function recordOnsiteDiagnosticControl(
+  ctx: OpsDiagnosticsRouteCtx,
+  session: StoredOnsiteDiagnosticSession,
+  body: Record<string, unknown>,
+  actorUserId: string | null,
+): Promise<
+  | { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse }
+  | { ok: false; status: number; error: string }
+> {
+  const token = boundedString(body.control_token, 200)
+  if (!token || !controlTokenMatches(session, token)) return { ok: false, status: 403, error: 'invalid control token' }
+
+  const action = controlActionValue(body.action)
+  if (!action) return { ok: false, status: 400, error: 'action must be extend or cancel' }
+
+  const nextSession = ctx.company
+    ? await recordPersistentOnsiteDiagnosticControl(ctx.company.id, session, action, actorUserId)
+    : recordMemoryOnsiteDiagnosticControl(session, action, actorUserId)
+  if (!nextSession) return { ok: false, status: 404, error: 'diagnostic session not found' }
+
+  return {
+    ok: true,
+    value: {
+      schema: 'sitelayer.ops_diagnostic_session_control.v1',
+      session: publicSession(nextSession),
+      control: {
+        action,
+        expires_at: nextSession.expires_at,
+      },
+    },
+  }
+}
+
 function recordMemoryOnsiteDiagnosticAction(
   session: StoredOnsiteDiagnosticSession,
   actionKey: OpsOnsiteDiagnosticActionKey,
@@ -633,6 +709,74 @@ function recordMemoryOnsiteDiagnosticAction(
   }
   session.audit_events.push(event)
   return event
+}
+
+function recordMemoryOnsiteDiagnosticControl(
+  session: StoredOnsiteDiagnosticSession,
+  action: OpsOnsiteDiagnosticControlAction,
+  actorUserId: string | null,
+): StoredOnsiteDiagnosticSession | null {
+  if (session.state !== 'active' || Date.parse(session.expires_at) <= Date.now()) return null
+  const at = new Date()
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+    at: at.toISOString(),
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    effect: 'audit_only',
+    summary: action === 'extend' ? 'Extended onsite diagnostic control.' : 'Cancelled onsite diagnostic control.',
+  }
+  session.audit_events.push(event)
+  if (action === 'extend') {
+    session.expires_at = new Date(at.getTime() + SESSION_TTL_MS).toISOString()
+    return session
+  }
+  session.state = 'cancelled'
+  onsiteDiagnosticSessions.delete(session.id)
+  return session
+}
+
+async function recordPersistentOnsiteDiagnosticControl(
+  companyId: string,
+  session: StoredOnsiteDiagnosticSession,
+  action: OpsOnsiteDiagnosticControlAction,
+  actorUserId: string | null,
+): Promise<StoredOnsiteDiagnosticSession | null> {
+  const at = new Date()
+  const nextExpiresAt = action === 'extend' ? new Date(at.getTime() + SESSION_TTL_MS).toISOString() : session.expires_at
+  const nextState: OpsOnsiteDiagnosticSessionState = action === 'cancel' ? 'cancelled' : 'active'
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: randomUUID(),
+    at: at.toISOString(),
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    effect: 'audit_only',
+    summary: action === 'extend' ? 'Extended onsite diagnostic control.' : 'Cancelled onsite diagnostic control.',
+  }
+  return withMutationTx(companyId, async (client: PoolClient) => {
+    const updated = await client.query<PersistentSessionRow>(
+      `update ops_diagnostic_sessions
+          set state = $4,
+              expires_at = $5::timestamptz,
+              updated_at = $3::timestamptz
+        where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3::timestamptz
+        returning id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at`,
+      [companyId, session.id, at.toISOString(), nextState, nextExpiresAt],
+    )
+    const row = updated.rows[0]
+    if (!row) return null
+    await client.query(
+      `insert into ops_diagnostic_session_events (
+         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
+       ) values ($1, $2, $3, $4, 'action.requested', null, 'audit_only', $5, $6)`,
+      [event.id, companyId, session.id, actorUserId, event.summary, at.toISOString()],
+    )
+    const events = await listPersistentEvents(client, companyId, row.id)
+    const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
+    const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
+    const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
+    return persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
+  })
 }
 
 async function recordPersistentOnsiteDiagnosticAction(
@@ -1670,7 +1814,7 @@ function persistentSessionFromRow(
   return sessionWithWorkLink(
     {
       id: row.id,
-      state: 'active',
+      state: row.state === 'cancelled' ? 'cancelled' : 'active',
       created_at: isoString(row.created_at),
       expires_at: isoString(row.expires_at),
       operator_user_id: row.operator_user_id,
@@ -1955,6 +2099,10 @@ function actionKeyValue(value: unknown): OpsOnsiteDiagnosticActionKey | null {
     value === 'dispatch_agent_review'
     ? value
     : null
+}
+
+function controlActionValue(value: unknown): OpsOnsiteDiagnosticControlAction | null {
+  return value === 'extend' || value === 'cancel' ? value : null
 }
 
 function boundedString(value: unknown, maxLength: number): string | null {

@@ -17,6 +17,7 @@ import {
 } from '../../components/m/index.js'
 import {
   apiGet,
+  controlOpsDiagnosticSession,
   createOpsDiagnosticSession,
   fetchAppIssueBoard,
   fetchOpsDiagnostics,
@@ -33,6 +34,7 @@ import {
   type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticControlAction,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionPlan,
   type OpsOnsiteDiagnosticSessionRecord,
@@ -162,10 +164,16 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     if (!canCaptureAppIssues) return
     const storedControl = readOpsDiagnosticControl(companySlug)
     if (!storedControl) return
+    if (!diagnosticSessions.data) return
     const restoredSession = (diagnosticSessions.data?.sessions ?? []).find(
       (session) => session.id === storedControl.session_id,
     )
-    if (!restoredSession) return
+    if (!restoredSession) {
+      clearOpsDiagnosticControl(companySlug)
+      setActiveDiagnosticSession(null)
+      setDiagnosticControlToken(null)
+      return
+    }
     setActiveDiagnosticSession(restoredSession)
     setDiagnosticControlToken(storedControl.control_token)
   }, [canCaptureAppIssues, companySlug, diagnosticSessions.data?.sessions])
@@ -201,6 +209,38 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       setLastDiagnosticAction(response)
       if (diagnosticControlToken) persistOpsDiagnosticControl(companySlug, response.session, diagnosticControlToken)
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 403) {
+        clearOpsDiagnosticControl(companySlug)
+        setActiveDiagnosticSession(null)
+        setDiagnosticControlToken(null)
+      }
+    },
+  })
+  const controlDiagnosticSession = useMutation({
+    mutationFn: (action: OpsOnsiteDiagnosticControlAction) => {
+      if (!activeDiagnosticSession || !diagnosticControlToken) {
+        return Promise.reject(new Error('diagnostic session is not active'))
+      }
+      return controlOpsDiagnosticSession(
+        activeDiagnosticSession.id,
+        { action, control_token: diagnosticControlToken },
+        companySlug,
+      )
+    },
+    onSuccess: (response, action) => {
+      setLastDiagnosticAction(null)
+      if (action === 'cancel') {
+        clearOpsDiagnosticControl(companySlug)
+        setActiveDiagnosticSession(null)
+        setDiagnosticControlToken(null)
+      } else {
+        setActiveDiagnosticSession(response.session)
+        if (diagnosticControlToken) persistOpsDiagnosticControl(companySlug, response.session, diagnosticControlToken)
+      }
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+      void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 403) {
@@ -555,7 +595,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           {activeDiagnosticAction ? (
             <MListRow
               leading={<MI.Camera size={18} />}
-              leadingTone={activeDiagnosticAction.enabled ? 'blue' : 'amber'}
+              leadingTone={
+                requestDiagnosticAction.isPending
+                  ? 'blue'
+                  : activeDiagnosticAction.enabled
+                    ? 'blue'
+                    : 'amber'
+              }
               headline={
                 requestDiagnosticAction.isPending
                   ? 'Recording action'
@@ -566,6 +612,32 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 activeDiagnosticAction.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
                   ? () => requestDiagnosticAction.mutate(activeDiagnosticAction.key)
                   : undefined
+              }
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.Clock size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'green'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'Extend control window'}
+              supporting={`Keep phone control until ${formatClock(activeDiagnosticSession.expires_at)} or extend another hour.`}
+              onTap={
+                controlDiagnosticSession.isPending
+                  ? undefined
+                  : () => controlDiagnosticSession.mutate('extend')
+              }
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.ShieldAlert size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control window' : 'End phone control'}
+              supporting="Close this diagnostic window and clear the control token on this phone."
+              onTap={
+                controlDiagnosticSession.isPending
+                  ? undefined
+                  : () => controlDiagnosticSession.mutate('cancel')
               }
             />
           ) : null}

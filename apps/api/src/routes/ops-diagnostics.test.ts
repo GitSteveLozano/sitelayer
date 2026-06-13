@@ -636,6 +636,99 @@ describe('ops diagnostics', () => {
     })
   })
 
+  it('extends and cancels token-gated onsite diagnostic control windows', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      __resetOpsDiagnosticSessionsForTests()
+      const createdResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL('http://localhost/api/ops/diagnostics/sessions'),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => createdResponses.push({ status, body }),
+          readBody: async () => ({ label: 'Plant walkdown', intent: 'dispatch_agent_review' }),
+          getCurrentUserId: () => 'user_42',
+          fetchImpl: greenFetch(),
+        },
+      )
+      const created = createdResponses[0]?.body as {
+        control_token: string
+        session: { id: string; expires_at: string }
+      }
+      const originalExpiry = Date.parse(created.session.expires_at)
+
+      const deniedResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => deniedResponses.push({ status, body }),
+          readBody: async () => ({ control_token: 'wrong', action: 'extend' }),
+        },
+      )
+      expect(deniedResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+
+      const extendResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control`),
+        {
+          requireCapability: async (capability) => {
+            expect(capability).toBe('app_issue.capture')
+            return true
+          },
+          sendJson: (status, body) => extendResponses.push({ status, body }),
+          readBody: async () => ({ control_token: created.control_token, action: 'extend' }),
+          getCurrentUserId: () => 'user_99',
+        },
+      )
+      const extended = extendResponses[0]?.body as {
+        schema: string
+        control: { action: string; expires_at: string }
+        session: { state: string; expires_at: string; audit_events: Array<{ summary: string }> }
+      }
+      expect(extendResponses[0]?.status).toBe(200)
+      expect(extended).toMatchObject({
+        schema: 'sitelayer.ops_diagnostic_session_control.v1',
+        control: { action: 'extend' },
+        session: { state: 'active' },
+      })
+      expect(Date.parse(extended.session.expires_at)).toBeGreaterThanOrEqual(originalExpiry)
+      expect(extended.session.audit_events.map((event) => event.summary)).toContain(
+        'Extended onsite diagnostic control.',
+      )
+
+      const cancelResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => cancelResponses.push({ status, body }),
+          readBody: async () => ({ control_token: created.control_token, action: 'cancel' }),
+          getCurrentUserId: () => 'user_99',
+        },
+      )
+      expect(cancelResponses[0]?.status).toBe(200)
+      expect(cancelResponses[0]?.body).toMatchObject({
+        control: { action: 'cancel' },
+        session: { state: 'cancelled' },
+      })
+
+      const readAfterCancel: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'GET' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => readAfterCancel.push({ status, body }),
+        },
+      )
+      expect(readAfterCancel).toEqual([{ status: 404, body: { error: 'diagnostic session not found' } }])
+    })
+  })
+
   it('keeps the phone action accepted when capture-router delivery fails', async () => {
     await withReadyOpsAgentFeed(async () => {
       __resetOpsDiagnosticSessionsForTests()
