@@ -11,6 +11,7 @@ import {
   collectEntityRefs,
   collectRequestIds,
   handleSupportPacketRoutes,
+  insertSupportPacket,
   sanitizeSupportJson,
   type JsonRecord,
   type SupportPacketRouteCtx,
@@ -217,17 +218,63 @@ describe('support packet sanitization', () => {
     expect(
       sanitizeSupportJson({
         notes:
-          'Request failed with Authorization: Bearer live-token-123 and url https://app.test/callback?token=abc123&next=/x',
-        env: 'api_key="sk_live_123"; refresh_token=rt-live-456; password=hunter2',
+          'Request failed with Authorization: Bearer live-token-123 and url https://app.test/callback?client_secret=abc123&next=/x',
+        env: 'api_key="sk_live_123"; QBO_CLIENT_SECRET=qbo-live; DO_SPACES_SECRET=spaces-live; SENTRY_AUTH_TOKEN=sentry-live; refresh_token=rt-live-456; password=hunter2',
         cookie: 'Cookie: session=abc123; theme=light',
         error: 'payload eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.abcdef0123456789',
       }),
     ).toEqual({
       notes:
-        'Request failed with Authorization: Bearer [redacted] and url https://app.test/callback?token=[redacted]&next=/x',
-      env: 'api_key="[redacted]"; refresh_token=[redacted]; password=[redacted]',
+        'Request failed with Authorization: Bearer [redacted] and url https://app.test/callback?client_secret=[redacted]&next=/x',
+      env: 'api_key="[redacted]"; QBO_CLIENT_SECRET=[redacted]; DO_SPACES_SECRET=[redacted]; SENTRY_AUTH_TOKEN=[redacted]; refresh_token=[redacted]; password=[redacted]',
       cookie: '[redacted]',
       error: 'payload [redacted]',
+    })
+  })
+
+  it('sanitizes every persisted support packet input at the insert seam', async () => {
+    let capturedParams: unknown[] | null = null
+    const executor = {
+      query: async (_sql: string, params: unknown[]) => {
+        capturedParams = params
+        return {
+          rows: [
+            {
+              id: '00000000-0000-4000-8000-000000000202',
+              created_at: '2026-05-21T12:00:00.000Z',
+              expires_at: null,
+            },
+          ],
+        }
+      },
+    } as unknown as Parameters<typeof insertSupportPacket>[0]
+
+    await insertSupportPacket(executor, {
+      companyId: COMPANY_ID,
+      actorUserId: 'creator-1',
+      requestId: 'request-1',
+      route: '/feedback?client_secret=route-secret',
+      captureSessionId: null,
+      buildSha: 'test-build',
+      problem: 'Screen says refresh_token=rt-live',
+      client: {
+        body: 'Authorization: Bearer client-live-token',
+        nested: { api_key: 'key-live' },
+      },
+      serverContext: {
+        timeline: [{ line: 'worker failed with DO_SPACES_SECRET=spaces-live' }],
+      },
+      expiresAt: null,
+    })
+
+    expect(capturedParams?.[3]).toBe('/feedback?client_secret=[redacted]')
+    expect(capturedParams?.[6]).toBe('Screen says refresh_token=[redacted]')
+    expect(JSON.parse(String(capturedParams?.[7]))).toEqual({
+      body: 'Authorization: Bearer [redacted]',
+      nested: { api_key: '[redacted]' },
+    })
+    expect(JSON.parse(String(capturedParams?.[8]))).toEqual({
+      timeline: [{ line: 'worker failed with DO_SPACES_SECRET=[redacted]' }],
     })
   })
 

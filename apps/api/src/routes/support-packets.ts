@@ -110,11 +110,12 @@ const SENSITIVE_KEY =
   /authorization|cookie|password|passwd|secret|token|jwt|session|csrf|api[-_]?key|access[-_]?token|refresh[-_]?token/i
 const SENSITIVE_VALUE_KEY =
   /password|passwd|secret|token|jwt|session|csrf|api[-_]?key|access[-_]?token|refresh[-_]?token/i
+const SENSITIVE_VALUE_NAME = String.raw`(?:[A-Za-z0-9_-]*[-_])?(?:${SENSITIVE_VALUE_KEY.source})`
 const SENSITIVE_ASSIGNMENT_RE = new RegExp(
-  String.raw`\b((?:${SENSITIVE_VALUE_KEY.source})\s*[:=]\s*)(["']?)[^"',\s;&)]+`,
+  String.raw`\b((${SENSITIVE_VALUE_NAME})\s*[:=]\s*)(["']?)[^"',\s;&)]+`,
   'gi',
 )
-const SENSITIVE_QUERY_PARAM_RE = new RegExp(String.raw`([?&](?:${SENSITIVE_VALUE_KEY.source})=)[^&#\s]+`, 'gi')
+const SENSITIVE_QUERY_PARAM_RE = new RegExp(String.raw`([?&]${SENSITIVE_VALUE_NAME}=)[^&#\s]+`, 'gi')
 const BEARER_TOKEN_RE = /\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi
 const BASIC_TOKEN_RE = /\b(Basic\s+)[A-Za-z0-9+/=]{8,}/gi
 const COOKIE_HEADER_RE = /\b((?:Cookie|Set-Cookie)\s*[:=]\s*)[^\n]+/gi
@@ -133,7 +134,7 @@ function redactString(value: string, maxLength = MAX_STRING_LENGTH): string {
     .replace(BEARER_TOKEN_RE, '$1[redacted]')
     .replace(BASIC_TOKEN_RE, '$1[redacted]')
     .replace(SENSITIVE_QUERY_PARAM_RE, '$1[redacted]')
-    .replace(SENSITIVE_ASSIGNMENT_RE, '$1$2[redacted]')
+    .replace(SENSITIVE_ASSIGNMENT_RE, '$1$3[redacted]')
     .replace(JWT_RE, '[redacted]')
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}...[truncated]` : redacted
 }
@@ -272,6 +273,8 @@ export async function insertSupportPacket(
   executor: LedgerExecutor,
   input: InsertSupportPacketInput,
 ): Promise<{ id: string; created_at: string; expires_at: string | null }> {
+  const client = supportJsonRecord(input.client)
+  const serverContext = supportJsonRecord(input.serverContext)
   const result = await executor.query<{ id: string; created_at: string; expires_at: string | null }>(
     `insert into support_debug_packets (
        company_id, actor_user_id, request_id, route, capture_session_id, build_sha, problem, client, server_context, expires_at, redaction_version
@@ -281,12 +284,12 @@ export async function insertSupportPacket(
       input.companyId,
       input.actorUserId,
       input.requestId,
-      input.route,
+      input.route ? redactString(input.route) : null,
       input.captureSessionId ?? null,
       input.buildSha,
-      input.problem,
-      JSON.stringify(input.client),
-      JSON.stringify(input.serverContext),
+      input.problem ? redactString(input.problem) : null,
+      JSON.stringify(client),
+      JSON.stringify(serverContext),
       input.expiresAt,
       input.redactionVersion ?? REDACTION_VERSION,
     ],
