@@ -93,6 +93,31 @@ Common causes: bad migration left a missing column → run `ENV_FILE=/app/sitela
 
 **Escalate:** Sentry triage; if root cause is QBO connector, page Intuit dev support.
 
+### 1a. Sentry paging — wiring prod errors to a pager
+
+The detect step above assumes a Sentry alert actually pages someone. By
+default it does **not**: Sentry error alerting reaches only the Sentry
+dashboard + UptimeRobot, so a prod error can sit unseen. To wire prod errors
+to a pager destination, run:
+
+```bash
+SENTRY_AUTH_TOKEN=<token> SENTRY_ORG=sandolabs \
+  SENTRY_ALERT_EMAIL=<pager-mailbox> \
+  npm run ops:sentry-alerts
+```
+
+This CREATE-or-UPDATEs two Sentry issue-alert rules on the api (and worker)
+project — (a) **new unresolved issue** and (b) **error frequency spike** —
+pointing at the email destination, plus an optional generic
+PagerDuty/Slack-compatible webhook when `SENTRY_ALERT_WEBHOOK` is set. The
+token needs `project:write` + `alerts:write`. The script
+([`scripts/setup-sentry-alerts.mjs`](../scripts/setup-sentry-alerts.mjs)) is
+**idempotent** (rules keyed by a stable name — re-running converges, never
+duplicates) and a **clean no-op** when the token/org are unset, so it is safe
+to run from any box. See `.env.example` for the `SENTRY_ALERT_*` /
+`SENTRY_PROJECT_*` knobs. With this wired, the §1 "Sentry alert" detect step
+becomes a real page instead of a dashboard you have to remember to open.
+
 ---
 
 ## 2. Database down (DO managed Postgres outage)
