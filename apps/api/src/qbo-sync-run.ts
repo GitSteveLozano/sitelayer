@@ -21,6 +21,7 @@ import {
 import { HttpError } from './http-utils.js'
 import { observeWorkflowEvent } from './metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent } from './mutation-tx.js'
+import { dispatchWorkflowEvent } from './workflow-dispatch.js'
 
 export type QboSyncRunRow = {
   id: string
@@ -363,86 +364,89 @@ export async function dispatchQboSyncRunHumanEvent(
     actorUserId: string
   },
 ): Promise<QboSyncRunDispatchResult> {
-  const locked = await client.query<QboSyncRunRow>(
-    `select ${QBO_SYNC_RUN_COLUMNS}
-       from qbo_sync_runs
-       where company_id = $1 and id = $2 and deleted_at is null
-       for update`,
-    [args.companyId, args.runId],
-  )
-  const current = locked.rows[0]
-  if (!current) return { kind: 'not_found' }
-  const currentSnapshot = rowToQboSyncRunSnapshot(current)
-  if (currentSnapshot.state_version !== args.expectedStateVersion) {
-    return { kind: 'version_conflict', row: current, snapshot: currentSnapshot }
-  }
+  // Routed through the SAME dispatch primitive the human workflow-event routes
+  // use (this used to hand-roll the lock → version-check → reduce → persist →
+  // recordWorkflowEvent → outbox pipeline inline). The primitive owns the
+  // event-log append the replay harness regression-tests, so this human
+  // dispatcher can't silently forget it. The route-as-worker system events
+  // (START_SYNC genesis, SYNC_SUCCEEDED/FAILED) below still append directly —
+  // they are not human-event dispatches.
   const nowIso = new Date().toISOString()
-  const event: QboSyncRunWorkflowEvent =
-    args.eventType === 'RETRY'
-      ? { type: 'RETRY', retried_at: nowIso, triggered_by: args.actorUserId }
-      : { type: 'START_SYNC', started_at: nowIso, triggered_by: args.actorUserId }
-  let nextSnapshot: QboSyncRunWorkflowSnapshot
-  try {
-    nextSnapshot = transitionQboSyncRunWorkflow(currentSnapshot, event)
-  } catch (err) {
-    return {
-      kind: 'illegal_transition',
-      row: current,
-      snapshot: currentSnapshot,
-      message: err instanceof Error ? err.message : String(err),
-    }
-  }
-  const updated = await client.query<QboSyncRunRow>(
-    `update qbo_sync_runs
-       set status = $3,
-           state_version = $4,
-           started_at = coalesce($5, started_at),
-           retried_at = coalesce($6, retried_at),
-           error = $7,
-           triggered_by = $8,
-           version = version + 1,
-           updated_at = now()
-     where company_id = $1 and id = $2
-     returning ${QBO_SYNC_RUN_COLUMNS}`,
-    [
-      args.companyId,
-      args.runId,
-      nextSnapshot.state,
-      nextSnapshot.state_version,
-      nextSnapshot.started_at ?? null,
-      nextSnapshot.retried_at ?? null,
-      nextSnapshot.error ?? null,
-      nextSnapshot.triggered_by ?? null,
-    ],
-  )
-  const updatedRow = updated.rows[0]
-  if (!updatedRow) throw new HttpError(500, 'qbo sync run update returned no row')
-  await recordWorkflowEvent(client, {
-    companyId: args.companyId,
-    workflowName: QBO_SYNC_RUN_WORKFLOW_NAME,
-    schemaVersion: QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
-    entityType: 'qbo_sync_run',
-    entityId: args.runId,
-    stateVersion: currentSnapshot.state_version,
-    eventType: event.type,
-    eventPayload: event,
-    snapshotAfter: nextSnapshot,
-    actorUserId: args.actorUserId,
-  })
-  // Re-emit the per-run outbox anchor so the worker drain re-attempts
-  // the sync against this same run. Stable key → on conflict resets to
-  // pending, no duplicate work.
-  await recordMutationOutbox(
-    args.companyId,
-    'qbo_sync_run',
-    args.runId,
-    'run_qbo_sync',
-    { qbo_sync_run_id: args.runId, integration_connection_id: updatedRow.integration_connection_id },
-    `qbo_sync_run:run:${args.runId}`,
-    'server',
-    args.actorUserId,
+  const result = await dispatchWorkflowEvent<QboSyncRunRow, QboSyncRunWorkflowSnapshot, QboSyncRunWorkflowEvent>(
     client,
+    {
+      definition: {
+        name: QBO_SYNC_RUN_WORKFLOW_NAME,
+        schemaVersion: QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+        reduce: transitionQboSyncRunWorkflow,
+      },
+      companyId: args.companyId,
+      entityType: 'qbo_sync_run',
+      entityId: args.runId,
+      expectedStateVersion: args.expectedStateVersion,
+      actorUserId: args.actorUserId,
+      loadSnapshot: async (c) => {
+        const locked = await c.query<QboSyncRunRow>(
+          `select ${QBO_SYNC_RUN_COLUMNS}
+             from qbo_sync_runs
+             where company_id = $1 and id = $2 and deleted_at is null
+             for update`,
+          [args.companyId, args.runId],
+        )
+        const current = locked.rows[0]
+        if (!current) return null
+        return { row: current, snapshot: rowToQboSyncRunSnapshot(current) }
+      },
+      buildEvent: () =>
+        args.eventType === 'RETRY'
+          ? { type: 'RETRY', retried_at: nowIso, triggered_by: args.actorUserId }
+          : { type: 'START_SYNC', started_at: nowIso, triggered_by: args.actorUserId },
+      persist: async (c, nextSnapshot) => {
+        const updated = await c.query<QboSyncRunRow>(
+          `update qbo_sync_runs
+             set status = $3,
+                 state_version = $4,
+                 started_at = coalesce($5, started_at),
+                 retried_at = coalesce($6, retried_at),
+                 error = $7,
+                 triggered_by = $8,
+                 version = version + 1,
+                 updated_at = now()
+           where company_id = $1 and id = $2
+           returning ${QBO_SYNC_RUN_COLUMNS}`,
+          [
+            args.companyId,
+            args.runId,
+            nextSnapshot.state,
+            nextSnapshot.state_version,
+            nextSnapshot.started_at ?? null,
+            nextSnapshot.retried_at ?? null,
+            nextSnapshot.error ?? null,
+            nextSnapshot.triggered_by ?? null,
+          ],
+        )
+        const updatedRow = updated.rows[0]
+        if (!updatedRow) throw new HttpError(500, 'qbo sync run update returned no row')
+        return updatedRow
+      },
+      // Re-emit the per-run outbox anchor so the worker drain re-attempts the
+      // sync against this same run. Stable key → on conflict resets to
+      // pending, no duplicate work.
+      sideEffects: async (c, _next, updatedRow) => {
+        await recordMutationOutbox(
+          args.companyId,
+          'qbo_sync_run',
+          args.runId,
+          'run_qbo_sync',
+          { qbo_sync_run_id: args.runId, integration_connection_id: updatedRow.integration_connection_id },
+          `qbo_sync_run:run:${args.runId}`,
+          'server',
+          args.actorUserId,
+          c,
+        )
+      },
+    },
   )
-  observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, args.eventType === 'RETRY' ? 'requested' : 'requested')
-  return { kind: 'ok', row: updatedRow, snapshot: nextSnapshot }
+  if (result.kind === 'ok') observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'requested')
+  return result
 }
