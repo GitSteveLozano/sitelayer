@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
-import type { PillTone } from '@/components/mobile'
+import { MButton, MPill, type MTone } from '@/components/m'
 import {
   downloadPayrollExport,
   useLaborPayrollRun,
@@ -13,11 +12,11 @@ import {
 } from '@/lib/api'
 import { GeneratePayrollExportSheet } from './generate-payroll-export-sheet'
 
-const STATUS_TONE: Record<PayrollExportStatus, PillTone> = {
-  pending: 'warn',
-  ready: 'good',
-  failed: 'bad',
-  expired: 'default',
+const STATUS_TONE: Record<PayrollExportStatus, MTone | undefined> = {
+  pending: 'amber',
+  ready: 'green',
+  failed: 'red',
+  expired: undefined,
 }
 
 const FORMAT_LABEL: Record<string, string> = Object.fromEntries(PAYROLL_EXPORT_FORMATS.map((f) => [f.value, f.label]))
@@ -123,9 +122,9 @@ export function PayrollExportDetailScreen() {
           </div>
 
           <div className="mt-4">
-            <MobileButton variant="primary" onClick={() => setSheetOpen(true)}>
+            <MButton variant="primary" onClick={() => setSheetOpen(true)}>
               Generate export
-            </MobileButton>
+            </MButton>
           </div>
 
           {error ? <div className="mt-3 text-[12px] text-bad">{error}</div> : null}
@@ -133,16 +132,16 @@ export function PayrollExportDetailScreen() {
           <div className="mt-6 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Files</div>
           <div className="mt-2 space-y-2">
             {exportsQuery.isPending ? (
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="text-[12px] text-ink-3">Loading…</div>
-              </Card>
+              </div>
             ) : exports.length === 0 ? (
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="text-[12px] text-ink-3">No exports yet. Generate one above.</div>
-              </Card>
+              </div>
             ) : (
               exports.map((row) => (
-                <Card key={row.id} tight>
+                <div key={row.id} className="m-card m-card-tight">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">{FORMAT_LABEL[row.format] ?? row.format}</div>
@@ -158,19 +157,20 @@ export function PayrollExportDetailScreen() {
                       {row.error ? <div className="text-[11px] text-bad mt-1">{row.error}</div> : null}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <Pill tone={STATUS_TONE[row.status]}>{row.status}</Pill>
+                      <MPill tone={STATUS_TONE[row.status]}>{row.status}</MPill>
                       {row.status === 'ready' ? (
-                        <MobileButton
+                        <MButton
+                          size="sm"
                           variant="ghost"
                           onClick={() => onDownload(row)}
                           disabled={downloadingId === row.id}
                         >
                           {downloadingId === row.id ? '…' : 'Download'}
-                        </MobileButton>
+                        </MButton>
                       ) : null}
                     </div>
                   </div>
-                </Card>
+                </div>
               ))
             )}
           </div>

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill } from '@/components/m'
 import { useBillingRuns, useEstimatePushes, useLaborPayrollRuns } from '@/lib/api'
 
 /**
@@ -36,31 +36,31 @@ export function FinancialHubScreen() {
 
       <div className="mt-6 space-y-3">
         <Link to="/financial/estimate-pushes" className="block">
-          <Card>
+          <div className="m-card">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold">Estimate pushes</div>
                 <div className="text-[12px] text-ink-3 mt-0.5">Bid → QBO Estimate. Review, approve, post.</div>
               </div>
-              <Pill tone={pushPending > 0 ? 'warn' : 'good'}>{pushPending} pending</Pill>
+              <MPill tone={pushPending > 0 ? 'amber' : 'green'}>{pushPending} pending</MPill>
             </div>
-          </Card>
+          </div>
         </Link>
 
         <Link to="/financial/billing-runs" className="block">
-          <Card>
+          <div className="m-card">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold">Rental billing runs</div>
                 <div className="text-[12px] text-ink-3 mt-0.5">25-day cycles → QBO Invoice. Approve, post, retry.</div>
               </div>
-              <Pill tone={runPending > 0 ? 'warn' : 'good'}>{runPending} pending</Pill>
+              <MPill tone={runPending > 0 ? 'amber' : 'green'}>{runPending} pending</MPill>
             </div>
-          </Card>
+          </div>
         </Link>
 
         <Link to="/financial/labor-payroll-runs" className="block">
-          <Card>
+          <div className="m-card">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold">Labor payroll runs</div>
@@ -68,13 +68,13 @@ export function FinancialHubScreen() {
                   Approved time-review → QBO payroll batch. Approve, post, retry.
                 </div>
               </div>
-              <Pill tone={payrollPending > 0 ? 'warn' : 'good'}>{payrollPending} pending</Pill>
+              <MPill tone={payrollPending > 0 ? 'amber' : 'green'}>{payrollPending} pending</MPill>
             </div>
-          </Card>
+          </div>
         </Link>
 
         <Link to="/financial/payroll-exports" className="block">
-          <Card>
+          <div className="m-card">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold">Payroll exports</div>
@@ -82,9 +82,9 @@ export function FinancialHubScreen() {
                   Generate a CSV / Xero / Gusto / ADP file from a run and download it.
                 </div>
               </div>
-              <Pill tone="default">Files</Pill>
+              <MPill>Files</MPill>
             </div>
-          </Card>
+          </div>
         </Link>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill } from '@/components/m'
 import { useLaborPayrollRuns, type LaborPayrollRunRow } from '@/lib/api'
 import { GeneratePayrollExportSheet } from './generate-payroll-export-sheet'
 
@@ -38,9 +38,9 @@ export function PayrollExportListScreen() {
       </div>
 
       <div className="mt-4">
-        <MobileButton variant="primary" onClick={() => setSheetOpen(true)} disabled={exportable.length === 0}>
+        <MButton variant="primary" onClick={() => setSheetOpen(true)} disabled={exportable.length === 0}>
           Generate export
-        </MobileButton>
+        </MButton>
         {exportable.length === 0 && !runs.isPending ? (
           <p className="text-[11px] text-ink-3 mt-2">No approved or posted runs yet — nothing to export.</p>
         ) : null}
@@ -49,24 +49,24 @@ export function PayrollExportListScreen() {
       <div className="mt-6 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Runs</div>
       <div className="mt-2 space-y-2">
         {runs.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : runs.isError ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-bad">Couldn't load payroll runs. Pull to retry.</div>
-          </Card>
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No payroll runs yet.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((r) => {
             const dollars = Number(r.total_cents) / 100
             const exportable = isExportable(r)
             return (
               <Link key={r.id} to={`/financial/payroll-exports/${r.id}`} className="block">
-                <Card tight>
+                <div className="m-card m-card-tight">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">
@@ -77,9 +77,9 @@ export function PayrollExportListScreen() {
                         {Number(r.total_hours).toFixed(1)}h · {r.covered_labor_entry_ids?.length ?? 0} entries
                       </div>
                     </div>
-                    <Pill tone={exportable ? 'good' : 'default'}>{exportable ? 'exportable' : r.state}</Pill>
+                    <MPill tone={exportable ? 'green' : undefined}>{exportable ? 'exportable' : r.state}</MPill>
                   </div>
-                </Card>
+                </div>
               </Link>
             )
           })

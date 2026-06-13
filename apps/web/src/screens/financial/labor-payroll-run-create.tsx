@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { Card, MobileButton } from '@/components/mobile'
+import { MButton } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { laborPayrollRunQueryKeys } from '@/lib/api'
@@ -46,7 +46,7 @@ export function LaborPayrollRunCreateScreen() {
       </p>
 
       {entry.error ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
@@ -64,12 +64,12 @@ export function LaborPayrollRunCreateScreen() {
               dismiss
             </button>
           </div>
-        </Card>
+        </div>
       ) : null}
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Pay period</div>
-        <Card tight>
+        <div className="m-card m-card-tight">
           <label className="flex items-center justify-between text-[12px] py-1.5 gap-3">
             <span className="text-ink-3">Period start</span>
             <input
@@ -94,20 +94,16 @@ export function LaborPayrollRunCreateScreen() {
               className="bg-card-soft border border-line rounded-md px-2 py-1 text-ink-2"
             />
           </label>
-        </Card>
-        <MobileButton
-          variant="ghost"
-          disabled={!periodStart || !periodEnd || entry.isPreviewing}
-          onClick={entry.runPreview}
-        >
+        </div>
+        <MButton variant="ghost" disabled={!periodStart || !periodEnd || entry.isPreviewing} onClick={entry.runPreview}>
           {entry.isPreviewing ? 'Previewing…' : 'Preview coverage'}
-        </MobileButton>
+        </MButton>
       </div>
 
       {preview ? (
         <div className="mt-4 space-y-2">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Coverage</div>
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="flex items-center justify-between text-[12px] py-1">
               <div className="text-ink-3">Labor entries</div>
               <div className="text-ink-2 num">{preview.total_entries}</div>
@@ -122,10 +118,10 @@ export function LaborPayrollRunCreateScreen() {
                 ${previewDollars.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </div>
             </div>
-          </Card>
-          <MobileButton variant="primary" disabled={!entry.canCreate || entry.isCreating} onClick={entry.create}>
+          </div>
+          <MButton variant="primary" disabled={!entry.canCreate || entry.isCreating} onClick={entry.create}>
             {entry.isCreating ? 'Creating…' : 'Create payroll run'}
-          </MobileButton>
+          </MButton>
         </div>
       ) : null}
 

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { useEstimatePushes, type EstimatePushState } from '@/lib/api'
 
 const STATES: ReadonlyArray<EstimatePushState | 'all'> = [
@@ -14,14 +14,14 @@ const STATES: ReadonlyArray<EstimatePushState | 'all'> = [
   'voided',
 ]
 
-const TONE_BY_STATE: Record<EstimatePushState, 'good' | 'warn' | 'default'> = {
-  drafted: 'default',
-  reviewed: 'default',
-  approved: 'default',
-  posting: 'warn',
-  posted: 'good',
-  failed: 'warn',
-  voided: 'default',
+const TONE_BY_STATE: Record<EstimatePushState, MTone | undefined> = {
+  drafted: undefined,
+  reviewed: undefined,
+  approved: undefined,
+  posting: 'amber',
+  posted: 'green',
+  failed: 'amber',
+  voided: undefined,
 }
 
 export function EstimatePushListScreen() {
@@ -56,17 +56,17 @@ export function EstimatePushListScreen() {
 
       <div className="mt-2 space-y-2">
         {pushes.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Nothing in this state.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((r) => (
             <Link key={r.id} to={`/financial/estimate-pushes/${r.id}`} className="block">
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[13px] font-semibold truncate">
@@ -77,9 +77,9 @@ export function EstimatePushListScreen() {
                       {r.qbo_estimate_id ? ` · QBO #${r.qbo_estimate_id}` : ''}
                     </div>
                   </div>
-                  <Pill tone={TONE_BY_STATE[r.status]}>{r.status}</Pill>
+                  <MPill tone={TONE_BY_STATE[r.status]}>{r.status}</MPill>
                 </div>
-              </Card>
+              </div>
             </Link>
           ))
         )}

@@ -1,18 +1,18 @@
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill, type MTone } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
 import { useBillingReview } from '@/machines/billing-review'
 import type { RentalBillingHumanEvent } from '@/lib/api'
 
-const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
-  generated: 'default',
-  approved: 'default',
-  posting: 'warn',
-  posted: 'good',
-  failed: 'warn',
-  voided: 'default',
+const TONE_BY_STATE: Record<string, MTone | undefined> = {
+  generated: undefined,
+  approved: undefined,
+  posting: 'amber',
+  posted: 'green',
+  failed: 'amber',
+  voided: undefined,
 }
 
 export function BillingRunDetailScreen() {
@@ -76,20 +76,20 @@ export function BillingRunDetailScreen() {
             {ctx.qbo_invoice_id ? ` · QBO inv #${ctx.qbo_invoice_id}` : ''}
           </div>
         </div>
-        <Pill tone={TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+        <MPill tone={TONE_BY_STATE[snapshot.state]}>{snapshot.state}</MPill>
       </div>
 
       {outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
           <div className="text-[12px] text-ink-2 mt-1">
             Run state moved on the server. Reloaded — pick the next action again.
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {error && !outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
@@ -99,25 +99,25 @@ export function BillingRunDetailScreen() {
               dismiss
             </button>
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {ctx.error ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Run error</div>
           <div className="text-[12px] text-ink-2 mt-1">{ctx.error}</div>
-        </Card>
+        </div>
       ) : null}
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Line items</div>
         {lines.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No lines.</div>
-          </Card>
+          </div>
         ) : (
           lines.map((line) => (
-            <Card key={line.id} tight>
+            <div key={line.id} className="m-card m-card-tight">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[13px] font-semibold truncate">{line.description ?? line.inventory_item_id}</div>
@@ -128,37 +128,37 @@ export function BillingRunDetailScreen() {
                 </div>
                 <div className="text-[13px] font-semibold num">${Number(line.amount).toFixed(2)}</div>
               </div>
-            </Card>
+            </div>
           ))
         )}
       </div>
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Trail</div>
-        <Card tight>
+        <div className="m-card m-card-tight">
           <Trail label="Approved" at={ctx.approved_at} />
           <Trail label="Posted" at={ctx.posted_at} />
           <Trail label="Failed" at={ctx.failed_at} />
-        </Card>
+        </div>
       </div>
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Actions</div>
         {snapshot.next_events.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
-          </Card>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {snapshot.next_events.map((ev) => (
-              <MobileButton
+              <MButton
                 key={ev.type}
                 variant={ev.type === 'VOID' ? 'ghost' : 'primary'}
                 disabled={isSubmitting}
                 onClick={() => onEvent(ev.type)}
               >
                 {ev.label}
-              </MobileButton>
+              </MButton>
             ))}
           </div>
         )}

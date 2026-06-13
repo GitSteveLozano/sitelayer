@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { useLaborPayrollRuns, type LaborPayrollState } from '@/lib/api'
 
 const STATES: ReadonlyArray<LaborPayrollState | 'all'> = [
@@ -13,13 +13,13 @@ const STATES: ReadonlyArray<LaborPayrollState | 'all'> = [
   'voided',
 ]
 
-const TONE_BY_STATE: Record<LaborPayrollState, 'good' | 'warn' | 'default'> = {
-  generated: 'default',
-  approved: 'default',
-  posting: 'warn',
-  posted: 'good',
-  failed: 'warn',
-  voided: 'default',
+const TONE_BY_STATE: Record<LaborPayrollState, MTone | undefined> = {
+  generated: undefined,
+  approved: undefined,
+  posting: 'amber',
+  posted: 'green',
+  failed: 'amber',
+  voided: undefined,
 }
 
 export function LaborPayrollRunListScreen() {
@@ -64,20 +64,20 @@ export function LaborPayrollRunListScreen() {
 
       <div className="mt-2 space-y-2">
         {runs.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Nothing in this state.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((r) => {
             const dollars = Number(r.total_cents) / 100
             const qboRef = r.qbo_payroll_batch_ref?.[0]
             return (
               <Link key={r.id} to={`/financial/labor-payroll-runs/${r.id}`} className="block">
-                <Card tight>
+                <div className="m-card m-card-tight">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">
@@ -89,9 +89,9 @@ export function LaborPayrollRunListScreen() {
                         {qboRef ? ` · QBO ${qboRef}` : ''}
                       </div>
                     </div>
-                    <Pill tone={TONE_BY_STATE[r.state]}>{r.state}</Pill>
+                    <MPill tone={TONE_BY_STATE[r.state]}>{r.state}</MPill>
                   </div>
-                </Card>
+                </div>
               </Link>
             )
           })

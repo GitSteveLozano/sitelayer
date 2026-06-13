@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { MobileButton, Sheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { MButton, MI } from '@/components/m'
 import {
   downloadPayrollExport,
   useRequestPayrollExport,
@@ -77,8 +77,10 @@ export function GeneratePayrollExportSheet({ open, onClose, runs, defaultRunId }
     }
   }
 
+  if (!open) return null
+
   return (
-    <Sheet open={open} onClose={onClose} title="Generate payroll export">
+    <MSheet title="Generate payroll export" onClose={onClose}>
       <div className="space-y-4">
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
@@ -138,21 +140,76 @@ export function GeneratePayrollExportSheet({ open, onClose, runs, defaultRunId }
         {error ? <div className="text-[12px] text-bad px-1">{error}</div> : null}
 
         <div className="flex gap-2 pt-2">
-          <MobileButton variant="ghost" onClick={onClose} disabled={requestExport.isPending || downloading}>
+          <MButton variant="ghost" onClick={onClose} disabled={requestExport.isPending || downloading}>
             {generated ? 'Done' : 'Cancel'}
-          </MobileButton>
+          </MButton>
           {generated ? (
-            <MobileButton variant="primary" onClick={onDownload} disabled={downloading}>
+            <MButton variant="primary" onClick={onDownload} disabled={downloading}>
               {downloading ? 'Downloading…' : 'Download'}
-            </MobileButton>
+            </MButton>
           ) : (
-            <MobileButton variant="primary" onClick={onGenerate} disabled={requestExport.isPending || !runId}>
+            <MButton variant="primary" onClick={onGenerate} disabled={requestExport.isPending || !runId}>
               {requestExport.isPending ? 'Generating…' : 'Generate'}
-            </MobileButton>
+            </MButton>
           )}
         </div>
       </div>
-    </Sheet>
+    </MSheet>
+  )
+}
+
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
