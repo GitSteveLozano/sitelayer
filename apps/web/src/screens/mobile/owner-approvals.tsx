@@ -13,14 +13,17 @@
  *     it ~24h, DENY mutes it. Same hooks that power the admin-home attention
  *     card + recovery-plan.
  *   - Work requests (`useWorkRequests`): open field material / equipment /
- *     issue requests. APPROVE appends `resolution.accepted`, DENY appends
- *     `work_item.status_changed` → `wont_do`, REPLY opens the work-request
- *     thread.
+ *     issue requests. APPROVE appends `resolution.accepted`, DENY opens an
+ *     inline reason composer and appends `work_item.status_changed` →
+ *     `wont_do` with the owner's note as `message` (the note is what the
+ *     foreman's denied-feedback screen at /foreman/denied/:id quotes, and
+ *     the server enqueues the foreman notification off this transition),
+ *     REPLY opens the work-request thread.
  * Built from the `components/m/` primitives + `var(--m-*)` tokens only.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MBanner, MBody, MPill, MTopBar } from '../../components/m/index.js'
+import { MBanner, MBody, MPill, MTextarea, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { useActiveGuardrails, useGuardrailAction, type Guardrail } from '../../lib/api/guardrails.js'
@@ -81,6 +84,12 @@ type ApprovalItem =
 export function MobileOwnerApprovals() {
   const navigate = useNavigate()
 
+  // Work-request DENY opens an inline reason composer on the card (the note
+  // becomes the denial `message` the foreman sees); guardrail DENY stays an
+  // immediate mute.
+  const [denyKey, setDenyKey] = useState<string | null>(null)
+  const [denyNote, setDenyNote] = useState('')
+
   const guardrailsQuery = useActiveGuardrails()
   const workRequestsQuery = useWorkRequests({ limit: 75 })
   const { snooze, mute, clear } = useGuardrailAction()
@@ -138,12 +147,29 @@ export function MobileOwnerApprovals() {
       // DENY a guardrail = mute it (acknowledged, stop paging).
       mute.mutate({ id: item.guardrail.id, mutedReason: 'Denied from approvals inbox' })
     } else {
-      workEvent.mutate({
-        id: item.workItem.id,
-        input: { event_type: 'work_item.status_changed', status: 'wont_do', lane: 'done' },
-      })
+      // Open the inline reason composer — the actual wont_do event is sent
+      // from onConfirmDeny so the owner's words travel with the denial.
+      setDenyKey(item.key)
+      setDenyNote('')
     }
   }
+  const onConfirmDeny = (item: ApprovalItem) => {
+    if (item.source !== 'work-request') return
+    const note = denyNote.trim()
+    workEvent.mutate(
+      {
+        id: item.workItem.id,
+        input: {
+          event_type: 'work_item.status_changed',
+          status: 'wont_do',
+          lane: 'done',
+          ...(note ? { message: note } : {}),
+        },
+      },
+      { onSuccess: () => setDenyKey(null) },
+    )
+  }
+  const onCancelDeny = () => setDenyKey(null)
   const onReply = (item: ApprovalItem) => {
     if (item.source === 'guardrail') {
       // REPLY = snooze ~24h so it stops paging while you follow up.
@@ -183,6 +209,11 @@ export function MobileOwnerApprovals() {
                 key={it.key}
                 item={it}
                 busy={busy}
+                denyOpen={denyKey === it.key}
+                denyNote={denyNote}
+                onDenyNoteChange={setDenyNote}
+                onConfirmDeny={onConfirmDeny}
+                onCancelDeny={onCancelDeny}
                 onApprove={onApprove}
                 onDeny={onDeny}
                 onReply={onReply}
@@ -214,12 +245,22 @@ export function MobileOwnerApprovals() {
 function ApprovalCard({
   item,
   busy,
+  denyOpen,
+  denyNote,
+  onDenyNoteChange,
+  onConfirmDeny,
+  onCancelDeny,
   onApprove,
   onDeny,
   onReply,
 }: {
   item: ApprovalItem
   busy: boolean
+  denyOpen: boolean
+  denyNote: string
+  onDenyNoteChange: (note: string) => void
+  onConfirmDeny: (item: ApprovalItem) => void
+  onCancelDeny: () => void
   onApprove: (item: ApprovalItem) => void
   onDeny: (item: ApprovalItem) => void
   onReply: (item: ApprovalItem) => void
@@ -275,8 +316,73 @@ function ApprovalCard({
         </div>
       </div>
 
+      {/* Deny composer — the owner's note travels as the denial `message`
+          and is what the foreman's /foreman/denied/:id screen quotes. */}
+      {denyOpen ? (
+        <div style={{ borderTop: '2px solid var(--m-ink)', padding: '12px 16px 14px' }}>
+          <div
+            style={{
+              fontFamily: MONO,
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              color: 'var(--m-ink-3)',
+              marginBottom: 8,
+            }}
+          >
+            WHY NOT — THE FOREMAN SEES THIS
+          </div>
+          <MTextarea
+            value={denyNote}
+            onChange={(e) => onDenyNoteChange(e.currentTarget.value)}
+            placeholder="Why this won't go ahead, and what to do instead…"
+            style={{ width: '100%', minHeight: 72 }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onConfirmDeny(item)}
+              style={{
+                flex: 2,
+                padding: '12px 0',
+                background: 'var(--m-red)',
+                color: '#fff',
+                border: '2px solid var(--m-ink)',
+                fontFamily: 'var(--m-font)',
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: busy ? 'default' : 'pointer',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? 'DENYING…' : 'CONFIRM DENY'}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onCancelDeny}
+              style={{
+                flex: 1,
+                padding: '12px 0',
+                background: 'transparent',
+                color: 'var(--m-ink-3)',
+                border: '2px solid var(--m-ink)',
+                fontFamily: 'var(--m-font)',
+                fontWeight: 700,
+                fontSize: 14,
+                cursor: busy ? 'default' : 'pointer',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              CANCEL
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Three-way action bar — APPROVE weighted 2×, REPLY + DENY 1× each. */}
-      <div style={{ borderTop: '2px solid var(--m-ink)', display: 'flex' }}>
+      <div style={{ borderTop: '2px solid var(--m-ink)', display: denyOpen ? 'none' : 'flex' }}>
         <button
           type="button"
           disabled={busy}

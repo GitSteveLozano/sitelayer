@@ -25,6 +25,9 @@ type PillTone = 'accent' | 'green' | 'red' | 'amber' | 'blue'
 
 function kindTag(kind: string): { label: string; tone: PillTone } {
   const k = kind.toLowerCase()
+  // Before the generic 'request' → AUTH branch: `field_request_denied`
+  // (owner denied a foreman request) reads as a denial, not an auth ask.
+  if (k.includes('denied') || k.includes('decline')) return { label: 'DENIED', tone: 'red' }
   if (k.includes('escalat')) return { label: 'RISK', tone: 'red' }
   if (k.includes('blocker') || k.includes('issue') || k.includes('flag')) return { label: 'FIELD', tone: 'red' }
   if (k.includes('resolved') || k.includes('approved') || k.includes('paid') || k.includes('posted'))

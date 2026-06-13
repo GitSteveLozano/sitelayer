@@ -9,7 +9,7 @@
  * (apps/worker/src/notifications.ts) picks up the inserted rows on its
  * next tick and routes them through the channel dispatcher.
  *
- * Three mutation_types are claimed here:
+ * Four mutation_types are claimed here:
  *   notify_worker_resolution    — RESOLVE event. Notify the worker who
  *                                 filed the ticket (recipient =
  *                                 reporter_clerk_user_id).
@@ -20,12 +20,22 @@
  *                                 assigned to the project and notify
  *                                 them; if no foreman is assigned, fan
  *                                 out to admin/office.
+ *   notify_field_request_denied — Owner denied a field request
+ *                                 (work_item.status_changed → wont_do,
+ *                                 apps/api/src/routes/work-requests.ts).
+ *                                 Notify the foreman who filed it
+ *                                 (recipient = created_by_user_id) with
+ *                                 the owner's denial note; the payload
+ *                                 carries a `/foreman/denied/:id` route
+ *                                 so the inbox deep-links to the
+ *                                 denied-feedback screen (msg__42).
  *
  * Idempotency is provided by the outbox row's idempotency_key
- * (`worker_issue:notify_*:<id>:<state_version>` or
- * `project_lifecycle:notify_foreman:<id>:<state_version>`), so a
+ * (`worker_issue:notify_*:<id>:<state_version>`,
+ * `project_lifecycle:notify_foreman:<id>:<state_version>`, or
+ * `context_work_item:notify_denied:<event_id>`), so a
  * re-claim after a worker crash inserts a notification row at most
- * once per state_version.
+ * once per state_version / denial event.
  *
  * The handler never calls any external API and only writes to
  * `notifications` and `mutation_outbox`. All work for one row happens
@@ -44,7 +54,11 @@ export type FieldEventNotifierSummary = {
 type ClaimedRow = {
   id: string
   entity_id: string
-  mutation_type: 'notify_worker_resolution' | 'notify_estimator_escalation' | 'notify_foreman_assignment'
+  mutation_type:
+    | 'notify_worker_resolution'
+    | 'notify_estimator_escalation'
+    | 'notify_foreman_assignment'
+    | 'notify_field_request_denied'
   payload: Record<string, unknown>
   attempt_count: number
 }
@@ -53,6 +67,7 @@ const FIELD_EVENT_MUTATION_TYPES = [
   'notify_worker_resolution',
   'notify_estimator_escalation',
   'notify_foreman_assignment',
+  'notify_field_request_denied',
 ] as const
 
 export const FIELD_EVENT_NOTIFIER_MAX_ATTEMPTS = 5
@@ -262,6 +277,40 @@ export async function processFieldEventNotifications(
             }
           }
         }
+      } else if (row.mutation_type === 'notify_field_request_denied') {
+        // Owner denied a field request. Single recipient: the foreman who
+        // filed it (created_by_user_id, stamped as recipient_user_id by the
+        // API enqueue). The notification payload keeps the API-stamped
+        // `/foreman/denied/:id` route so the role inbox deep-links into the
+        // denied-feedback screen. No fan-out fallback: a missing creator id
+        // is a data-shape bug, not a delivery failure (mirrors
+        // notify_worker_resolution).
+        const recipientId = asString(payload.recipient_user_id)
+        const title = asString(payload.title) ?? '(untitled request)'
+        const reason = asString(payload.denial_message)
+        const subject = `Request denied: ${title}`
+        const text = reason ?? `Your request "${title}" won't move forward as submitted.`
+        if (!recipientId) {
+          await client.query(
+            `update mutation_outbox set status = 'applied', applied_at = now(), error = $3
+             where company_id = $1 and id = $2`,
+            [companyId, row.id, 'no recipient — skipped'],
+          )
+          await client.query('commit')
+          skipped++
+          continue
+        }
+        await insertNotification(client, {
+          companyId,
+          recipientUserId: recipientId,
+          kind: 'field_request_denied',
+          subject,
+          text,
+          payload: {
+            ...payload,
+            route: asString(payload.route) ?? `/foreman/denied/${row.entity_id}`,
+          },
+        })
       } else {
         // notify_estimator_escalation: fan out to estimator/admin
         // members of the company. Insert one notifications row per

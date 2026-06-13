@@ -14,7 +14,9 @@ export function createFieldEventsRunner(deps: { pool: Pool; logger: Logger }): F
 
   async function drainFieldEventNotifications(companyId: string) {
     // Drains notify_worker_resolution + notify_estimator_escalation outbox
-    // rows emitted by worker_issues PATCH (RESOLVE/ESCALATE workflow events).
+    // rows emitted by worker_issues PATCH (RESOLVE/ESCALATE workflow events),
+    // notify_foreman_assignment from project-lifecycle, and
+    // notify_field_request_denied from the work-requests owner-deny path.
     // Inserts notifications rows; push-channel delivery is a follow-up.
     const client = await pool.connect()
     try {

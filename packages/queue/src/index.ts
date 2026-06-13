@@ -340,6 +340,11 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   'notify_worker_resolution',
   'notify_estimator_escalation',
   'notify_foreman_assignment',
+  // Owner-denied field request → foreman feedback notification — drained by
+  // apps/worker/src/field-event-notifier.ts. Dedicated so the generic drain
+  // can't mark the row applied without inserting the notifications row that
+  // closes the denial → /foreman/denied/:id feedback loop.
+  'notify_field_request_denied',
   // Blueprint storage GC — drained by apps/worker/src/runners/
   // blueprint-storage-gc.ts. Marking it dedicated keeps the generic
   // drain from racing the GC runner (the generic drain just marks

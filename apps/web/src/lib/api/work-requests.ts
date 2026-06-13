@@ -541,6 +541,20 @@ export function useWorkRequests(
 }
 
 /**
+ * Load one work request with its handoff-event timeline. Powers the
+ * owner-denied feedback screen (`/foreman/denied/:id`) and any other surface
+ * that needs the full event history for a single item.
+ */
+export function useWorkRequest(id: string, options?: Partial<UseQueryOptions<WorkRequestDetailResponse>>) {
+  return useQuery<WorkRequestDetailResponse>({
+    queryKey: queryKeys.workRequests.detail(id),
+    queryFn: () => fetchWorkRequest(id),
+    enabled: id.length > 0,
+    ...options,
+  })
+}
+
+/**
  * Append a handoff event to a work request (approve via `resolution.accepted`,
  * decline via `work_item.status_changed` → `wont_do`, reply via
  * `message.added`). Invalidates the work-request list + detail on success.

@@ -81,6 +81,7 @@ const DEFAULT_CALLBACK_TOKEN_TTL_HOURS = 72
 const DEFAULT_DISPATCH_MAX_PENDING = 50
 const DEFAULT_DISPATCH_MAX_FAILED = 25
 const DISPATCH_MUTATION_TYPE = 'dispatch_mesh_work_request'
+const DENIAL_NOTIFY_MUTATION_TYPE = 'notify_field_request_denied'
 const HEALTH_WORK_STATUSES = ['agent_running', 'review_ready', 'review_stale', 'proposal_expired'] as const
 const HEALTH_DISPATCH_STATUSES = ['pending', 'processing', 'failed', 'dead'] as const
 const HANDOFF_PACKET_AUDIENCES = ['operator', 'mesh', 'collaborator', 'github'] as const
@@ -2094,6 +2095,67 @@ async function getGithubExport(ctx: WorkRequestRouteCtx, id: string, opts: { rec
   if (event) observeContextHandoff('external.github_export_prepared')
 }
 
+/**
+ * Owner-denial → foreman feedback loop (design msg__42). When a field_request
+ * transitions into `wont_do` — the owner's DENY in the mobile/desktop
+ * approvals inboxes and the issue-board move both land here — queue ONE
+ * notification for the foreman who filed the request, deep-linking to
+ * `/foreman/denied/:id`. Runs in the SAME tx as the status change; idempotent
+ * via the handoff event id (a replayed request resolves to the same event →
+ * `on conflict do nothing`), and a later re-denial after a reopen mints a new
+ * event → a new notification, which is the correct behavior. The worker drain
+ * (apps/worker/src/field-event-notifier.ts) turns the outbox row into the
+ * `notifications` row.
+ */
+async function enqueueFieldRequestDenialNotificationTx(
+  executor: LedgerExecutor,
+  args: {
+    companyId: string
+    actorUserId: string | null
+    workItem: ContextWorkItemRow
+    event: ContextHandoffEventRow
+    message: string | null
+  },
+): Promise<void> {
+  const trace = currentTraceHeaders()
+  const requestId = getRequestContext()?.requestId ?? null
+  const payload = {
+    work_item_id: args.workItem.id,
+    title: args.workItem.title,
+    summary: args.workItem.summary,
+    severity: args.workItem.severity,
+    denial_message: args.message,
+    denied_by_user_id: args.actorUserId,
+    denied_at: args.event.occurred_at,
+    recipient_user_id: args.workItem.created_by_user_id,
+    route: `/foreman/denied/${args.workItem.id}`,
+  }
+  await executor.query(
+    `insert into mutation_outbox (
+       company_id, device_id, actor_user_id, entity_type, entity_id,
+       mutation_type, payload, idempotency_key, status,
+       sentry_trace, sentry_baggage, request_id, capture_session_id
+     ) values (
+       $1, 'server', $2, 'context_work_item', $3,
+       $4, $5::jsonb, $6, 'pending',
+       $7, $8, $9, $10::uuid
+     )
+     on conflict (company_id, idempotency_key) do nothing`,
+    [
+      args.companyId,
+      args.actorUserId,
+      args.workItem.id,
+      DENIAL_NOTIFY_MUTATION_TYPE,
+      JSON.stringify(payload),
+      `context_work_item:notify_denied:${args.event.id}`,
+      trace.sentryTrace,
+      trace.baggage,
+      requestId,
+      args.workItem.capture_session_id,
+    ],
+  )
+}
+
 async function moveWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
   if (!(await ctx.requireCapability('field_request.triage'))) return
   if (!isValidUuid(id)) {
@@ -2202,6 +2264,15 @@ async function moveWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRouteC
       },
       ...(idempotencyKey ? { idempotencyKey } : {}),
     })
+    if (updated && nextStatus === 'wont_do' && current.status !== 'wont_do') {
+      await enqueueFieldRequestDenialNotificationTx(c, {
+        companyId: ctx.company.id,
+        actorUserId: ctx.identity.userId,
+        workItem: updated.workItem,
+        event: updated.event,
+        message: optionalText(body.message, MAX_SUMMARY_LENGTH) ?? null,
+      })
+    }
     return updated ? { kind: 'ok' as const, updated } : { kind: 'not_found' as const }
   })
   if (result.kind === 'not_found') {
@@ -2299,7 +2370,20 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
     ...(next.resolvedAt !== undefined ? { resolvedAt: next.resolvedAt } : {}),
     ...(optionalText(body.idempotency_key, 200) ? { idempotencyKey: optionalText(body.idempotency_key, 200) } : {}),
   }
-  const updated = await withMutationTx(ctx.company.id, (c) => updateContextWorkItemWithEventTx(c, updateArgs))
+  const previousStatus = detail.work_item.status
+  const updated = await withMutationTx(ctx.company.id, async (c) => {
+    const result = await updateContextWorkItemWithEventTx(c, updateArgs)
+    if (result && next.status === 'wont_do' && previousStatus !== 'wont_do') {
+      await enqueueFieldRequestDenialNotificationTx(c, {
+        companyId: ctx.company.id,
+        actorUserId: ctx.identity.userId,
+        workItem: result.workItem,
+        event: result.event,
+        message: optionalText(body.message, MAX_SUMMARY_LENGTH) ?? null,
+      })
+    }
+    return result
+  })
   if (!updated) {
     ctx.sendJson(404, { error: 'work request not found' })
     return

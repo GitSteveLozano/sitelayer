@@ -1113,6 +1113,77 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.handoffEvents.map((event) => event.event_type)).toEqual(['work_item.created', 'resolution.accepted'])
   })
 
+  it('enqueues a foreman denial notification when the owner denies a field request', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Deny me', client: clientContext }, 'foreman', 'foreman-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const deny = makeCtx(pool, {
+      event_type: 'work_item.status_changed',
+      status: 'wont_do',
+      lane: 'done',
+      message: 'Aspen is already over budget — pull what you can from yard.',
+    })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/events`), deny.ctx)
+
+    expect(deny.responses[0]?.status).toBe(201)
+    expect(pool.workItems[0]).toMatchObject({ status: 'wont_do', lane: 'done' })
+    const outbox = pool.mutationOutbox.find((row) => row.mutation_type === 'notify_field_request_denied')
+    expect(outbox).toBeDefined()
+    expect(outbox).toMatchObject({
+      entity_type: 'context_work_item',
+      entity_id: workItem.id,
+      status: 'pending',
+    })
+    expect(outbox!.idempotency_key).toMatch(/^context_work_item:notify_denied:/)
+    expect(outbox!.payload).toMatchObject({
+      work_item_id: workItem.id,
+      title: 'Deny me',
+      denial_message: 'Aspen is already over budget — pull what you can from yard.',
+      denied_by_user_id: 'user-1',
+      recipient_user_id: 'foreman-1',
+      route: `/foreman/denied/${workItem.id}`,
+    })
+  })
+
+  it('enqueues the denial notification on the board move path, exactly once per denial', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Move-deny me', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const move = makeCtx(pool, {
+      status: 'wont_do',
+      expected_updated_at: workItem.updated_at,
+      message: 'Not this month.',
+    })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/move`), move.ctx)
+
+    expect(move.responses[0]?.status).toBe(200)
+    expect(pool.mutationOutbox.filter((row) => row.mutation_type === 'notify_field_request_denied')).toHaveLength(1)
+
+    // A repeat deny on an already-wont_do item is not a new denial — no
+    // second notification row.
+    const again = makeCtx(pool, { event_type: 'work_item.status_changed', status: 'wont_do', lane: 'done' })
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/events`), again.ctx)
+    expect(again.responses[0]?.status).toBe(201)
+    expect(pool.mutationOutbox.filter((row) => row.mutation_type === 'notify_field_request_denied')).toHaveLength(1)
+  })
+
+  it('does not enqueue a denial notification for non-denial status changes', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Triage me', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItem = pool.workItems[0]!
+    const triage = makeCtx(pool, { event_type: 'work_item.status_changed', status: 'triaged' })
+
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/events`), triage.ctx)
+
+    expect(triage.responses[0]?.status).toBe(201)
+    expect(pool.mutationOutbox.filter((row) => row.mutation_type === 'notify_field_request_denied')).toHaveLength(0)
+  })
+
   it('returns a safe agent-readable work request brief', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, {

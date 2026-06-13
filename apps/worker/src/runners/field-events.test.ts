@@ -7,8 +7,9 @@ import { createFieldEventsRunner } from './field-events.js'
 //
 //   drainNotifications  → wraps processFieldEventNotifications. Claims
 //                         notify_worker_resolution / notify_estimator_escalation /
-//                         notify_foreman_assignment outbox rows and inserts
-//                         per-recipient `notifications` rows.
+//                         notify_foreman_assignment / notify_field_request_denied
+//                         outbox rows and inserts per-recipient
+//                         `notifications` rows.
 //
 //   runAutoEscalation   → wraps processFieldEventAutoEscalation. Periodic-timer
 //                         claim of severity='stopped' worker_issues that have
@@ -145,6 +146,65 @@ describe('createFieldEventsRunner — drainNotifications', () => {
     expect(inserts[0]!.params[1]).toBe('user_admin1')
     expect(inserts[1]!.params[1]).toBe('user_admin2')
     expect(inserts[0]!.params[2]).toBe('field_event_escalation')
+  })
+
+  it('happy path — notify_field_request_denied inserts a deep-linked notification for the filing foreman', async () => {
+    const claimedRow = {
+      id: 'outbox-1',
+      entity_id: 'work-item-9',
+      mutation_type: 'notify_field_request_denied',
+      payload: {
+        work_item_id: 'work-item-9',
+        title: '$510 EPS order',
+        denial_message: 'Aspen is already over budget. Pull what you can from yard.',
+        denied_by_user_id: 'user_owner',
+        recipient_user_id: 'user_foreman',
+        route: '/foreman/denied/work-item-9',
+      },
+      attempt_count: 1,
+    }
+    const responder: Responder = (sql) => {
+      if (sql.includes('update mutation_outbox') && sql.includes("'processing'")) {
+        return { rows: [claimedRow], rowCount: 1 }
+      }
+      if (sql.includes('insert into notifications')) return { rows: [], rowCount: 1 }
+      return { rows: [], rowCount: 1 }
+    }
+    const { pool, calls } = makePool(responder)
+    const runner = createFieldEventsRunner({ pool, logger: testLogger })
+    const summary = await runner.drainNotifications('co-1')
+    expect(summary).toEqual({ processed: 1, notified: 1, skipped: 0, failed: 0 })
+
+    const insert = calls.find((c) => c.sql.includes('insert into notifications'))
+    expect(insert).toBeDefined()
+    // params: companyId, recipientUserId, kind, subject, text, payload
+    expect(insert!.params[1]).toBe('user_foreman')
+    expect(insert!.params[2]).toBe('field_request_denied')
+    expect(String(insert!.params[3])).toMatch(/\$510 EPS order/)
+    expect(String(insert!.params[4])).toMatch(/over budget/)
+    const payload = JSON.parse(String(insert!.params[5])) as Record<string, unknown>
+    expect(payload.route).toBe('/foreman/denied/work-item-9')
+  })
+
+  it('skip path — notify_field_request_denied with no creator id → marks outbox applied, no insert', async () => {
+    const claimedRow = {
+      id: 'outbox-1',
+      entity_id: 'work-item-9',
+      mutation_type: 'notify_field_request_denied',
+      payload: { title: 'Orphan request', denial_message: 'no creator on row' },
+      attempt_count: 1,
+    }
+    const responder: Responder = (sql) => {
+      if (sql.includes('update mutation_outbox') && sql.includes("'processing'")) {
+        return { rows: [claimedRow], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 1 }
+    }
+    const { pool, calls } = makePool(responder)
+    const runner = createFieldEventsRunner({ pool, logger: testLogger })
+    const summary = await runner.drainNotifications('co-1')
+    expect(summary).toEqual({ processed: 1, notified: 0, skipped: 1, failed: 0 })
+    expect(calls.find((c) => c.sql.includes('insert into notifications'))).toBeUndefined()
   })
 
   it('skip path — notify_worker_resolution with no reporter id → marks outbox applied, no insert', async () => {

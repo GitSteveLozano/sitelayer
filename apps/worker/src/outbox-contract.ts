@@ -30,6 +30,7 @@ export const DEDICATED_RUNNER_REGISTRY: Readonly<Record<string, string>> = {
   notify_worker_resolution: 'apps/worker/src/field-event-notifier.ts',
   notify_estimator_escalation: 'apps/worker/src/field-event-notifier.ts',
   notify_foreman_assignment: 'apps/worker/src/field-event-notifier.ts',
+  notify_field_request_denied: 'apps/worker/src/field-event-notifier.ts',
   materialize_labor_entries: 'apps/worker/src/crew-schedule-confirm-processor.ts',
   notify_foreman_decline: 'apps/worker/src/crew-schedule-confirm-processor.ts',
   delete_blueprint_storage_object: 'apps/worker/src/runners/blueprint-storage-gc.ts',

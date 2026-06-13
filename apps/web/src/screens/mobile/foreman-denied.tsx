@@ -1,223 +1,369 @@
 /**
- * FOREMAN · DENIED FEEDBACK (`fm-denied`) — design source V2ForemanDenied,
- * "OWNER DENIED · FEEDBACK" / from "Owner denies → foreman push".
+ * FOREMAN · OWNER-DENIED FEEDBACK (`fm-denied`) — design source msg__42
+ * ("FROM MIKE · DENIED · $510 EPS order — not yet."), the owner-denial →
+ * foreman feedback loop of the M06 request/approval flow.
  *
- * The owner reviewed something the foreman submitted (an estimate, a
- * change order, an over-budget request) and DENIED it. This is the
- * foreman's landing surface for that decision: the denial reason in the
- * owner's words, the item it was about, and two next steps —
- *   • Push back   — reopen the conversation / re-submit with context
- *   • Acknowledge — accept the decision and move on
+ * Routed at `/foreman/denied/:id` where `:id` is the **field_request work
+ * item id** (`context_work_items`). The loop end-to-end:
  *
- * Routed at `/foreman/denied/:id` (mirrors `/foreman/blocker/:issueId`),
- * where `:id` is the project id. The `project_lifecycle` workflow has a
- * server-side `declined` state whose snapshot carries the owner's
- * `decline_reason` + `declined_at`; this screen reads that snapshot and
- * shows the denial in the owner's words. Foreman = default light theme.
+ *   1. The owner DENIES a field request in the approvals inbox
+ *      (owner-approvals → POST /api/work-requests/:id/events with
+ *      `work_item.status_changed` → `wont_do`, the owner's note as
+ *      `message`).
+ *   2. The API enqueues `notify_field_request_denied`
+ *      (apps/api/src/routes/work-requests.ts) and the worker
+ *      (apps/worker/src/field-event-notifier.ts) inserts a notification for
+ *      the foreman who filed the request whose payload `route` deep-links
+ *      HERE; the role inbox (notifications-inbox.tsx) navigates on tap.
+ *   3. This screen loads the real work item + event timeline
+ *      (GET /api/work-requests/:id via `useWorkRequest`), renders the
+ *      denial in the owner's words (the `wont_do` event's `message`), and
+ *      offers two REAL next steps:
+ *        • RESUBMIT — `resolution.reopened` (+ the foreman's note), which
+ *          puts the request back into the owner's approvals queue
+ *          (`reopened` is in its open-statuses set).
+ *        • REPLY — `message.added`, a thread message on the request.
+ *      Both events are `field_request.view`-class, so the foreman role can
+ *      send them; `wont_do` is not a hard-terminal state (only `reversed`
+ *      blocks events), so the server accepts both.
  *
- * Read path is wired (GET /api/projects/:id/lifecycle via the headless
- * useProjectLifecycle machine). The denied "item"/"amount" line is NOT a
- * project_lifecycle field (the workflow tracks the project, not a specific
- * change order / over-budget request), so those still come from
- * search-params when the caller passes them. See GAP note on the actions.
+ * Honesty notes: there is NO structured "suggested alternatives" field on
+ * the backend — the owner's free-text denial note is the only alternatives
+ * signal, so the WHY quote renders only when that note exists and nothing
+ * is fabricated when it doesn't. The owner's display name is not resolvable
+ * from the work-item/event rows (clerk user ids only), so the screen says
+ * "OWNER" rather than inventing a name. Foreman = default light theme.
  */
 import { useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { MShell, MBody, MTopBar, MBanner, MButton, MButtonStack, MSectionH, MTextarea, MI } from '@/components/m'
-import { getActiveCompanySlug } from '@/lib/api/client'
-import { useProjectLifecycle } from '@/machines/project-lifecycle'
+import { useNavigate, useParams } from 'react-router-dom'
+import { MBanner, MBody, MButton, MButtonStack, MSectionH, MShell, MTextarea, MTopBar } from '@/components/m'
+import { MSkeletonList } from '@/components/m-states'
+import { useAppendWorkRequestEvent, useWorkRequest, type ContextHandoffEvent } from '@/lib/api/work-requests'
 
-function formatDeclinedAt(iso: string | null): string | null {
+const DISPLAY = 'var(--m-font-display)'
+const MONO = 'var(--m-num)'
+
+/** "9:14 AM · APR 28" style stamp for the denial meta line. */
+function denialStamp(iso: string | null): string | null {
   if (!iso) return null
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return `${time} · ${day}`.toUpperCase()
 }
+
+/** Latest denial event: a status change that landed the item on wont_do. */
+function findDenialEvent(events: ContextHandoffEvent[]): ContextHandoffEvent | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!
+    if (e.event_type === 'work_item.status_changed' && e.payload?.status === 'wont_do') return e
+  }
+  return null
+}
+
+function eventMessage(event: ContextHandoffEvent | null): string | null {
+  const raw = event?.payload?.message
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+type ComposeMode = 'idle' | 'resubmit' | 'reply'
 
 export function ForemanDeniedScreen() {
   const navigate = useNavigate()
   const { id } = useParams()
-  const [searchParams] = useSearchParams()
-  const [pushOpen, setPushOpen] = useState(false)
+  const workItemId = id ?? ''
+
+  const detail = useWorkRequest(workItemId)
+  const appendEvent = useAppendWorkRequestEvent()
+
+  const [mode, setMode] = useState<ComposeMode>('idle')
   const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [replySent, setReplySent] = useState(false)
 
-  // Real declined-state snapshot for the project. The lifecycle context
-  // carries the owner's decline_reason + declined_at when state==='declined'.
-  const companySlug = getActiveCompanySlug()
-  const lifecycle = useProjectLifecycle(id ?? '', companySlug)
-  const ctx = lifecycle.snapshot?.context ?? null
-  const isDeclined = lifecycle.snapshot?.state === 'declined'
+  const workItem = detail.data?.work_item ?? null
+  const events = detail.data?.events ?? []
+  const denial = findDenialEvent(events)
+  const reason = eventMessage(denial)
+  const deniedStamp = denialStamp(denial?.occurred_at ?? null)
 
-  // `item`/`amount` are not project_lifecycle fields — the workflow denies a
-  // project transition, not a specific change order / over-budget request — so
-  // they come from the caller's query params (the surface that knows the line
-  // item). The owner-words reason + who/when come from the live snapshot when
-  // the project is declined, with a query-param/static fallback otherwise.
-  const item = searchParams.get('item') ?? 'Change order #14 — added scaffold drop'
-  const amount = searchParams.get('amount') ?? '+$4,200'
-  const deniedBy = searchParams.get('by') ?? ctx?.customer_name ?? 'the owner'
-  const declinedAtLabel = formatDeclinedAt(ctx?.declined_at ?? null)
-  const reason =
-    (isDeclined ? ctx?.decline_reason : null) ??
-    searchParams.get('reason') ??
-    "We didn't agree this drop with the client and the contract is fixed-price. Confirm the change in writing with the GC before adding cost, then resubmit."
-
+  const busy = appendEvent.isPending
   const goBack = () => navigate(-1)
 
-  const onAcknowledge = () => {
-    setBusy(true)
-    // GAP: there is no foreman-facing "acknowledge" event. The
-    // project_lifecycle reducer's `declined` state only offers ARCHIVE
-    // (admin/office-only) — no ACKNOWLEDGE transition, and the events route
-    // rejects foreman role. Acknowledging is therefore a client-side
-    // dismissal for now. Suggested shape: a per-(project,foreman)
-    // acknowledgement row + POST /api/projects/:id/denial/acknowledge, OR a
-    // notification mark-read once the denial is delivered as a notification.
-    navigate('/today', { replace: true })
-  }
-
-  const onSubmitPushBack = () => {
-    setBusy(true)
-    // GAP: no push-back/reopen-request event exists for a foreman. REOPEN on
-    // the lifecycle reducer is admin/office-only and bypasses the owner's
-    // re-review. A real push-back needs either a project_message back to the
-    // owner (POST /api/projects/:id/messages — available, but a different
-    // surface) or a dedicated "request re-review" lifecycle event the owner
-    // approves. Until one exists this composes the note locally and returns.
-    navigate('/today', { replace: true })
+  const submit = (composeMode: Exclude<ComposeMode, 'idle'>) => {
+    const text = note.trim()
+    if (!workItem || text.length === 0) return
+    appendEvent.mutate(
+      {
+        id: workItem.id,
+        input:
+          composeMode === 'resubmit'
+            ? { event_type: 'resolution.reopened', message: text }
+            : { event_type: 'message.added', message: text },
+      },
+      {
+        onSuccess: () => {
+          setMode('idle')
+          setNote('')
+          if (composeMode === 'reply') setReplySent(true)
+        },
+      },
+    )
   }
 
   return (
     <div className="m-host">
       <MShell>
-        <MTopBar back eyebrow="Owner decision" title="Request denied" onBack={goBack} />
+        <MTopBar back eyebrow="Owner decision" title="From the owner" onBack={goBack} />
         <MBody>
-          <div style={{ padding: '12px 16px 0' }}>
-            <MBanner
-              tone="error"
-              title={`Denied by ${deniedBy}`}
-              body={
-                declinedAtLabel
-                  ? `Declined ${declinedAtLabel}. This won't move forward as submitted — read the reason below before you push back or acknowledge.`
-                  : "This won't move forward as submitted. Read the reason below before you push back or acknowledge."
-              }
-            />
-          </div>
-
-          {/* What was denied */}
-          <div style={{ padding: '8px 20px 0' }}>
-            <MSectionH>What was denied</MSectionH>
-            <div
-              style={{
-                border: '1px solid var(--m-line)',
-                borderRadius: 12,
-                background: 'var(--m-card)',
-                padding: '14px 16px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 12,
-              }}
-            >
-              <span
-                style={{
-                  width: 36,
-                  height: 36,
-                  flexShrink: 0,
-                  borderRadius: 8,
-                  background: 'var(--m-red-soft)',
-                  color: 'var(--m-red)',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <MI.X size={18} />
-              </span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--m-ink)' }}>{item}</div>
-                <div
-                  style={{
-                    fontFamily: 'var(--m-num)',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    color: 'var(--m-red)',
-                    marginTop: 3,
-                  }}
-                >
-                  {amount}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Reason in the owner's words */}
-          <div style={{ padding: '16px 20px 0' }}>
-            <MSectionH>Reason</MSectionH>
-            <blockquote
-              style={{
-                margin: 0,
-                borderLeft: '3px solid var(--m-line-2)',
-                paddingLeft: 14,
-                fontSize: 15,
-                lineHeight: 1.55,
-                color: 'var(--m-ink-2)',
-                fontStyle: 'italic',
-              }}
-            >
-              “{reason}”
-            </blockquote>
-          </div>
-
-          {/* Push-back composer (revealed) */}
-          {pushOpen ? (
-            <div style={{ padding: '20px 20px 0' }}>
-              <MSectionH>Your response</MSectionH>
-              <MTextarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Add the context the owner asked for, or explain why this still needs to happen…"
-                rows={4}
+          {detail.isPending ? (
+            <MSkeletonList count={3} />
+          ) : detail.error || !workItem ? (
+            <div style={{ padding: '14px 16px' }}>
+              <MBanner
+                tone="error"
+                title="Couldn't load this request"
+                body={
+                  detail.error instanceof Error
+                    ? detail.error.message
+                    : 'It may have been removed or belongs to another company.'
+                }
+                action={
+                  <MButton size="sm" variant="quiet" onClick={() => navigate('/today')}>
+                    Back to Today
+                  </MButton>
+                }
               />
             </div>
-          ) : null}
+          ) : workItem.status === 'wont_do' ? (
+            <>
+              {/* Red full-fill denial hero — msg__42's "● DENIED / $510 EPS
+                  order — not yet." block, on the real request title. */}
+              <div
+                style={{
+                  padding: '18px 20px 22px',
+                  background: 'var(--m-red)',
+                  color: '#fff',
+                  borderBottom: '2px solid var(--m-ink)',
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                  }}
+                >
+                  ● DENIED{deniedStamp ? ` · ${deniedStamp}` : ''}
+                </div>
+                <div
+                  style={{
+                    fontFamily: DISPLAY,
+                    fontSize: 34,
+                    fontWeight: 800,
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.02,
+                    margin: '10px 0 0',
+                    overflowWrap: 'break-word',
+                  }}
+                >
+                  {workItem.title}
+                </div>
+                {workItem.summary ? (
+                  <div style={{ fontSize: 14, lineHeight: 1.45, marginTop: 10, opacity: 0.92 }}>{workItem.summary}</div>
+                ) : null}
+              </div>
 
-          <div style={{ padding: '24px 20px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
-            {pushOpen ? (
-              <MButtonStack>
-                <MButton variant="primary" onClick={onSubmitPushBack} disabled={busy || note.trim().length === 0}>
-                  {busy ? 'Sending…' : 'Send push-back'}
-                </MButton>
-                <MButton variant="ghost" onClick={() => setPushOpen(false)} disabled={busy}>
-                  Cancel
-                </MButton>
-              </MButtonStack>
-            ) : (
-              <MButtonStack>
-                <MButton variant="primary" onClick={() => setPushOpen(true)}>
-                  Push back
-                </MButton>
-                <MButton variant="ghost" onClick={onAcknowledge} disabled={busy}>
-                  {busy ? 'Saving…' : 'Acknowledge & move on'}
-                </MButton>
-              </MButtonStack>
-            )}
-            <div
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 500,
-                letterSpacing: '0.04em',
-                textAlign: 'center',
-                color: 'var(--m-ink-4)',
-                marginTop: 12,
-              }}
-            >
-              Ref {id ?? '—'}
+              {appendEvent.error ? (
+                <div style={{ padding: '14px 16px 0' }}>
+                  <MBanner
+                    tone="error"
+                    title="Couldn't send that"
+                    body={appendEvent.error instanceof Error ? appendEvent.error.message : 'Request failed — retry.'}
+                  />
+                </div>
+              ) : null}
+              {replySent ? (
+                <div style={{ padding: '14px 16px 0' }}>
+                  <MBanner tone="ok" title="Reply sent" body="Your note is on the request thread for the owner." />
+                </div>
+              ) : null}
+
+              {/* WHY — the denial in the owner's words. Only the real note;
+                  when the owner gave none, say exactly that. */}
+              <div style={{ padding: '16px 20px 0' }}>
+                <MSectionH>Why</MSectionH>
+                {reason ? (
+                  <div
+                    style={{
+                      border: '2px solid var(--m-ink)',
+                      background: 'var(--m-card)',
+                      padding: '14px 16px',
+                      fontFamily: DISPLAY,
+                      fontSize: 17,
+                      fontWeight: 600,
+                      lineHeight: 1.4,
+                      color: 'var(--m-ink)',
+                    }}
+                  >
+                    {reason}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      border: '2px solid var(--m-line-2)',
+                      background: 'var(--m-card-soft)',
+                      padding: '14px 16px',
+                      fontFamily: MONO,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      letterSpacing: '0.02em',
+                      color: 'var(--m-ink-3)',
+                    }}
+                  >
+                    NO REASON WAS LEFT WITH THIS DENIAL.
+                  </div>
+                )}
+                <div
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: '0.06em',
+                    color: 'var(--m-ink-3)',
+                    marginTop: 8,
+                  }}
+                >
+                  {deniedStamp ? `${deniedStamp} · OWNER` : 'OWNER'}
+                </div>
+              </div>
+
+              {/* Next steps — msg__42's SUGGESTED ALTERNATIVES button stack.
+                  The backend has no structured alternatives field, so the
+                  header only claims "suggested alternatives" when the owner's
+                  note (the only alternatives signal) exists. Both actions are
+                  real events on the request. */}
+              <div style={{ padding: '20px 20px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
+                <MSectionH>{reason ? 'Suggested alternatives' : 'Next steps'}</MSectionH>
+                {mode === 'idle' ? (
+                  <MButtonStack>
+                    <MButton variant="primary" onClick={() => setMode('resubmit')} disabled={busy}>
+                      Resubmit with changes
+                    </MButton>
+                    <MButton variant="ghost" onClick={() => setMode('reply')} disabled={busy}>
+                      Reply to owner
+                    </MButton>
+                    <MButton variant="quiet" onClick={() => navigate('/today')} disabled={busy}>
+                      Back to Today
+                    </MButton>
+                  </MButtonStack>
+                ) : (
+                  <>
+                    <MTextarea
+                      value={note}
+                      onChange={(e) => setNote(e.currentTarget.value)}
+                      placeholder={
+                        mode === 'resubmit'
+                          ? "What changed — the context the owner asked for, or why it's still needed…"
+                          : 'Your reply lands on the request thread for the owner…'
+                      }
+                      rows={4}
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ marginTop: 12 }}>
+                      <MButtonStack>
+                        <MButton
+                          variant="primary"
+                          onClick={() => submit(mode)}
+                          disabled={busy || note.trim().length === 0}
+                        >
+                          {busy ? 'Sending…' : mode === 'resubmit' ? 'Send back for review' : 'Send reply'}
+                        </MButton>
+                        <MButton variant="ghost" onClick={() => setMode('idle')} disabled={busy}>
+                          Cancel
+                        </MButton>
+                      </MButtonStack>
+                    </div>
+                    {mode === 'resubmit' ? (
+                      <div
+                        style={{
+                          fontFamily: MONO,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: '0.06em',
+                          textAlign: 'center',
+                          color: 'var(--m-ink-3)',
+                          marginTop: 10,
+                        }}
+                      >
+                        GOES BACK INTO THE OWNER'S APPROVAL QUEUE
+                      </div>
+                    ) : null}
+                  </>
+                )}
+                <RefLine id={workItem.id} />
+              </div>
+            </>
+          ) : workItem.status === 'reopened' ? (
+            // Post-resubmit landing (also reached when someone else already
+            // reopened it): the denial is superseded — back in review.
+            <div style={{ padding: '14px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
+              <MBanner
+                tone="ok"
+                title="Back in review"
+                body={`"${workItem.title}" is back in the owner's approval queue.`}
+              />
+              <div style={{ marginTop: 16 }}>
+                <MButtonStack>
+                  <MButton variant="primary" onClick={() => navigate('/today')}>
+                    Back to Today
+                  </MButton>
+                </MButtonStack>
+              </div>
+              <RefLine id={workItem.id} />
             </div>
-          </div>
+          ) : (
+            // Any other status: this request is no longer denied — say what it
+            // is now instead of rendering a stale denial composition.
+            <div style={{ padding: '14px 16px calc(env(safe-area-inset-bottom, 0px) + 20px)' }}>
+              <MBanner
+                tone="info"
+                title="No longer denied"
+                body={`"${workItem.title}" is now ${workItem.status.replace(/_/g, ' ')}.`}
+              />
+              <div style={{ marginTop: 16 }}>
+                <MButtonStack>
+                  <MButton variant="primary" onClick={() => navigate('/today')}>
+                    Back to Today
+                  </MButton>
+                </MButtonStack>
+              </div>
+              <RefLine id={workItem.id} />
+            </div>
+          )}
         </MBody>
       </MShell>
+    </div>
+  )
+}
+
+function RefLine({ id }: { id: string }) {
+  return (
+    <div
+      style={{
+        fontFamily: MONO,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: '0.06em',
+        textAlign: 'center',
+        color: 'var(--m-ink-4)',
+        marginTop: 14,
+      }}
+    >
+      REF {id.slice(0, 8).toUpperCase()}
     </div>
   )
 }
