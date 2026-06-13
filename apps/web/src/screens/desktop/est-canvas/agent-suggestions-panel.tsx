@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
-import { Card, MobileButton } from '@/components/mobile'
+import { MButton } from '@/components/m'
 import {
   confidenceBucket,
   confidenceBucketLabel,
@@ -297,21 +297,21 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
 
   if (result.isLoading) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions</AiEyebrow>
         <div className="text-[12px] text-ink-3 italic mt-1.5">Loading captured result…</div>
-      </Card>
+      </div>
     )
   }
 
   if (result.isError || !result.data) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions</AiEyebrow>
         <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
           Capture from a blueprint or upload to see AI-suggested quantities.
         </div>
-      </Card>
+      </div>
     )
   }
 
@@ -319,12 +319,12 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
   // polling; render an explicit in-progress state, never an empty result.
   if (captureStatus === 'processing') {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions · AI read in progress</AiEyebrow>
         <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
           The AI is reading the blueprint on the server. Suggestions appear here automatically when the read completes.
         </div>
-      </Card>
+      </div>
     )
   }
 
@@ -332,7 +332,7 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
   // fabricated rows). Re-running is a fresh capture from the AI palette.
   if (captureStatus === 'failed') {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions · AI read failed</AiEyebrow>
         <div className="text-[12px] text-warn leading-snug mt-1.5">
           {result.data.error ?? 'The AI provider returned an error. No quantities were produced.'}
@@ -340,36 +340,36 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
         <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
           Re-run the capture (a fresh AI auto-takeoff) to try again — failed reads never produce placeholder rows.
         </div>
-      </Card>
+      </div>
     )
   }
 
   if (quantities.length === 0) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions</AiEyebrow>
         <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
           The capture pipeline returned no quantities. Re-run the capture or escalate to manual takeoff.
         </div>
-      </Card>
+      </div>
     )
   }
 
   if (visible.length === 0) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <AiEyebrow>Agent suggestions</AiEyebrow>
         <div className="text-[12px] text-ink-3 leading-snug mt-1.5">
           All {quantities.length} captured quantities have been confirmed or rejected this session.
         </div>
         {summary ? <div className="mt-1.5 text-[11px] text-ink-3">{summary}</div> : null}
-      </Card>
+      </div>
     )
   }
 
   return (
     <div>
-      <Card tight>
+      <div className="m-card m-card-tight">
         <div className="flex items-baseline justify-between">
           <AiEyebrow>Agent suggestions · {visible.length} pending</AiEyebrow>
           {highConfidence.length > 0 ? (
@@ -393,7 +393,7 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
         ) : null}
         {summary ? <div className="mt-1.5 text-[11px] text-ink-3">{summary}</div> : null}
         {error ? <div className="mt-1.5 text-[12px] text-warn">{error}</div> : null}
-      </Card>
+      </div>
 
       {/* High + medium confidence stack first; low confidence sits behind
           a disclosure per the design rule. AgentSurface contributes its own
@@ -420,7 +420,7 @@ export function AgentSuggestionsPanel({ projectId, draft }: AgentSuggestionsPane
           <button
             type="button"
             onClick={() => setShowLow((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2 bg-card-soft border border-line rounded text-[12px] font-medium text-ink-2"
+            className="w-full flex items-center justify-between px-3 py-2 bg-card-soft border border-line text-[12px] font-medium text-ink-2"
           >
             <span className="flex items-center gap-2">
               <Spark state="muted" size={10} aria-label="" />
@@ -536,7 +536,7 @@ function AgentSuggestionCard({
             value={override}
             onChange={(e) => onOverrideChange(e.target.value)}
             placeholder={derivedCodeFor(quantity) ?? 'service_item_code'}
-            className="flex-1 min-w-0 px-2 py-1 rounded border border-line bg-card-soft text-[12px] font-mono"
+            className="flex-1 min-w-0 px-2 py-1 border border-line bg-card-soft text-[12px] font-mono"
           />
         </div>
       ) : null}
@@ -550,21 +550,15 @@ function AgentSuggestionCard({
       </div>
 
       <div className="mt-2 grid grid-cols-3 gap-2">
-        <MobileButton variant="primary" size="sm" fullWidth={false} onClick={onConfirm} disabled={isBusy}>
+        <MButton variant="primary" size="sm" onClick={onConfirm} disabled={isBusy}>
           {isBusy ? 'Working…' : 'Confirm'}
-        </MobileButton>
-        <MobileButton
-          variant={isEditing ? 'quiet' : 'ghost'}
-          size="sm"
-          fullWidth={false}
-          onClick={onToggleEdit}
-          disabled={isBusy}
-        >
+        </MButton>
+        <MButton variant={isEditing ? 'quiet' : 'ghost'} size="sm" onClick={onToggleEdit} disabled={isBusy}>
           {isEditing ? 'Done' : 'Edit'}
-        </MobileButton>
-        <MobileButton variant="ghost" size="sm" fullWidth={false} onClick={onReject} disabled={isBusy}>
+        </MButton>
+        <MButton variant="ghost" size="sm" onClick={onReject} disabled={isBusy}>
           Reject
-        </MobileButton>
+        </MButton>
       </div>
     </AgentSurface>
   )

@@ -8,7 +8,7 @@
  * succeeds via the geofence, we navigate to /m/clockin with the event id;
  * otherwise this screen handles manual punches.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, type BootstrapResponse } from '@/lib/api'
 import {
@@ -29,7 +29,6 @@ import {
   initialsFor,
 } from '../../components/m/index.js'
 import { MPermissionState } from '../../components/m-states/index.js'
-import { Sheet } from '../../components/mobile/Sheet.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 import { useCrewSchedule } from '../../machines/crew-schedule.js'
 import { useAutoGeofenceClock, useIdleAutoClockOut, usePrimaryProjectFence } from '../../lib/geofence.js'
@@ -433,7 +432,7 @@ function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose 
   }, [declineReason, machine, submitting])
 
   return (
-    <Sheet open onClose={onClose} title={projectName}>
+    <AssignmentConfirmSheet title={projectName} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {machine.error ? <MBanner tone="error" title="Couldn't confirm" body={machine.error} /> : null}
         {machine.outOfSync ? (
@@ -477,7 +476,76 @@ function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose 
           </MButton>
         </MButtonRow>
       </div>
-    </Sheet>
+    </AssignmentConfirmSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Replaces the legacy
+ * mobile-kit Sheet (rounded-t-[24px] + blur) this screen used pre-v2. ESC and backdrop-tap dismiss. Same local-helper pattern as
+ * screens/mobile/schedule.tsx (AssignmentSheet).
+ */
+function AssignmentConfirmSheet({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 

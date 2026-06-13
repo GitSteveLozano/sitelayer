@@ -458,8 +458,8 @@ function CreateAssignmentSheet({
 /**
  * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
  * ink top rule, hard offset shadow, no grabber/blur). Replaces the legacy
- * `components/mobile/Sheet.tsx` (rounded-t-[24px] + blur) this screen used
- * pre-v2 (audit M09 #21). ESC and backdrop-tap dismiss.
+ * mobile-kit Sheet (rounded-t-[24px] + blur) this screen used pre-v2
+ * (audit M09 #21). ESC and backdrop-tap dismiss.
  */
 function AssignmentSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {

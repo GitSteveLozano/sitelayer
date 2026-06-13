@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { Card, MobileButton } from '@/components/mobile'
+import { useNavigate } from 'react-router-dom'
+import { MBody, MButton, MShell, MTextarea, MTopBar } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { useClockTimeline, useCreateDailyLog, useDailyLogs, useUploadDailyLogPhoto } from '@/lib/api'
@@ -12,6 +12,12 @@ import { findOpenSpan, pairClockSpans } from '@/lib/clock-derive'
  * photo, types a quick note, and the photo attaches to today's daily
  * log for the project they're clocked in to (or the project they're
  * scheduled on if off-clock).
+ *
+ * View layer is the M07 worker dark idiom (msg__52 "NEW PHOTO" — dark
+ * shell, X-dismiss topbar, mono uppercase NOTE label, big yellow
+ * worker-size SAVE TO LOG), self-wrapped in `.m-dark` because /photo
+ * mounts in App.tsx outside the worker MobileShell. Same pattern as
+ * worker-invite.tsx.
  *
  * Wire-up:
  *   1. Resolve the active project — open clock span first, falling
@@ -118,106 +124,99 @@ export function WorkerPhotoLogScreen() {
 
   if (!activeProjectId) {
     return (
-      <div className="flex flex-col">
-        <div className="px-5 pt-6 pb-3">
-          <Link to="/" className="text-[12px] text-ink-3">
-            ← Today
-          </Link>
-          <h1 className="mt-2 font-display text-[22px] font-bold tracking-tight leading-tight">Site photo</h1>
-        </div>
-        <EmptyState
-          title="No active project"
-          body="Clock in to a job first — site photos attach to that day's log for that project."
-          primaryAction={
-            <Link
-              to="/"
-              className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
-            >
-              Back to today
-            </Link>
-          }
-        />
+      <div className="m-host">
+        <MShell className="m-dark">
+          <MTopBar back backVariant="close" title="Site photo" onBack={() => navigate('/')} />
+          <MBody>
+            <EmptyState
+              title="No active project"
+              body="Clock in to a job first — site photos attach to that day's log for that project."
+              primaryAction={
+                <MButton variant="primary" data-size="worker" onClick={() => navigate('/')}>
+                  Back to today
+                </MButton>
+              }
+            />
+          </MBody>
+        </MShell>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col">
-      <div className="px-5 pt-6 pb-3">
-        <Link to="/" className="text-[12px] text-ink-3">
-          ← Today
-        </Link>
-        <h1 className="mt-2 font-display text-[22px] font-bold tracking-tight leading-tight">Site photo</h1>
-        <p className="text-[12px] text-ink-3 mt-1">
-          Attaches to today's log for{' '}
-          <span className="font-semibold text-ink-2">{activeProjectName ?? 'this project'}</span>.
-        </p>
-      </div>
-
-      <div className="px-4 space-y-3 pb-8">
-        {!imageUrl ? (
-          <Card>
-            <div className="text-[13px] font-semibold mb-2">Capture or pick</div>
-            <p className="text-[12px] text-ink-3 mb-3">
-              Mobile browsers open the camera directly. Anything you snap appears in the foreman's daily log.
-            </p>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={onPickFile}
-              className="hidden"
-            />
-            <MobileButton variant="primary" onClick={() => fileRef.current?.click()}>
-              Open camera
-            </MobileButton>
-          </Card>
-        ) : (
-          <>
-            <Card className="!p-0 overflow-hidden">
-              <img src={imageUrl} alt="Site capture" className="block w-full h-auto" />
-              <div className="px-3 py-2 border-t border-line flex items-center justify-between text-[12px] text-ink-3">
-                <span>Photo ready to attach.</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (imageUrl) URL.revokeObjectURL(imageUrl)
-                    setImageUrl(null)
-                    setImageFile(null)
-                  }}
-                  className="text-accent font-medium"
-                >
-                  Retake
-                </button>
-              </div>
-            </Card>
-
-            <Card>
-              <label className="block">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-                  Caption (optional)
-                </div>
-                <textarea
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
-                  rows={3}
-                  placeholder="e.g. EPS install · East elevation · sec 2 of 4 done"
-                  className="mt-1 w-full text-[14px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent resize-none"
+    <div className="m-host">
+      <MShell className="m-dark">
+        <MTopBar
+          back
+          backVariant="close"
+          title="Site photo"
+          sub={`Attaches to today's log for ${activeProjectName ?? 'this project'}`}
+          onBack={() => navigate('/')}
+        />
+        <MBody>
+          <div style={{ padding: '16px 16px 32px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {!imageUrl ? (
+              <div className="m-card">
+                <div className="text-[13px] font-semibold mb-2">Capture or pick</div>
+                <p className="text-[12px] text-ink-3 mb-3">
+                  Mobile browsers open the camera directly. Anything you snap appears in the foreman's daily log.
+                </p>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={onPickFile}
+                  className="hidden"
                 />
-              </label>
-            </Card>
+                <MButton variant="primary" data-size="worker" onClick={() => fileRef.current?.click()}>
+                  Open camera
+                </MButton>
+              </div>
+            ) : (
+              <>
+                <div className="m-card overflow-hidden" style={{ padding: 0 }}>
+                  <img src={imageUrl} alt="Site capture" className="block w-full h-auto" />
+                  <div className="px-3 py-2 border-t border-line flex items-center justify-between text-[12px] text-ink-3">
+                    <span>Photo ready to attach.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (imageUrl) URL.revokeObjectURL(imageUrl)
+                        setImageUrl(null)
+                        setImageFile(null)
+                      }}
+                      className="text-accent font-medium"
+                    >
+                      Retake
+                    </button>
+                  </div>
+                </div>
 
-            {error ? <div className="text-[12px] text-warn">{error}</div> : null}
+                <div className="m-card">
+                  <label className="block">
+                    <div className="m-field-l">Caption (optional)</div>
+                    <MTextarea
+                      value={caption}
+                      onChange={(e) => setCaption(e.target.value)}
+                      rows={3}
+                      placeholder="e.g. EPS install · East elevation · sec 2 of 4 done"
+                    />
+                  </label>
+                </div>
 
-            <MobileButton variant="primary" onClick={onSave} disabled={posting}>
-              {posting ? 'Saving…' : 'Save to log'}
-            </MobileButton>
+                {error ? <div className="text-[12px] text-warn">{error}</div> : null}
 
-            <Attribution source="POST /api/daily-logs (find/create) + /api/daily-logs/:id/photos (upload)" />
-          </>
-        )}
-      </div>
+                <MButton variant="primary" data-size="worker" onClick={onSave} disabled={posting}>
+                  {posting ? 'Saving…' : 'Save to log'}
+                </MButton>
+
+                <Attribution source="POST /api/daily-logs (find/create) + /api/daily-logs/:id/photos (upload)" />
+              </>
+            )}
+          </div>
+        </MBody>
+      </MShell>
     </div>
   )
 }

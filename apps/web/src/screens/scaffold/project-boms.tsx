@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Banner } from '@/components/mobile'
+import { MBanner, MButton } from '@/components/m'
 import { useProjectBoms, useBom, useApproveBom, useSupersedeBom, type Bom, type BomLine } from '@/lib/api/scaffold-ops'
 
 const MM_PER_FOOT = 304.8
@@ -41,9 +41,9 @@ export function ProjectBomsScreen() {
       <p className="text-[12px] text-ink-3 mt-1">{rows.length} BOM(s) for this project.</p>
 
       <div className="mt-5 space-y-3">
-        {boms.isPending ? <Card>Loading…</Card> : null}
+        {boms.isPending ? <div className="m-card">Loading…</div> : null}
         {!boms.isPending && rows.length === 0 ? (
-          <Card>
+          <div className="m-card">
             <div className="text-[13px] font-semibold">No BOMs yet</div>
             <div className="text-[12px] text-ink-3 mt-0.5">
               Generate one in the{' '}
@@ -52,11 +52,11 @@ export function ProjectBomsScreen() {
               </Link>{' '}
               and save it to this project.
             </div>
-          </Card>
+          </div>
         ) : null}
         {rows.map((bom) => (
           <button key={bom.id} type="button" onClick={() => setSelectedId(bom.id)} className="block w-full text-left">
-            <Card>
+            <div className="m-card">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[14px] font-semibold truncate">{bom.name}</div>
@@ -66,7 +66,7 @@ export function ProjectBomsScreen() {
                 </div>
                 <StatusBadge status={bom.status} />
               </div>
-            </Card>
+            </div>
           </button>
         ))}
       </div>
@@ -83,7 +83,7 @@ function StatusBadge({ status }: { status: Bom['status'] }) {
       : status === 'superseded'
         ? 'bg-line text-ink-3'
         : 'bg-warn-soft text-warn'
-  return <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${cls}`}>{status}</span>
+  return <span className={`shrink-0 px-2 py-0.5 text-[11px] font-medium ${cls}`}>{status}</span>
 }
 
 function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void }) {
@@ -100,7 +100,7 @@ function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void 
 
   return (
     <div className="mt-5">
-      <Card>
+      <div className="m-card">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[11px] uppercase tracking-[0.06em] text-ink-3">BOM detail</div>
           <button type="button" onClick={onClose} className="text-[12px] text-ink-3">
@@ -131,30 +131,30 @@ function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void 
             {canApprove || canSupersede ? (
               <div className="mt-3 flex flex-col gap-2">
                 {canApprove ? (
-                  <MobileButton
+                  <MButton
                     variant="primary"
                     disabled={approve.isPending}
                     onClick={() => approve.mutate({ state_version: stateVersion })}
                   >
                     {approve.isPending ? 'Approving…' : 'Approve BOM'}
-                  </MobileButton>
+                  </MButton>
                 ) : null}
                 {canSupersede ? (
-                  <MobileButton
+                  <MButton
                     variant="ghost"
                     disabled={supersede.isPending}
                     onClick={() => supersede.mutate({ state_version: stateVersion })}
                   >
                     {supersede.isPending ? 'Superseding…' : 'Supersede BOM'}
-                  </MobileButton>
+                  </MButton>
                 ) : null}
-                {approve.isError ? <Banner tone="error" title={approve.error.message} className="mt-2" /> : null}
-                {supersede.isError ? <Banner tone="error" title={supersede.error.message} className="mt-2" /> : null}
+                {approve.isError ? <MBanner tone="error" title={approve.error.message} /> : null}
+                {supersede.isError ? <MBanner tone="error" title={supersede.error.message} /> : null}
               </div>
             ) : null}
           </>
         ) : null}
-      </Card>
+      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { useClockTimeline, useProjects, useSchedules, useWorkers, type Worker } from '@/lib/api'
@@ -104,7 +104,7 @@ export function ForemanLiveCrewScreen() {
         </Link>
         <div className="mt-2 flex items-baseline justify-between gap-3">
           <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Live crew</h1>
-          <div className="inline-flex p-1 bg-card-soft rounded-full border border-line shrink-0">
+          <div className="inline-flex p-1 bg-card-soft border border-line shrink-0">
             {(['list', 'map'] as const).map((v) => (
               <button
                 key={v}
@@ -113,8 +113,8 @@ export function ForemanLiveCrewScreen() {
                 disabled={v === 'map' && pins.length === 0}
                 className={
                   view === v
-                    ? 'px-3 py-1 rounded-full text-[12px] font-medium bg-bg text-ink shadow-1'
-                    : 'px-3 py-1 rounded-full text-[12px] font-medium text-ink-3 disabled:opacity-50'
+                    ? 'px-3 py-1 text-[12px] font-medium bg-bg text-ink shadow-1'
+                    : 'px-3 py-1 text-[12px] font-medium text-ink-3 disabled:opacity-50'
                 }
               >
                 {v === 'list' ? 'List' : 'Map'}
@@ -136,7 +136,7 @@ export function ForemanLiveCrewScreen() {
             primaryAction={
               <Link
                 to="/schedule"
-                className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
+                className="w-full h-[50px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
               >
                 Open schedule
               </Link>
@@ -158,7 +158,7 @@ export function ForemanLiveCrewScreen() {
 
       <div className="px-4 pb-6">
         <Link to="/" className="block">
-          <MobileButton variant="ghost">Back to today</MobileButton>
+          <MButton variant="ghost">Back to today</MButton>
         </Link>
       </div>
     </div>
@@ -176,7 +176,7 @@ function ProjectRosterCard({
   }
 }) {
   return (
-    <Card className="!p-0 overflow-hidden">
+    <div className="m-card overflow-hidden" style={{ padding: 0 }}>
       <div className="px-4 py-3 border-b border-line flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[14px] font-semibold truncate">{roster.projectName}</div>
@@ -185,11 +185,11 @@ function ProjectRosterCard({
           </div>
         </div>
         {roster.onSite.length > 0 ? (
-          <Pill tone="good" withDot>
+          <MPill tone="green" dot>
             live
-          </Pill>
+          </MPill>
         ) : (
-          <Pill tone="default">scheduled</Pill>
+          <MPill>scheduled</MPill>
         )}
       </div>
       <ul className="divide-y divide-line">
@@ -218,7 +218,7 @@ function ProjectRosterCard({
           </li>
         ))}
       </ul>
-    </Card>
+    </div>
   )
 }
 
@@ -233,7 +233,7 @@ function CrewAvatar({ name, tone }: { name: string; tone: 'green' | 'muted' }) {
   return (
     <span
       className={
-        'w-9 h-9 rounded-full text-[12px] font-semibold inline-flex items-center justify-center shrink-0 ' +
+        'w-9 h-9 text-[12px] font-semibold inline-flex items-center justify-center shrink-0 ' +
         (tone === 'green' ? 'bg-good-soft text-good' : 'bg-card-soft text-ink-3')
       }
     >
@@ -268,7 +268,7 @@ function CrewMap({ pins }: { pins: Array<{ roster: ProjectRoster; lat: number; l
   const totalOnSite = pins.reduce((sum, p) => sum + p.roster.onSite.length, 0)
 
   return (
-    <Card className="!p-0 overflow-hidden">
+    <div className="m-card overflow-hidden" style={{ padding: 0 }}>
       <div className="relative bg-card-soft" style={{ aspectRatio: `${W}/${H}` }}>
         <svg viewBox={`0 0 ${W} ${H}`} className="absolute inset-0 w-full h-full" role="img" aria-label="Crew map">
           {/* Grid hint — eight cells × five rows. Reads as 'this is a
@@ -325,7 +325,7 @@ function CrewMap({ pins }: { pins: Array<{ roster: ProjectRoster; lat: number; l
             )
           })}
         </svg>
-        <div className="absolute top-2 left-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 bg-card/80 backdrop-blur rounded-md px-2 py-1">
+        <div className="absolute top-2 left-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 bg-card/80 backdrop-blur px-2 py-1">
           Live · {totalOnSite} on site
         </div>
       </div>
@@ -339,16 +339,16 @@ function CrewMap({ pins }: { pins: Array<{ roster: ProjectRoster; lat: number; l
               </div>
             </div>
             {roster.onSite.length > 0 ? (
-              <Pill tone="good" withDot>
+              <MPill tone="green" dot>
                 live
-              </Pill>
+              </MPill>
             ) : (
-              <Pill tone="default">scheduled</Pill>
+              <MPill>scheduled</MPill>
             )}
           </li>
         ))}
       </ul>
-    </Card>
+    </div>
   )
 }
 

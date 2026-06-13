@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { generateScaffoldModel, type ScaffoldDesignSpec, type ScaffoldModel } from '@sitelayer/domain'
-import { Card, Banner, MobileButton } from '@/components/mobile'
+import { MBanner, MButton } from '@/components/m'
 import { useProjects } from '@/lib/api/projects'
 import { useScaffoldSystems, useCreateScaffoldDesignBom } from '@/lib/api/scaffold-ops'
 import { buildScaffoldScene, colorForRole } from '@/lib/scaffold/scaffold-scene'
@@ -74,7 +74,7 @@ export function ScaffoldDesignerScreen() {
       </p>
 
       <div className="mt-5 space-y-4">
-        <Card>
+        <div className="m-card">
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <NumberField label="Bays (length)" value={spec.baysAlongLength} onChange={num('baysAlongLength')} />
             <NumberField label="Bays (width)" value={spec.baysAlongWidth} onChange={num('baysAlongWidth')} />
@@ -88,21 +88,21 @@ export function ScaffoldDesignerScreen() {
             <Checkbox label="Guardrails" checked={spec.options?.guardrails ?? true} onChange={toggle('guardrails')} />
             <Checkbox label="Toeboards" checked={spec.options?.toeboards ?? false} onChange={toggle('toeboards')} />
           </div>
-        </Card>
+        </div>
 
-        {error ? <Banner tone="error" title={error} /> : null}
+        {error ? <MBanner tone="error" title={error} /> : null}
 
         {scene ? (
-          <div className="relative h-[440px] overflow-hidden rounded-xl border border-line bg-[#0d1117]">
+          <div className="relative h-[440px] overflow-hidden border border-line bg-[#0d1117]">
             <ScaffoldThreeScene scene={scene} />
-            <div className="absolute bottom-2 right-2 rounded-md bg-black/45 px-2 py-1 text-[11px] text-white/70">
+            <div className="absolute bottom-2 right-2 bg-black/45 px-2 py-1 text-[11px] text-white/70">
               Drag to rotate · scroll to zoom
             </div>
           </div>
         ) : null}
 
         {model ? (
-          <Card>
+          <div className="m-card">
             <div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">Bill of materials</div>
             <ul className="divide-y divide-line">
               {model.partDemand.map((line) => (
@@ -122,7 +122,7 @@ export function ScaffoldDesignerScreen() {
                 {w}
               </p>
             ))}
-          </Card>
+          </div>
         ) : null}
 
         {model ? <SaveBomPanel spec={spec} /> : null}
@@ -146,7 +146,7 @@ function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
   const unresolvedRoles = save.data ? [...new Set(save.data.unresolved.map((u) => u.role))] : []
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">Save as BOM</div>
       <div className="space-y-3">
         <label className="block">
@@ -179,7 +179,7 @@ function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
             className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
           />
         </label>
-        <MobileButton
+        <MButton
           variant="primary"
           disabled={!projectId || save.isPending}
           onClick={() =>
@@ -191,11 +191,11 @@ function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
           }
         >
           {save.isPending ? 'Saving…' : 'Save as BOM'}
-        </MobileButton>
+        </MButton>
 
-        {save.isError ? <Banner tone="error" title={save.error.message} /> : null}
+        {save.isError ? <MBanner tone="error" title={save.error.message} /> : null}
         {save.data ? (
-          <div className="rounded-lg border border-line p-3 text-[12px]">
+          <div className="border border-line p-3 text-[12px]">
             <div className="font-semibold">
               Saved “{save.data.bom.name}” — {save.data.bom.total_lines} line(s)
             </div>
@@ -213,7 +213,7 @@ function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
           </div>
         ) : null}
       </div>
-    </Card>
+    </div>
   )
 }
 

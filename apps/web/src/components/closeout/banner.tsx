@@ -1,11 +1,11 @@
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { useProjectCloseoutMachine } from '@/machines/project-closeout'
 
-const CLOSEOUT_STATE_LABEL: Record<string, { label: string; tone: 'default' | 'info' | 'good' | 'warn' | 'bad' }> = {
-  active: { label: 'Active', tone: 'default' },
-  completed: { label: 'Closed', tone: 'good' },
+const CLOSEOUT_STATE_LABEL: Record<string, { label: string; tone: MTone | undefined }> = {
+  active: { label: 'Active', tone: undefined },
+  completed: { label: 'Closed', tone: 'green' },
 }
 
 /**
@@ -38,16 +38,16 @@ export function CloseoutBanner({ projectId }: { projectId: string }) {
   if (snap.state === 'active' && snap.next_events.length === 0) {
     return null
   }
-  const label = CLOSEOUT_STATE_LABEL[snap.state] ?? { label: snap.state, tone: 'default' as const }
+  const label = CLOSEOUT_STATE_LABEL[snap.state] ?? { label: snap.state, tone: undefined }
   const showOutOfSync = closeout.outOfSync
   const errorMessage = closeout.error
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Closeout</span>
-          <Pill tone={label.tone}>{label.label}</Pill>
+          <MPill tone={label.tone}>{label.label}</MPill>
         </div>
         <span className="text-[11px] text-ink-3 num">v{snap.state_version}</span>
       </div>
@@ -75,7 +75,7 @@ export function CloseoutBanner({ projectId }: { projectId: string }) {
               onClick={() => closeout.dispatch(evt.type)}
               disabled={closeout.isSubmitting || Boolean(evt.disabled_reason)}
               title={evt.disabled_reason ?? undefined}
-              className="px-3 py-1.5 rounded border border-line text-[12px] font-semibold text-ink bg-card-soft disabled:opacity-50 hover:bg-card"
+              className="px-3 py-1.5 border border-line text-[12px] font-semibold text-ink bg-card-soft disabled:opacity-50 hover:bg-card"
             >
               {evt.label}
             </button>
@@ -83,6 +83,6 @@ export function CloseoutBanner({ projectId }: { projectId: string }) {
         </div>
       )}
       <Attribution source="GET /api/projects/:id/closeout · POST /:id/closeout (project-closeout workflow + XState machine)" />
-    </Card>
+    </div>
   )
 }

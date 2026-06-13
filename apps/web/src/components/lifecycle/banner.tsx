@@ -1,18 +1,17 @@
-import { Card, Pill } from '@/components/mobile'
-import { Attribution } from '@/components/ai'
+import { MPill, type MTone } from '@/components/m'
 import { getActiveCompanySlug } from '@/lib/api/client'
 import { useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
 import { useProjectLifecycle } from '@/machines/project-lifecycle'
 
-const LIFECYCLE_STATE_LABEL: Record<string, { label: string; tone: 'default' | 'info' | 'good' | 'warn' | 'bad' }> = {
-  draft: { label: 'Drafting', tone: 'default' },
-  estimating: { label: 'Estimating', tone: 'default' },
-  sent: { label: 'Sent to client', tone: 'info' },
-  accepted: { label: 'Accepted', tone: 'good' },
-  declined: { label: 'Declined', tone: 'bad' },
-  in_progress: { label: 'In progress', tone: 'good' },
-  done: { label: 'Done', tone: 'good' },
-  archived: { label: 'Archived', tone: 'default' },
+const LIFECYCLE_STATE_LABEL: Record<string, { label: string; tone: MTone | undefined }> = {
+  draft: { label: 'Drafting', tone: undefined },
+  estimating: { label: 'Estimating', tone: undefined },
+  sent: { label: 'Sent to client', tone: 'blue' },
+  accepted: { label: 'Accepted', tone: 'green' },
+  declined: { label: 'Declined', tone: 'red' },
+  in_progress: { label: 'In progress', tone: 'green' },
+  done: { label: 'Done', tone: 'green' },
+  archived: { label: 'Archived', tone: undefined },
 }
 
 /**
@@ -40,16 +39,16 @@ export function LifecycleBanner({ projectId }: { projectId: string }) {
   if (!snap) {
     return null
   }
-  const label = LIFECYCLE_STATE_LABEL[snap.state] ?? { label: snap.state, tone: 'default' as const }
+  const label = LIFECYCLE_STATE_LABEL[snap.state] ?? { label: snap.state, tone: undefined }
   const showOutOfSync = lifecycle.outOfSync
   const errorMessage = lifecycle.error
 
   return (
-    <Card data-testid="lifecycle-banner">
+    <div className="m-card" data-testid="lifecycle-banner">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Lifecycle</span>
-          <Pill tone={label.tone}>{label.label}</Pill>
+          <MPill tone={label.tone}>{label.label}</MPill>
         </div>
         <span className="text-[11px] text-ink-3 num">v{snap.state_version}</span>
       </div>
@@ -77,14 +76,19 @@ export function LifecycleBanner({ projectId }: { projectId: string }) {
               onClick={() => lifecycle.dispatch({ type: evt.type })}
               disabled={lifecycle.isSubmitting || Boolean(evt.disabled_reason)}
               title={evt.disabled_reason ?? undefined}
-              className="px-3 py-1.5 rounded border border-line text-[12px] font-semibold text-ink bg-card-soft disabled:opacity-50 hover:bg-card"
+              className="px-3 py-1.5 border border-line text-[12px] font-semibold text-ink bg-card-soft disabled:opacity-50 hover:bg-card"
             >
               {evt.label}
             </button>
           ))}
         </div>
       )}
-      <Attribution source="GET /api/projects/:id/lifecycle · POST /:id/lifecycle/events (project-lifecycle workflow + XState machine)" />
-    </Card>
+      {/* The Attribution endpoint-string footer was dropped here per the
+          2026-06-12 design-fidelity audit (medium finding: "lifecycle/banner
+          printing API endpoints into the Overview tab" — debug noise on a
+          customer surface; the mobile overview removed the whole banner for
+          the same reason). The advance-pipeline affordance above is the
+          banner's actual job. */}
+    </div>
   )
 }

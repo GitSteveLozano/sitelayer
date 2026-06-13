@@ -9,20 +9,9 @@ import tseslint from 'typescript-eslint'
 // The allowlist below is the burn-down: it only shrinks. Porting a screen =
 // swap its primitives to components/m AND delete its entry here. NO new
 // imports of components/mobile anywhere.
-const LEGACY_KIT_ALLOWLIST = [
-  'apps/web/src/components/ai/RejectSheet.tsx',
-  'apps/web/src/components/closeout/banner.tsx',
-  'apps/web/src/components/lifecycle/banner.tsx',
-  'apps/web/src/components/time-review/index.tsx',
-  'apps/web/src/screens/desktop/est-canvas/agent-suggestions-panel.tsx',
-  'apps/web/src/screens/foreman/live-crew.tsx',
-  'apps/web/src/screens/mobile/schedule.tsx',
-  'apps/web/src/screens/mobile/worker-today.tsx',
-  'apps/web/src/screens/owner/bid-accuracy.tsx',
-  'apps/web/src/screens/scaffold/project-boms.tsx',
-  'apps/web/src/screens/scaffold/scaffold-designer.tsx',
-  'apps/web/src/screens/worker/photo-log.tsx',
-]
+// R5 (2026-06-13) emptied it — every screen/component is ported. R6 deletes
+// components/mobile/ itself (and can then drop this whole ratchet block).
+const LEGACY_KIT_ALLOWLIST = []
 
 export default tseslint.config(
   {

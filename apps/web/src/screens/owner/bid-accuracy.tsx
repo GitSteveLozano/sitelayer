@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { Attribution, Spark, StripeCard, WhyThis } from '@/components/ai'
 import { useBidAccuracy, type AccuracyConfidence, type BidAccuracyProject } from '@/lib/api'
 
@@ -78,9 +78,9 @@ export function OwnerBidAccuracyScreen() {
 
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">Per project</div>
         {projects.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No bids with realized cost yet.</div>
-          </Card>
+          </div>
         ) : (
           projects.map((p) => <ProjectRow key={p.project_id} project={p} />)
         )}
@@ -90,13 +90,13 @@ export function OwnerBidAccuracyScreen() {
 }
 
 function ProjectRow({ project }: { project: BidAccuracyProject }) {
-  const tone: 'good' | 'warn' | 'default' =
-    project.confidence === 'high' ? 'good' : project.confidence === 'med' ? 'default' : 'warn'
+  const tone: MTone | undefined =
+    project.confidence === 'high' ? 'green' : project.confidence === 'med' ? undefined : 'amber'
   const sign = project.delta_cents > 0 ? '+' : project.delta_cents < 0 ? '−' : ''
   const absDelta = Math.abs(project.delta_cents) / 100
   return (
     <Link to={`/projects/${project.project_id}`} className="block">
-      <Card tight>
+      <div className="m-card m-card-tight">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-[13px] font-semibold">{project.project_name}</div>
@@ -107,9 +107,9 @@ function ProjectRow({ project }: { project: BidAccuracyProject }) {
               actual ${(project.actual_total_cents / 100).toLocaleString()} · {sign}${absDelta.toLocaleString()}
             </div>
           </div>
-          <Pill tone={tone}>{labelFor(project.confidence)}</Pill>
+          <MPill tone={tone}>{labelFor(project.confidence)}</MPill>
         </div>
-      </Card>
+      </div>
     </Link>
   )
 }
