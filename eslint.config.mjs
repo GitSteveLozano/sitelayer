@@ -2,15 +2,11 @@ import js from '@eslint/js'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-// ── Legacy-kit retirement ratchet ──────────────────────────────────────────
-// components/mobile (the wave-2 kit) is being retired in favor of
-// components/m. Campaign + wave plan:
-// ~/notes/sitelayer-legacy-kit-retirement-campaign-2026-06-13.md
-// The allowlist below is the burn-down: it only shrinks. Porting a screen =
-// swap its primitives to components/m AND delete its entry here. NO new
-// imports of components/mobile anywhere.
-// R5 (2026-06-13) emptied it — every screen/component is ported. R6 deletes
-// components/mobile/ itself (and can then drop this whole ratchet block).
+// ── Legacy-kit ban (permanent) ─────────────────────────────────────────────
+// components/mobile (the wave-2 kit) was retired and DELETED on 2026-06-13
+// (campaign: ~/notes/sitelayer-legacy-kit-retirement-campaign-2026-06-13.md,
+// waves R0–R6). This rule is the permanent guard: never reintroduce the kit
+// or imports of it. UI primitives live in components/m / styles/m.css.
 const LEGACY_KIT_ALLOWLIST = []
 
 export default tseslint.config(
@@ -95,7 +91,7 @@ export default tseslint.config(
                 '**/components/mobile/**',
               ],
               message:
-                'components/mobile is retired — use components/m. Porting this file? Also remove it from LEGACY_KIT_ALLOWLIST in eslint.config.mjs (see ~/notes/sitelayer-legacy-kit-retirement-campaign-2026-06-13.md).',
+                'components/mobile was deleted 2026-06-13 — use components/m (see ~/notes/sitelayer-legacy-kit-retirement-campaign-2026-06-13.md).',
             },
           ],
         },
