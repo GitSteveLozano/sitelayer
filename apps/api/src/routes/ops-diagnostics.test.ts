@@ -13,6 +13,7 @@ import {
   __desktopEvidenceFromRowForTests,
   __enqueueOnsiteDiagnosticConcernForTests,
   __latestPersistentOnsiteWorkLinkForTests,
+  __recordPersistentOnsiteDiagnosticActionForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
@@ -186,10 +187,54 @@ function handoffEventRow(params: unknown[]) {
 
 class PersistentOpsClient {
   calls: Array<{ sql: string; params: unknown[] }> = []
+  sessionEvents: Array<{
+    id: string
+    actor_user_id: string | null
+    event_type: string
+    action_key: string | null
+    effect: string
+    summary: string
+    created_at: string
+  }> = []
 
   async query(sql: string, params: unknown[] = []) {
     const normalized = sql.replace(/\s+/g, ' ').trim()
     this.calls.push({ sql: normalized, params })
+    if (normalized.startsWith('update ops_diagnostic_sessions')) {
+      return {
+        rows: [
+          {
+            id: OPS_SESSION_ID,
+            operator_user_id: 'user_42',
+            label: 'Plant walkdown',
+            intent: 'dispatch_agent_review',
+            plan: readyPlan(),
+            control_token_hash: 'hash',
+            state: 'active',
+            expires_at: '2026-06-12T13:00:00.000Z',
+            created_at: '2026-06-12T12:00:00.000Z',
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+    if (normalized.startsWith('insert into ops_diagnostic_session_events')) {
+      this.sessionEvents.push({
+        id: String(params[0]),
+        actor_user_id: (params[3] as string | null) ?? null,
+        event_type: String(params[4]),
+        action_key: (params[5] as string | null) ?? null,
+        effect: 'audit_only',
+        summary: String(params[6]),
+        created_at: String(params[7]),
+      })
+      return { rows: [], rowCount: 1 }
+    }
+    if (normalized.startsWith('select id, actor_user_id, event_type, action_key')) {
+      return { rows: this.sessionEvents, rowCount: this.sessionEvents.length }
+    }
+    if (normalized.startsWith('select id, audience, concern_ref, status')) return { rows: [], rowCount: 0 }
+    if (normalized.startsWith('select s.id::text as capture_session_id')) return { rows: [], rowCount: 0 }
     if (normalized.startsWith('select id::text as context_work_item_id')) return { rows: [], rowCount: 0 }
     if (normalized.startsWith('insert into support_debug_packets')) {
       return {
@@ -638,6 +683,68 @@ describe('ops diagnostics', () => {
         },
       )
       expect(deniedResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+    })
+  })
+
+  it('routes field-context capture actions through the capture router', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      __resetOpsDiagnosticSessionsForTests()
+      const routedEnvelopes: unknown[] = []
+      const fetchImpl = routedFetch(routedEnvelopes)
+      const createdResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL('http://localhost/api/ops/diagnostics/sessions'),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => createdResponses.push({ status, body }),
+          readBody: async () => ({ intent: 'capture_field_context' }),
+          getCurrentUserId: () => 'user_42',
+          fetchImpl,
+        },
+      )
+      const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
+
+      const actionResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => actionResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: created.control_token,
+            action_key: 'capture_field_context',
+          }),
+          getCurrentUserId: () => 'user_99',
+          fetchImpl,
+        },
+      )
+
+      expect(actionResponses[0]?.status).toBe(202)
+      expect(actionResponses[0]?.body).toMatchObject({
+        accepted_action: {
+          key: 'capture_field_context',
+          capture_route: {
+            status: 'accepted',
+            request_ref: `opsdiag:${created.session.id}:capture_field_context`,
+          },
+        },
+      })
+      expect(routedEnvelopes).toHaveLength(1)
+      expect(routedEnvelopes[0]).toMatchObject({
+        events: [
+          expect.objectContaining({
+            event_type: 'sitelayer.ops_diagnostic.capture_field_context.requested',
+            payload: {
+              work_request: expect.objectContaining({
+                request_ref: `opsdiag:${created.session.id}:capture_field_context`,
+                intent: 'capture-followup',
+              }),
+            },
+          }),
+        ],
+      })
     })
   })
 
@@ -1250,6 +1357,50 @@ describe('ops diagnostics', () => {
     )
     expect(anchorLookup?.sql).toContain('order by created_at asc, id asc')
     expect(anchorLookup?.sql).toContain('limit 1 for update')
+  })
+
+  it('creates routable work evidence for persistent field-context capture actions', async () => {
+    const client = new PersistentOpsClient()
+    const result = await __recordPersistentOnsiteDiagnosticActionForTests(
+      {
+        companyId: 'company-1',
+        session: persistentSession(),
+        actionKey: 'capture_field_context',
+        actionLabel: 'Capture field context',
+        actorUserId: 'user_99',
+      },
+      async (companyId, fn) => {
+        expect(companyId).toBe('company-1')
+        return fn(client as unknown as PoolClient)
+      },
+    )
+
+    expect(result).toMatchObject({
+      agentFeed: null,
+      session: {
+        support_packet_id: OPS_SUPPORT_PACKET_ID,
+        context_work_item_id: OPS_WORK_ITEM_ID,
+      },
+    })
+    expect(__buildOpsOnsiteDiagnosticManifestForTests(result!.session)).toMatchObject({
+      support_packet_id: OPS_SUPPORT_PACKET_ID,
+      context_work_item_id: OPS_WORK_ITEM_ID,
+      readiness: { work_evidence: 'work_item_attached' },
+    })
+
+    const supportInsert = client.calls.find((call) => call.sql.startsWith('insert into support_debug_packets'))
+    const workItemInsert = client.calls.find((call) => call.sql.startsWith('insert into context_work_items'))
+    const feedInsert = client.calls.find((call) => call.sql.startsWith('insert into agent_feed_concerns'))
+    const handoffEventTypes = client.calls
+      .filter((call) => call.sql.startsWith('insert into context_handoff_events'))
+      .map((call) => call.params[2])
+
+    expect(supportInsert?.params[6]).toBe('Operator requested Capture field context from Mobile Ops.')
+    expect(JSON.parse(String(workItemInsert?.params[14] ?? '{}'))).toMatchObject({
+      requested_action: 'capture_field_context',
+    })
+    expect(feedInsert).toBeUndefined()
+    expect(handoffEventTypes).toEqual(['work_item.created'])
   })
 
   it('cancels pending and claimed routed agent-feed work when onsite control is cancelled', async () => {

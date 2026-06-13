@@ -815,6 +815,7 @@ async function recordPersistentOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
+  runTx: OpsDiagnosticsTxRunner = withMutationTx,
 ): Promise<{
   session: StoredOnsiteDiagnosticSession
   event: OpsOnsiteDiagnosticAuditEvent
@@ -830,7 +831,7 @@ async function recordPersistentOnsiteDiagnosticAction(
     effect: 'audit_only',
     summary: `Requested ${actionLabel}.`,
   }
-  const result = await withMutationTx(companyId, async (client: PoolClient) => {
+  const result = await runTx(companyId, async (client: PoolClient) => {
     const update = await client.query(
       `update ops_diagnostic_sessions
           set updated_at = $3
@@ -844,6 +845,18 @@ async function recordPersistentOnsiteDiagnosticAction(
        ) values ($1, $2, $3, $4, $5, $6, 'audit_only', $7, $8)`,
       [event.id, companyId, session.id, actorUserId, event.type, actionKey, event.summary, at],
     )
+    let workLink: OpsOnsiteDiagnosticWorkLink | null = null
+    if (actionKey === 'capture_field_context') {
+      workLink = await ensureOnsiteDiagnosticWorkLinkTx(client, {
+        companyId,
+        session,
+        event,
+        actionKey,
+        actionLabel,
+        actorUserId,
+        requestedAt: at,
+      })
+    }
     const agentFeed = await enqueueOnsiteDiagnosticConcernTx(client, {
       companyId,
       session,
@@ -854,7 +867,7 @@ async function recordPersistentOnsiteDiagnosticAction(
       requestedAt: at,
     })
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
-    const workLink = await latestPersistentOnsiteWorkLink(client, companyId, session.id, false)
+    workLink = workLink ?? (await latestPersistentOnsiteWorkLink(client, companyId, session.id, false))
     return { agentFeed, deliveries, workLink }
   })
   if (!result) return null
@@ -1176,6 +1189,7 @@ async function cancelOnsiteDiagnosticAgentFeedTx(
 
 function routesToCaptureRouter(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
   return (
+    actionKey === 'capture_field_context' ||
     actionKey === 'capture_desktop_context' ||
     actionKey === 'route_support_packet' ||
     actionKey === 'dispatch_agent_review'
@@ -2282,6 +2296,26 @@ export async function __enqueueOnsiteDiagnosticConcernForTests(
   },
 ): Promise<OpsOnsiteDiagnosticAgentFeedResult | null> {
   return enqueueOnsiteDiagnosticConcernTx(client, args)
+}
+
+export async function __recordPersistentOnsiteDiagnosticActionForTests(
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+  },
+  runTx: OpsDiagnosticsTxRunner,
+): ReturnType<typeof recordPersistentOnsiteDiagnosticAction> {
+  return recordPersistentOnsiteDiagnosticAction(
+    args.companyId,
+    args.session,
+    args.actionKey,
+    args.actionLabel,
+    args.actorUserId,
+    runTx,
+  )
 }
 
 export async function __cancelOnsiteDiagnosticAgentFeedForTests(
