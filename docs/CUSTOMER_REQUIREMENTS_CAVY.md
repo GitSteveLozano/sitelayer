@@ -15,9 +15,15 @@
 When prioritizing, **Cavy's messages win.** Steve's ambitions and David's market notes are
 context, not spec. Treat anything not asked for by Cavy as a nice-to-have until he asks.
 
+> **Naming note:** the pilot **contractor/contact is Cavy Braun**. Other docs and the
+> seed fixtures call the anchor company **"L&A" / `la-operations`** (the seed-template
+> company slug, e.g. `PLANSWIFT_REBUILD_SPEC §0`, `ACTIVE_COMPANY_SLUG`). Same anchor —
+> `la-operations` is the seed slug, Cavy Braun is the live pilot contact. Don't read them
+> as two different customers.
+
 ## What Cavy actually asked for — and where it stands
 
-Verdicts are grounded against live code (2026-05-30). "Surfaced" = the desktop/mobile UI a
+Verdicts are grounded against live code (2026-06-13). "Surfaced" = the desktop/mobile UI a
 user actually touches, not just an API route.
 
 | #   | Cavy's ask (WhatsApp ref)                                                                                          | Status                     | Evidence / note                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
