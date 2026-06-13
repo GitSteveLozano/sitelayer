@@ -107,6 +107,25 @@ const ENTITY_TABLE: Record<string, EntityMapping> = {
     stateVersionColumn: 'state_version',
     columns: [{ column: 'confirmed_at' }, { column: 'confirmed_by' }],
   },
+  estimate_share: {
+    // Customer-facing share-link lifecycle
+    // (sent → viewed → accepted | declined | expired | revoked). Persisted on
+    // estimate_share_links; status/state_version are the workflow columns.
+    // Wired by routes/estimate-shares-{admin,portal}.ts — must be swept.
+    table: 'estimate_share_links',
+    stateColumn: 'status',
+    stateVersionColumn: 'state_version',
+    columns: [
+      { column: 'sent_at' },
+      { column: 'expires_at' },
+      { column: 'viewed_at' },
+      { column: 'accepted_at' },
+      { column: 'signer_name' },
+      { column: 'declined_at' },
+      { column: 'decline_reason' },
+      { column: 'revoked_at' },
+    ],
+  },
   project_closeout: {
     table: 'projects',
     stateColumn: 'status',
@@ -263,26 +282,40 @@ const ENTITY_TABLE: Record<string, EntityMapping> = {
   },
 }
 
+// Registered reducers that exist (with property + golden tests) but have NO
+// live API dispatch route yet — scaffolding ahead of a feature, so they have
+// no persisted rows to sweep and their absence from ENTITY_TABLE is intentional,
+// not drift. Move a name OUT the moment it gains a dispatch route (it must then
+// get an ENTITY_TABLE mapping). See the 2026-06-13 state-of-union review F5.
+const NOT_YET_LIVE_WORKFLOWS = new Set(['asset_deployment', 'tenant_provision'])
+
 /**
  * Advisory registry⊇ENTITY_TABLE conformance check. Prints a warning to
- * stderr (does NOT change the exit code) when a registered workflow has no
- * replay mapping here, so a workflow added without a mapping is visible
- * instead of being silently un-swept. Kept advisory because some workflows
- * (e.g. ones still being wired) legitimately have no live entity table yet.
+ * stderr (does NOT change the exit code) when a registered, LIVE workflow has
+ * no replay mapping here, so a workflow added without a mapping is visible
+ * instead of being silently un-swept. Not-yet-live reducers
+ * (NOT_YET_LIVE_WORKFLOWS) are exempt — but if one gains a mapping (i.e. went
+ * live) the check flags that its NOT_YET_LIVE flag is now stale.
  */
 function printConformanceWarnings(): void {
   const registered = new Set(listWorkflows().map((d) => d.name))
   const mapped = new Set(Object.keys(ENTITY_TABLE))
-  const unmapped = [...registered].filter((n) => !mapped.has(n)).sort()
+  const unmapped = [...registered].filter((n) => !mapped.has(n) && !NOT_YET_LIVE_WORKFLOWS.has(n)).sort()
   const orphaned = [...mapped].filter((n) => !registered.has(n)).sort()
+  const liveButFlagged = [...NOT_YET_LIVE_WORKFLOWS].filter((n) => mapped.has(n)).sort()
   if (unmapped.length > 0) {
     console.error(
-      `[warn] ${unmapped.length} registered workflow(s) have no replay ENTITY_TABLE mapping (un-swept): ${unmapped.join(', ')}`,
+      `[warn] ${unmapped.length} registered live workflow(s) have no replay ENTITY_TABLE mapping (un-swept): ${unmapped.join(', ')}`,
     )
   }
   if (orphaned.length > 0) {
     console.error(
       `[warn] ${orphaned.length} ENTITY_TABLE entr(ies) reference an unregistered workflow: ${orphaned.join(', ')}`,
+    )
+  }
+  if (liveButFlagged.length > 0) {
+    console.error(
+      `[warn] ${liveButFlagged.length} workflow(s) are mapped but still flagged NOT_YET_LIVE — drop them from NOT_YET_LIVE_WORKFLOWS: ${liveButFlagged.join(', ')}`,
     )
   }
 }
