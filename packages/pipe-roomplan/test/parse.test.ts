@@ -92,6 +92,34 @@ describe('parseCapturedRoom — single-room fixture', () => {
     expect(result.geometry!.surfaces!.length).toBeGreaterThanOrEqual(4)
   })
 
+  it('emits drawable wall-line geometry (start/end/height) for the 3D scene', () => {
+    const walls = result.geometry!.walls
+    expect(walls).toBeDefined()
+    // 4 captured walls in the fixture → 4 wall lines.
+    expect(walls!).toHaveLength(4)
+    for (const wall of walls!) {
+      expect(wall.id).toMatch(/^aaaaaaaa-/)
+      expect(wall.start).toHaveLength(2)
+      expect(wall.end).toHaveLength(2)
+      // 8' ceiling (2.4384m) → ~8 ft.
+      expect(wall.heightFt).toBeGreaterThan(7.9)
+      expect(wall.heightFt).toBeLessThan(8.1)
+      // 0.16m thickness → ~0.52 ft.
+      expect(wall.thicknessFt!).toBeGreaterThan(0.4)
+      // Each wall line must have a non-zero plan-view length.
+      const len = Math.hypot(wall.end[0] - wall.start[0], wall.end[1] - wall.start[1])
+      expect(len).toBeGreaterThan(1)
+    }
+    // Wall 1 (south, 12' = 3.6576m, axis-aligned along +X, center at X=1.8288m=6ft,
+    // Z=0): run length ≈ 12 ft, endpoints span X ≈ [0, 12] at Z = 0.
+    const w1 = walls!.find((w) => w.id.startsWith('aaaaaaaa-0001'))!
+    const w1Len = Math.hypot(w1.end[0] - w1.start[0], w1.end[1] - w1.start[1])
+    expect(w1Len).toBeGreaterThan(12 * 0.98)
+    expect(w1Len).toBeLessThan(12 * 1.02)
+    // Axis-aligned east-running wall → constant Z.
+    expect(w1.start[1]).toBeCloseTo(w1.end[1], 3)
+  })
+
   it('populates sourceArtifact.roomplan with per-wall and per-feature breakdown', () => {
     expect(result.sourceArtifact).toBeDefined()
     expect(result.sourceArtifact!.kind).toBe('roomplan')

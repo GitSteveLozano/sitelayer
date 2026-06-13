@@ -16,7 +16,7 @@
 // and are projected at true scale; everything else is bounds-normalized to a
 // relative span (shape + relative placement are correct, absolute scale is not).
 
-import type { CapturedGeometry } from '@/lib/api'
+import type { CapturedGeometry, CapturedGeometryWall } from '@/lib/api'
 import {
   DEFAULT_WALL_HEIGHT_FT,
   POLYGON_VISUAL_THICKNESS_FT,
@@ -82,9 +82,11 @@ interface PendingItem {
  *   - floor / ceiling / roof / facade → flat `polygon` items
  *   - wall                            → a `lineal` run (rendered as a wall box)
  *   - opening                         → a `count` marker at the polygon centroid
- * `objects[]` with a bbox become `count` markers (RoomPlan fixtures, blueprint
- *  symbol instances). Rooms carry only metrics (no coordinates) and are reported
- *  in the warnings rather than fabricated as polygons.
+ * `walls[]` carry plan-view start/end + height (RoomPlan): each becomes a `lineal`
+ *  run extruded up by its `heightFt` so captured walls render as wall planes — not
+ *  just metrics. `objects[]` with a bbox become `count` markers (RoomPlan fixtures,
+ *  blueprint symbol instances). Rooms carry only metrics (no coordinates) and are
+ *  reported in the warnings rather than fabricated as polygons.
  *
  * Returns `null` when there is nothing drawable, so the caller can fall back to
  * the manual-measurement scene unchanged.
@@ -123,6 +125,25 @@ export function buildCapturedGeometryScene(
       code: SURFACE_KIND_CODE[kind],
       label: kind,
       heightFt: heightForSurface(kind, defaultWallHeightFt),
+      entryIndex: entries.length - 1,
+    })
+  }
+
+  // Captured wall lines (RoomPlan): start→end plan-view run extruded up by its
+  // own captured height. Rendered as `lineal` wall boxes alongside the surfaces.
+  for (const wall of geometry.walls ?? []) {
+    const line = readWallLine(wall)
+    if (!line) {
+      skipped += 1
+      continue
+    }
+    entries.push({ points: line })
+    pending.push({
+      id: `${CAPTURED_ID_PREFIX}wall:${wall.id}`,
+      kind: 'lineal',
+      code: SURFACE_KIND_CODE.wall,
+      label: 'wall',
+      heightFt: finiteNumber(wall.heightFt) ?? defaultWallHeightFt,
       entryIndex: entries.length - 1,
     })
   }
@@ -241,6 +262,22 @@ function readPolygon(polygon: number[][] | undefined): Array<[number, number]> |
     if (x != null && y != null) points.push([x, y])
   }
   return points.length >= 2 ? points : null
+}
+
+/** Parse a captured wall's plan-view line into `[start, end]` `[x, y]` tuples.
+ *  Returns null when either endpoint is non-finite or the run is zero-length
+ *  (nothing drawable). */
+function readWallLine(wall: CapturedGeometryWall): Array<[number, number]> | null {
+  const sx = finiteNumber(wall.start?.[0])
+  const sy = finiteNumber(wall.start?.[1])
+  const ex = finiteNumber(wall.end?.[0])
+  const ey = finiteNumber(wall.end?.[1])
+  if (sx == null || sy == null || ex == null || ey == null) return null
+  if (sx === ex && sy === ey) return null
+  return [
+    [sx, sy],
+    [ex, ey],
+  ]
 }
 
 /** Origin (`[x, y]`) of an object bbox (`[x, y, ...]`), or null if not finite. */

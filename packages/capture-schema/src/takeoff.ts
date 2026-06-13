@@ -138,6 +138,23 @@ export const TakeoffGeometry = z.object({
       }),
     )
     .optional(),
+  // Captured wall lines (plan-view start/end + height). Unlike `surfaces[].polygon`
+  // (a flat footprint), a wall is a vertical plane: the renderer extrudes the
+  // start→end run up by `heightFt`. Coordinates share the surface-polygon convention
+  // (`[x, y]` = plan-view east/south, feet for RoomPlan). RoomPlan emits these from
+  // each captured wall so wall geometry — not just metrics — reaches the 3D scene.
+  walls: z
+    .array(
+      z.object({
+        id: z.string(),
+        parentRoomId: z.string().optional(),
+        start: z.tuple([z.number(), z.number()]),
+        end: z.tuple([z.number(), z.number()]),
+        heightFt: z.number(),
+        thicknessFt: z.number().optional(),
+      }),
+    )
+    .optional(),
   objects: z
     .array(
       z.object({

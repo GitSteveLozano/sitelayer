@@ -347,14 +347,30 @@ export interface CapturedGeometrySurface {
   polygon?: number[][]
 }
 
+/** A captured wall line. Mirrors `TakeoffGeometry.walls[]` in
+ *  @sitelayer/capture-schema. Unlike a `surface.polygon` (flat footprint), a wall
+ *  is a vertical plane: the 3D adapter extrudes the `start`→`end` plan-view run up
+ *  by `heightFt`. Coordinates share the surface-polygon convention (`[x, y]` =
+ *  plan-view east/south, feet for RoomPlan). */
+export interface CapturedGeometryWall {
+  id: string
+  parentRoomId?: string
+  start: [number, number]
+  end: [number, number]
+  heightFt: number
+  thicknessFt?: number
+}
+
 /** The cross-pipeline geometry block of a captured `TakeoffResult`. A
  *  structural slice of `TakeoffGeometry` (@sitelayer/capture-schema) covering
- *  the fields the web renders: per-symbol count `objects[]` (M1) and the
- *  drawable `surfaces[]` / `rooms[]` consumed by the 3D preview adapter. */
+ *  the fields the web renders: per-symbol count `objects[]` (M1), the drawable
+ *  `surfaces[]` / `rooms[]`, and captured wall lines `walls[]` consumed by the
+ *  3D preview adapter. */
 export interface CapturedGeometry {
   rooms?: CapturedGeometryRoom[]
   surfaces?: CapturedGeometrySurface[]
   objects?: CapturedGeometryObject[]
+  walls?: CapturedGeometryWall[]
 }
 
 export interface CapturedTakeoffResult {

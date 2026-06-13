@@ -828,6 +828,7 @@ export {
   type CapturedGeometryObject,
   type CapturedGeometryRoom,
   type CapturedGeometrySurface,
+  type CapturedGeometryWall,
   type CapturedQuantity,
   type CapturedTakeoffResult,
   type CaptureKind,

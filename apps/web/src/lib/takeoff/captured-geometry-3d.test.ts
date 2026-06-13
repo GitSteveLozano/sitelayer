@@ -77,6 +77,41 @@ describe('buildCapturedGeometryScene', () => {
     expect(opening?.points).toHaveLength(1)
   })
 
+  it('renders RoomPlan wall lines (start/end/height) as extruded lineal wall boxes', () => {
+    const geometry: CapturedGeometry = {
+      walls: [
+        // 12-ft east-running wall, 8-ft tall.
+        { id: 'w1', start: [0, 0], end: [12, 0], heightFt: 8, thicknessFt: 0.52 },
+        // 14-ft south-running wall, 8-ft tall.
+        { id: 'w2', start: [12, 0], end: [12, 14], heightFt: 8, thicknessFt: 0.52 },
+      ],
+    }
+
+    const scene = buildCapturedGeometryScene(geometry)
+    expect(scene).not.toBeNull()
+    const walls = scene!.items.filter((item) => item.serviceItemCode === 'CAP·WALL')
+    expect(walls).toHaveLength(2)
+    for (const wall of walls) {
+      expect(wall.kind).toBe('lineal')
+      // The captured wall height (8 ft) reaches the scene, not the polygon thickness.
+      expect(wall.heightFt).toBe(8)
+      expect(wall.points).toHaveLength(2)
+      expect(isCapturedPreviewId(wall.id)).toBe(true)
+    }
+  })
+
+  it('falls back to the default wall height when a captured wall omits heightFt', () => {
+    const geometry = {
+      walls: [{ id: 'w1', start: [0, 0], end: [10, 0] }],
+    } as unknown as CapturedGeometry
+
+    const scene = buildCapturedGeometryScene(geometry, { defaultWallHeightFt: 11 })
+    expect(scene).not.toBeNull()
+    const wall = scene!.items.find((item) => item.serviceItemCode === 'CAP·WALL')
+    expect(wall?.kind).toBe('lineal')
+    expect(wall?.heightFt).toBe(11)
+  })
+
   it('renders object bboxes as count markers', () => {
     const geometry: CapturedGeometry = {
       objects: [

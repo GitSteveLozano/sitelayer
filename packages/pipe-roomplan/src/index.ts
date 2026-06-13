@@ -294,6 +294,46 @@ function makeRoomplanProvenance(common: ProvenanceCommon, surfaceId?: string, ob
   return provenance
 }
 
+/**
+ * Derive a wall's plan-view (X/Z) endpoints in feet from its RoomPlan transform.
+ *
+ * The transform is a column-major 4x4 stored as 4 rows. Row 3 is the translation
+ * (the wall CENTER): `[tx, ty, tz, 1]`. The wall extends along its LOCAL X axis,
+ * whose world direction is the first COLUMN of the rotation block —
+ * `(transform[0][0], transform[1][0], transform[2][0])`. In plan view we keep the
+ * east (X = component 0) and south (Z = component 2) components. start/end are
+ * center ∓ (direction · length/2). Output is feet to match the rest of the
+ * geometry block (surface `areaSqFt`, room `floorAreaSqFt`).
+ */
+function wallPlanLineFt(wall: WallComputed): {
+  start: [number, number]
+  end: [number, number]
+} {
+  const t = wall.raw.transform
+  const cx = t[3]?.[0] ?? 0
+  const cz = t[3]?.[2] ?? 0
+  // First column of the rotation block = world direction of the wall's local +X.
+  let dirX = t[0]?.[0] ?? 1
+  let dirZ = t[2]?.[0] ?? 0
+  const norm = Math.hypot(dirX, dirZ)
+  if (norm > 1e-9) {
+    dirX /= norm
+    dirZ /= norm
+  } else {
+    // Degenerate/missing rotation: fall back to an east-running wall so the
+    // run still has a non-zero length rather than collapsing to a point.
+    dirX = 1
+    dirZ = 0
+  }
+  const halfFt = mToFt(wall.lengthM) / 2
+  const cxFt = mToFt(cx)
+  const czFt = mToFt(cz)
+  return {
+    start: [round(cxFt - dirX * halfFt, 4), round(czFt - dirZ * halfFt, 4)],
+    end: [round(cxFt + dirX * halfFt, 4), round(czFt + dirZ * halfFt, 4)],
+  }
+}
+
 function emitRoomQuantities(
   room: RoomComputed,
   capturedRoomId: string,
@@ -303,6 +343,7 @@ function emitRoomQuantities(
   const geomRooms: NonNullable<TakeoffGeometry['rooms']> = []
   const geomSurfaces: NonNullable<TakeoffGeometry['surfaces']> = []
   const geomObjects: NonNullable<TakeoffGeometry['objects']> = []
+  const geomWalls: NonNullable<TakeoffGeometry['walls']> = []
 
   const roomCommon: ProvenanceCommon = compact({ capturedRoomId, deviceModel })
 
@@ -315,7 +356,7 @@ function emitRoomQuantities(
     perimeterLf: round(mToFt(room.perimeterM), 2),
   })
 
-  // ── Per-wall geometry surfaces
+  // ── Per-wall geometry surfaces + drawable wall lines
   for (const w of room.walls) {
     geomSurfaces.push({
       id: w.id,
@@ -323,6 +364,20 @@ function emitRoomQuantities(
       parentRoomId: room.id,
       areaSqFt: round(sqmToSqft(w.netAreaSqM), 2),
     })
+    // Wall LINE geometry (plan-view start/end + height) so the captured walls
+    // render as extruded planes in the 3D scene, not just as metric surfaces.
+    const line = wallPlanLineFt(w)
+    const thicknessFt = round(mToFt(w.raw.dimensions[2]), 4)
+    geomWalls.push(
+      compact({
+        id: w.id,
+        parentRoomId: room.id,
+        start: line.start,
+        end: line.end,
+        heightFt: round(mToFt(w.heightM), 4),
+        thicknessFt: thicknessFt > 0 ? thicknessFt : undefined,
+      }),
+    )
   }
 
   // ── Drywall (sum of net wall area). MasterFormat 09 29 00.
@@ -488,6 +543,7 @@ function emitRoomQuantities(
       rooms: geomRooms,
       surfaces: geomSurfaces,
       objects: geomObjects,
+      walls: geomWalls,
     },
   }
 }
@@ -552,6 +608,7 @@ export function parseCapturedRoom(opts: ParseCapturedRoomOptions): TakeoffResult
   const geomRooms: NonNullable<TakeoffGeometry['rooms']> = []
   const geomSurfaces: NonNullable<TakeoffGeometry['surfaces']> = []
   const geomObjects: NonNullable<TakeoffGeometry['objects']> = []
+  const geomWalls: NonNullable<TakeoffGeometry['walls']> = []
 
   for (const room of computedRooms) {
     const { quantities, geometry } = emitRoomQuantities(room, topLevelId, opts.deviceModel)
@@ -559,6 +616,7 @@ export function parseCapturedRoom(opts: ParseCapturedRoomOptions): TakeoffResult
     if (geometry.rooms) geomRooms.push(...geometry.rooms)
     if (geometry.surfaces) geomSurfaces.push(...geometry.surfaces)
     if (geometry.objects) geomObjects.push(...geometry.objects)
+    if (geometry.walls) geomWalls.push(...geometry.walls)
   }
 
   // Determine captured-room version string
@@ -591,6 +649,7 @@ export function parseCapturedRoom(opts: ParseCapturedRoomOptions): TakeoffResult
       rooms: geomRooms,
       surfaces: geomSurfaces,
       objects: geomObjects,
+      walls: geomWalls,
     },
     sourceArtifact,
   }
