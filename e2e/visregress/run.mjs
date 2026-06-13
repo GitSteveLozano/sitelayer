@@ -54,9 +54,25 @@ const SKIP_CAPTURE = process.env.VISREGRESS_SKIP_CAPTURE === '1'
 // remote dev tier, which is wrong for a local pre-push gate, so we set localhost here when unset.
 if (!process.env.E2E_BASE_URL) process.env.E2E_BASE_URL = 'http://localhost:3000'
 
-// The screens to gate (baseline file id). `takeoff-3d-demo` is the public, auth-free, byte-stable
-// surface; the two financial review screens need a seeded stack (E2E_BASE_URL + e2e act-as).
-const SCREENS = [{ id: 'takeoff-3d-demo' }, { id: 'rental-billing-review' }, { id: 'estimate-push-review' }]
+// The screens to gate (baseline file id). One representative route per ported
+// cluster (gap #6): tonight's R1-R6 retired the legacy kit across ~60 screens,
+// but the gate only covered 3. `takeoff-3d-demo` is the public, auth-free,
+// byte-stable surface; the others need a seeded stack (E2E_BASE_URL + e2e
+// act-as) and render a stable list/empty-state baseline:
+//   - rental-billing-review / estimate-push-review : FINANCIAL cluster (R3)
+//   - settings-home                                : SETTINGS  cluster (R1)
+//   - projects-list                                : PROJECTS  cluster (R2)
+//   - rentals-utilization                          : INVENTORY/rentals (R4)
+// Each id MUST have a matching capture test in e2e/visual/top-screens.visual.spec.ts
+// (that spec produces both the committed __baselines__ and the fresh __candidates__).
+const SCREENS = [
+  { id: 'takeoff-3d-demo' },
+  { id: 'rental-billing-review' },
+  { id: 'estimate-push-review' },
+  { id: 'settings-home' },
+  { id: 'projects-list' },
+  { id: 'rentals-utilization' },
+]
 
 // 1+2. render fresh candidates via this repo's Playwright (unless CI / a test already did).
 // We clean stale candidates ONLY when we are about to re-render — VISREGRESS_SKIP_CAPTURE=1

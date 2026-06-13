@@ -42,3 +42,6 @@ ops/env/production.build.env
 
 # Local AI-takeoff training/validation corpora (datasets — internal benchmarking only, never commit)
 data/takeoff-corpus
+
+# synthetic post-deploy render check: ephemeral Playwright artifacts
+e2e/synthetic/.artifacts

@@ -146,6 +146,16 @@ AUTODEPLOY_SMOKE="${AUTODEPLOY_SMOKE:-1}"
 AUTODEPLOY_SMOKE_SCRIPT="${AUTODEPLOY_SMOKE_SCRIPT:-$AUTODEPLOY_REPO_DIR/scripts/smoke-tier.sh}"
 AUTODEPLOY_DEMO_ACCESS_CODE="${AUTODEPLOY_DEMO_ACCESS_CODE:-${DEMO_ACCESS_CODE:-}}"
 
+# Post-deploy authenticated-MOUNT synthetic (gap #8). Runs AFTER the JSON smoke
+# to confirm a few authenticated screens actually RENDER (catching a "blind
+# port" the JSON-only smoke ships at HTTP 200). Detection only — never crashes
+# the watcher or re-marks the deploy failed. Needs node + a Playwright chromium
+# in the dedicated checkout; SKIPS gracefully when absent. AUTODEPLOY_SYNTHETIC=0
+# disables it; the script defaults SYNTHETIC_ENABLED so the dedicated checkout
+# (no browser/node_modules by default) skips rather than fails.
+AUTODEPLOY_SYNTHETIC="${AUTODEPLOY_SYNTHETIC:-1}"
+AUTODEPLOY_SYNTHETIC_SCRIPT="${AUTODEPLOY_SYNTHETIC_SCRIPT:-$AUTODEPLOY_REPO_DIR/scripts/render-synthetic.sh}"
+
 # Opt-in inline re-gate (defense in depth on top of the enforced land-time hook).
 # When AUTODEPLOY_INLINE_VERIFY=1, the watcher runs `npm run verify` (level
 # AUTODEPLOY_VERIFY_LEVEL, default `fast`) in the dedicated checkout BEFORE
@@ -310,6 +320,40 @@ set_smoke_failure() {
   mv -f "$tmp" "$AUTODEPLOY_STATE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 }
 
+# ---- Post-deploy authenticated-mount synthetic (detection only) -------------
+# Runs scripts/render-synthetic.sh against the live host after a successful
+# deploy + smoke. It mounts a few AUTHENTICATED screens in a headless browser
+# and asserts they render (no root error boundary / not blank) — the render
+# check the JSON-only smoke is blind to (gap #8). Best-effort + non-fatal: a
+# missing browser/node SKIPS gracefully (the script returns 0), and a real
+# render failure is logged LOUDLY + recorded but never crashes the watcher (the
+# deploy already happened). Returns 0 always.
+run_post_deploy_synthetic() {
+  local tier="$1" host="$2" sha="$3"
+
+  if [ "$AUTODEPLOY_SYNTHETIC" != "1" ]; then
+    log "SYNTHETIC-SKIP tier=$tier (AUTODEPLOY_SYNTHETIC=$AUTODEPLOY_SYNTHETIC)"
+    return 0
+  fi
+  if [ ! -f "$AUTODEPLOY_SYNTHETIC_SCRIPT" ]; then
+    log "SYNTHETIC-SKIP tier=$tier synthetic script not found at $AUTODEPLOY_SYNTHETIC_SCRIPT"
+    return 0
+  fi
+
+  log "SYNTHETIC tier=$tier host=$host sha=$(short "$sha") — mounting authenticated screens"
+  if ( bash "$AUTODEPLOY_SYNTHETIC_SCRIPT" "$host" ) >>"$AUTODEPLOY_LOG_FILE" 2>&1; then
+    log "SYNTHETIC-OK tier=$tier host=$host sha=$(short "$sha")"
+  else
+    log "############################################################"
+    log "## SYNTHETIC-FAILED tier=$tier host=$host sha=$(short "$sha")"
+    log "## A screen did NOT render (root error boundary / blank page)."
+    log "## This is DETECTION — investigate $host (see $AUTODEPLOY_LOG_FILE)."
+    log "############################################################"
+    set_smoke_failure "${tier}-synthetic" "$sha"
+  fi
+  return 0
+}
+
 # ---- Opt-in inline re-gate --------------------------------------------------
 # Run `npm run verify` (level AUTODEPLOY_VERIFY_LEVEL) in the dedicated checkout
 # BEFORE shipping. Returns 0 = passed (or disabled), non-zero = the gate FAILED
@@ -416,6 +460,10 @@ deploy_tier() {
     # Post-deploy smoke: confirm the shipped SHA is actually serving. Detection
     # only — never crashes the watcher or re-marks the deploy failed.
     run_post_deploy_smoke "$tier" "$host" "$desired"
+    # Post-deploy authenticated-mount synthetic: confirm a few authenticated
+    # screens actually RENDER (the render check the JSON smoke is blind to).
+    # Detection only — same non-fatal posture as the smoke.
+    run_post_deploy_synthetic "$tier" "$host" "$desired"
   else
     log "FAILED tier=$tier deploy of $(short "$desired") returned non-zero; recording failed-sha (will skip until remote advances)"
     set_failed_sha "$tier" "$desired"

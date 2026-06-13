@@ -17,13 +17,15 @@
 #   scripts/verify-local.sh --fast          # static + build + unit only
 #   scripts/verify-local.sh --full          # standard + e2e (resource-heavy; run on a quiet/dedicated box)
 #   scripts/verify-local.sh --skip-e2e      # full minus e2e
+#   scripts/verify-local.sh --skip-visregress  # full e2e but skip the visual gate
 #   scripts/verify-local.sh --skip-integration
 #   scripts/verify-local.sh --keep-going    # run all stages, don't fail-fast
 #
 # Levels (also via VERIFY_LEVEL env; flag wins over env):
 #   fast      -> static, audit, build, unit                     (quick iteration)
 #   standard  -> static, audit, build, unit, integration        (DEFAULT; the deploy/merge gate — deterministic + reliable)
-#   full      -> standard + e2e (docker-compose stack + Playwright)
+#   full      -> standard + e2e (docker-compose stack + Playwright + the
+#                visregress visual gate, both against the same seeded stack)
 #
 # Why e2e is NOT in the default gate: the e2e stage stands up the full app
 # stack + a real browser and is resource-sensitive. On a clean dedicated runner
@@ -33,6 +35,7 @@
 #
 # Escapes (env or flag; LOUD when used):
 #   --skip-e2e          / VERIFY_SKIP_E2E=1
+#   --skip-visregress   / VERIFY_SKIP_VISREGRESS=1   (visual gate only; e2e still runs)
 #   --skip-integration  / VERIFY_SKIP_INTEGRATION=1
 #
 # Everything below is env-overridable so the gate is testable in isolation.
@@ -48,6 +51,10 @@ VERIFY_LEVEL="${VERIFY_LEVEL:-standard}"
 KEEP_GOING="${VERIFY_KEEP_GOING:-0}"
 SKIP_E2E="${VERIFY_SKIP_E2E:-0}"
 SKIP_INTEGRATION="${VERIFY_SKIP_INTEGRATION:-0}"
+# The visregress visual gate runs inside the e2e stage (full level) against the
+# same seeded stack. Skip it independently when the local VLM judge / playwright
+# render engine is unavailable on this box.
+SKIP_VISREGRESS="${VERIFY_SKIP_VISREGRESS:-0}"
 
 # Distinct, high project name + ports so two runs (or a live local stack)
 # never collide. PID-suffixed by default; overridable for determinism.
@@ -102,6 +109,7 @@ for arg in "$@"; do
     --standard) VERIFY_LEVEL="standard" ;;
     --full) VERIFY_LEVEL="full" ;;
     --skip-e2e) SKIP_E2E="1" ;;
+    --skip-visregress) SKIP_VISREGRESS="1" ;;
     --skip-integration) SKIP_INTEGRATION="1" ;;
     --keep-going) KEEP_GOING="1" ;;
     -h|--help)
@@ -705,6 +713,45 @@ stage_e2e() {
     echo "  --- worker.log (tail) ---" >&2; tail -40 "$logdir/worker.log" >&2 || true
   fi
 
+  # --- Visual-regression gate (visregress) reusing the SAME seeded stack ----
+  # gap #7: the deploy authority was structurally blind to visual regressions —
+  # test:visregress lived ONLY in .githooks/pre-push, and there a "no app
+  # reachable" exit was a non-blocking WARNING. The --full stage stood up the
+  # full seeded app for Playwright e2e but never gated visually. Here we point
+  # the SAME running web server (E2E_BASE_URL) at the visregress run so a
+  # CONFIRMED visual regression (analyzer exit 2) FAILS the --full gate.
+  #
+  # Exit-code contract (mirrors the pre-push hook): 0 = clean; 2 = a confirmed
+  # visual regression -> the gate FAILS; any other non-zero (no fresh candidate
+  # rendered / VLM judge unavailable on this box) is a NON-blocking SKIP so a
+  # headless-judge-less box is never wedged by a missing local engine, but a real
+  # visual break is caught. Skip entirely with --skip-visregress /
+  # VERIFY_SKIP_VISREGRESS=1.
+  local vis_rc=0
+  if [ "$SKIP_VISREGRESS" = "1" ]; then
+    warn "visregress SKIPPED via --skip-visregress / VERIFY_SKIP_VISREGRESS=1 (visual gate did NOT run)."
+  else
+    echo "  -> running visregress visual gate against the seeded stack (E2E_BASE_URL=http://localhost:${VERIFY_E2E_WEB_PORT})"
+    set +e
+    E2E_RUN=1 \
+    E2E_BASE_URL="http://localhost:${VERIFY_E2E_WEB_PORT}" \
+    E2E_WEB_PORT="$VERIFY_E2E_WEB_PORT" \
+    E2E_API_PORT="$VERIFY_E2E_API_PORT" \
+    VITE_API_URL="http://localhost:${VERIFY_E2E_API_PORT}" \
+    VITE_DEFAULT_COMPANY_SLUG=e2e-fixtures \
+      npm run test:visregress
+    vis_rc=$?
+    set -e
+    if [ "$vis_rc" = "2" ]; then
+      echo "  --- visregress CONFIRMED a VISUAL REGRESSION (review e2e/visual/__candidates__ vs __baselines__) ---" >&2
+    elif [ "$vis_rc" != "0" ]; then
+      warn "visregress did not run cleanly (exit $vis_rc: no fresh candidate / judge unavailable) — NOT blocking, but the visual gate did NOT confirm this change."
+      vis_rc=0
+    else
+      echo "  -> visregress visual gate passed."
+    fi
+  fi
+
   _e2e_stop
   rm -rf "$logdir" 2>/dev/null || true
 
@@ -712,7 +759,12 @@ stage_e2e() {
   "$DOCKER" compose -p "$project" "${VERIFY_COMPOSE_FILES[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
   CLEANUP_E2E_PROJECT=""
 
-  return "$e2e_rc"
+  # The e2e stage FAILS if EITHER the Playwright e2e suite OR a CONFIRMED visual
+  # regression failed. (vis_rc is 0 unless visregress confirmed a regression.)
+  if [ "$e2e_rc" -ne 0 ]; then
+    return "$e2e_rc"
+  fi
+  return "$vis_rc"
 }
 
 # ============================================================================
@@ -726,7 +778,7 @@ main() {
     flock 8
   fi
 
-  log "level=$VERIFY_LEVEL keep-going=$KEEP_GOING skip-integration=$SKIP_INTEGRATION skip-e2e=$SKIP_E2E"
+  log "level=$VERIFY_LEVEL keep-going=$KEEP_GOING skip-integration=$SKIP_INTEGRATION skip-e2e=$SKIP_E2E skip-visregress=$SKIP_VISREGRESS"
   log "repo=$REPO_ROOT sha=$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
   local run_start; run_start="$(date +%s)"
 

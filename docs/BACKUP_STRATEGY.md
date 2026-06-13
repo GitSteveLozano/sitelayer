@@ -104,9 +104,36 @@ Record each drill result here (date, dump tested, PASS/FAIL, notes). The mesh
 `record_restore_drill_result` / `list_restore_drill_events` tools are the
 operator-facing ledger; this section is the human-readable mirror.
 
-| Date                                                           | Dump tested | Result | Notes |
-| -------------------------------------------------------------- | ----------- | ------ | ----- |
-| _(none recorded yet — populate from the next automated drill)_ |             |        |       |
+| Date       | Subsystem                           | Dump tested                         | Result | Notes                                                                                                                                                                                                                                                                                                                                              |
+| ---------- | ----------------------------------- | ----------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-06-13 | `sitelayer-restore-drill-machinery` | synthetic seeded dump (NOT prod)    | PASS   | Campaign C: validated `scripts/restore-drill.sh` end-to-end against a synthetic `pg_dump --enable-row-security --no-owner --no-privileges \| gzip -9` of a freshly migrated + e2e-seeded DB (same shape as `backup-postgres.sh`). Sanity OK (companies=3, projects=3), recency 0h<48h. Proves the DRILL MACHINERY reaches PASS. Mesh ledger id 18. |
+| _pending_  | `sitelayer-prod-postgres`           | latest `/app/backups/postgres` dump | —      | **Operator-gated, NOT yet run.** The real RPO≈24h DR guarantee is still UNVERIFIED — the `sitelayer-prod-postgres` ledger is EMPTY. Run on the prod droplet (see "Operator command — real prod-data drill" below).                                                                                                                                 |
+
+#### Operator command — real prod-data drill (gated; run ON the prod droplet)
+
+The machinery is proven (row above). The remaining gap is a drill against **real
+prod backups**, which only the prod droplet can reach (`/app/backups/postgres`,
+the managed-PG trusted-source IP). To take the `sitelayer-prod-postgres` ledger
+to its first PASS, the operator runs, **on the prod droplet** (`sitelayer@165.245.230.3`):
+
+```sh
+# 1. Confirm a fresh local dump exists (backup-postgres.sh / its timer).
+ls -lt /app/backups/postgres/sitelayer-*.sql.gz | head
+
+# 2. Run the drill against the latest prod dump, emitting the result to the
+#    mesh ledger so list_restore_drill_events / db_health stop reporting
+#    "unverified". MESH_API_URL/_TOKEN reach mesh over the Tailnet.
+MESH_API_URL="https://<mesh-authority-host>" \
+MESH_API_TOKEN="<mesh-token>" \
+RESTORE_DRILL_SUBSYSTEM="sitelayer-prod-postgres" \
+  bash scripts/restore-drill.sh
+```
+
+The installed weekly `sitelayer-restore-drill.service`
+(`DRILL_TIME=Sun *-*-* 04:00:00`) runs the same script; it only needs
+`MESH_API_URL`/`MESH_API_TOKEN` in its unit env for the PASS/FAIL to land in the
+ledger automatically. Until either path runs once, treat the prod DR guarantee
+as **untested**.
 
 ## Open work
 

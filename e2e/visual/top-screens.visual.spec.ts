@@ -105,3 +105,55 @@ test('baseline: estimate-push-review', { tag: '@visual' }, async ({ context }) =
   await snap(page, 'estimate-push-review')
   await page.close()
 })
+
+/*
+ * Cluster-coverage baselines (gap #6). One representative route per ported
+ * cluster so the visual gate is no longer blind to ~60 mechanical ports. Each
+ * is captured best-effort against the seeded e2e stack; the ready-wait keys off
+ * a stable MTopBar title (the visual top bar these screens all render) rather
+ * than a brittle data-dependent element, so the baseline is the screen's stable
+ * shell + list/empty-state.
+ */
+
+test('baseline: settings-home', { tag: '@visual' }, async ({ context }) => {
+  // SETTINGS cluster (R1). `/settings` renders the designed settings hub with a
+  // "Settings" top bar (apps/web/src/screens/settings/settings-home.tsx).
+  const page = await buildRolePage(context, 'e2e-admin')
+  await page.goto('/settings', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Settings', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'settings-home')
+  await page.close()
+})
+
+test('baseline: projects-list', { tag: '@visual' }, async ({ context }) => {
+  // PROJECTS cluster (R2). `/projects` renders MobileProjectsList with a
+  // "Projects" top bar (apps/web/src/screens/mobile/projects-list.tsx).
+  const page = await buildRolePage(context, 'e2e-admin')
+  await page.goto('/projects', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Projects', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'projects-list')
+  await page.close()
+})
+
+test('baseline: rentals-utilization', { tag: '@visual' }, async ({ context }) => {
+  // INVENTORY/rentals cluster (R4). `/rentals/utilization` renders
+  // MobileRentalsUtilization with a "Rentals" top bar
+  // (apps/web/src/screens/mobile/rentals-utilization.tsx).
+  const page = await buildRolePage(context, 'e2e-admin')
+  await page.goto('/rentals/utilization', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Rentals', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'rentals-utilization')
+  await page.close()
+})

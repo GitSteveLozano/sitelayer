@@ -54,6 +54,16 @@ deleted on 2026-06-02 (the deploy workflows had already been removed in
 - Playwright fixture route smoke tests
 - docker-compose DB-backed integration checks (real Postgres 18 + booted API) — in the default/standard gate
 - Playwright e2e (full app stack + browser) — opt-in `--full` level (`npm run verify:full`); resource-heavy, run on a quiet box, NOT in the deploy gate
+- visual-regression gate (`visregress`) — runs INSIDE the `--full` e2e stage
+  against the SAME seeded stack (`E2E_BASE_URL`): a CONFIRMED visual regression
+  (analyzer exit 2) FAILS `--full`; a "no candidate rendered / judge
+  unavailable" exit is a non-blocking SKIP. Previously this lived only in the
+  pre-push hook as a non-blocking WARNING, so the deploy authority was
+  structurally blind to visual regressions. Skip with `--skip-visregress` /
+  `VERIFY_SKIP_VISREGRESS=1`. Baselines: `e2e/visual/__baselines__/` (one
+  representative route per ported cluster — settings / projects / financial /
+  inventory). Re-baseline against a seeded app:
+  `E2E_BASE_URL=<seeded-app> npx playwright test -c e2e/visual.config.ts`.
 
 There is no PR CI and no status check. GitHub branch protection on `main`
 (PR + review) is optional code-review hygiene only — it is no longer enforced
@@ -127,6 +137,23 @@ The smoke is **detection, not a gate**: a failure is logged loudly and recorded,
 but does NOT crash the watcher or mark the deploy failed (the deploy already
 happened). The smoke is unit-tested against a localhost mock
 (`apps/api/src/smoke-tier.test.ts`).
+
+### Authenticated-mount synthetic (render check after the smoke)
+
+The JSON smoke above proves the API endpoints answer, but nothing in it RENDERS
+a mounted screen — so a "blind port" (a screen ported but rendering-broken)
+ships at HTTP 200 and the smoke stays green. Right after the smoke the watcher
+runs **`scripts/render-synthetic.sh <host>`** (Playwright config
+`e2e/synthetic.config.ts`, spec `e2e/synthetic/authenticated-mount.synthetic.spec.ts`):
+a headless browser MOUNTS a handful of authenticated routes (one per ported
+cluster + `/foreman/denied/:id`) and asserts each renders without crashing into
+the root error boundary or going blank. It reuses the dev act-as identity, so on
+the DEV tier the screens mount fully; on the DEMO tier (Clerk-ON) each authed
+route lands on the sign-in shell and is treated as a graceful per-route SKIP.
+
+Like the smoke it is **detection, not a gate**: a render failure is logged
+loudly and recorded but never crashes the watcher; a missing browser/node SKIPS
+gracefully (exit 0). Disable with `AUTODEPLOY_SYNTHETIC=0`.
 
 ## Production Deploys
 
