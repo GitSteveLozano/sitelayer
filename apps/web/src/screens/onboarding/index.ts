@@ -1,4 +1,3 @@
-export { OnboardingWizardScreen } from './wizard'
 export { SafariLandingScreen, useShouldShowSafariLanding, SAFARI_LANDING_DISMISS_KEY } from './safari-landing'
 export { LocationPrimeScreen } from './location-prime'
 export { NotificationsPrimeScreen } from './notifications-prime'

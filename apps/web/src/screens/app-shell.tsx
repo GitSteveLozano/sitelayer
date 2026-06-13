@@ -104,7 +104,7 @@ export default function AppShell() {
 
   if (membershipsQuery.isPending) return <ColdStartSplash />
   if (membershipsQuery.error) return <WorkspaceLoadError error={membershipsQuery.error} />
-  if (!activeCompany) return <Navigate to="/onboarding" replace />
+  if (!activeCompany) return <OnboardingRedirect />
 
   return <CompanyShell activeCompany={activeCompany} />
 }
@@ -125,7 +125,7 @@ function CompanyShell({ activeCompany }: { activeCompany: ActiveCompany }) {
   })
 
   const error = bootstrapQuery.error ?? sessionQuery.error
-  if (needsOnboarding(error)) return <Navigate to="/onboarding" replace />
+  if (needsOnboarding(error)) return <OnboardingRedirect />
   if (error) return <WorkspaceLoadError error={error} />
 
   const session = sessionQuery.data ?? null
@@ -193,6 +193,19 @@ function persistActiveCompanySlug(slug: string): void {
   } catch {
     // localStorage is best-effort only; module state still keeps this render coherent.
   }
+}
+
+/**
+ * First-run / no-company redirect → the DESIGNED onboarding flows
+ * (design-fidelity audit M01/D16). Desktop viewports get the account-setup
+ * wizard at /welcome (dsg__68-72); everything else gets the mobile owner
+ * flow at /owner/onboarding (msg__01-03). The legacy 3-step Tailwind wizard
+ * (screens/onboarding/wizard.tsx) is retired — /onboarding itself now
+ * forwards here-equivalently (routes/onboarding.tsx).
+ */
+function OnboardingRedirect() {
+  const isDesktop = useIsDesktop()
+  return <Navigate to={isDesktop ? '/welcome' : '/owner/onboarding'} replace />
 }
 
 function needsOnboarding(error: unknown): boolean {

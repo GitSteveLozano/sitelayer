@@ -15,9 +15,11 @@ import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
+  AlertTriangle,
   Bell,
   Briefcase,
   Calendar,
+  Clock,
   DollarSign,
   FileText,
   Home,
@@ -179,6 +181,36 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/fm/time', label: 'FM Time', icon: asIcon(Calendar) },
       { to: '/desktop/fm/confirm', label: 'FM Confirm Day', icon: asIcon(Calendar) },
       { to: '/desktop/fm/log', label: 'FM Log', icon: asIcon(FileText) },
+    ],
+  },
+]
+
+// Foreman command-center sidebar (audit D13, design dsg__33): Today / Crew /
+// Field·badge / Schedule / Time / Settings — the six-item foreman shell,
+// rendered for the foreman PERSONA instead of the owner command center. The
+// FM screens are the merged responsive foreman screens mounted under
+// /desktop/fm/*. "Field" is the field-issues queue: no desktop twin exists
+// yet, so it routes to the field surface at /field (outside /desktop) and
+// carries the pending-field-items badge the design shows. Confirm-day and
+// the daily log keep their own section so they stay reachable (they were
+// previously only linked from the owner sidebar's Foreman block).
+const FOREMAN_NAV: DNavSection[] = [
+  {
+    title: 'Field ops',
+    items: [
+      { to: '/desktop/fm/today', label: 'Today', icon: asIcon(Home) },
+      { to: '/desktop/fm/crew', label: 'Crew', icon: asIcon(Users) },
+      { to: '/field', label: 'Field', icon: asIcon(AlertTriangle) },
+      { to: '/desktop/fm/schedule', label: 'Schedule', icon: asIcon(Calendar) },
+      { to: '/desktop/fm/time', label: 'Time', icon: asIcon(Clock) },
+      { to: '/desktop/settings', label: 'Settings', icon: asIcon(Settings) },
+    ],
+  },
+  {
+    title: 'Logs',
+    items: [
+      { to: '/desktop/fm/confirm', label: 'Confirm day', icon: asIcon(Calendar) },
+      { to: '/desktop/fm/log', label: 'Daily log', icon: asIcon(FileText) },
     ],
   },
 ]
@@ -412,18 +444,6 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const probeRoute = useMemo(() => parseDesktopProbeRoute(location.pathname), [location.pathname])
   const activeProjectName = probeRoute.projectId ? (projectName.get(probeRoute.projectId) ?? null) : null
   const pendingApprovals = usePendingApprovalsSummary(projectName)
-  const navSections = useMemo<DNavSection[]>(
-    () =>
-      OWNER_NAV.map((section) => ({
-        ...section,
-        items: section.items.map((item) =>
-          item.to === '/desktop/approvals'
-            ? { ...item, badge: pendingApprovals.count > 0 ? pendingApprovals.count : undefined }
-            : item,
-        ),
-      })),
-    [pendingApprovals.count],
-  )
 
   // RoleContext for the desktop command-center tree. App.tsx mounts this
   // surface directly at `/desktop/*` (NOT through routes/workspace.tsx), so
@@ -450,6 +470,29 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     const companyRole = normalizeMobileShellRole(sessionRole)
     return companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
   }, [sessionRole])
+
+  // Sidebar nav by persona (audit D13): a FOREMAN gets the design's six-item
+  // foreman shell (dsg__33) instead of the owner command center; owners keep
+  // OWNER_NAV (including its Foreman hat section). The badge rail decorates
+  // the owner's Approvals item / the foreman's Field item from the same
+  // pending summary the dashboard KPI uses.
+  const baseNav = persona === 'foreman' ? FOREMAN_NAV : OWNER_NAV
+  const navSections = useMemo<DNavSection[]>(
+    () =>
+      baseNav.map((section) => ({
+        ...section,
+        items: section.items.map((item) =>
+          item.to === '/desktop/approvals' || item.to === '/field'
+            ? { ...item, badge: pendingApprovals.count > 0 ? pendingApprovals.count : undefined }
+            : item,
+        ),
+      })),
+    [baseNav, pendingApprovals.count],
+  )
+  // WEARING ▾ reflects the actual hat (audit D13): route-derived activeHat
+  // for owners switching hats; a pure foreman persona always reads Foreman.
+  // Replaces the hardcoded "Owner".
+  const wearingLabel = persona === 'foreman' ? 'Foreman' : (HATS.find((h) => h.key === activeHat)?.label ?? 'Owner')
 
   // Redacted state-provider for the desktop workspace shell — the surface a
   // reviewer (e.g. Steve) lands on by default (`/desktop`), which previously
@@ -600,7 +643,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
 
   return (
     <DShell
-      sidebar={<DSidebar sections={navSections} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}
+      sidebar={
+        <DSidebar sections={navSections} wearing={wearingLabel} onWearingClick={() => setWearingOpen((v) => !v)} />
+      }
     >
       {wearingOpen ? (
         <div

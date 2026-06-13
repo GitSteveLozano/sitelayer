@@ -260,11 +260,13 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
 
   return (
     <>
+      {/* Header bell → crew inbox (msg__80 "CREW · INBOX"), audit M11. */}
       <MTopBar
         title="Today"
         eyebrow={greeting.toUpperCase()}
         actionIcon={<MI.Settings size={20} />}
         actionLabel="Settings"
+        onBell={() => navigate('/notifications')}
       />
       <MBody pad>
         <MLargeHead

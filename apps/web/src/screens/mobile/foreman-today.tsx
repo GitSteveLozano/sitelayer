@@ -315,7 +315,8 @@ function ForemanTodayMobile({ bootstrap, companySlug }: { bootstrap: BootstrapRe
 
   return (
     <>
-      <MTopBar title="Today" />
+      {/* Header bell → foreman inbox (msg__79 "FROM THE FIELD"), audit M11. */}
+      <MTopBar title="Today" onBell={() => navigate('/notifications')} />
       <MBody>
         <MLargeHead
           eyebrow={`FOREMAN · ${shortMonthDay()}`}

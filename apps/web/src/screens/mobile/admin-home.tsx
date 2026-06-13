@@ -171,11 +171,13 @@ function AdminHomeMobile({ bootstrap }: AdminHomeProps) {
 
   return (
     <>
+      {/* Header bell → owner inbox (msg__78 "OWNER · INBOX"), audit M11. */}
       <MTopBar
         title="Today"
         actionIcon={<MI.Plus size={20} />}
         actionLabel="New"
         onAction={() => navigate('/projects/new')}
+        onBell={() => navigate('/notifications')}
       />
       <MBody>
         {triggeredGuardrail ? (

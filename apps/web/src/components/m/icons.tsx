@@ -7,6 +7,7 @@
 import {
   AlertCircle,
   AlertTriangle,
+  Bell,
   Camera,
   CheckCircle2,
   ChevronLeft,
@@ -34,6 +35,7 @@ import {
 export const MI = {
   Alert: AlertCircle,
   AlertTri: AlertTriangle,
+  Bell,
   Camera,
   Check: CheckCircle2,
   ChevLeft: ChevronLeft,

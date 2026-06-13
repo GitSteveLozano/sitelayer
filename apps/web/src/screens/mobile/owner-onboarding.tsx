@@ -3,13 +3,14 @@
  * the mobile master flow from Steve's mobile bundle (steve.html):
  * Company → Crew Size → Integrations → Ready.
  *
- * This is the MOBILE owner-onboarding flow. The desktop equivalent is
+ * This is the MOBILE owner-onboarding flow — and since the 2026-06-12
+ * design-fidelity audit (M01) it is the LIVE first-run path: AppShell's
+ * no-company / requires-onboarding redirects land here on mobile viewports
+ * (desktop goes to `/welcome`). The desktop equivalent is
  * `screens/desktop/onboarding/onboarding.tsx` (sign-in → company → team →
- * connect → ready, centered-card layout). The pre-existing mobile
- * `/onboarding` (`routes/onboarding.tsx` → `screens/onboarding/wizard.tsx`)
- * is a different, plainer 3-step company/team/seed wizard kept for the
- * Tailwind-styled tenant-bootstrap path; this screen is the brutalist
- * m-* persona flow the v2 mobile design calls for.
+ * connect → ready, centered-card layout). The legacy 3-step Tailwind wizard
+ * (`screens/onboarding/wizard.tsx`) was deleted; `/onboarding` now just
+ * forwards to the designed flows.
  *
  * Four steps:
  *   1. Company   — name + trade (real `useCreateCompany` on advance).

@@ -61,7 +61,14 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
     if (!file) return
     setUploadError(null)
     uploadBlueprint.mutate(file, {
-      onSuccess: () => setReloadKey((k) => k + 1),
+      // Upload success enters the plan-ingest STEP 3/3 screen (dsg__44/45,
+      // audit M03 #12) instead of skipping straight to the canvas. The new
+      // document's id travels as `?blueprint=` so ingest can track THIS
+      // upload's parse rather than re-deriving "latest doc".
+      onSuccess: (doc) => {
+        setReloadKey((k) => k + 1)
+        navigate(`/projects/${projectId}/takeoff-ai/ingest?blueprint=${encodeURIComponent(doc.id)}`)
+      },
       onError: (err) => setUploadError(err instanceof Error ? err.message : 'Upload failed'),
     })
   }

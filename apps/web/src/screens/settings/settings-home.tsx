@@ -103,7 +103,7 @@ export function MobileSettingsHome({
         <div style={{ padding: '14px 16px' }}>
           <button
             type="button"
-            onClick={() => go('/more')}
+            onClick={() => go('/more/profile')}
             style={{
               width: '100%',
               textAlign: 'left',
@@ -181,6 +181,80 @@ export function MobileSettingsHome({
             chev
             onTap={() => go('/activity')}
           />
+          <MListRow
+            leading={<MI.Check size={18} />}
+            leadingTone="green"
+            headline="Approvals"
+            supporting="Owner authorization inbox"
+            chev
+            onTap={() => go('/approvals')}
+          />
+          <MListRow
+            leading={<MI.Alert size={18} />}
+            headline="Inbox"
+            supporting="Notifications addressed to you"
+            chev
+            onTap={() => go('/notifications')}
+          />
+        </MListInset>
+
+        {/* Workflow group — operational jump-offs the retired "Everything
+            else" More hub used to carry; kept here so every destination it
+            linked stays reachable (audit M12 reachability constraint). */}
+        <MSectionH>Workflow</MSectionH>
+        <MListInset>
+          <MListRow
+            leading={<MI.MapPin size={18} />}
+            headline="Ops"
+            supporting="Phone diagnostics and routing"
+            chev
+            onTap={() => go('/ops')}
+          />
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            headline="Work queue"
+            supporting="Field material, equipment and issue requests"
+            chev
+            onTap={() => go('/work')}
+          />
+          <MListRow
+            leading={<MI.Layers size={18} />}
+            headline="Measurements"
+            supporting="Takeoff focus across projects"
+            chev
+            onTap={() => go('/projects?focus=takeoff')}
+          />
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            leadingTone="accent"
+            headline="Estimates"
+            supporting="Estimate focus across projects"
+            chev
+            onTap={() => go('/projects?focus=estimate')}
+          />
+          <MListRow
+            leading={<MI.Users size={18} />}
+            leadingTone="blue"
+            headline="Live crew"
+            supporting="Who's clocked in right now"
+            chev
+            onTap={() => go('/live-crew')}
+          />
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            leadingTone="green"
+            headline="Financial"
+            supporting="Invoices, payroll, job costing"
+            chev
+            onTap={() => go('/financial')}
+          />
+          <MListRow
+            leading={<MI.Users size={18} />}
+            headline="Assignments"
+            supporting="Project crew assignments"
+            chev
+            onTap={() => go('/projects/assignments')}
+          />
         </MListInset>
 
         {/* Workspace group — mirrors the design's settings hub
@@ -237,6 +311,17 @@ export function MobileSettingsHome({
             chev
             onTap={() => go('/more/catalog/workers')}
           />
+          {/* Invite teammate — design msg__94: "From → Settings → Invite".
+              The send screen at /invite/teammate was complete but had zero
+              inbound links (audit M01 #19). */}
+          <MListRow
+            leading={<MI.Plus size={18} />}
+            leadingTone="accent"
+            headline="Invite teammate"
+            supporting="Send a role-scoped invite link"
+            chev
+            onTap={() => go('/invite/teammate')}
+          />
           <MListRow
             leading={<MI.Settings size={18} />}
             leadingTone="green"
@@ -245,12 +330,41 @@ export function MobileSettingsHome({
             chev
             onTap={() => go('/more/catalog')}
           />
+          <MListRow
+            leading={<MI.Truck size={18} />}
+            leadingTone="amber"
+            headline="Inventory admin"
+            supporting="Items, locations, movements, branches"
+            chev
+            onTap={() => go('/more/inventory')}
+          />
+          <MListRow
+            leading={<MI.Layers size={18} />}
+            headline="Bonus simulator"
+            supporting="Model bonus rules against real hours"
+            chev
+            onTap={() => go('/more/bonus-sim')}
+          />
+          <MListRow
+            leading={<MI.Truck size={18} />}
+            headline="Dispatch lanes"
+            supporting="Rental dispatch lane admin"
+            chev
+            onTap={() => go('/more/dispatch-lanes')}
+          />
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            headline="Notification queue"
+            supporting="Outbound delivery queue health"
+            chev
+            onTap={() => go('/more/notifications-queue')}
+          />
         </MListInset>
 
-        {/* Integrations group — live status */}
-        <MSectionH link="Manage" onLinkClick={() => go('/more/integrations')}>
-          Integrations
-        </MSectionH>
+        {/* Integrations group — live status. (No "Manage" header link: the
+            legacy QBO-only hub at /more/integrations was retired and that path
+            now redirects back to this screen; each row navigates itself.) */}
+        <MSectionH>Integrations</MSectionH>
         <IntegrationsStatusList navigate={go} />
 
         {/* Account group */}

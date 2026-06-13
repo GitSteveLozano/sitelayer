@@ -213,7 +213,10 @@ const ADMIN_TABS = [
   { id: 'projects', label: 'Projects', Icon: MI.FileText },
   { id: 'schedule', label: 'Schedule', Icon: MI.Clock },
   { id: 'rentals', label: 'Rentals', Icon: MI.Truck },
-  { id: 'more', label: 'More', Icon: MI.Settings },
+  // The 5th slot lands on the DESIGNED settings hub (`settings/*` →
+  // MobileSettingsHome, msg__83), not the legacy "Everything else" hub —
+  // audit M12. Its detail sub-screens still live under `more/*`.
+  { id: 'settings', label: 'More', Icon: MI.Settings },
 ] as const
 
 const FOREMAN_TABS = [
@@ -288,7 +291,13 @@ export function MobileShell({
     tabs.find((t) => {
       const prefix = `${basePath}/${t.id}`
       return location.pathname === prefix || location.pathname.startsWith(`${prefix}/`)
-    })?.id ?? 'today'
+    })?.id ??
+    // The designed settings hub's detail sub-screens (pricing book, catalog,
+    // integrations, …) still mount under `more/*`; keep the More/settings tab
+    // lit while the user is inside them.
+    (location.pathname === `${basePath}/more` || location.pathname.startsWith(`${basePath}/more/`)
+      ? 'settings'
+      : 'today')
 
   const isWorker = ctx.kind === 'worker'
 

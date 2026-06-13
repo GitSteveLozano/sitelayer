@@ -13,6 +13,13 @@ export type MTopBarProps = {
   actionIcon?: ReactNode | undefined
   onBack?: (() => void) | undefined
   onAction?: (() => void) | undefined
+  /**
+   * Header bell — the designed notifications-inbox entry (msg__78/79/80,
+   * "FROM → role · header bell"). Renders a bell button in the trailing
+   * slot (before the action button when both are present); the handler
+   * should navigate to the role's inbox route (`/notifications`).
+   */
+  onBell?: (() => void) | undefined
 }
 
 /**
@@ -31,6 +38,7 @@ export function MTopBar({
   actionIcon,
   onBack,
   onAction,
+  onBell,
 }: MTopBarProps) {
   const isClose = backVariant === 'close'
   return (
@@ -50,6 +58,11 @@ export function MTopBar({
         <div className="m-h1">{title}</div>
         {sub ? <div className="m-sub">{sub}</div> : null}
       </div>
+      {onBell ? (
+        <button type="button" className="m-topbar-action" aria-label="Notifications" onClick={onBell}>
+          <MI.Bell size={20} />
+        </button>
+      ) : null}
       {actionIcon || actionLabel ? (
         <button type="button" className="m-topbar-action" aria-label={actionLabel ?? 'Action'} onClick={onAction}>
           {actionIcon}

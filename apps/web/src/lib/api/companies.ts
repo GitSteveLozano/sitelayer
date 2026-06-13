@@ -31,7 +31,14 @@ export function useCreateCompany() {
   const qc = useQueryClient()
   return useMutation<CreateCompanyResponse, Error, CreateCompanyRequest>({
     mutationFn: (input) => request<CreateCompanyResponse>('/api/companies', { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['companies'] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['companies'] })
+      // AppShell gates the whole authenticated tree on `/api/me/memberships`
+      // (['me','memberships',…], 5-min staleTime). Without this invalidation a
+      // first-run user finishing the designed onboarding flow bounces straight
+      // back into onboarding off the stale empty membership list.
+      void qc.invalidateQueries({ queryKey: ['me', 'memberships'] })
+    },
   })
 }
 
