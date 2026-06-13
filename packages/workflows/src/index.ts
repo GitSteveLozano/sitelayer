@@ -51,6 +51,15 @@ export {
 export { applyEventLog, snapshotsEqual, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
 
 export {
+  buildJourneyGraph,
+  buildAllJourneyGraphs,
+  recreateState,
+  journeyGraphToMermaid,
+  type JourneyEdge,
+  type JourneyGraph,
+} from './journey-graph.js'
+
+export {
   buildWorkflowEventLogInsert,
   WORKFLOW_EVENT_LOG_COLUMNS,
   type WorkflowEventLogInsertArgs,

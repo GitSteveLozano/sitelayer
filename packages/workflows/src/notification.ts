@@ -368,6 +368,15 @@ export const notificationWorkflow = registerWorkflow<
   // logic lives outside the workflow boundary and doesn't route
   // through mutation_outbox.
   sideEffectTypes: [] as const,
+  // SEND_FAILED is the one PAYLOAD-discriminated transition in the package:
+  // `kind` selects among three distinct failure terminals. Hand the journey
+  // graph one sample per kind so it discovers all three edges (a payload-less
+  // probe would only ever surface `failed_provider`). Every other event type
+  // is keyed on `type` + source state alone, so the default probe suffices.
+  sampleEvents: (eventType) =>
+    eventType === 'SEND_FAILED'
+      ? NOTIFICATION_FAILURE_KINDS.map((kind) => ({ type: 'SEND_FAILED', kind }))
+      : [{ type: eventType }],
 })
 
 // Wire-format request schema for POST /api/notifications/:id/events.

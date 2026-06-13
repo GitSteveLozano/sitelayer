@@ -40,6 +40,20 @@ export interface WorkflowDefinition<
    * outbox layer for routing and by the future Temporal worker for
    * activity registration. */
   sideEffectTypes: readonly string[]
+  /**
+   * Optional: representative event payloads for graph-walking tools
+   * (`journey-graph.ts`) that must exercise PAYLOAD-discriminated branches —
+   * where the reducer's next state depends on a field of the event, not just
+   * `event.type`. The canonical case is `notification.SEND_FAILED`, whose
+   * `kind` selects among three distinct terminal states; a payload-less probe
+   * `{ type: 'SEND_FAILED' }` would only ever discover one of them.
+   *
+   * When omitted (the common case — a transition keyed solely on `type` +
+   * source state), tools use a single payload-less probe `{ type }`. This is
+   * pure metadata; the reducer never reads it. Return one entry per distinct
+   * target the event can reach.
+   */
+  sampleEvents?: (eventType: string) => ReadonlyArray<Record<string, unknown>>
 }
 
 type AnyDefinition = WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
