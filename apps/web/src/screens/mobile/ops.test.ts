@@ -8,6 +8,7 @@ import {
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
   formatDesktopEvidenceSummary,
+  reusableLeaveBehindCaptureUrl,
   resolveLatestDesktopEvidence,
 } from './ops'
 import type {
@@ -271,5 +272,14 @@ describe('MobileOps leave-behind capture invite', () => {
       },
     })
     expect(JSON.stringify(payload)).not.toContain('control_token')
+  })
+
+  it('does not reuse a cached leave-behind invite across diagnostic sessions', () => {
+    const cached = { url: 'https://app.sitelayer.test/guest/old', session_id: 'diag-session-1' }
+
+    expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-1' }))).toBe(cached.url)
+    expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-2' }))).toBeNull()
+    expect(reusableLeaveBehindCaptureUrl(cached, null)).toBeNull()
+    expect(reusableLeaveBehindCaptureUrl({ url: cached.url, session_id: null }, null)).toBe(cached.url)
   })
 })

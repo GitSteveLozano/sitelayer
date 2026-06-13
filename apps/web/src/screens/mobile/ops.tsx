@@ -94,7 +94,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   )
   const [diagnosticControlTransferUrl, setDiagnosticControlTransferUrl] = useState<string | null>(null)
   const [diagnosticControlTransferCopied, setDiagnosticControlTransferCopied] = useState(false)
-  const [leaveBehindCaptureUrl, setLeaveBehindCaptureUrl] = useState<string | null>(null)
+  const [leaveBehindCaptureLink, setLeaveBehindCaptureLink] = useState<LeaveBehindCaptureLinkState | null>(null)
   const [leaveBehindCaptureCopied, setLeaveBehindCaptureCopied] = useState(false)
 
   const work = useQuery({
@@ -156,6 +156,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const onsiteSession = opsDiagnostics.data?.onsite_session
   const observedDiagnosticSession = diagnosticSessions.data?.sessions[0] ?? null
   const displayedDiagnosticSession = activeDiagnosticSession ?? observedDiagnosticSession
+  const displayedDiagnosticSessionId = displayedDiagnosticSession?.id ?? null
   const hasDiagnosticControl = Boolean(activeDiagnosticSession && diagnosticControlToken)
   useEffect(() => {
     setActiveDiagnosticSession(null)
@@ -163,9 +164,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     setLastDiagnosticAction(null)
     setDiagnosticControlTransferUrl(null)
     setDiagnosticControlTransferCopied(false)
-    setLeaveBehindCaptureUrl(null)
+    setLeaveBehindCaptureLink(null)
     setLeaveBehindCaptureCopied(false)
   }, [companySlug])
+  useEffect(() => {
+    setLeaveBehindCaptureLink(null)
+    setLeaveBehindCaptureCopied(false)
+  }, [displayedDiagnosticSessionId])
   useEffect(() => {
     if (!canCaptureAppIssues) return
     const importedControl = importOpsDiagnosticControlFromUrl(companySlug)
@@ -301,21 +306,22 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const copyLeaveBehindCaptureInvite = useMutation({
     mutationFn: async () => {
       if (!companyId) throw new Error('company is not loaded')
+      const sessionId = displayedDiagnosticSession?.id ?? null
       const inviteUrl =
-        leaveBehindCaptureUrl ??
+        reusableLeaveBehindCaptureUrl(leaveBehindCaptureLink, displayedDiagnosticSession) ??
         (
           await createLeaveBehindCaptureInvite.mutateAsync(
             buildLeaveBehindCaptureInviteInput({ companySlug, session: displayedDiagnosticSession }),
           )
         ).invite_url
-      setLeaveBehindCaptureUrl(inviteUrl)
+      setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
       setLeaveBehindCaptureCopied(false)
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
       await navigator.clipboard.writeText(inviteUrl)
-      return inviteUrl
+      return { inviteUrl, sessionId }
     },
-    onSuccess: (inviteUrl) => {
-      setLeaveBehindCaptureUrl(inviteUrl)
+    onSuccess: ({ inviteUrl, sessionId }) => {
+      setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
       setLeaveBehindCaptureCopied(true)
     },
   })
@@ -830,6 +836,11 @@ type FieldReadinessInput = {
   onsiteSession: OpsOnsiteDiagnosticSessionPlan | undefined
 }
 
+export type LeaveBehindCaptureLinkState = {
+  url: string
+  session_id: string | null
+}
+
 export function buildFieldReadinessItems({
   online,
   hasDiagnosticControl,
@@ -902,6 +913,14 @@ export function buildFieldReadinessItems({
             : (agentFeed?.detail ?? 'Agent feed pending.'),
     },
   ]
+}
+
+export function reusableLeaveBehindCaptureUrl(
+  link: LeaveBehindCaptureLinkState | null,
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): string | null {
+  if (!link) return null
+  return link.session_id === (session?.id ?? null) ? link.url : null
 }
 
 export function buildLeaveBehindCaptureInviteInput({
