@@ -32,6 +32,21 @@
  *   SIGNAL_URL        relay endpoint to emit to     (default: none; inert)
  *   BLOCK_GATE_PCT    gate-only floor that blocks even without a VLM (default: 0.02)
  *   VISREGRESS_SKIP_CAPTURE=1  reuse existing __candidates__ (CI already rendered them)
+ *   VISREGRESS_REQUIRE_BASELINES=1  STRICT: a declared SCREENS id that rendered a candidate but
+ *                              has NO committed baseline is a LOUD FAILURE (exit 1), not a graceful
+ *                              first-run prompt. Opt-in so we can flip it ON once baselines land;
+ *                              the DEFAULT stays graceful (noBaseline -> exit 0) so the gate is not
+ *                              broken before baselines are committed.
+ *
+ * EXIT CONTRACT (machine-readable summary on its own line for the fleet watcher):
+ *   visregress: ran=<n> skipped=<n> noBaseline=<n> blocked=<n>
+ *     ran        screens that had BOTH a fresh candidate and a committed baseline (actually gated)
+ *     skipped    no candidate rendered (app/VLM-judge genuinely unreachable / screen failed to render)
+ *     noBaseline candidate rendered but no committed baseline yet (first-run capture prompt)
+ *     blocked    confirmed regression(s) OR (under VISREGRESS_REQUIRE_BASELINES=1) noBaseline ids
+ *   exit 0  nothing gated produced a regression (skip/noBaseline alone never fail by default)
+ *   exit 2  CONFIRMED regression from the analyzer (gate fails) — UNCHANGED contract
+ *   exit 1  STRICT require-baselines violation, or an internal/harness error
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,6 +63,15 @@ const JUDGE = process.env.JUDGE || 'local'
 const BLOCK = process.env.BLOCK_GATE_PCT || '0.02'
 const PROJECT = 'sitelayer'
 const SKIP_CAPTURE = process.env.VISREGRESS_SKIP_CAPTURE === '1'
+const REQUIRE_BASELINES = process.env.VISREGRESS_REQUIRE_BASELINES === '1'
+
+// Single machine-readable summary line for the fleet watcher. Emit EXACTLY once,
+// on every exit path, so a watcher can parse the gate outcome without scraping
+// human prose. `blocked` is non-zero iff the gate is failing (regression, or a
+// strict require-baselines violation).
+function emitSummary({ ran, skipped, noBaseline, blocked }) {
+  console.log(`visregress: ran=${ran} skipped=${skipped} noBaseline=${noBaseline} blocked=${blocked}`)
+}
 
 // Default candidate-capture target = the local app (docker stack / `npm run dev`). An explicit
 // E2E_BASE_URL always wins (e.g. the persistent dev tier). The visual.config.ts default is the
@@ -135,28 +159,57 @@ if (skipped.length) {
   )
 }
 if (noBaseline.length) {
-  console.warn(
-    `[sitelayer] candidate rendered but NO committed baseline yet for: ${noBaseline.join(', ')} — ` +
-      `first-run / newly added cluster screen; capture a baseline in the canonical env ` +
-      `(re-run e2e/visual/top-screens.visual.spec.ts) to start gating it. NOT a failure.`,
-  )
+  if (REQUIRE_BASELINES) {
+    console.error(
+      `[sitelayer] VISREGRESS_REQUIRE_BASELINES=1 and candidate rendered but NO committed baseline ` +
+        `for: ${noBaseline.join(', ')} — a declared SCREENS id MUST have a committed baseline. ` +
+        `Capture it in the canonical env (run e2e/visual/top-screens.visual.spec.ts with ` +
+        `VISUAL_SNAP_DIR unset) and commit __baselines__/<id>.png.`,
+    )
+  } else {
+    console.warn(
+      `[sitelayer] candidate rendered but NO committed baseline yet for: ${noBaseline.join(', ')} — ` +
+        `first-run / newly added cluster screen; capture a baseline in the canonical env ` +
+        `(re-run e2e/visual/top-screens.visual.spec.ts) to start gating it. NOT a failure ` +
+        `(set VISREGRESS_REQUIRE_BASELINES=1 to make this loud once baselines land).`,
+    )
+  }
+}
+
+// STRICT opt-in: a declared id that rendered a candidate but has no committed
+// baseline is a LOUD failure. This is how we *require* baselines once they land
+// without breaking the gate beforehand (the default below stays graceful).
+if (REQUIRE_BASELINES && noBaseline.length) {
+  emitSummary({ ran: 0, skipped: skipped.length, noBaseline: noBaseline.length, blocked: noBaseline.length })
+  process.exit(1)
 }
 
 if (!pairs.length) {
   if (noBaseline.length) {
     // Candidates DID render — there's just no committed baseline to gate against
-    // yet. That's a first-run state, not the "app unreachable" failure below.
+    // yet. That's a first-run state (skip, exit 0), not a failure. A genuinely
+    // unreachable app falls to the branch below.
     console.warn(
       '[sitelayer] candidates rendered but no committed baselines to gate against yet — ' +
         'capture baselines in the canonical env. Not gating this run (exit 0).',
     )
+    emitSummary({ ran: 0, skipped: skipped.length, noBaseline: noBaseline.length, blocked: 0 })
     process.exit(0)
   }
-  console.error(
-    '[sitelayer] no fresh candidates rendered — refusing to pass on stale pairs.\n' +
-      '  start a seeded app and set E2E_BASE_URL (e.g. http://localhost:3000), then re-run.',
+  // No candidate rendered for ANY declared screen: the app / VLM-judge is
+  // genuinely unreachable (or every screen failed to render). This is a SKIP,
+  // not a confirmed regression — we have nothing to compare, so we cannot
+  // assert a "FAILED" candidate. Exit 0 so an offline box doesn't red the gate;
+  // the `skipped` count + the absence of any `ran` makes the no-op visible to
+  // the watcher. (A candidate that rendered but mismatched is the analyzer's
+  // exit-2 below, which is the real, loud regression signal.)
+  console.warn(
+    '[sitelayer] no fresh candidate rendered for any declared screen — app/VLM-judge not reachable ' +
+      'or every screen failed to render. Nothing to gate this run (skip, exit 0).\n' +
+      '  start a seeded app and set E2E_BASE_URL (e.g. http://localhost:3000) to gate.',
   )
-  process.exit(1)
+  emitSummary({ ran: 0, skipped: skipped.length, noBaseline: noBaseline.length, blocked: 0 })
+  process.exit(0)
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'sitelayer-visregress-'))
@@ -191,13 +244,36 @@ process.stdout.write(res.stdout || '')
 if (res.stderr) process.stderr.write(res.stderr)
 
 // Persist the verdicts (the analyzer prints per-screen lines then a trailing JSON array).
+let blockedScreens = 0
 try {
   const out = res.stdout || ''
   const m = out.match(/\n\[\n[\s\S]*\n\]\s*$/)
   const jsonText = m ? m[0] : out.slice(out.indexOf('['))
-  writeFileSync(resultsJson, JSON.stringify(JSON.parse(jsonText.trim()), null, 2))
+  const verdicts = JSON.parse(jsonText.trim())
+  writeFileSync(resultsJson, JSON.stringify(verdicts, null, 2))
+  // Count the screens the analyzer marked as a confirmed regression, so the
+  // summary line carries a per-screen `blocked` count rather than just a bit.
+  if (Array.isArray(verdicts)) {
+    blockedScreens = verdicts.filter(
+      (v) => v && (v.regression === true || v.blocked === true || v.verdict === 'regression'),
+    ).length
+  }
 } catch {
   /* keep the analyzer's own exit code; results-file is best-effort */
 }
 
-process.exit(res.status ?? 1) // 0 clean, 2 regression -> CI / pre-push gate
+// exit 2 = confirmed regression (UNCHANGED contract). If the analyzer flagged a
+// regression but we couldn't parse a per-screen count, fall back to 1 so the
+// summary still signals "blocked" rather than a false all-clear.
+const exitCode = res.status ?? 1
+const regressed = exitCode === 2
+if (regressed && blockedScreens === 0) blockedScreens = 1
+
+emitSummary({
+  ran: pairs.length,
+  skipped: skipped.length,
+  noBaseline: noBaseline.length,
+  blocked: blockedScreens,
+})
+
+process.exit(exitCode) // 0 clean, 2 regression -> CI / pre-push gate

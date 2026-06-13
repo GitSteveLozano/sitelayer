@@ -68,6 +68,58 @@ async function snap(page: Page, id: string): Promise<void> {
   await page.screenshot({ path: path.join(SNAP_DIR, `${id}.png`), fullPage: true })
 }
 
+/**
+ * Resolve the id of a seeded project the act-as identity can see, for the
+ * heavy-flow capture screens that live behind a `:projectId` param route
+ * (takeoff canvas, blueprint viewer, scope-vs-bid). `page.request` already
+ * carries the act-as + company-slug headers from buildRolePage, so the same
+ * /api/bootstrap the SPA calls returns the role's project list.
+ *
+ * NEVER throws — a missing project / unreachable API yields null, and the
+ * caller falls back to a deterministic placeholder id so the capture still
+ * renders the screen's stable empty/error shell (a valid first-run candidate;
+ * the real baseline is committed later in the canonical seeded env).
+ */
+async function firstProjectId(page: Page): Promise<string | null> {
+  try {
+    const res = await page.request.get('/api/bootstrap')
+    if (!res.ok()) return null
+    const body = (await res.json()) as { projects?: Array<{ id?: string }> }
+    const id = body?.projects?.find((p) => typeof p?.id === 'string' && p.id)?.id
+    return id ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve a portal estimate share token (the customer portal is auth-free but
+ * keyed by an opaque share token). Tries the seeded admin's estimate-shares
+ * list; falls back to null so the caller can capture the portal's "invalid /
+ * not-found token" shell — itself a stable, deterministic candidate.
+ *
+ * NEVER throws.
+ */
+async function firstShareToken(context: BrowserContext): Promise<string | null> {
+  try {
+    const probe = await context.request.get('/api/estimate-shares', {
+      headers: {
+        'x-sitelayer-act-as': 'e2e-admin',
+        'x-sitelayer-company-slug': E2E_COMPANY_SLUG,
+        'x-sitelayer-user-id': 'e2e-admin',
+      },
+    })
+    if (!probe.ok()) return null
+    const body = (await probe.json()) as {
+      shares?: Array<{ share_token?: string; token?: string }>
+    }
+    const row = body?.shares?.find((s) => s?.share_token || s?.token)
+    return row?.share_token ?? row?.token ?? null
+  } catch {
+    return null
+  }
+}
+
 const test = base
 
 test('baseline: takeoff-3d-demo', { tag: '@visual' }, async ({ page }) => {
@@ -217,5 +269,107 @@ test('baseline: worker-hours', { tag: '@visual' }, async ({ context }) => {
     .waitFor({ state: 'visible' })
     .catch(() => {})
   await snap(page, 'worker-hours')
+  await page.close()
+})
+
+/*
+ * Heavy-flow + missing-role-surface captures (VIS-2). These exercise the
+ * surfaces the gate was structurally blind to — the live takeoff CANVAS, the
+ * blueprint PDF viewer, the estimate scope-vs-bid screen, the customer PORTAL
+ * estimate view, and an office/bookkeeper financial surface. Each resolves a
+ * real seeded id where the route is param-keyed (via firstProjectId /
+ * firstShareToken, which never throw) and falls back to a deterministic
+ * placeholder so the screen's stable shell still renders. They produce
+ * CANDIDATES today; baselines are captured later in the canonical seeded env
+ * (top-value postures from scenarios/takeoff-canvas-states.yaml). All
+ * ready-waits are `.catch(() => {})` so snap() always runs the settled
+ * capture — a screen that only reaches its empty/error shell is still a valid
+ * first-run candidate.
+ */
+
+test('baseline: takeoff-canvas', { tag: '@visual' }, async ({ context }) => {
+  // Live takeoff CANVAS (the consolidated est-canvas editor). Mobile canonical
+  // route is `/projects/:id/takeoff-mobile` (canvas-route.ts); desktop mounts
+  // the SAME component at `/desktop/canvas/:id`. Seed via
+  // scenarios/takeoff-canvas-states.yaml for the manual/uncal/ai/empty postures.
+  const page = await buildRolePage(context, 'e2e-admin')
+  const id = (await firstProjectId(page)) ?? 'seed-takeoff-project'
+  await page.goto(`/projects/${id}/takeoff-mobile`, { waitUntil: 'domcontentloaded' })
+  // Canvas mounts a lazy chunk + (when calibrated) a drawing surface; key off
+  // the page settling rather than a brittle canvas element so an empty/cold
+  // posture still captures.
+  await page
+    .getByRole('heading')
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'takeoff-canvas')
+  await page.close()
+})
+
+test('baseline: blueprint-viewer', { tag: '@visual' }, async ({ context }) => {
+  // Blueprint PDF viewer — `/projects/:id/takeoff-preview` renders the uploaded
+  // blueprint page(s) + the 3D takeoff overlay (takeoff-preview.tsx). Seeded
+  // scenarios store real PDF bytes (writeBlueprintSourceFiles), so against the
+  // canonical stack this captures the actual sheet.
+  const page = await buildRolePage(context, 'e2e-admin')
+  const id = (await firstProjectId(page)) ?? 'seed-takeoff-project'
+  await page.goto(`/projects/${id}/takeoff-preview`, { waitUntil: 'domcontentloaded' })
+  await page
+    .getByRole('heading')
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'blueprint-viewer')
+  await page.close()
+})
+
+test('baseline: estimate-scope-vs-bid', { tag: '@visual' }, async ({ context }) => {
+  // Estimate scope-vs-bid screen — `/projects/:id/quantities` renders the
+  // MobileEstQuantitiesSummary (the GET /estimate/scope-vs-bid surface) under a
+  // stable "Quantities" top bar (est-quantities-summary.tsx).
+  const page = await buildRolePage(context, 'e2e-admin')
+  const id = (await firstProjectId(page)) ?? 'seed-takeoff-project'
+  await page.goto(`/projects/${id}/quantities`, { waitUntil: 'domcontentloaded' })
+  await page
+    .getByText('Quantities', { exact: true })
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'estimate-scope-vs-bid')
+  await page.close()
+})
+
+test('baseline: portal-estimate', { tag: '@visual' }, async ({ context }) => {
+  // Customer PORTAL estimate view — `/portal/estimates/:shareToken` is auth-free
+  // (no Clerk, no act-as) and renders the view + Accept/Decline CTAs
+  // (portal/EstimateView.tsx). A missing/invalid token renders the portal's
+  // stable error shell, which is itself a deterministic candidate.
+  const token = (await firstShareToken(context)) ?? 'seed-share-token'
+  const page = await context.newPage()
+  await page.goto(`/portal/estimates/${token}`, { waitUntil: 'domcontentloaded' })
+  // Either the loaded estimate (Accept estimate) or the error/loading shell;
+  // wait for the page body to settle without asserting a specific state.
+  await page
+    .getByText(/Accept estimate|Loading|Estimate/i)
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'portal-estimate')
+  await page.close()
+})
+
+test('baseline: office-financial', { tag: '@visual' }, async ({ context }) => {
+  // OFFICE / bookkeeper surface — the office persona lands the admin/financial
+  // shell at runtime; capture the financial billing-runs hub (the QBO-push
+  // surface a bookkeeper/office persona works) under its stable shell heading.
+  const page = await buildRolePage(context, 'e2e-office')
+  await page.goto('/financial/billing-runs', { waitUntil: 'domcontentloaded' })
+  await page
+    .getByRole('heading')
+    .first()
+    .waitFor({ state: 'visible' })
+    .catch(() => {})
+  await snap(page, 'office-financial')
   await page.close()
 })
