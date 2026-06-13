@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
-import { dispatchWorkflowEvent, toWorkflowSnapshot } from './workflow-dispatch.js'
+import { dispatchWorkflowEvent, isKnownWorkflowEvent, toWorkflowSnapshot } from './workflow-dispatch.js'
 
 type Snap = { state: 'start' | 'done'; state_version: number }
 type Ev = { type: 'GO' | 'BAD' }
@@ -89,6 +89,63 @@ describe('dispatchWorkflowEvent', () => {
     expect(client.calls.find((c) => /workflow_event_log/i.test(c.text))).toBeUndefined()
   })
 
+  it('open-world boundary: an unmodeled event type is rejected before reduce, flagged, and telemetered', async () => {
+    const client = fakeClient()
+    let reduceCalled = false
+    const unknownSeen: string[] = []
+    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
+      client,
+      baseOpts({
+        // Opt into the boundary by declaring the modeled event set.
+        definition: {
+          ...definition,
+          allEventTypes: ['GO', 'BAD'] as const,
+          reduce: (s: Snap, e: Ev): Snap => {
+            reduceCalled = true
+            return definition.reduce(s, e)
+          },
+        },
+        buildEvent: () => ({ type: 'WUT' as unknown as Ev['type'] }),
+        onUnknownEvent: (t: string) => unknownSeen.push(t),
+      }) as never,
+    )
+    expect(result.kind).toBe('illegal_transition')
+    if (result.kind !== 'illegal_transition') return
+    expect(result.unknownEvent).toBe(true)
+    expect(result.message).toMatch(/unknown event type "WUT"/)
+    // boundary short-circuits BEFORE the reducer and writes nothing
+    expect(reduceCalled).toBe(false)
+    expect(client.calls.find((c) => /workflow_event_log/i.test(c.text))).toBeUndefined()
+    // exactly one telemetry row for the open-world event
+    expect(unknownSeen).toEqual(['WUT'])
+  })
+
+  it('open-world boundary: a MODELED but illegal event is NOT flagged unknownEvent', async () => {
+    const client = fakeClient()
+    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
+      client,
+      baseOpts({
+        definition: { ...definition, allEventTypes: ['GO', 'BAD'] as const },
+        buildEvent: () => ({ type: 'BAD' }), // modeled, but illegal from 'start'
+      }) as never,
+    )
+    expect(result.kind).toBe('illegal_transition')
+    if (result.kind !== 'illegal_transition') return
+    expect(result.unknownEvent).toBeFalsy()
+    expect(result.message).toMatch(/illegal transition/)
+  })
+
+  it('without allEventTypes, an unknown event still falls through to the reducer throw backstop', async () => {
+    const client = fakeClient()
+    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
+      client,
+      baseOpts({ buildEvent: () => ({ type: 'WUT' as unknown as Ev['type'] }) }) as never,
+    )
+    expect(result.kind).toBe('illegal_transition')
+    if (result.kind !== 'illegal_transition') return
+    expect(result.unknownEvent).toBeFalsy() // boundary not declared → reducer throw path
+  })
+
   it('runs sideEffects on ok', async () => {
     const client = fakeClient()
     let ran = false
@@ -102,6 +159,14 @@ describe('dispatchWorkflowEvent', () => {
     )
     expect(result.kind).toBe('ok')
     expect(ran).toBe(true)
+  })
+})
+
+describe('isKnownWorkflowEvent', () => {
+  it('is a pure membership check for inbound boundaries (replay, callbacks)', () => {
+    expect(isKnownWorkflowEvent(['APPROVE', 'VOID'], 'APPROVE')).toBe(true)
+    expect(isKnownWorkflowEvent(['APPROVE', 'VOID'], 'DELETED_LONG_AGO')).toBe(false)
+    expect(isKnownWorkflowEvent([], 'anything')).toBe(false)
   })
 })
 

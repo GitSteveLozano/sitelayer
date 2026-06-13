@@ -60,6 +60,14 @@ export {
 } from './journey-graph.js'
 
 export {
+  captureScenarioFromLog,
+  captureScenarioToYaml,
+  type CapturedScenario,
+  type CapturedWorkflowEvent,
+  type CaptureVerification,
+} from './capture-scenario.js'
+
+export {
   buildWorkflowEventLogInsert,
   WORKFLOW_EVENT_LOG_COLUMNS,
   type WorkflowEventLogInsertArgs,

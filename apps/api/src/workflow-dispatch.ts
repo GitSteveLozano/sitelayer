@@ -43,13 +43,38 @@ export interface DispatchDefinition<Snap extends WorkflowSnapshotBase, Event ext
   schemaVersion: number
   /** The pure transition. Must not read clock/db/random. */
   reduce: (snapshot: Snap, event: Event) => Snap
+  /**
+   * The open-world boundary: the full set of event types this reducer models.
+   * When present, the primitive rejects an event whose `type` is NOT a member
+   * BEFORE calling `reduce`, returning `illegal_transition` with
+   * `unknownEvent: true` (vs. a real-event-illegal-state rejection). Passing the
+   * registry workflow object directly (which carries `allEventTypes`) opts in
+   * for free. When omitted, the reducer's own exhaustiveness throw is the
+   * backstop (it lands in `illegal_transition` all the same).
+   */
+  allEventTypes?: readonly string[]
+}
+
+/** Pure membership check for inbound boundaries (replay, agent callbacks, …)
+ *  that hold an event-type string from an open world. */
+export function isKnownWorkflowEvent(allEventTypes: readonly string[], eventType: string): boolean {
+  return allEventTypes.includes(eventType)
 }
 
 export type DispatchResult<Row, Snap> =
   | { kind: 'ok'; row: Row; snapshot: Snap }
   | { kind: 'not_found' }
   | { kind: 'version_conflict'; row: Row; snapshot: Snap }
-  | { kind: 'illegal_transition'; row: Row; snapshot: Snap; message: string }
+  | {
+      kind: 'illegal_transition'
+      row: Row
+      snapshot: Snap
+      message: string
+      /** True when the event TYPE isn't modeled by the workflow at all (open-world
+       *  boundary hit), vs. a modeled event illegal from the current state. Lets a
+       *  caller answer 422 (unprocessable) + emit telemetry, instead of 409. */
+      unknownEvent?: boolean
+    }
 
 export interface DispatchOptions<Row, Snap extends WorkflowSnapshotBase, Event extends { type: string }> {
   definition: DispatchDefinition<Snap, Event>
@@ -67,6 +92,13 @@ export interface DispatchOptions<Row, Snap extends WorkflowSnapshotBase, Event e
   persist: (client: PoolClient, next: Snap, prevRow: Row) => Promise<Row>
   /** Optional outbox enqueue(s) / ledger rows for the transition (with the workflow's idempotency key). */
   sideEffects?: (client: PoolClient, next: Snap, row: Row, event: Event) => Promise<void>
+  /**
+   * Telemetry hook fired exactly once when the open-world boundary is hit — an
+   * event type not in the definition's `allEventTypes`. The "one telemetry row"
+   * for an unmodeled event so the operator can see an integration sending
+   * something we don't understand. No-op when omitted.
+   */
+  onUnknownEvent?: (eventType: string) => void
 }
 
 /**
@@ -89,6 +121,25 @@ export async function dispatchWorkflowEvent<Row, Snap extends WorkflowSnapshotBa
 
   // 3. pure reduce (clock/actor supplied by buildEvent, never inside reduce)
   const event = opts.buildEvent(snapshot)
+
+  // 3a. Open-world boundary: reject an event type the workflow doesn't model at
+  //     all, distinctly from a modeled event that's illegal from this state. The
+  //     reducer's own exhaustiveness throw would also catch this (and lands in
+  //     the same result), but checking here yields a clearer message + the
+  //     `unknownEvent` flag + the telemetry hook — the cheapest open-world signal.
+  if (opts.definition.allEventTypes && !isKnownWorkflowEvent(opts.definition.allEventTypes, event.type)) {
+    opts.onUnknownEvent?.(event.type)
+    return {
+      kind: 'illegal_transition',
+      row,
+      snapshot,
+      unknownEvent: true,
+      message:
+        `unknown event type "${event.type}" — not a modeled event of workflow ` +
+        `"${opts.definition.name}" (known: ${opts.definition.allEventTypes.join(', ')})`,
+    }
+  }
+
   let next: Snap
   try {
     next = opts.definition.reduce(snapshot, event)
