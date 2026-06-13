@@ -19,6 +19,7 @@
     "seed:e2e": "tsx apps/api/scripts/seed-e2e-fixtures.ts",
     "seed:scenario": "tsx scripts/seed-scenario.ts",
     "seed:demo": "tsx scripts/seed-scenario.ts scenarios/steve-demo.yaml",
+    "sim:takeoff": "tsx scripts/simulate-takeoff.ts",
     "capture:smoke": "bash scripts/test-capture-session-smoke.sh",
     "capture:analyze": "tsx scripts/analyze-capture-session.ts",
     "capture:audio-qa": "bash scripts/test-capture-audio-roundtrip.sh",

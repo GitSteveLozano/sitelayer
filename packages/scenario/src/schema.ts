@@ -319,6 +319,22 @@ const dailyLog = z.object({
   scope_progress: z.array(z.unknown()).optional(),
 })
 
+/**
+ * `run_capture` directive (Track B / SIM-2). When a takeoff draft declares
+ * `run_capture: { kind: blueprint_vision, mode: dry-run }` instead of (or
+ * alongside) a hand-authored `result_json`, the engine runs the DETERMINISTIC
+ * dry-run capture (`runDryRunCapture` from `@sitelayer/pipe-blueprint`, injected
+ * via `ApplyContext`) at SEED TIME and persists ITS real output as the draft's
+ * `result_json` — so the seeded AI-review state IS the stub's output, not a
+ * fixture that can drift from it. Only `blueprint_vision` + `dry-run` are wired
+ * today (live providers are async/keyed and out of scope for deterministic
+ * seeding). A scenario omitting `run_capture` plans byte-identically to before.
+ */
+const runCaptureDirective = z.object({
+  kind: z.literal('blueprint_vision'),
+  mode: z.literal('dry-run'),
+})
+
 const takeoffDraft = z.object({
   ref,
   project_ref: z.string(),
@@ -329,6 +345,7 @@ const takeoffDraft = z.object({
   status: z.string().optional(),
   review_required: z.boolean().optional(),
   result_json: json.optional(),
+  run_capture: runCaptureDirective.optional(),
   measurements: z
     .array(
       z.object({

@@ -21,7 +21,7 @@ export {
   type ScenarioPlan,
   type SeedSummary,
 } from './plan.js'
-export { applyPlan, applyScenario, ensureCompanyRow, type ApplyContext } from './apply.js'
+export { applyPlan, applyScenario, ensureCompanyRow, type ApplyContext, type DryRunCaptureFn } from './apply.js'
 export {
   runFragments,
   type AggregatedRefs,

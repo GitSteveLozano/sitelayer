@@ -15,8 +15,25 @@ import type { ScenarioDoc } from './schema.js'
  * can keep its concrete `PoolClient` signature while the engine itself only
  * relies on the structural `QueryExecutor` (`{ query(text, values?) }`).
  */
+/**
+ * The deterministic dry-run blueprint-vision capture, INJECTED so this package
+ * never imports `@sitelayer/pipe-blueprint` (which pulls the Anthropic SDK) —
+ * same inversion-avoidance rationale as `seedCompanyDefaults`. The CLI / sim
+ * pass `runDryRunCapture` from `@sitelayer/pipe-blueprint`. Returns the draft's
+ * `result_json` plus a provenance discriminator and pipeline version (mirrors
+ * the synchronous capture endpoint's persisted shape). A scenario that uses the
+ * `run_capture` directive without supplying this throws a clear error.
+ */
+export type DryRunCaptureFn = (projectId: string) => Promise<{
+  result: unknown
+  pipelineVersion: string
+  provenance: string
+}>
+
 export interface ApplyContext<C extends QueryExecutor = QueryExecutor> {
   seedCompanyDefaults: (client: C, companyId: string) => Promise<void>
+  /** Required only when a scenario uses a `run_capture` directive. */
+  runDryRunCapture?: DryRunCaptureFn
   /** Single clock instant for relative-time resolution. Defaults to `new Date()`. */
   now?: Date
 }
@@ -55,6 +72,23 @@ async function runOp<C extends QueryExecutor>(client: C, op: ApplyOp, ctx: Apply
     case 'company_defaults':
       await ctx.seedCompanyDefaults(client, op.companyId)
       return
+    case 'dry_run_capture': {
+      if (!ctx.runDryRunCapture) {
+        throw new Error(`scenario uses run_capture (${op.label}) but ApplyContext.runDryRunCapture was not provided`)
+      }
+      const outcome = await ctx.runDryRunCapture(op.projectId)
+      await client.query(
+        `update takeoff_drafts
+            set takeoff_result_json = $1::jsonb,
+                pipeline_version = $2,
+                capture_status = 'ready',
+                capture_provenance = $3,
+                updated_at = now()
+          where id = $4 and company_id = $5`,
+        [JSON.stringify(outcome.result), outcome.pipelineVersion, outcome.provenance, op.draftId, op.companyId],
+      )
+      return
+    }
   }
 }
 

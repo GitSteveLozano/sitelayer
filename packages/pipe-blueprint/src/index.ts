@@ -23,6 +23,14 @@ export {
   type RunLiveBlueprintCaptureArgs,
   type StoredBlueprintInput,
 } from './live-capture.js'
+export {
+  runDryRunCapture,
+  DRY_RUN_DEMO_ROWS,
+  type DryRunCaptureOutcome,
+  type DryRunDemoRow,
+  type DryRunProvenance,
+  type RunDryRunCaptureOptions,
+} from './dry-run-capture.js'
 export { CLASSIFY_PROMPT, EXTRACT_PROMPT, PROMPT_VERSION } from './prompts.js'
 export {
   ClassifyResponse,

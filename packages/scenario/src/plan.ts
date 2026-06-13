@@ -40,6 +40,15 @@ export type ApplyOp =
   | { kind: 'query'; label: string; text: string; values: unknown[] }
   | { kind: 'event_log'; label: string; args: ApplyEventSequenceArgs<ScenarioEvent> }
   | { kind: 'company_defaults'; label: string; companyId: string }
+  /**
+   * Run the DETERMINISTIC dry-run blueprint-vision capture at apply time and
+   * UPDATE the draft's `takeoff_result_json` with its real output (SIM-2). The
+   * capture fn is injected via ApplyContext so this package never imports
+   * `@sitelayer/pipe-blueprint` (which pulls the Anthropic SDK) — mirroring how
+   * `company_defaults` injects `seedCompanyDefaults`. Emitted only when a
+   * takeoff draft declares `run_capture: { blueprint_vision, dry-run }`.
+   */
+  | { kind: 'dry_run_capture'; label: string; companyId: string; draftId: string; projectId: string }
 
 export interface PlanContext {
   /** The resolved `companies.id` (DB-generated; obtained by the caller before
@@ -1220,6 +1229,14 @@ function planTakeoffDraftsRich(b: Builder, drafts: ScenarioDoc['takeoff_drafts']
     const projectId = mustResolve('project', d.project_ref, b.refs.projects)
     const draftId = refUuid('takeoff_draft', d.ref)
     b.refs.takeoffDrafts.set(d.ref, draftId)
+    // A `run_capture` directive means the engine fills `result_json` from the
+    // deterministic dry-run AT APPLY TIME (see the dry_run_capture op below), so
+    // the insert defaults to a blueprint_vision review draft and leaves
+    // result_json NULL for the apply step to populate with the stub's real
+    // output (any hand-authored result_json is ignored when run_capture is set).
+    const hasRunCapture = d.run_capture !== undefined
+    const source = d.source ?? (hasRunCapture ? 'blueprint_vision' : 'manual')
+    const reviewRequired = d.review_required ?? (hasRunCapture ? true : false)
     q(
       b,
       `takeoff_draft:${d.ref}`,
@@ -1234,12 +1251,22 @@ function planTakeoffDraftsRich(b: Builder, drafts: ScenarioDoc['takeoff_drafts']
         d.name,
         d.type ?? 'measurement',
         d.status ?? 'active',
-        d.source ?? 'manual',
+        source,
         d.kind ?? 'takeoff',
-        d.review_required ?? false,
-        d.result_json ? JSON.stringify(d.result_json) : null,
+        reviewRequired,
+        !hasRunCapture && d.result_json ? JSON.stringify(d.result_json) : null,
       ],
     )
+
+    if (hasRunCapture) {
+      b.ops.push({
+        kind: 'dry_run_capture',
+        label: `takeoff_draft:run_capture:${d.ref}`,
+        companyId: b.companyId,
+        draftId,
+        projectId,
+      })
+    }
 
     if (d.measurements && d.measurements.length > 0) {
       for (let i = 0; i < d.measurements.length; i++) {

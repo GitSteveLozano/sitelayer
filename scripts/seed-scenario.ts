@@ -37,6 +37,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { Pool } from 'pg'
 import { applyScenario, parseScenario, refUuid, type ScenarioDoc, type SeedSummary } from '@sitelayer/scenario'
+import { runDryRunCapture } from '@sitelayer/pipe-blueprint'
 import { loadAppConfig, TierConfigError, type AppTier } from '../apps/api/src/tier.js'
 import { seedCompanyDefaults } from '../apps/api/src/onboarding.js'
 import { createBlueprintStorage, getBlueprintMimeType, readStorageEnv } from '../apps/api/src/storage.js'
@@ -107,7 +108,7 @@ export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
     const client = await pool.connect()
     try {
       await client.query('begin')
-      const summary = await applyScenario(client, doc, { seedCompanyDefaults })
+      const summary = await applyScenario(client, doc, { seedCompanyDefaults, runDryRunCapture })
       await writeBlueprintSourceFiles(doc.blueprints, summary, config.tier)
       await client.query('commit')
       return summary
