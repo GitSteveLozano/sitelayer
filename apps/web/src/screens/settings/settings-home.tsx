@@ -3,8 +3,8 @@
  * (Design Overview/estimator/screenshots/set-home.png +
  * source/mb-screens-3.jsx `SettingsHome`).
  *
- * Built on the `m/` design-system primitives (not the legacy
- * `components/mobile` shells) so it matches the rest of the v3.3.0
+ * Built on the `m/` design-system primitives (not the retired legacy
+ * wave-2 kit shells) so it matches the rest of the v3.3.0
  * mobile shell. Sections, top to bottom:
  *   1. Profile card — name / role · company / plan dot.
  *   2. Workspace — Team, Pricing book, Loaded labor cost (jump-offs into

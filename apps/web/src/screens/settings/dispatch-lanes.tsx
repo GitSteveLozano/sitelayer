@@ -7,7 +7,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill, type PillTone } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import {
   useDispatchLanes,
   usePauseDispatchLane,
@@ -16,10 +16,10 @@ import {
   type DispatchLaneState,
 } from '@/lib/api'
 
-const STATE_TONE: Record<DispatchLaneState, PillTone> = {
-  active: 'good',
-  paused: 'bad',
-  degraded: 'warn',
+const STATE_TONE: Record<DispatchLaneState, MTone> = {
+  active: 'green',
+  paused: 'red',
+  degraded: 'amber',
 }
 
 export function DispatchLanesAdminScreen() {
@@ -42,14 +42,14 @@ export function DispatchLanesAdminScreen() {
           {lanes.isPending ? 'Loading…' : `${rows.length} lane${rows.length === 1 ? '' : 's'}`}
         </div>
         {lanes.isError ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-bad">Failed to load lanes — admin role required.</div>
-          </Card>
+          </div>
         ) : null}
         {rows.length === 0 && !lanes.isPending && !lanes.isError ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No lanes seeded yet.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((lane) => <LaneRow key={lane.name} lane={lane} />)
         )}
@@ -63,12 +63,12 @@ function LaneRow({ lane }: { lane: DispatchLane }) {
   const [showResumeModal, setShowResumeModal] = useState(false)
 
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <div className="text-[13px] font-semibold">{lane.name}</div>
-            <Pill tone={STATE_TONE[lane.state]}>{lane.state}</Pill>
+            <MPill tone={STATE_TONE[lane.state]}>{lane.state}</MPill>
           </div>
           {lane.pause_reason ? (
             <div className="text-[11px] text-ink-3 mt-1 break-words">reason: {lane.pause_reason}</div>
@@ -107,7 +107,7 @@ function LaneRow({ lane }: { lane: DispatchLane }) {
       </div>
       {showPauseModal ? <PauseModal lane={lane} onClose={() => setShowPauseModal(false)} /> : null}
       {showResumeModal ? <ResumeModal lane={lane} onClose={() => setShowResumeModal(false)} /> : null}
-    </Card>
+    </div>
   )
 }
 

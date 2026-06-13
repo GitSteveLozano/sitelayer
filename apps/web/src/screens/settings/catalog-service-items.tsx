@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
+import { MButton, MI, MPill } from '@/components/m'
 import {
   useCreateServiceItem,
   useDeleteServiceItem,
@@ -66,24 +66,24 @@ export function CatalogServiceItemsScreen() {
           <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Service items</h1>
           <p className="text-[12px] text-ink-3 mt-1">{items.data?.serviceItems.length ?? 0} items</p>
         </div>
-        <MobileButton variant="primary" onClick={() => setEditing('new')}>
+        <MButton size="sm" variant="primary" onClick={() => setEditing('new')}>
           + New
-        </MobileButton>
+        </MButton>
       </div>
 
       <div className="mt-6 space-y-2">
         {items.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : (items.data?.serviceItems ?? []).length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No service items yet.</div>
-          </Card>
+          </div>
         ) : (
           items.data?.serviceItems.map((item) => (
             <button key={item.code} type="button" onClick={() => setEditing(item)} className="block w-full text-left">
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[13px] font-semibold truncate">
@@ -94,9 +94,9 @@ export function CatalogServiceItemsScreen() {
                       {item.default_rate ? ` · $${Number(item.default_rate).toFixed(2)}` : ''}
                     </div>
                   </div>
-                  <Pill tone={item.source === 'qbo' ? 'good' : 'default'}>{item.source}</Pill>
+                  <MPill tone={item.source === 'qbo' ? 'green' : undefined}>{item.source}</MPill>
                 </div>
-              </Card>
+              </div>
             </button>
           ))
         )}
@@ -136,7 +136,7 @@ function ServiceItemForm({
 }) {
   const patch = usePatchServiceItem(item?.code ?? '')
   const del = useDeleteServiceItem()
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirmSheet()
   const [code, setCode] = useState(item?.code ?? '')
   const [name, setName] = useState(item?.name ?? '')
   const [category, setCategory] = useState(item?.category ?? 'labor')
@@ -198,7 +198,7 @@ function ServiceItemForm({
   }
 
   return (
-    <Sheet open onClose={onClose} title={item ? 'Edit service item' : 'New service item'}>
+    <SettingsSheet onClose={onClose} title={item ? 'Edit service item' : 'New service item'}>
       <div className="space-y-3">
         {!item ? (
           <Field label="Code" value={code} onChange={setCode} placeholder="LBR-FRMR" />
@@ -258,23 +258,146 @@ function ServiceItemForm({
         </div>
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={item ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton
+          <MButton
             variant="primary"
             onClick={submit}
             disabled={(!item && !code.trim()) || !name.trim() || patch.isPending}
           >
             {item ? 'Save' : 'Create'}
-          </MobileButton>
+          </MButton>
           {item ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
+            <MButton variant="ghost" onClick={remove} disabled={del.isPending}>
               Delete
-            </MobileButton>
+            </MButton>
           ) : null}
         </div>
       </div>
       {confirmNode}
-    </Sheet>
+    </SettingsSheet>
   )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Replaces the legacy
+ * legacy mobile-kit Sheet (rounded-t-[24px] + blur) per the legacy-kit
+ * retirement campaign (R1); same pattern as `AssignmentSheet` in
+ * screens/mobile/schedule.tsx. ESC and backdrop-tap dismiss.
+ */
+function SettingsSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type MConfirmAsk = {
+  title: string
+  body?: ReactNode
+  confirmLabel?: string
+  cancelLabel?: string
+  destructive?: boolean
+}
+
+/**
+ * One-shot confirm-then-do hook in the `.m-sheet` idiom. Same `[node, ask]`
+ * contract as the retired legacy mobile-kit ConfirmSheet hook: render
+ * the node next to your markup, `await ask({...})` from an event handler.
+ */
+function useMConfirmSheet() {
+  const [state, setState] = useState<{
+    open: boolean
+    props: MConfirmAsk
+    resolve: (ok: boolean) => void
+  }>({
+    open: false,
+    props: { title: '' },
+    resolve: () => {},
+  })
+
+  const settle = (ok: boolean) => {
+    setState((s) => ({ ...s, open: false }))
+    state.resolve(ok)
+  }
+
+  const node = state.open ? (
+    <SettingsSheet title={state.props.title} onClose={() => settle(false)}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {state.props.body ? (
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.props.body}</div>
+        ) : null}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}>
+          <MButton variant="ghost" onClick={() => settle(false)}>
+            {state.props.cancelLabel ?? 'Cancel'}
+          </MButton>
+          {state.props.destructive ? (
+            <button type="button" className="m-btn" data-variant="danger" onClick={() => settle(true)}>
+              {state.props.confirmLabel ?? 'Confirm'}
+            </button>
+          ) : (
+            <MButton variant="primary" onClick={() => settle(true)}>
+              {state.props.confirmLabel ?? 'Confirm'}
+            </MButton>
+          )}
+        </div>
+      </div>
+    </SettingsSheet>
+  ) : null
+
+  const ask = (props: MConfirmAsk): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ open: true, props, resolve })
+    })
+
+  return [node, ask] as const
 }
 
 function Field({

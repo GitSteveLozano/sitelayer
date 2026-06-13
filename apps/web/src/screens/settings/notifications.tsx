@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill } from '@/components/m'
 import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
@@ -313,7 +313,7 @@ export function NotificationPreferencesScreen() {
             </div>
           </div>
 
-          <Card>
+          <div className="m-card">
             <div className="text-[14px] font-semibold">Contacts</div>
             <div className="text-[12px] text-ink-3 mt-1 mb-3">Required when you've selected SMS or Email above.</div>
             <label className="block text-[12px] font-medium text-ink-3 mb-1">SMS phone</label>
@@ -332,21 +332,21 @@ export function NotificationPreferencesScreen() {
               placeholder="you@example.com"
               className="w-full p-3 text-[14px] rounded border border-line-2 bg-card focus:outline-none focus:border-accent"
             />
-          </Card>
+          </div>
 
           {error ? <div className="px-1 text-[13px] text-bad">{error}</div> : null}
           {saved ? (
             <div className="px-1 text-[13px] text-good inline-flex items-center gap-2">
-              <Pill tone="good" withDot>
+              <MPill tone="green" dot>
                 Saved
-              </Pill>
+              </MPill>
             </div>
           ) : null}
 
           <div className="pt-2">
-            <MobileButton variant="primary" onClick={onSave} disabled={update.isPending}>
+            <MButton variant="primary" onClick={onSave} disabled={update.isPending}>
               {update.isPending ? 'Saving…' : 'Save preferences'}
-            </MobileButton>
+            </MButton>
           </div>
         </div>
       )}

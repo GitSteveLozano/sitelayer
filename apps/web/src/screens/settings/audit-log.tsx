@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { useAuditEvents, type AuditEvent } from '@/lib/api'
 
@@ -45,7 +45,7 @@ export function AuditLogScreen() {
       <h1 className="mt-2 font-display text-[26px] font-bold tracking-tight leading-tight">Audit log</h1>
       <p className="text-[12px] text-ink-3 mt-1">Append-only ledger of state-changing API calls. Admin-only.</p>
 
-      <Card className="mt-6">
+      <div className="m-card mt-6">
         <label className="block">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Entity type</div>
           <select
@@ -79,16 +79,16 @@ export function AuditLogScreen() {
             className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
           />
         </label>
-      </Card>
+      </div>
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">
           {events.isPending ? 'Loading…' : `${rows.length} event${rows.length === 1 ? '' : 's'}`}
         </div>
         {rows.length === 0 && !events.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No events match the current filter.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((e) => <EventRow key={e.id} event={e} />)
         )}
@@ -100,11 +100,11 @@ export function AuditLogScreen() {
 
 function EventRow({ event }: { event: AuditEvent }) {
   const [expanded, setExpanded] = useState(false)
-  const tone: 'warn' | 'good' | 'default' =
-    event.action === 'delete' || event.action === 'void' ? 'warn' : event.action === 'create' ? 'good' : 'default'
+  const tone: MTone | undefined =
+    event.action === 'delete' || event.action === 'void' ? 'amber' : event.action === 'create' ? 'green' : undefined
 
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <button type="button" onClick={() => setExpanded((e) => !e)} className="block w-full text-left">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -116,7 +116,7 @@ function EventRow({ event }: { event: AuditEvent }) {
               {event.actor_user_id ?? 'system'} · {new Date(event.created_at).toLocaleString()}
             </div>
           </div>
-          <Pill tone={tone}>{event.action}</Pill>
+          <MPill tone={tone}>{event.action}</MPill>
         </div>
       </button>
       {expanded ? (
@@ -125,7 +125,7 @@ function EventRow({ event }: { event: AuditEvent }) {
           <DiffBlock label="After" value={event.after} />
         </div>
       ) : null}
-    </Card>
+    </div>
   )
 }
 

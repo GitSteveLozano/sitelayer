@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { MPill, type MTone } from '@/components/m'
 import { Attribution, Spark, StripeCard } from '@/components/ai'
 import { simulateBonusScenario, type BonusTier } from '@sitelayer/domain'
 import { useBonusRules } from '@/lib/api'
@@ -44,7 +44,8 @@ export function BonusSimulatorScreen() {
   )
 
   const marginPct = result.margin * 100
-  const tone: 'good' | 'warn' | 'default' = result.eligible ? 'good' : marginPct < 0 ? 'warn' : 'default'
+  // m-* tone vocabulary: green = eligible, amber = loss, default (no tone) = below threshold.
+  const tone: MTone | undefined = result.eligible ? 'green' : marginPct < 0 ? 'amber' : undefined
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
@@ -55,7 +56,7 @@ export function BonusSimulatorScreen() {
       <p className="text-[12px] text-ink-3 mt-1">What-if modeling against an active bonus rule's tier schedule.</p>
 
       {activeRules.length === 0 ? (
-        <Card tight className="mt-6">
+        <div className="m-card m-card-tight mt-6">
           <div className="text-[12px] text-ink-3">
             No active bonus rules. Add one in{' '}
             <Link to="/more/catalog/bonus-rules" className="text-accent">
@@ -63,10 +64,10 @@ export function BonusSimulatorScreen() {
             </Link>
             .
           </div>
-        </Card>
+        </div>
       ) : (
         <div className="mt-6 space-y-3">
-          <Card>
+          <div className="m-card">
             <label className="block">
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Bonus rule</div>
               <select
@@ -81,13 +82,13 @@ export function BonusSimulatorScreen() {
                 ))}
               </select>
             </label>
-          </Card>
+          </div>
 
-          <Card>
+          <div className="m-card">
             <Field label="Revenue ($)" value={revenue} onChange={setRevenue} />
             <Field label="Cost ($)" value={cost} onChange={setCost} />
             <Field label="Bonus pool ($)" value={pool} onChange={setPool} />
-          </Card>
+          </div>
 
           <StripeCard tone={result.eligible ? 'good' : 'accent'}>
             <div className="flex items-center gap-2 mb-1">
@@ -100,7 +101,7 @@ export function BonusSimulatorScreen() {
               {(result.payout_percent * 100).toFixed(1)}% of pool
             </div>
             <div className="mt-2">
-              <Pill tone={tone}>{result.eligible ? 'eligible' : marginPct < 0 ? 'loss' : 'below threshold'}</Pill>
+              <MPill tone={tone}>{result.eligible ? 'eligible' : marginPct < 0 ? 'loss' : 'below threshold'}</MPill>
             </div>
             {result.next_tier_threshold !== null ? (
               <div className="text-[11px] text-ink-3 mt-3 pt-2 border-t border-dashed border-line-2">

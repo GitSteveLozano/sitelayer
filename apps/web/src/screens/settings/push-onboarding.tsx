@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill } from '@/components/m'
 import { ensurePushSubscription, isPushSupported, PushUnavailableError } from '@/lib/push-subscribe'
 import { useNotificationPermission } from '@/lib/permissions'
 
@@ -80,18 +80,18 @@ export function PushOnboardingCard() {
   // Render branches per platform / permission state.
   if (!isPushSupported()) {
     return (
-      <Card>
+      <div className="m-card">
         <div className="text-[14px] font-semibold">Push notifications</div>
         <div className="text-[12px] text-ink-3 mt-1">
           This browser doesn't support push. Switch to the installed PWA or use SMS / Email.
         </div>
-      </Card>
+      </div>
     )
   }
 
   if (subscribed) {
     return (
-      <Card>
+      <div className="m-card">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-[14px] font-semibold">Push notifications</div>
@@ -99,24 +99,24 @@ export function PushOnboardingCard() {
               This device is registered. Notifications will arrive even when the app is closed.
             </div>
           </div>
-          <Pill tone="good" withDot>
+          <MPill tone="green" dot>
             On
-          </Pill>
+          </MPill>
         </div>
-      </Card>
+      </div>
     )
   }
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="text-[14px] font-semibold">Push notifications</div>
       <div className="text-[12px] text-ink-3 mt-1 mb-3">
         Get instant pings for assignments, time-review approvals, and clock anomalies.
       </div>
       {error ? <div className="text-[12px] text-bad mb-2">{error}</div> : null}
-      <MobileButton variant="primary" size="sm" onClick={onEnable} disabled={working || permState === 'denied'}>
+      <MButton variant="primary" size="sm" onClick={onEnable} disabled={working || permState === 'denied'}>
         {working ? 'Working…' : permState === 'denied' ? 'Permission blocked' : 'Enable push'}
-      </MobileButton>
-    </Card>
+      </MButton>
+    </div>
   )
 }

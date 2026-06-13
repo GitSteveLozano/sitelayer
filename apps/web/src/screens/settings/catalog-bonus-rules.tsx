@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { MBody, MButton, MButtonRow, MI, MInput, MListPlain, MListRow, MPill, MTextarea, MTopBar } from '@/components/m'
 import { useBonusRules, useCreateBonusRule, useDeleteBonusRule, usePatchBonusRule, type BonusRule } from '@/lib/api'
 
 /**
@@ -12,47 +12,43 @@ export function CatalogBonusRulesScreen() {
   const rules = useBonusRules()
   const create = useCreateBonusRule()
   const [editing, setEditing] = useState<BonusRule | 'new' | null>(null)
+  const navigate = useNavigate()
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/catalog" className="text-[12px] text-ink-3">
-        ← Catalog
-      </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Bonus rules</h1>
-          <p className="text-[12px] text-ink-3 mt-1">{rules.data?.bonusRules.length ?? 0} rules</p>
-        </div>
-        <MobileButton variant="primary" onClick={() => setEditing('new')}>
-          + New
-        </MobileButton>
-      </div>
-
-      <div className="mt-6 space-y-2">
+    <>
+      <MTopBar
+        back
+        eyebrow="Settings"
+        title="Bonus rules"
+        sub={`${rules.data?.bonusRules.length ?? 0} rules`}
+        actionLabel="New bonus rule"
+        actionIcon={<span style={{ fontSize: 22, fontWeight: 800 }}>+</span>}
+        onBack={() => navigate('/more/catalog')}
+        onAction={() => setEditing('new')}
+      />
+      <MBody>
         {rules.isPending ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            Loading…
+          </div>
         ) : (rules.data?.bonusRules ?? []).length === 0 ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">No bonus rules yet.</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            No bonus rules yet.
+          </div>
         ) : (
-          rules.data?.bonusRules.map((r) => (
-            <button key={r.id} type="button" onClick={() => setEditing(r)} className="block w-full text-left">
-              <Card tight>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-semibold truncate">{r.name}</div>
-                    <div className="text-[11px] text-ink-3 mt-0.5">v{r.version}</div>
-                  </div>
-                  <Pill tone={r.is_active ? 'good' : 'default'}>{r.is_active ? 'active' : 'inactive'}</Pill>
-                </div>
-              </Card>
-            </button>
-          ))
+          <MListPlain>
+            {rules.data?.bonusRules.map((r) => (
+              <MListRow
+                key={r.id}
+                headline={r.name}
+                supporting={`v${r.version}`}
+                trailing={<MPill tone={r.is_active ? 'green' : undefined}>{r.is_active ? 'active' : 'inactive'}</MPill>}
+                onTap={() => setEditing(r)}
+              />
+            ))}
+          </MListPlain>
         )}
-      </div>
+      </MBody>
 
       {editing !== null ? (
         <BonusRuleForm
@@ -65,7 +61,7 @@ export function CatalogBonusRulesScreen() {
           }}
         />
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -80,7 +76,7 @@ function BonusRuleForm({
 }) {
   const patch = usePatchBonusRule(rule?.id ?? '')
   const del = useDeleteBonusRule()
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirm()
   const [name, setName] = useState(rule?.name ?? '')
   const [isActive, setIsActive] = useState(rule?.is_active ?? true)
   const [configText, setConfigText] = useState(
@@ -122,7 +118,6 @@ function BonusRuleForm({
       title: 'Delete bonus rule?',
       body: `Permanently remove "${rule.name}".`,
       confirmLabel: 'Delete',
-      destructive: true,
     })
     if (!ok) return
     try {
@@ -134,48 +129,166 @@ function BonusRuleForm({
   }
 
   return (
-    <Sheet open onClose={onClose} title={rule ? 'Edit bonus rule' : 'New bonus rule'}>
-      <div className="space-y-3">
-        <label className="block">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Name</div>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-          />
-        </label>
-        <label className="flex items-center gap-2">
+    <MSheet title={rule ? 'Edit bonus rule' : 'New bonus rule'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+        <Field label="Name">
+          <MInput value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
             checked={isActive}
             onChange={(e) => setIsActive(e.target.checked)}
-            className="rounded"
+            style={{ width: 16, height: 16, accentColor: 'var(--m-accent)' }}
           />
-          <span className="text-[13px]">Active (eligible for payouts)</span>
+          <span style={{ fontSize: 13 }}>Active (eligible for payouts)</span>
         </label>
-        <label className="block">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tiers (JSON)</div>
-          <textarea
+        <Field label="Tiers (JSON)">
+          <MTextarea
             value={configText}
             onChange={(e) => setConfigText(e.target.value)}
             rows={10}
-            className="mt-1 w-full font-mono text-[12px] p-2 rounded border border-line bg-card focus:outline-none focus:border-accent resize-y"
+            style={{ fontFamily: 'var(--m-num)', fontSize: 12, minHeight: 200, resize: 'vertical' }}
           />
-        </label>
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <div className={rule ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
-            {rule ? 'Save' : 'Create'}
-          </MobileButton>
-          {rule ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
+        </Field>
+        {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+        {rule ? (
+          <MButtonRow>
+            <MButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
+              Save
+            </MButton>
+            <MButton
+              variant="ghost"
+              onClick={remove}
+              disabled={del.isPending}
+              style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+            >
               Delete
-            </MobileButton>
-          ) : null}
-        </div>
+            </MButton>
+          </MButtonRow>
+        ) : (
+          <MButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
+            Create
+          </MButton>
+        )}
       </div>
       {confirmNode}
-    </Sheet>
+    </MSheet>
   )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+/**
+ * `.m-sheet` replacement for the legacy `useConfirmSheet` hook — same
+ * `[node, ask]` API, resolves the promise with the user's choice.
+ */
+function useMConfirm() {
+  const [state, setState] = useState<{
+    title: string
+    body: string
+    confirmLabel: string
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok)
+    setState(null)
+  }
+
+  const node =
+    state !== null ? (
+      <MSheet title={state.title} onClose={() => settle(false)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.body}</div>
+          <MButtonRow>
+            <MButton variant="ghost" onClick={() => settle(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              variant="primary"
+              onClick={() => settle(true)}
+              style={{ background: 'var(--m-red)', borderColor: 'var(--m-red)', color: '#fff' }}
+            >
+              {state.confirmLabel}
+            </MButton>
+          </MButtonRow>
+        </div>
+      </MSheet>
+    ) : null
+
+  const ask = (props: { title: string; body: string; confirmLabel: string }): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ ...props, resolve })
+    })
+
+  return [node, ask] as const
 }
