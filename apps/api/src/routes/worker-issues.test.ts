@@ -91,6 +91,7 @@ type IssueRow = {
   material_label?: string | null
   material_quantity?: string | number | null
   material_unit?: string | null
+  client_request_id?: string | null
   created_at?: string
 }
 type AttachmentRow = {
@@ -101,6 +102,7 @@ type AttachmentRow = {
   storage_key: string
   mime_type: string
   size_bytes: number
+  client_upload_id?: string | null
   created_at: string
 }
 
@@ -109,6 +111,7 @@ class FakePool {
   attachments: AttachmentRow[] = []
   outbox: unknown[] = []
   syncEvents: unknown[] = []
+  notifications: unknown[] = []
   workflowEvents: unknown[][] = []
   // Auto-incrementing UUIDs simulated as `att-1`, `att-2`, ...
   private idCounter = 0
@@ -155,6 +158,16 @@ class FakePool {
     // with workflow-column defaults so the field-event reducer + the
     // route's `rowToSnapshot` see a coherent shape.
     if (/^select[\s\S]+from\s+worker_issues/i.test(sql)) {
+      if (/client_request_id\s*=\s*\$3/i.test(sql)) {
+        const [companyId, reporterUserId, clientRequestId] = params as [string, string, string]
+        const row = this.issues.find(
+          (candidate) =>
+            candidate.company_id === companyId &&
+            candidate.reporter_clerk_user_id === reporterUserId &&
+            candidate.client_request_id === clientRequestId,
+        )
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+      }
       // Param order differs across call sites: the `for update` load + GET
       // detail bind (company_id, id); the post-transition refetch binds
       // (id, company_id). Match order-agnostically on the (id, company)
@@ -217,9 +230,21 @@ class FakePool {
     // Positional binding from the route:
     //   company_id=$1, project_id=$2, worker_id=$3, reporter=$4, kind=$5,
     //   message=$6, severity=$7, material_label=$8, material_quantity=$9,
-    //   material_unit=$10
+    //   material_unit=$10, client_request_id=$11
     if (/^insert\s+into\s+worker_issues/i.test(sql)) {
-      const [companyId, projectId, workerId, reporter, kind, message, severity, matLabel, matQty, matUnit] = params as [
+      const [
+        companyId,
+        projectId,
+        workerId,
+        reporter,
+        kind,
+        message,
+        severity,
+        matLabel,
+        matQty,
+        matUnit,
+        clientRequestId,
+      ] = params as [
         string,
         string | null,
         string | null,
@@ -230,7 +255,40 @@ class FakePool {
         string | null,
         number | null,
         string | null,
+        string | null,
       ]
+      const replayed = clientRequestId
+        ? this.issues.find(
+            (issue) =>
+              issue.company_id === companyId &&
+              issue.reporter_clerk_user_id === reporter &&
+              issue.client_request_id === clientRequestId,
+          )
+        : null
+      if (replayed) {
+        return {
+          rows: [
+            {
+              id: replayed.id,
+              company_id: replayed.company_id,
+              project_id: replayed.project_id ?? null,
+              worker_id: replayed.worker_id ?? null,
+              reporter_clerk_user_id: replayed.reporter_clerk_user_id ?? null,
+              kind: replayed.kind,
+              message: replayed.message,
+              severity: replayed.severity,
+              state: replayed.state,
+              resolved_at: null,
+              resolved_by_clerk_user_id: null,
+              material_label: replayed.material_label ?? null,
+              material_quantity: replayed.material_quantity ?? null,
+              material_unit: replayed.material_unit ?? null,
+              created_at: replayed.created_at,
+            },
+          ],
+          rowCount: 1,
+        }
+      }
       this.idCounter += 1
       const row: IssueRow = {
         id: `wi-${this.idCounter}`,
@@ -248,6 +306,7 @@ class FakePool {
         material_label: matLabel ?? null,
         material_quantity: matQty ?? null,
         material_unit: matUnit ?? null,
+        client_request_id: clientRequestId ?? null,
         created_at: 'now',
       }
       this.issues.push(row)
@@ -286,6 +345,7 @@ class FakePool {
       return { rows: [], rowCount: 0 }
     }
     if (/^insert\s+into\s+notifications/i.test(sql)) {
+      this.notifications.push(params)
       return { rows: [{ id: 'notif-1' }], rowCount: 1 }
     }
 
@@ -297,24 +357,40 @@ class FakePool {
 
     // Voice replacement: delete any existing voice attachment.
     if (/^delete\s+from\s+worker_issue_attachments/i.test(sql)) {
-      const [companyId, issueId] = params as [string, string]
+      const [companyId, issueId, clientUploadId] = params as [string, string, string | null]
       const before = this.attachments.length
       this.attachments = this.attachments.filter(
-        (a) => !(a.company_id === companyId && a.worker_issue_id === issueId && a.kind === 'voice'),
+        (a) =>
+          !(
+            a.company_id === companyId &&
+            a.worker_issue_id === issueId &&
+            a.kind === 'voice' &&
+            (!clientUploadId || a.client_upload_id !== clientUploadId)
+          ),
       )
       return { rows: [], rowCount: before - this.attachments.length }
     }
 
     // Insert attachment.
     if (/^insert\s+into\s+worker_issue_attachments/i.test(sql)) {
-      const [companyId, workerIssueId, kind, storageKey, mimeType, sizeBytes] = params as [
+      const [companyId, workerIssueId, kind, storageKey, mimeType, sizeBytes, clientUploadId] = params as [
         string,
         string,
         'voice' | 'photo',
         string,
         string,
         number,
+        string | null,
       ]
+      const replayed = clientUploadId
+        ? this.attachments.find(
+            (attachment) =>
+              attachment.company_id === companyId &&
+              attachment.worker_issue_id === workerIssueId &&
+              attachment.client_upload_id === clientUploadId,
+          )
+        : null
+      if (replayed) return { rows: [replayed], rowCount: 1 }
       this.idCounter += 1
       const row: AttachmentRow = {
         id: `att-${this.idCounter}`,
@@ -324,6 +400,7 @@ class FakePool {
         storage_key: storageKey,
         mime_type: mimeType,
         size_bytes: Number(sizeBytes),
+        client_upload_id: clientUploadId ?? null,
         created_at: new Date().toISOString(),
       }
       this.attachments.push(row)
@@ -334,6 +411,13 @@ class FakePool {
     if (/^select[\s\S]+from\s+worker_issue_attachments/i.test(sql)) {
       const companyId = params[0] as string
       const issueId = params[1] as string
+      if (/client_upload_id\s*=\s*\$3/i.test(sql)) {
+        const clientUploadId = params[2] as string
+        const row = this.attachments.find(
+          (a) => a.company_id === companyId && a.worker_issue_id === issueId && a.client_upload_id === clientUploadId,
+        )
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+      }
       if (params.length >= 3) {
         const storageKey = params[2] as string
         const row = this.attachments.find(
@@ -462,6 +546,7 @@ beforeEach(() => {
   pool.attachments = []
   pool.outbox = []
   pool.syncEvents = []
+  pool.notifications = []
   pool.workflowEvents = []
   storage.files.clear()
   storage.mimes.clear()
@@ -503,6 +588,7 @@ function buildMultipartBody(
 function postMultipart(
   path: string,
   parts: Parameters<typeof buildMultipartBody>[0],
+  headers: Record<string, string> = {},
 ): Promise<{ status: number; body: unknown }> {
   const boundary = `----test-${Math.random().toString(36).slice(2)}`
   const body = buildMultipartBody(parts, boundary)
@@ -516,6 +602,7 @@ function postMultipart(
         headers: {
           'content-type': `multipart/form-data; boundary=${boundary}`,
           'content-length': String(body.length),
+          ...headers,
         },
       },
       (res) => {
@@ -627,6 +714,38 @@ describe('POST /api/worker-issues/:id/attachments', () => {
     expect(body.attachment.size_bytes).toBe(photoBytes.length)
     expect(pool.attachments).toHaveLength(1)
     await expect(storage.get(body.attachment.storage_key)).resolves.toEqual(photoBytes)
+  })
+
+  it('replays duplicate attachment uploads by client_upload_id without storing bytes again', async () => {
+    seedIssue()
+    const photoBytes = Buffer.from('FAKE-JPEG-BYTES')
+    const replayBytes = Buffer.from('SHOULD-NOT-UPLOAD')
+    const headers = { 'Idempotency-Key': 'worker-photo-1' }
+    const first = await postMultipart(
+      `/api/worker-issues/${ISSUE_ID}/attachments`,
+      [
+        { kind: 'field', name: 'kind', value: 'photo' },
+        { kind: 'file', name: 'file', filename: 'site.jpg', mime: 'image/jpeg', body: photoBytes },
+      ],
+      headers,
+    )
+    expect(first.status, JSON.stringify(first.body)).toBe(201)
+    const created = first.body as { attachment: { id: string; storage_key: string } }
+
+    const second = await postMultipart(
+      `/api/worker-issues/${ISSUE_ID}/attachments`,
+      [
+        { kind: 'field', name: 'kind', value: 'photo' },
+        { kind: 'file', name: 'file', filename: 'site-retry.jpg', mime: 'image/jpeg', body: replayBytes },
+      ],
+      headers,
+    )
+
+    expect(second.status, JSON.stringify(second.body)).toBe(200)
+    expect(second.body).toMatchObject({ replayed: true, attachment: { id: created.attachment.id } })
+    expect(pool.attachments).toHaveLength(1)
+    expect(storage.files.size).toBe(1)
+    await expect(storage.get(created.attachment.storage_key)).resolves.toEqual(photoBytes)
   })
 
   it('uploads a voice note and replaces any prior voice attachment on re-record', async () => {
@@ -991,6 +1110,29 @@ describe('POST /api/worker-issues (severity column)', () => {
     expect(pool.issues[0]!.severity).toBe('stopped')
     // And not smuggled into the message body.
     expect(pool.issues[0]!.message).not.toMatch(/\[severity:/)
+  })
+
+  it('replays duplicate worker issue creates by client_request_id without duplicating notifications', async () => {
+    const first = await postJson({
+      kind: 'safety',
+      message: 'Crew is stopped',
+      severity: 'stopped',
+      client_request_id: 'worker-issue-create-1',
+    })
+    expect(first.status, JSON.stringify(first.body)).toBe(201)
+    const firstBody = first.body as { worker_issue: { id: string } }
+
+    const second = await postJson({
+      kind: 'other',
+      message: 'same tap replayed',
+      severity: 'question',
+      client_request_id: 'worker-issue-create-1',
+    })
+
+    expect(second.status, JSON.stringify(second.body)).toBe(200)
+    expect(second.body).toMatchObject({ replayed: true, worker_issue: { id: firstBody.worker_issue.id } })
+    expect(pool.issues).toHaveLength(1)
+    expect(pool.notifications).toHaveLength(1)
   })
 
   it('defaults severity to "slowing" when absent or invalid', async () => {

@@ -256,8 +256,93 @@ const WorkerIssueCreateBodySchema = z
     material_label: z.string().nullish(),
     material_quantity: NumericInputSchema.nullish(),
     material_unit: z.string().nullish(),
+    client_request_id: z.string().nullish(),
   })
   .loose()
+
+function idempotencyKeyFromHeader(req: http.IncomingMessage): string | null {
+  const value = req.headers['idempotency-key']
+  const raw = Array.isArray(value) ? value[0] : value
+  return boundedIdempotencyKey(raw)
+}
+
+function boundedIdempotencyKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, 160)
+}
+
+async function findWorkerIssueAttachmentByClientUploadId(
+  companyId: string,
+  issueId: string,
+  clientUploadId: string | null,
+): Promise<WorkerIssueAttachmentRow | null> {
+  if (!clientUploadId) return null
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query<WorkerIssueAttachmentRow>(
+      `select ${ATTACHMENT_COLUMNS}
+         from worker_issue_attachments
+        where company_id = $1
+          and worker_issue_id = $2
+          and client_upload_id = $3
+        limit 1`,
+      [companyId, issueId, clientUploadId],
+    ),
+  )
+  return result.rows[0] ?? null
+}
+
+async function findWorkerIssueByClientRequestId(
+  companyId: string,
+  reporterUserId: string,
+  clientRequestId: string | null,
+): Promise<Record<string, unknown> | null> {
+  if (!clientRequestId) return null
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query(
+      `select ${ISSUE_COLUMNS}
+         from worker_issues
+        where company_id = $1
+          and reporter_clerk_user_id = $2
+          and client_request_id = $3
+        limit 1`,
+      [companyId, reporterUserId, clientRequestId],
+    ),
+  )
+  return result.rows[0] ?? null
+}
+
+async function sendWorkerIssueAttachmentResponse(
+  ctx: WorkerIssueRouteCtx,
+  issueId: string,
+  attachment: WorkerIssueAttachmentRow,
+  opts: { replayed?: boolean } = {},
+): Promise<void> {
+  const [issue, attachments] = await Promise.all([
+    withCompanyClient(ctx.company.id, (client) =>
+      client.query(`select ${ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        issueId,
+      ]),
+    ),
+    withCompanyClient(ctx.company.id, (client) =>
+      client.query<WorkerIssueAttachmentRow>(
+        `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+       where company_id = $1 and worker_issue_id = $2
+       order by created_at asc`,
+        [ctx.company.id, issueId],
+      ),
+    ),
+  ])
+
+  ctx.sendJson(opts.replayed ? 200 : 201, {
+    worker_issue: issue.rows[0] ?? null,
+    attachment,
+    attachments: attachments.rows,
+    ...(opts.replayed ? { replayed: true } : {}),
+  })
+}
 
 export async function handleWorkerIssueRoutes(
   req: http.IncomingMessage,
@@ -303,6 +388,12 @@ export async function handleWorkerIssueRoutes(
     const materialLabel = kind === 'materials_out' ? parseMaterialLabel(body.material_label) : null
     const materialQuantity = kind === 'materials_out' ? parseMaterialQuantity(body.material_quantity) : null
     const materialUnit = kind === 'materials_out' ? parseMaterialUnit(body.material_unit) : null
+    const clientRequestId = idempotencyKeyFromHeader(req) ?? boundedIdempotencyKey(body.client_request_id)
+    const replayedIssue = await findWorkerIssueByClientRequestId(ctx.company.id, ctx.currentUserId, clientRequestId)
+    if (replayedIssue) {
+      ctx.sendJson(200, { worker_issue: replayedIssue, replayed: true })
+      return true
+    }
 
     // Resolve worker_id from the active membership when it exists. A row
     // without a worker mapping is fine — we still want to capture the
@@ -322,8 +413,11 @@ export async function handleWorkerIssueRoutes(
       const result = await client.query(
         `insert into worker_issues
            (company_id, project_id, worker_id, reporter_clerk_user_id, kind, message, severity,
-            material_label, material_quantity, material_unit)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            material_label, material_quantity, material_unit, client_request_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         on conflict (company_id, reporter_clerk_user_id, client_request_id)
+           where client_request_id is not null
+         do update set client_request_id = excluded.client_request_id
          returning ${ISSUE_COLUMNS}`,
         [
           ctx.company.id,
@@ -336,6 +430,7 @@ export async function handleWorkerIssueRoutes(
           materialLabel,
           materialQuantity,
           materialUnit,
+          clientRequestId,
         ],
       )
       const row = result.rows[0]
@@ -406,6 +501,17 @@ export async function handleWorkerIssueRoutes(
       return true
     }
 
+    const headerClientUploadId = idempotencyKeyFromHeader(req)
+    const replayedByHeader = await findWorkerIssueAttachmentByClientUploadId(
+      ctx.company.id,
+      issueId,
+      headerClientUploadId,
+    )
+    if (replayedByHeader) {
+      await sendWorkerIssueAttachmentResponse(ctx, issueId, replayedByHeader, { replayed: true })
+      return true
+    }
+
     let upload
     try {
       upload = await parseWorkerIssueAttachmentMultipart(req, ctx.storage, ctx.company.id, issueId, {
@@ -419,22 +525,38 @@ export async function handleWorkerIssueRoutes(
       throw err
     }
 
+    const clientUploadId = headerClientUploadId ?? boundedIdempotencyKey(upload.fields.client_upload_id)
+    const replayedAfterUpload = await findWorkerIssueAttachmentByClientUploadId(ctx.company.id, issueId, clientUploadId)
+    if (replayedAfterUpload) {
+      if (upload.storagePath !== replayedAfterUpload.storage_key) {
+        await ctx.storage.deleteObject(upload.storagePath).catch(() => undefined)
+      }
+      await sendWorkerIssueAttachmentResponse(ctx, issueId, replayedAfterUpload, { replayed: true })
+      return true
+    }
+
     const inserted = await withMutationTx(async (client: PoolClient) => {
       // Voice notes are 1-per-issue; replace any prior voice attachment
       // (the partial unique index would otherwise reject the insert).
       if (upload.kind === 'voice') {
         await client.query(
           `delete from worker_issue_attachments
-             where company_id = $1 and worker_issue_id = $2 and kind = 'voice'`,
-          [ctx.company.id, issueId],
+             where company_id = $1
+               and worker_issue_id = $2
+               and kind = 'voice'
+               and ($3::text is null or client_upload_id is distinct from $3)`,
+          [ctx.company.id, issueId, clientUploadId],
         )
       }
       const result = await client.query<WorkerIssueAttachmentRow>(
         `insert into worker_issue_attachments
-           (company_id, worker_issue_id, kind, storage_key, mime_type, size_bytes)
-         values ($1, $2, $3, $4, $5, $6)
+           (company_id, worker_issue_id, kind, storage_key, mime_type, size_bytes, client_upload_id)
+         values ($1, $2, $3, $4, $5, $6, $7)
+         on conflict (company_id, worker_issue_id, client_upload_id)
+           where client_upload_id is not null
+         do update set client_upload_id = excluded.client_upload_id
          returning ${ATTACHMENT_COLUMNS}`,
-        [ctx.company.id, issueId, upload.kind, upload.storagePath, upload.mimeType, upload.bytes],
+        [ctx.company.id, issueId, upload.kind, upload.storagePath, upload.mimeType, upload.bytes, clientUploadId],
       )
       const row = result.rows[0]
       if (!row) throw new HttpError(500, 'worker issue attachment insert returned no row')
@@ -449,31 +571,7 @@ export async function handleWorkerIssueRoutes(
       return row
     })
 
-    // Pull the issue + the full attachment list so the client gets a
-    // self-sufficient response (mirrors how POST /api/daily-logs/:id/photos
-    // returns the updated row + the new photo).
-    const [issue, attachments] = await Promise.all([
-      withCompanyClient(ctx.company.id, (c) =>
-        c.query(`select ${ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`, [
-          ctx.company.id,
-          issueId,
-        ]),
-      ),
-      withCompanyClient(ctx.company.id, (c) =>
-        c.query<WorkerIssueAttachmentRow>(
-          `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
-         where company_id = $1 and worker_issue_id = $2
-         order by created_at asc`,
-          [ctx.company.id, issueId],
-        ),
-      ),
-    ])
-
-    ctx.sendJson(201, {
-      worker_issue: issue.rows[0] ?? null,
-      attachment: inserted,
-      attachments: attachments.rows,
-    })
+    await sendWorkerIssueAttachmentResponse(ctx, issueId, inserted)
     return true
   }
 
