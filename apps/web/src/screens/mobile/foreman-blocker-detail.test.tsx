@@ -109,6 +109,10 @@ function wrap(node: ReactNode) {
     <MemoryRouter initialEntries={['/foreman/blocker/i1']}>
       <Routes>
         <Route path="/foreman/blocker/:issueId" element={node} />
+        {/* Stubs for the STOP WORK takeover so the safety-stop trigger has a
+            destination to land on (the real screen is screens/mobile/stop-work.tsx). */}
+        <Route path="/projects/:projectId/stop-work" element={<div>STOP_WORK_TAKEOVER</div>} />
+        <Route path="/stop-work" element={<div>STOP_WORK_TAKEOVER</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -137,6 +141,26 @@ describe('ForemanBlockerDetail — next_events drives the affordances (Gap 1)', 
     hookValue = makeHook(snapshot('open', [{ type: 'RESOLVE', label: 'r' }]))
     wrap(<ForemanBlockerDetail bootstrap={bootstrap()} companySlug="acme" />)
     expect(screen.queryByText('Reopen')).toBeNull()
+  })
+
+  it('a stopped-severity open issue surfaces a STOP WORK trigger that opens the all-crew takeover', () => {
+    // The default snapshot() is severity:'stopped' on project p1.
+    apiGetMock.mockResolvedValue({ attachments: [] })
+    hookValue = makeHook(snapshot('open', [{ type: 'RESOLVE', label: 'r' }]))
+    wrap(<ForemanBlockerDetail bootstrap={bootstrap()} companySlug="acme" />)
+    const btn = screen.getByRole('button', { name: /show stop-work screen/i })
+    fireEvent.click(btn)
+    // Routed to /projects/p1/stop-work — the previously-orphaned takeover.
+    expect(screen.getByText('STOP_WORK_TAKEOVER')).toBeTruthy()
+  })
+
+  it('does NOT surface the STOP WORK trigger for a non-stopped severity', () => {
+    apiGetMock.mockResolvedValue({ attachments: [] })
+    const snap = snapshot('open', [{ type: 'RESOLVE', label: 'r' }])
+    snap.context.severity = 'slowing'
+    hookValue = makeHook(snap)
+    wrap(<ForemanBlockerDetail bootstrap={bootstrap()} companySlug="acme" />)
+    expect(screen.queryByRole('button', { name: /show stop-work screen/i })).toBeNull()
   })
 
   it('dismissed state offers Reopen; clicking it dispatches REOPEN', () => {

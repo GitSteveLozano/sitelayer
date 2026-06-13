@@ -345,6 +345,39 @@ export function ForemanBlockerDetailMobile({
           ) : null}
         </div>
 
+        {/* SAFETY STOP → the full-screen, all-crew STOP WORK takeover
+            (screens/mobile/stop-work.tsx). That screen used to be a routing
+            orphan; a stopped-severity field event is its canonical trigger —
+            the foreman broadcasts the muster instruction for this site. */}
+        {severity === 'stopped' && state === 'open' ? (
+          <button
+            type="button"
+            onClick={() => navigate(projectId ? `/projects/${projectId}/stop-work` : '/stop-work')}
+            style={{
+              width: '100%',
+              marginTop: 12,
+              minHeight: 56,
+              background: 'var(--m-red)',
+              backgroundImage: 'var(--m-stop-hatch)',
+              color: '#fff',
+              border: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 17,
+              textTransform: 'uppercase',
+              letterSpacing: '-0.01em',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+            }}
+          >
+            <MI.AlertTri size={20} />
+            Show stop-work screen
+          </button>
+        ) : null}
+
         {state === 'open' ? (
           <>
             {/* Material-fulfillment hero — for an out-of-materials blocker the
@@ -753,6 +786,34 @@ export function FmBlockerDetail({
               </MButton>
             }
           />
+        ) : null}
+
+        {ctx?.severity === 'stopped' && state === 'open' ? (
+          <button
+            type="button"
+            onClick={() => navigate(ctx?.project_id ? `/projects/${ctx.project_id}/stop-work` : '/stop-work')}
+            style={{
+              width: '100%',
+              minHeight: 56,
+              background: 'var(--m-red)',
+              backgroundImage: 'var(--m-stop-hatch)',
+              color: '#fff',
+              border: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 17,
+              textTransform: 'uppercase',
+              letterSpacing: '-0.01em',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+            }}
+          >
+            <MI.AlertTri size={20} />
+            Show stop-work screen
+          </button>
         ) : null}
 
         {state === 'open' ? (
