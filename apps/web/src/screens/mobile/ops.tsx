@@ -271,13 +271,9 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           )
           setDiagnosticControlTransferUrl(transferUrl)
           setDiagnosticControlTransferCopied(false)
-          if (transferUrl && navigator.clipboard?.writeText) {
-            try {
-              await navigator.clipboard.writeText(transferUrl)
-              setDiagnosticControlTransferCopied(true)
-            } catch {
-              setDiagnosticControlTransferCopied(false)
-            }
+          if (transferUrl) {
+            const shareResult = await shareOrCopyMobileLink(transferUrl, 'Sitelayer onsite control handoff')
+            setDiagnosticControlTransferCopied(shareResult !== 'manual')
           }
         } else {
           setDiagnosticControlTransferUrl(null)
@@ -295,20 +291,22 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       }
     },
   })
-  const copyDiagnosticControlTransferLink = () => {
-    if (!diagnosticControlTransferUrl || !navigator.clipboard?.writeText) return
-    navigator.clipboard
-      .writeText(diagnosticControlTransferUrl)
-      .then(() => setDiagnosticControlTransferCopied(true))
-      .catch(() => setDiagnosticControlTransferCopied(false))
+  const copyDiagnosticControlTransferLink = async () => {
+    if (!diagnosticControlTransferUrl) return
+    const shareResult = await shareOrCopyMobileLink(diagnosticControlTransferUrl, 'Sitelayer onsite control handoff')
+    setDiagnosticControlTransferCopied(shareResult !== 'manual')
   }
   const createLeaveBehindCaptureInvite = useCreateFeedbackInvite(companyId ?? '')
+  const reusableLeaveBehindCaptureLinkUrl = reusableLeaveBehindCaptureUrl(
+    leaveBehindCaptureLink,
+    displayedDiagnosticSession,
+  )
   const copyLeaveBehindCaptureInvite = useMutation({
     mutationFn: async () => {
       if (!companyId) throw new Error('company is not loaded')
       const sessionId = displayedDiagnosticSession?.id ?? null
       const inviteUrl =
-        reusableLeaveBehindCaptureUrl(leaveBehindCaptureLink, displayedDiagnosticSession) ??
+        reusableLeaveBehindCaptureLinkUrl ??
         (
           await createLeaveBehindCaptureInvite.mutateAsync(
             buildLeaveBehindCaptureInviteInput({ companySlug, session: displayedDiagnosticSession }),
@@ -316,13 +314,12 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         ).invite_url
       setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
       setLeaveBehindCaptureCopied(false)
-      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
-      await navigator.clipboard.writeText(inviteUrl)
-      return { inviteUrl, sessionId }
+      const shareResult = await shareOrCopyMobileLink(inviteUrl, 'Sitelayer leave-behind capture link')
+      return { inviteUrl, sessionId, shareResult }
     },
-    onSuccess: ({ inviteUrl, sessionId }) => {
+    onSuccess: ({ inviteUrl, sessionId, shareResult }) => {
       setLeaveBehindCaptureLink({ url: inviteUrl, session_id: sessionId })
-      setLeaveBehindCaptureCopied(true)
+      setLeaveBehindCaptureCopied(shareResult !== 'manual')
     },
   })
   const openDesktopEvidence = useMutation({
@@ -699,15 +696,24 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 controlDiagnosticSession.isPending
                   ? 'Preparing handoff'
                   : diagnosticControlTransferCopied
-                    ? 'Control handoff copied'
+                    ? 'Control handoff ready'
                     : diagnosticControlTransferUrl
-                      ? 'Copy control handoff'
-                      : 'Transfer phone control'
+                      ? 'Share control handoff'
+                      : 'Create control handoff'
               }
               supporting={
                 diagnosticControlTransferUrl
-                  ? 'Open the copied link on another phone to import control.'
-                  : 'Rotate the token and copy a short-lived handoff link.'
+                  ? (
+                      <ManualLinkSupporting
+                        message={
+                          diagnosticControlTransferCopied
+                            ? 'Link shared or copied. Open it on another phone to import control.'
+                            : 'Use this short-lived link on another phone to import control.'
+                        }
+                        url={diagnosticControlTransferUrl}
+                      />
+                    )
+                  : 'Rotate the token and create a short-lived handoff link.'
               }
               onTap={
                 controlDiagnosticSession.isPending
@@ -772,13 +778,27 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                       ? 'green'
                       : 'accent'
               }
-              headline={leaveBehindCaptureCopied ? 'Leave-behind link copied' : 'Copy leave-behind capture link'}
-              supporting={formatLeaveBehindCaptureSummary({
-                pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
-                copied: leaveBehindCaptureCopied,
-                error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
-                hasSession: Boolean(displayedDiagnosticSession),
-              })}
+              headline={leaveBehindCaptureCopied ? 'Leave-behind link ready' : 'Share leave-behind capture link'}
+              supporting={
+                reusableLeaveBehindCaptureLinkUrl ? (
+                  <ManualLinkSupporting
+                    message={formatLeaveBehindCaptureSummary({
+                      pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
+                      copied: leaveBehindCaptureCopied,
+                      error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
+                      hasSession: Boolean(displayedDiagnosticSession),
+                    })}
+                    url={reusableLeaveBehindCaptureLinkUrl}
+                  />
+                ) : (
+                  formatLeaveBehindCaptureSummary({
+                    pending: copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending,
+                    copied: leaveBehindCaptureCopied,
+                    error: copyLeaveBehindCaptureInvite.error ?? createLeaveBehindCaptureInvite.error,
+                    hasSession: Boolean(displayedDiagnosticSession),
+                  })
+                )
+              }
               onTap={
                 copyLeaveBehindCaptureInvite.isPending || createLeaveBehindCaptureInvite.isPending
                   ? undefined
@@ -839,6 +859,13 @@ type FieldReadinessInput = {
 export type LeaveBehindCaptureLinkState = {
   url: string
   session_id: string | null
+}
+
+export type MobileLinkShareResult = 'shared' | 'copied' | 'manual'
+
+export type MobileLinkShareDeps = {
+  share?: ((data: ShareData) => Promise<void>) | undefined
+  clipboard?: { writeText?: ((text: string) => Promise<void>) | undefined } | undefined
 }
 
 export function buildFieldReadinessItems({
@@ -915,6 +942,38 @@ export function buildFieldReadinessItems({
   ]
 }
 
+export async function shareOrCopyMobileLink(
+  url: string,
+  title: string,
+  deps: MobileLinkShareDeps = browserMobileLinkShareDeps(),
+): Promise<MobileLinkShareResult> {
+  if (deps.share) {
+    try {
+      await deps.share({ title, url })
+      return 'shared'
+    } catch {
+      /* Fall back to clipboard/manual link display. */
+    }
+  }
+  if (deps.clipboard?.writeText) {
+    try {
+      await deps.clipboard.writeText(url)
+      return 'copied'
+    } catch {
+      return 'manual'
+    }
+  }
+  return 'manual'
+}
+
+function browserMobileLinkShareDeps(): MobileLinkShareDeps {
+  if (typeof navigator === 'undefined') return {}
+  return {
+    share: typeof navigator.share === 'function' ? navigator.share.bind(navigator) : undefined,
+    clipboard: navigator.clipboard,
+  }
+}
+
 export function reusableLeaveBehindCaptureUrl(
   link: LeaveBehindCaptureLinkState | null,
   session: OpsOnsiteDiagnosticSessionRecord | null,
@@ -961,6 +1020,16 @@ function formatLeaveBehindCaptureSummary({
   if (error) return error instanceof Error ? error.message : 'Could not create the link.'
   if (copied) return hasSession ? 'Guest capture is tied to this onsite session.' : 'Guest capture is tied to Ops.'
   return hasSession ? 'Guest can send text, audio, state, or screen evidence.' : 'Works without starting control.'
+}
+
+function ManualLinkSupporting({ message, url }: { message: string; url: string }) {
+  return (
+    <span>
+      {message}
+      <br />
+      <span style={{ wordBreak: 'break-all', fontFamily: 'var(--m-num)' }}>{url}</span>
+    </span>
+  )
 }
 
 function countStatus(items: readonly ContextWorkItem[], status: WorkItemStatus): number {

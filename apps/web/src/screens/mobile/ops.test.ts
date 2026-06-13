@@ -10,6 +10,7 @@ import {
   formatDesktopEvidenceSummary,
   reusableLeaveBehindCaptureUrl,
   resolveLatestDesktopEvidence,
+  shareOrCopyMobileLink,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
@@ -281,5 +282,55 @@ describe('MobileOps leave-behind capture invite', () => {
     expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-2' }))).toBeNull()
     expect(reusableLeaveBehindCaptureUrl(cached, null)).toBeNull()
     expect(reusableLeaveBehindCaptureUrl({ url: cached.url, session_id: null }, null)).toBe(cached.url)
+  })
+})
+
+describe('MobileOps link sharing', () => {
+  it('uses native share before clipboard when available', async () => {
+    const calls: ShareData[] = []
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        share: async (data) => {
+          calls.push(data)
+        },
+        clipboard: {
+          writeText: async () => {
+            throw new Error('clipboard should not be used')
+          },
+        },
+      }),
+    ).resolves.toBe('shared')
+    expect(calls).toEqual([{ title: 'Handoff', url: 'https://app.sitelayer.test/handoff' }])
+  })
+
+  it('falls back to clipboard and then visible manual links', async () => {
+    const copied: string[] = []
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        share: async () => {
+          throw new Error('share cancelled')
+        },
+        clipboard: {
+          writeText: async (value) => {
+            copied.push(value)
+          },
+        },
+      }),
+    ).resolves.toBe('copied')
+    expect(copied).toEqual(['https://app.sitelayer.test/handoff'])
+
+    await expect(
+      shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {
+        clipboard: {
+          writeText: async () => {
+            throw new Error('clipboard unavailable')
+          },
+        },
+      }),
+    ).resolves.toBe('manual')
+
+    await expect(shareOrCopyMobileLink('https://app.sitelayer.test/handoff', 'Handoff', {})).resolves.toBe('manual')
   })
 })
