@@ -16,6 +16,11 @@ export default defineConfig({
       '@sitelayer/pipe-blueprint': fileURLToPath(
         new URL('../../packages/pipe-blueprint/src/index.ts', import.meta.url),
       ),
+      '@sitelayer/pipe-roomplan': fileURLToPath(new URL('../../packages/pipe-roomplan/src/index.ts', import.meta.url)),
+      '@sitelayer/pipe-photogrammetry': fileURLToPath(
+        new URL('../../packages/pipe-photogrammetry/src/index.ts', import.meta.url),
+      ),
+      '@sitelayer/pipe-drone': fileURLToPath(new URL('../../packages/pipe-drone/src/index.ts', import.meta.url)),
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
       '@sitelayer/scenario': fileURLToPath(new URL('../../packages/scenario/src/index.ts', import.meta.url)),
       '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
@@ -38,6 +43,9 @@ export default defineConfig({
       '@sitelayer/queue',
       '@sitelayer/capture-schema',
       '@sitelayer/pipe-blueprint',
+      '@sitelayer/pipe-roomplan',
+      '@sitelayer/pipe-photogrammetry',
+      '@sitelayer/pipe-drone',
       '@sitelayer/scenario',
       '@sitelayer/workflows',
       '@sitelayer/projectkit-bridge',
