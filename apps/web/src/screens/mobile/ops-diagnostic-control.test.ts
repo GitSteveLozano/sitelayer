@@ -89,14 +89,11 @@ describe('ops diagnostic control storage', () => {
 
     expect(imported).toMatchObject({
       session_id: 'opsdiag_1',
-      control_token: 'handoff-token',
+      transfer_token: 'handoff-token',
       expires_at: '2026-06-12T17:00:00.000Z',
       company_slug: 'acme',
     })
-    expect(readOpsDiagnosticControl('acme', Date.parse('2026-06-12T16:30:00.000Z'))).toMatchObject({
-      session_id: 'opsdiag_1',
-      control_token: 'handoff-token',
-    })
+    expect(readOpsDiagnosticControl('acme', Date.parse('2026-06-12T16:30:00.000Z'))).toBeNull()
   })
 
   it('rejects handoff links for another company', () => {

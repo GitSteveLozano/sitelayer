@@ -10,6 +10,13 @@ export type StoredOpsDiagnosticControl = {
   company_slug?: string
 }
 
+export type OpsDiagnosticControlTransfer = {
+  session_id: string
+  transfer_token: string
+  expires_at: string
+  company_slug?: string
+}
+
 export function readOpsDiagnosticControl(companySlug: string, nowMs = Date.now()): StoredOpsDiagnosticControl | null {
   const storage = sessionStorageSafe()
   if (!storage) return null
@@ -57,10 +64,10 @@ export function clearOpsDiagnosticControl(companySlug: string): void {
 export function createOpsDiagnosticControlTransferUrl(
   companySlug: string,
   session: OpsOnsiteDiagnosticSessionRecord,
-  controlToken: string,
+  transferToken: string,
   href: string = currentHref(),
 ): string | null {
-  if (!controlToken.trim()) return null
+  if (!transferToken.trim()) return null
   let url: URL
   try {
     url = new URL(href)
@@ -72,7 +79,7 @@ export function createOpsDiagnosticControlTransferUrl(
     OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY,
     encodeTransferPayload({
       session_id: session.id,
-      control_token: controlToken,
+      transfer_token: transferToken,
       expires_at: session.expires_at,
       company_slug: companySlug,
     }),
@@ -86,7 +93,7 @@ export function importOpsDiagnosticControlFromUrl(
   nowMs = Date.now(),
   href: string = currentHref(),
   stripFragment = true,
-): StoredOpsDiagnosticControl | null {
+): OpsDiagnosticControlTransfer | null {
   let url: URL
   try {
     url = new URL(href)
@@ -96,12 +103,11 @@ export function importOpsDiagnosticControlFromUrl(
   const params = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash)
   const raw = params.get(OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY)
   if (!raw) return null
-  const parsed = parseStoredOpsDiagnosticControl(decodeTransferPayload(raw))
+  const parsed = parseOpsDiagnosticControlTransfer(decodeTransferPayload(raw))
   if (stripFragment) stripControlFragment(url, params)
   if (!parsed) return null
   if (parsed.company_slug && parsed.company_slug !== companySlug) return null
   if (Date.parse(parsed.expires_at) <= nowMs) return null
-  writeOpsDiagnosticControl(companySlug, parsed)
   return parsed
 }
 
@@ -115,7 +121,7 @@ function writeOpsDiagnosticControl(companySlug: string, control: StoredOpsDiagno
   }
 }
 
-function encodeTransferPayload(payload: StoredOpsDiagnosticControl): string {
+function encodeTransferPayload(payload: OpsDiagnosticControlTransfer): string {
   const bytes = new TextEncoder().encode(JSON.stringify(payload))
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
@@ -130,6 +136,26 @@ function decodeTransferPayload(raw: string): string | null {
     return new TextDecoder().decode(bytes)
   } catch {
     return null
+  }
+}
+
+function parseOpsDiagnosticControlTransfer(raw: string | null): OpsDiagnosticControlTransfer | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  const candidate = parsed as Partial<OpsDiagnosticControlTransfer>
+  if (!candidate.session_id?.trim() || !candidate.transfer_token?.trim() || !candidate.expires_at?.trim()) return null
+  if (Number.isNaN(Date.parse(candidate.expires_at))) return null
+  return {
+    session_id: candidate.session_id,
+    transfer_token: candidate.transfer_token,
+    expires_at: candidate.expires_at,
+    ...(candidate.company_slug?.trim() ? { company_slug: candidate.company_slug } : {}),
   }
 }
 

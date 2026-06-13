@@ -983,15 +983,66 @@ describe('ops diagnostics', () => {
         },
       )
       const transferred = transferResponses[0]?.body as {
-        control: { action: string; control_token: string }
+        control: { action: string; transfer_token: string; control_token?: string }
         session: { audit_events: Array<{ summary: string }> }
       }
       expect(transferResponses[0]?.status).toBe(200)
-      expect(transferred.control).toMatchObject({ action: 'transfer', control_token: expect.any(String) })
-      expect(transferred.control.control_token).not.toBe(created.control_token)
+      expect(transferred.control).toMatchObject({ action: 'transfer', transfer_token: expect.any(String) })
+      expect(transferred.control.control_token).toBeUndefined()
+      expect(transferred.control.transfer_token).not.toBe(created.control_token)
       expect(transferred.session.audit_events.map((event) => event.summary)).toContain(
-        'Transferred onsite diagnostic control token.',
+        'Created onsite diagnostic control handoff.',
       )
+
+      const oldTokenBeforeRedeemResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => oldTokenBeforeRedeemResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: created.control_token,
+            action_key: 'capture_field_context',
+          }),
+        },
+      )
+      expect(oldTokenBeforeRedeemResponses[0]?.status).toBe(202)
+
+      const redeemResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control/redeem`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => redeemResponses.push({ status, body }),
+          readBody: async () => ({ transfer_token: transferred.control.transfer_token }),
+          getCurrentUserId: () => 'user_100',
+        },
+      )
+      const redeemed = redeemResponses[0]?.body as {
+        control: { action: string; control_token: string }
+        session: { audit_events: Array<{ summary: string }> }
+      }
+      expect(redeemResponses[0]?.status).toBe(200)
+      expect(redeemed.control).toMatchObject({ action: 'redeem', control_token: expect.any(String) })
+      expect(redeemed.control.control_token).not.toBe(created.control_token)
+      expect(redeemed.control.control_token).not.toBe(transferred.control.transfer_token)
+      expect(redeemed.session.audit_events.map((event) => event.summary)).toContain(
+        'Redeemed onsite diagnostic control handoff.',
+      )
+
+      const transferReplayResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control/redeem`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => transferReplayResponses.push({ status, body }),
+          readBody: async () => ({ transfer_token: transferred.control.transfer_token }),
+        },
+      )
+      expect(transferReplayResponses).toEqual([{ status: 403, body: { error: 'invalid transfer token' } }])
 
       const oldTokenResponses: Array<{ status: number; body: unknown }> = []
       await handleOpsDiagnosticsRoutes(
@@ -1016,7 +1067,7 @@ describe('ops diagnostics', () => {
           requireCapability: async () => true,
           sendJson: (status, body) => newTokenResponses.push({ status, body }),
           readBody: async () => ({
-            control_token: transferred.control.control_token,
+            control_token: redeemed.control.control_token,
             action_key: 'capture_field_context',
           }),
         },
@@ -1030,7 +1081,7 @@ describe('ops diagnostics', () => {
         {
           requireCapability: async () => true,
           sendJson: (status, body) => revokeResponses.push({ status, body }),
-          readBody: async () => ({ control_token: transferred.control.control_token, action: 'revoke' }),
+          readBody: async () => ({ control_token: redeemed.control.control_token, action: 'revoke' }),
           getCurrentUserId: () => 'user_99',
         },
       )
@@ -1039,7 +1090,7 @@ describe('ops diagnostics', () => {
         control: { action: 'revoke' },
         session: { state: 'active' },
       })
-      expect(JSON.stringify(revokeResponses[0]?.body)).not.toContain(transferred.control.control_token)
+      expect(JSON.stringify(revokeResponses[0]?.body)).not.toContain(redeemed.control.control_token)
 
       const revokedTokenResponses: Array<{ status: number; body: unknown }> = []
       await handleOpsDiagnosticsRoutes(
@@ -1049,7 +1100,7 @@ describe('ops diagnostics', () => {
           requireCapability: async () => true,
           sendJson: (status, body) => revokedTokenResponses.push({ status, body }),
           readBody: async () => ({
-            control_token: transferred.control.control_token,
+            control_token: redeemed.control.control_token,
             action_key: 'capture_field_context',
           }),
         },

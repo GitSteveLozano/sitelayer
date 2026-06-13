@@ -25,6 +25,7 @@ import {
   fetchWorkRequestQueueHealth,
   fetchWorkRequests,
   queryKeys,
+  redeemOpsDiagnosticControlTransfer,
   requestOpsDiagnosticSessionAction,
   useAppIssueCapabilities,
   type ContextWorkItem,
@@ -176,10 +177,27 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     if (!canCaptureAppIssues) return
     const importedControl = importOpsDiagnosticControlFromUrl(companySlug)
     if (!importedControl) return
-    setDiagnosticControlToken(importedControl.control_token)
-    setDiagnosticControlTransferUrl(null)
-    setDiagnosticControlTransferCopied(false)
-  }, [canCaptureAppIssues, companySlug])
+    let cancelled = false
+    redeemOpsDiagnosticControlTransfer(
+      importedControl.session_id,
+      { transfer_token: importedControl.transfer_token },
+      companySlug,
+    )
+      .then((response) => {
+        if (cancelled || !response.control.control_token) return
+        setActiveDiagnosticSession(response.session)
+        setDiagnosticControlToken(response.control.control_token)
+        persistOpsDiagnosticControl(companySlug, response.session, response.control.control_token)
+        setDiagnosticControlTransferUrl(null)
+        setDiagnosticControlTransferCopied(false)
+        void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
+        void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [canCaptureAppIssues, companySlug, qc])
   useEffect(() => {
     if (!canCaptureAppIssues) return
     const storedControl = readOpsDiagnosticControl(companySlug)
@@ -243,7 +261,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     },
   })
   const controlDiagnosticSession = useMutation({
-    mutationFn: (action: OpsOnsiteDiagnosticControlAction) => {
+    mutationFn: (action: Exclude<OpsOnsiteDiagnosticControlAction, 'redeem'>) => {
       if (!activeDiagnosticSession || !diagnosticControlToken) {
         return Promise.reject(new Error('diagnostic session is not active'))
       }
@@ -268,11 +286,11 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
           setDiagnosticControlToken(nextControlToken)
           persistOpsDiagnosticControl(companySlug, response.session, nextControlToken)
         }
-        if (action === 'transfer' && response.control.control_token) {
+        if (action === 'transfer' && response.control.transfer_token) {
           const transferUrl = createOpsDiagnosticControlTransferUrl(
             companySlug,
             response.session,
-            response.control.control_token,
+            response.control.transfer_token,
           )
           setDiagnosticControlTransferUrl(transferUrl)
           setDiagnosticControlTransferCopied(false)

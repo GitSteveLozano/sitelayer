@@ -17,7 +17,7 @@ export type OpsOnsiteDiagnosticActionKey =
   | 'route_support_packet'
   | 'dispatch_agent_review'
 export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
-export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer' | 'redeem'
 
 export type OpsOnsiteDiagnosticAction = {
   key: OpsOnsiteDiagnosticActionKey
@@ -179,8 +179,12 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
 }
 
 export type OpsOnsiteDiagnosticSessionControlInput = {
-  action: OpsOnsiteDiagnosticControlAction
+  action: Exclude<OpsOnsiteDiagnosticControlAction, 'redeem'>
   control_token: string
+}
+
+export type OpsOnsiteDiagnosticSessionControlRedeemInput = {
+  transfer_token: string
 }
 
 export type OpsOnsiteDiagnosticSessionControlResponse = {
@@ -190,6 +194,7 @@ export type OpsOnsiteDiagnosticSessionControlResponse = {
     action: OpsOnsiteDiagnosticControlAction
     expires_at: string
     control_token?: string
+    transfer_token?: string
   }
 }
 
@@ -242,6 +247,18 @@ export function controlOpsDiagnosticSession(
 ): Promise<OpsOnsiteDiagnosticSessionControlResponse> {
   return apiPost<OpsOnsiteDiagnosticSessionControlResponse>(
     `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/control`,
+    input,
+    companySlug,
+  )
+}
+
+export function redeemOpsDiagnosticControlTransfer(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticSessionControlRedeemInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticSessionControlResponse> {
+  return apiPost<OpsOnsiteDiagnosticSessionControlResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/control/redeem`,
     input,
     companySlug,
   )

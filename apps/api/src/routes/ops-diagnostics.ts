@@ -74,7 +74,7 @@ export type OpsOnsiteDiagnosticAuditEvent = {
 }
 
 export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
-export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer' | 'redeem'
 
 export type OpsOnsiteDiagnosticManifest = {
   schema: 'sitelayer.ops_diagnostic_manifest.v1'
@@ -162,6 +162,7 @@ export type OpsOnsiteDiagnosticSessionControlResponse = {
     action: OpsOnsiteDiagnosticControlAction
     expires_at: string
     control_token?: string
+    transfer_token?: string
   }
 }
 
@@ -271,6 +272,8 @@ const OPS_DESKTOP_EVIDENCE_RETENTION_DAYS = 14
 export type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
   control_token?: string
   control_token_hash?: string
+  pending_control_transfer_token?: string
+  pending_control_transfer_hash?: string | null
 }
 
 const onsiteDiagnosticSessions = new Map<string, StoredOnsiteDiagnosticSession>()
@@ -324,6 +327,39 @@ export async function handleOpsDiagnosticsRoutes(
       return true
     }
     ctx.sendJson(405, { error: 'method not allowed' })
+    return true
+  }
+
+  const sessionControlRedeemMatch = url.pathname.match(
+    /^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/control\/redeem$/,
+  )
+  if (sessionControlRedeemMatch) {
+    if (req.method !== 'POST') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_CAPTURE))) return true
+    const session = await lookupSession(ctx, sessionControlRedeemMatch[1] ?? '')
+    if (!session.ok) {
+      ctx.sendJson(session.status, { error: session.error })
+      return true
+    }
+    const body = await readRequestBody(ctx)
+    if (!body.ok) {
+      ctx.sendJson(400, { error: body.error })
+      return true
+    }
+    const controlResult = await redeemOnsiteDiagnosticControl(
+      ctx,
+      session.value,
+      body.value,
+      ctx.getCurrentUserId?.() ?? null,
+    )
+    if (!controlResult.ok) {
+      ctx.sendJson(controlResult.status, { error: controlResult.error })
+      return true
+    }
+    ctx.sendJson(200, controlResult.value)
     return true
   }
 
@@ -747,7 +783,7 @@ async function recordOnsiteDiagnosticControl(
     ? await recordPersistentOnsiteDiagnosticControl(ctx.company.id, session, action, actorUserId)
     : recordMemoryOnsiteDiagnosticControl(session, action, actorUserId)
   if (!controlResult) return { ok: false, status: 404, error: 'diagnostic session not found' }
-  const { session: nextSession, controlToken } = controlResult
+  const { session: nextSession, controlToken, transferToken } = controlResult
 
   return {
     ok: true,
@@ -758,6 +794,39 @@ async function recordOnsiteDiagnosticControl(
         action,
         expires_at: nextSession.expires_at,
         ...(controlToken ? { control_token: controlToken } : {}),
+        ...(transferToken ? { transfer_token: transferToken } : {}),
+      },
+    },
+  }
+}
+
+async function redeemOnsiteDiagnosticControl(
+  ctx: OpsDiagnosticsRouteCtx,
+  session: StoredOnsiteDiagnosticSession,
+  body: Record<string, unknown>,
+  actorUserId: string | null,
+): Promise<
+  | { ok: true; value: OpsOnsiteDiagnosticSessionControlResponse }
+  | { ok: false; status: number; error: string }
+> {
+  const token = boundedString(body.transfer_token ?? body.control_token, 200)
+  if (!token) return { ok: false, status: 403, error: 'invalid transfer token' }
+
+  const controlResult = ctx.company
+    ? await redeemPersistentOnsiteDiagnosticControl(ctx.company.id, session, token, actorUserId)
+    : redeemMemoryOnsiteDiagnosticControl(session, token, actorUserId)
+  if (!controlResult) return { ok: false, status: 403, error: 'invalid transfer token' }
+  const { session: nextSession, controlToken } = controlResult
+
+  return {
+    ok: true,
+    value: {
+      schema: 'sitelayer.ops_diagnostic_session_control.v1',
+      session: publicSession(nextSession),
+      control: {
+        action: 'redeem',
+        expires_at: nextSession.expires_at,
+        control_token: controlToken,
       },
     },
   }
@@ -804,7 +873,7 @@ function recordMemoryOnsiteDiagnosticControl(
   session: StoredOnsiteDiagnosticSession,
   action: OpsOnsiteDiagnosticControlAction,
   actorUserId: string | null,
-): { session: StoredOnsiteDiagnosticSession; controlToken?: string } | null {
+): { session: StoredOnsiteDiagnosticSession; controlToken?: string; transferToken?: string } | null {
   if (session.state !== 'active' || Date.parse(session.expires_at) <= Date.now()) return null
   const at = new Date()
   const event: OpsOnsiteDiagnosticAuditEvent = {
@@ -821,17 +890,42 @@ function recordMemoryOnsiteDiagnosticControl(
     return { session }
   }
   if (action === 'transfer') {
-    const controlToken = randomUUID()
-    session.control_token = controlToken
-    return { session, controlToken }
+    const transferToken = randomUUID()
+    session.pending_control_transfer_token = transferToken
+    return { session, transferToken }
   }
   if (action === 'revoke') {
     session.control_token = randomUUID()
+    delete session.pending_control_transfer_token
     return { session }
   }
   session.state = 'cancelled'
+  delete session.pending_control_transfer_token
   onsiteDiagnosticSessions.delete(session.id)
   return { session }
+}
+
+function redeemMemoryOnsiteDiagnosticControl(
+  session: StoredOnsiteDiagnosticSession,
+  transferToken: string,
+  actorUserId: string | null,
+): { session: StoredOnsiteDiagnosticSession; controlToken: string } | null {
+  if (session.state !== 'active' || Date.parse(session.expires_at) <= Date.now()) return null
+  if (!session.pending_control_transfer_token || session.pending_control_transfer_token !== transferToken) return null
+  const at = new Date()
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: `event_${randomUUID().replace(/-/g, '').slice(0, 18)}`,
+    at: at.toISOString(),
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    effect: 'audit_only',
+    summary: controlActionSummary('redeem'),
+  }
+  session.audit_events.push(event)
+  const controlToken = randomUUID()
+  session.control_token = controlToken
+  delete session.pending_control_transfer_token
+  return { session, controlToken }
 }
 
 async function recordPersistentOnsiteDiagnosticControl(
@@ -839,18 +933,22 @@ async function recordPersistentOnsiteDiagnosticControl(
   session: StoredOnsiteDiagnosticSession,
   action: OpsOnsiteDiagnosticControlAction,
   actorUserId: string | null,
-): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken?: string } | null> {
+): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken?: string; transferToken?: string } | null> {
   const at = new Date()
   const atIso = at.toISOString()
   const nextExpiresAt = action === 'extend' ? new Date(at.getTime() + SESSION_TTL_MS).toISOString() : session.expires_at
   const nextState: OpsOnsiteDiagnosticSessionState = action === 'cancel' ? 'cancelled' : 'active'
-  const controlToken = action === 'transfer' ? randomUUID() : null
+  const transferToken = action === 'transfer' ? randomUUID() : null
   const nextControlTokenHash =
-    controlToken
-      ? hashControlToken(controlToken)
-      : action === 'revoke'
+    action === 'revoke'
         ? hashControlToken(randomUUID())
         : session.control_token_hash
+  const nextPendingTransferHash =
+    transferToken
+      ? hashControlToken(transferToken)
+      : action === 'revoke' || action === 'cancel'
+        ? null
+        : (session.pending_control_transfer_hash ?? null)
   const event: OpsOnsiteDiagnosticAuditEvent = {
     id: randomUUID(),
     at: atIso,
@@ -865,10 +963,12 @@ async function recordPersistentOnsiteDiagnosticControl(
           set state = $4,
               expires_at = $5::timestamptz,
               control_token_hash = $6,
+              pending_control_transfer_hash = $7,
               updated_at = $3::timestamptz
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3::timestamptz
-        returning id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at`,
-      [companyId, session.id, atIso, nextState, nextExpiresAt, nextControlTokenHash],
+        returning id, operator_user_id, label, intent, plan, control_token_hash,
+                  pending_control_transfer_hash, state, expires_at, created_at`,
+      [companyId, session.id, atIso, nextState, nextExpiresAt, nextControlTokenHash, nextPendingTransferHash],
     )
     const row = updated.rows[0]
     if (!row) return null
@@ -884,13 +984,63 @@ async function recordPersistentOnsiteDiagnosticControl(
     const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
     const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
     const nextSession = persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
-    return controlToken ? { session: nextSession, controlToken } : { session: nextSession }
+    return transferToken ? { session: nextSession, transferToken } : { session: nextSession }
+  })
+}
+
+async function redeemPersistentOnsiteDiagnosticControl(
+  companyId: string,
+  session: StoredOnsiteDiagnosticSession,
+  transferToken: string,
+  actorUserId: string | null,
+): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken: string } | null> {
+  const at = new Date()
+  const atIso = at.toISOString()
+  const controlToken = randomUUID()
+  const event: OpsOnsiteDiagnosticAuditEvent = {
+    id: randomUUID(),
+    at: atIso,
+    actor_user_id: actorUserId,
+    type: 'action.requested',
+    effect: 'audit_only',
+    summary: controlActionSummary('redeem'),
+  }
+  return withMutationTx(companyId, async (client: PoolClient) => {
+    const updated = await client.query<PersistentSessionRow>(
+      `update ops_diagnostic_sessions
+          set control_token_hash = $4,
+              pending_control_transfer_hash = null,
+              updated_at = $3::timestamptz
+        where company_id = $1
+          and id = $2::uuid
+          and state = 'active'
+          and expires_at > $3::timestamptz
+          and pending_control_transfer_hash = $5
+        returning id, operator_user_id, label, intent, plan, control_token_hash,
+                  pending_control_transfer_hash, state, expires_at, created_at`,
+      [companyId, session.id, atIso, hashControlToken(controlToken), hashControlToken(transferToken)],
+    )
+    const row = updated.rows[0]
+    if (!row) return null
+    await client.query(
+      `insert into ops_diagnostic_session_events (
+         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
+       ) values ($1, $2, $3, $4, 'action.requested', null, 'audit_only', $5, $6)`,
+      [event.id, companyId, session.id, actorUserId, event.summary, atIso],
+    )
+    const events = await listPersistentEvents(client, companyId, row.id)
+    const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
+    const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
+    const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
+    const nextSession = persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
+    return { session: nextSession, controlToken }
   })
 }
 
 function controlActionSummary(action: OpsOnsiteDiagnosticControlAction): string {
   if (action === 'extend') return 'Extended onsite diagnostic control.'
-  if (action === 'transfer') return 'Transferred onsite diagnostic control token.'
+  if (action === 'transfer') return 'Created onsite diagnostic control handoff.'
+  if (action === 'redeem') return 'Redeemed onsite diagnostic control handoff.'
   if (action === 'revoke') return 'Revoked onsite diagnostic control token.'
   return 'Cancelled onsite diagnostic control.'
 }
@@ -1877,7 +2027,8 @@ async function lookupPersistentSession(
   if (!isUuid(id)) return { ok: false, status: 404, error: 'diagnostic session not found' }
   const session = await withCompanyClient(companyId, async (client: PoolClient) => {
     const result = await client.query<PersistentSessionRow>(
-      `select id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at
+      `select id, operator_user_id, label, intent, plan, control_token_hash,
+              pending_control_transfer_hash, state, expires_at, created_at
          from ops_diagnostic_sessions
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > now()
         limit 1`,
@@ -1898,7 +2049,8 @@ async function lookupPersistentSession(
 async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promise<OpsOnsiteDiagnosticSessionRecord[]> {
   return withCompanyClient(companyId, async (client: PoolClient) => {
     const result = await client.query<PersistentSessionRow>(
-      `select id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at
+      `select id, operator_user_id, label, intent, plan, control_token_hash,
+              pending_control_transfer_hash, state, expires_at, created_at
          from ops_diagnostic_sessions
         where company_id = $1 and state = 'active' and expires_at > now()
         order by created_at desc
@@ -1924,6 +2076,7 @@ type PersistentSessionRow = {
   intent: string | null
   plan: unknown
   control_token_hash: string
+  pending_control_transfer_hash: string | null
   state: string
   expires_at: string | Date
   created_at: string | Date
@@ -2125,6 +2278,7 @@ function persistentSessionFromRow(
       agent_feed_deliveries: deliveries,
       ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
       control_token_hash: row.control_token_hash,
+      pending_control_transfer_hash: row.pending_control_transfer_hash,
     },
     workLink,
   )
@@ -2146,6 +2300,8 @@ function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnos
   const {
     control_token: _controlToken,
     control_token_hash: _controlTokenHash,
+    pending_control_transfer_token: _pendingControlTransferToken,
+    pending_control_transfer_hash: _pendingControlTransferHash,
     diagnostic_manifest: _diagnosticManifest,
     ...rest
   } = session
