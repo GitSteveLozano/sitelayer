@@ -645,7 +645,7 @@ function IntegrationsStatusList({ navigate }: { navigate: (path: string) => void
         supporting="Collect payments — card + ACH on invoices"
         trailing={
           <MPill dot tone={undefined}>
-            Connect
+            Soon
           </MPill>
         }
       />
@@ -655,7 +655,7 @@ function IntegrationsStatusList({ navigate }: { navigate: (path: string) => void
         supporting="Books · alternative"
         trailing={
           <MPill dot tone={undefined}>
-            Connect
+            Soon
           </MPill>
         }
       />
@@ -665,7 +665,7 @@ function IntegrationsStatusList({ navigate }: { navigate: (path: string) => void
         supporting="GC project import"
         trailing={
           <MPill dot tone={undefined}>
-            Connect
+            Soon
           </MPill>
         }
       />
