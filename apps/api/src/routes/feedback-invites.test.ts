@@ -5,6 +5,7 @@ import {
   handleFeedbackInviteRoutes,
   type FeedbackInviteRouteCtx,
 } from './feedback-invites.js'
+import { __portalActorWorkItemBindingForTests } from './portal-capture-sessions.js'
 
 type Response = { status: number; body: unknown }
 
@@ -136,6 +137,34 @@ describe('handleFeedbackInviteRoutes', () => {
     })
     expect(metadata).not.toHaveProperty('control_token')
     expect(metadata).not.toHaveProperty('arbitrary_note')
+  })
+
+  it('binds leave-behind feedback work items back to the onsite diagnostic session', () => {
+    expect(
+      __portalActorWorkItemBindingForTests({
+        companyId: 'company-1',
+        actorRef: 'invite-1',
+        authority: 'signed_feedback_invite_token',
+        surface: 'feedback_invite',
+        metadata: {
+          ops_diagnostic_session_id: 'diag-session-9',
+          source: 'mobile_ops_leavebehind',
+        },
+      }),
+    ).toEqual({
+      entityType: 'ops_diagnostic_session',
+      entityId: 'diag-session-9',
+    })
+
+    expect(
+      __portalActorWorkItemBindingForTests({
+        companyId: 'company-1',
+        actorRef: 'invite-2',
+        authority: 'signed_feedback_invite_token',
+        surface: 'feedback_invite',
+        metadata: { source: 'manual' },
+      }),
+    ).toEqual({})
   })
 
   it('ignores unrelated routes', async () => {

@@ -131,6 +131,14 @@ function portalActorWorkItemMetadata(actor: PortalCaptureActor): JsonRecord {
   return routed
 }
 
+function portalActorWorkItemBinding(actor: PortalCaptureActor): { entityType?: string; entityId?: string } {
+  const actorMetadata = jsonRecord(actor.metadata)
+  const opsDiagnosticSessionId = optionalText(actorMetadata.ops_diagnostic_session_id, 160)
+  return opsDiagnosticSessionId
+    ? { entityType: 'ops_diagnostic_session', entityId: opsDiagnosticSessionId }
+    : {}
+}
+
 function optionalText(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -771,6 +779,7 @@ export async function finalizePortalCaptureSession(
   const category = optionalText(body.category, 120) ?? 'portal_capture_session'
   const buildSha = snapshot.session.app_build_sha ?? ctx.buildSha ?? null
   const actorWorkItemMetadata = portalActorWorkItemMetadata(actor)
+  const actorWorkItemBinding = portalActorWorkItemBinding(actor)
   const rawClient: JsonRecord = {
     capture_session_id: id,
     path: route ? { route } : null,
@@ -843,6 +852,7 @@ export async function finalizePortalCaptureSession(
         lane: 'triage',
         severity,
         route,
+        ...actorWorkItemBinding,
         captureSessionId: id,
         createdByUserId: actorUserId,
         metadata: {
@@ -875,6 +885,8 @@ export async function finalizePortalCaptureSession(
           route: item.route,
           capture_session_id: id,
           support_packet_id: packet.id,
+          entity_type: item.entity_type,
+          entity_id: item.entity_id,
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
           portal_surface: actor.surface,
@@ -1120,6 +1132,13 @@ export async function discardPortalCaptureSession(
         }
       : {}),
   })
+}
+
+export function __portalActorWorkItemBindingForTests(actor: PortalCaptureActor): {
+  entityType?: string
+  entityId?: string
+} {
+  return portalActorWorkItemBinding(actor)
 }
 
 function parseMetadataField(value: string | undefined): Record<string, unknown> {
