@@ -78,12 +78,34 @@ function mondayOf(d: Date): Date {
 }
 
 /**
+ * Schedule dates are SQL-style calendar days. `new Date("YYYY-MM-DD")` parses
+ * as UTC and shifts to the prior local day in western timezones, which drops
+ * Monday rows out of the working-day grid. Keep date-only strings as local
+ * calendar dates.
+ */
+function parseScheduleDate(iso: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (match) {
+    const y = Number(match[1])
+    const m = Number(match[2])
+    const d = Number(match[3])
+    if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+      return new Date(y, m - 1, d)
+    }
+  }
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return null
+  parsed.setHours(0, 0, 0, 0)
+  return parsed
+}
+
+/**
  * Working-day offset (Mon–Fri only) from `anchorMonday` for an ISO date, or
  * null when the date falls outside the 4-week window or on a weekend.
  */
 function workingDayOffset(iso: string, anchorMonday: Date): number | null {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
+  const d = parseScheduleDate(iso)
+  if (!d) return null
   d.setHours(0, 0, 0, 0)
   const ms = d.getTime() - anchorMonday.getTime()
   const calDay = Math.floor(ms / 86_400_000)
@@ -105,8 +127,8 @@ function weekLabel(anchorMonday: Date, week: number): string {
 
 /** Mon=0 … Sun=6 column index for an ISO date string, or null if not Mon–Fri. */
 function weekdayIndex(iso: string): number | null {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
+  const d = parseScheduleDate(iso)
+  if (!d) return null
   const dow = d.getDay() // 0=Sun … 6=Sat
   const idx = (dow + 6) % 7 // Mon=0 … Sun=6
   return idx < 5 ? idx : null
