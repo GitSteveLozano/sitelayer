@@ -1,78 +1,133 @@
-import { test, expect, dispatchWorkflowEvent, fetchWorkflowSnapshot } from '../fixtures/auth'
+import type { Page } from '@playwright/test'
+import { test, expect, fetchWorkflowSnapshot } from '../fixtures/auth'
 import { FIXTURE_IDS } from '../fixtures/ids'
 
 /**
  * Spec 5 — office-rental-billing.
  *
- * Office user approves a rental billing run and requests the QBO post.
- * The browser-visible human handoff is:
- *   APPROVE → POST_REQUESTED → posting
+ * Office user walks a rental billing run through the human handoff, then the
+ * WORKER drives it home:
+ *   generated → approved → posting → (worker) posted
  *
  * Wire: POST /api/rental-billing-runs/:id/events
- * UI:   `/financial/billing-runs/:id` — billing-run-detail renders the
- *       literal `state` string in a Pill and an Actions grid of role-located
- *       buttons whose labels come from the workflow's next_events
+ * UI:   `/financial/billing-runs/:id` — billing-run-detail renders the literal
+ *       `state` string in a Pill and an Actions grid of buttons whose labels
+ *       come straight from the workflow's next_events
  *       (packages/workflows/src/rental-billing.ts).
  *       (apps/web/src/screens/financial/billing-run-detail.tsx)
  *
- * CLICK-THROUGH (gap #9). The first transition (APPROVE) is driven by a REAL
- * role-located button CLICK on the rendered screen — not a direct API POST — so
- * a port that lost its onClick→mutation wiring FAILS here (it used to pass: the
- * spec drove every transition via dispatchWorkflowEvent and only asserted a
- * Pill, never exercising the button). This mirrors the genuine click-through in
- * foreman-field-event.spec.ts. The remaining POST_REQUESTED step stays an API
- * call (the click-through has already proven the UI mutation path end-to-end).
+ * FULL CLICK-THROUGH (WF-1). Every human transition is driven by a REAL button
+ * CLICK on the rendered detail screen — not a direct API POST. We follow the
+ * ordered chain, and for each step locate the on-screen button by its
+ * next_events label (`getByRole('button', { name })`) and click it. A port that
+ * lost any onClick→mutation wiring FAILS here. This mirrors the genuine
+ * click-through in foreman-field-event.spec.ts.
+ *
+ * WORKER-DRIVEN TERMINAL (WF-3). After the final human event (POST_REQUESTED →
+ * posting) we assert the worker-only `POST_SUCCEEDED` transition lands: poll
+ * `fetchWorkflowSnapshot` until `state === 'posted'` with the QBO invoice id
+ * populated. The e2e worker drains the stubbed QBO push inside Playwright's
+ * window — no permissive `/^(posting|posted)$/` tolerance.
  */
+
+type RentalBillingNextEvent = { type: string; label: string }
 
 type RentalBillingSnapshot = {
   state: 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
   state_version: number
+  next_events: RentalBillingNextEvent[]
+  context: { qbo_invoice_id: string | null }
 }
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
+// Ordered human chain UP TO the QBO request. The on-screen button label is
+// resolved at runtime from the live snapshot's next_events so the spec follows
+// the workflow, not a hardcoded copy of its labels. POST_REQUESTED is handled
+// separately because the e2e worker may drain `posting → posted` before the UI
+// can settle on the transient `posting` Pill.
+const HUMAN_CHAIN: Array<{ event: string; expected: RentalBillingSnapshot['state'] }> = [
+  { event: 'APPROVE', expected: 'approved' },
+]
+
+/** Click the on-screen button that drives `event`, resolving its label from the
+ *  live snapshot's next_events. */
+async function clickAction(page: Page, snapshotPath: string, event: string): Promise<void> {
+  const before = await fetchWorkflowSnapshot<RentalBillingSnapshot>(page, snapshotPath)
+  const action = before.next_events.find((ev) => ev.type === event)
+  expect(action, `next_events should offer ${event} from ${before.state}`).toBeTruthy()
+  // Drives the onClick→dispatch through the billing-review XState machine, the
+  // exact wiring a blind port can drop.
+  await page.getByRole('button', { name: action!.label, exact: true }).click()
+}
+
+/**
+ * Poll the billing-run snapshot until the e2e worker drives it to the `posted`
+ * terminal with a populated QBO invoice id, then return that snapshot.
+ */
+async function pollForPosted(page: Page, snapshotPath: string): Promise<RentalBillingSnapshot> {
+  let last: RentalBillingSnapshot | null = null
+  await expect
+    .poll(
+      async () => {
+        last = await fetchWorkflowSnapshot<RentalBillingSnapshot>(page, snapshotPath)
+        return last.state === 'posted' && Boolean(last.context.qbo_invoice_id)
+      },
+      {
+        message: 'e2e worker should drive rental billing posting → posted with a QBO id',
+        timeout: 30_000,
+        intervals: [500, 1_000, 2_000],
+      },
+    )
+    .toBe(true)
+  return last!
+}
+
 runSpec('office user approves and requests a rental billing post', { tag: '@rental' }, async ({ officePage }) => {
   const runId = FIXTURE_IDS.billingRunId
   const snapshotPath = `/api/rental-billing-runs/${runId}`
-  const eventsPath = `${snapshotPath}/events`
 
   // Sanity-check the seed: the run starts `generated`.
   const initial = await fetchWorkflowSnapshot<RentalBillingSnapshot>(officePage, snapshotPath)
   expect(initial.state).toBe('generated')
 
-  // --- REAL click-through: open the detail screen and click "Approve" -------
+  // Open the detail screen — the Actions grid renders one MButton per
+  // next_event, labelled from the reducer.
   await officePage.goto(`/financial/billing-runs/${runId}`)
-  // The state Pill shows the current literal state before we act.
   await expect(officePage.getByText('generated', { exact: true })).toBeVisible()
 
-  // The Actions grid renders one MButton per next_event; from `generated` the
-  // human action is labelled "Approve billing run"
-  // (packages/workflows/src/rental-billing.ts). Clicking it fires the
-  // onClick→dispatch(APPROVE) mutation through the billing-review XState
-  // machine — the exact wiring a blind port can drop.
-  await officePage.getByRole('button', { name: 'Approve billing run' }).click()
+  let prevVersion = initial.state_version
+  for (const step of HUMAN_CHAIN) {
+    // The button label is resolved from server truth so the click targets
+    // exactly the affordance the workflow offers (generated → "Approve billing
+    // run").
+    await clickAction(officePage, snapshotPath, step.event)
 
-  // After the mutation resolves the Pill flips to `approved`. This asserts the
-  // UI actually performed the transition (not just that a button exists).
-  await expect(officePage.getByText('approved', { exact: true })).toBeVisible({ timeout: 10_000 })
+    // The state Pill flips once the reducer transition resolves.
+    await expect(officePage.getByText(step.expected, { exact: true })).toBeVisible({ timeout: 10_000 })
 
-  // Server-truth cross-check: the run advanced to `approved` with a bumped
-  // version — proof the click drove a real reducer transition, not optimistic UI.
-  const afterApprove = await fetchWorkflowSnapshot<RentalBillingSnapshot>(officePage, snapshotPath)
-  expect(afterApprove.state).toBe('approved')
-  expect(afterApprove.state_version).toBe(initial.state_version + 1)
+    // Server-truth cross-check: advanced to the expected state with a bumped
+    // version — proof the click drove a real reducer transition.
+    const after = await fetchWorkflowSnapshot<RentalBillingSnapshot>(officePage, snapshotPath)
+    expect(after.state).toBe(step.expected)
+    expect(after.state_version).toBe(prevVersion + 1)
+    prevVersion = after.state_version
+  }
 
-  // Continue the handoff via the events endpoint (the click-through above has
-  // already exercised the UI mutation path end-to-end).
-  const posting = await dispatchWorkflowEvent<RentalBillingSnapshot>(officePage, eventsPath, {
-    event: 'POST_REQUESTED',
-    state_version: afterApprove.state_version,
-  })
-  expect(posting.state).toBe('posting')
+  // approved → posting: the final human CLICK kicks off the QBO push. We don't
+  // assert the transient `posting` Pill (the worker can drain it away mid-frame)
+  // — the worker-driven terminal below is the real assertion.
+  await clickAction(officePage, snapshotPath, 'POST_REQUESTED')
 
-  // UI assertion — the detail screen reflects the handoff or the
-  // worker-advanced state (the e2e worker may post the run before the route
-  // repaints).
+  // --- WORKER-DRIVEN TERMINAL: posting → posted (POST_SUCCEEDED) ------------
+  // The human chain ended at `posting`; the worker-only POST_SUCCEEDED lands
+  // `posted` with the QBO invoice id. Poll until the e2e worker drains the
+  // stubbed push — terminal only once `posted` AND the QBO id is populated.
+  const terminal = await pollForPosted(officePage, snapshotPath)
+  expect(terminal.state).toBe('posted')
+  expect(terminal.context.qbo_invoice_id, 'posted run should carry a QBO invoice id').toBeTruthy()
+
+  // UI cross-check: the detail screen reflects the worker-driven terminal.
   await officePage.goto(`/financial/billing-runs/${runId}`)
-  await expect(officePage.getByText(/^(posting|posted)$/)).toBeVisible()
+  await expect(officePage.getByText('posted', { exact: true })).toBeVisible({ timeout: 10_000 })
 })
