@@ -220,6 +220,16 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
             />
           </div>
         ) : null}
+        {/* Schedule → one-tap "Confirm day" entry (Cavy #11). Confirm-Day is the
+            phone-first bulk time-confirm: it CREATES the day's entries from the
+            scheduled roster (distinct from this week-scoped REVIEW of clock-ins
+            that already exist). Surfaced here so foremen reach it from the Time
+            tab; mounts at /time/confirm. */}
+        <div style={{ padding: '12px 16px 0' }}>
+          <MButton variant="ghost" onClick={() => navigate('/time/confirm')}>
+            Confirm day from schedule →
+          </MButton>
+        </div>
         {/* TOTAL HOURS big-number hero — v2 brutalist: mono micro-label,
             tabular bignum with a unit suffix, burden + flag-count subline,
             closed off with a heavy section bar. */}

@@ -288,6 +288,12 @@ export async function handlePortalRentalRoutes(
             contact: { name: contactName, email: contactEmail, phone: contactPhone },
             notes,
             source: 'portal',
+            // Deep-link target for the owner's approve/decline queue. The
+            // notifications inbox (apps/web .../notifications-inbox.tsx) reads
+            // payload.route (must start with "/") to make a row tappable; any
+            // notification surfaced off this rental_request lands the owner on
+            // the RentalRequestsQueueScreen rather than a dead end.
+            route: '/rentals/requests',
           }),
           `rental_request:create:${row.id}`,
           getRequestContext()?.captureSessionId ?? null,

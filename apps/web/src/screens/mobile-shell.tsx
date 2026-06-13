@@ -96,6 +96,9 @@ const MobileTimeReview = lazy(() => import('./mobile/time-review.js').then((m) =
 const MobileForemanTimeEntry = lazy(() =>
   import('./mobile/foreman-time-entry.js').then((m) => ({ default: m.MobileForemanTimeEntry })),
 )
+const MobileFmConfirmDay = lazy(() =>
+  import('./mobile/fm-confirm-day.js').then((m) => ({ default: m.MobileFmConfirmDay })),
+)
 const WorkerToday = lazy(() => import('./mobile/worker-today.js').then((m) => ({ default: m.WorkerToday })))
 const WorkerClockinConfirm = lazy(() =>
   import('./mobile/worker-clockin.js').then((m) => ({ default: m.WorkerClockinConfirm })),
@@ -521,6 +524,7 @@ export function MobileShell({
             />
             <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
             <Route path="time/new" element={<MobileForemanTimeEntry bootstrap={bootstrap} />} />
+            <Route path="time/confirm" element={<MobileFmConfirmDay bootstrap={bootstrap} />} />
             <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
             <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
             <Route path="hours" element={<WorkerHours bootstrap={bootstrap} />} />

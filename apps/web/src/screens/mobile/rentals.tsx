@@ -201,6 +201,13 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
           <MQuickAction Icon={MI.Camera} label="Scan" onClick={() => navigate('/rentals/scan')} />
           <MQuickAction Icon={MI.FileText} label="Portal" onClick={() => navigate('/rentals/portal')} />
           <MQuickAction Icon={MI.Layers} label="Billing runs" onClick={() => navigate('/rentals/billing')} />
+          {/* Inbound portal rental requests awaiting owner approve/decline
+              (RentalRequestsQueueScreen, route /rentals/requests). Without this
+              entry the queue is only reachable from a notification deep-link —
+              admin/office reach it here directly. */}
+          {companyRole === 'admin' || companyRole === 'office' ? (
+            <MQuickAction Icon={MI.Bell} label="Requests" onClick={() => navigate('/rentals/requests')} />
+          ) : null}
         </MQuickActionGrid>
         <MSectionH>Assets</MSectionH>
         {error ? (

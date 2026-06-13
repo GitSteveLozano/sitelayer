@@ -9,13 +9,44 @@
  */
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAnalytics, type AnalyticsDivision, type AnalyticsProject } from '@/lib/api/analytics'
+import {
+  useAnalytics,
+  useServiceItemProductivity,
+  type AnalyticsDivision,
+  type AnalyticsProject,
+  type AnalyticsServiceItemProductivity,
+} from '@/lib/api/analytics'
+import { useServiceItems } from '@/lib/api'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
 
 function marginTone(margin: number): 'green' | 'amber' | 'red' {
   return margin > 0.18 ? 'green' : margin > 0.1 ? 'amber' : 'red'
+}
+
+function formatQty(n: number, unit: string): string {
+  const rounded = Number.isInteger(n) ? String(n) : n.toFixed(1)
+  return `${rounded} ${unit}`
+}
+
+// Per-service-item estimate-vs-actual row. ACTUAL side (quantity completed,
+// hours, real $/unit-equiv) comes from /api/analytics/service-item-productivity;
+// the ESTIMATE side is the item's catalog bid rate (default_rate) — what the
+// work was priced at — applied to the same completed quantity. The delta tells
+// the estimator whether crews are beating or missing the rate the job was bid
+// at, per LINE ITEM (Cavy's "build-a-bear / actual cost per line item" loop).
+interface ServiceItemActualRow {
+  code: string
+  name: string
+  unit: string
+  totalQuantity: number
+  totalHours: number
+  avgPerHour: number
+  /** Catalog bid rate ($/unit) the work was estimated at, if known. */
+  bidRate: number | null
+  /** bidRate × quantity completed — the estimated value of the work done. */
+  estimatedValue: number | null
 }
 
 function Kpi({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'bad' | undefined }) {
@@ -45,6 +76,38 @@ export function OwnerJobCosts() {
   const analytics = useAnalytics()
   const projects = useMemo(() => analytics.data?.projects ?? [], [analytics.data])
   const divisions = useMemo(() => analytics.data?.divisions ?? [], [analytics.data])
+
+  // Per-line-item actuals (quantity/hour the crews achieved per service item)
+  // joined to the catalog bid rate so the estimator sees estimate-vs-actual at
+  // the granularity Cavy asked for. Both are read-only GETs.
+  const productivity = useServiceItemProductivity()
+  const serviceItems = useServiceItems()
+  const bidRateByCode = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const it of serviceItems.data?.serviceItems ?? []) {
+      const rate = Number(it.default_rate ?? NaN)
+      if (Number.isFinite(rate)) map.set(it.code, rate)
+    }
+    return map
+  }, [serviceItems.data])
+
+  const serviceItemRows = useMemo<ServiceItemActualRow[]>(() => {
+    const rows = productivity.data?.service_items ?? []
+    return rows.map((r: AnalyticsServiceItemProductivity) => {
+      const bidRate = bidRateByCode.has(r.code) ? bidRateByCode.get(r.code)! : null
+      const totalQuantity = Number(r.total_quantity) || 0
+      return {
+        code: r.code,
+        name: r.name,
+        unit: r.unit,
+        totalQuantity,
+        totalHours: Number(r.total_hours) || 0,
+        avgPerHour: Number(r.avg_quantity_per_hour) || 0,
+        bidRate,
+        estimatedValue: bidRate !== null ? bidRate * totalQuantity : null,
+      }
+    })
+  }, [productivity.data, bidRateByCode])
 
   const totals = useMemo(() => {
     let revenue = 0
@@ -151,6 +214,61 @@ export function OwnerJobCosts() {
     },
   ]
 
+  const serviceItemColumns: Array<DColumn<ServiceItemActualRow>> = [
+    {
+      key: 'item',
+      header: 'Service item',
+      render: (r) => (
+        <span>
+          <span className="d-table-cell-strong">{r.code}</span>
+          {r.name && r.name !== r.code ? <span style={{ color: 'var(--m-ink-3)' }}> · {r.name}</span> : null}
+        </span>
+      ),
+    },
+    {
+      key: 'qty',
+      header: 'Qty done',
+      numeric: true,
+      render: (r) => formatQty(r.totalQuantity, r.unit),
+    },
+    {
+      key: 'hours',
+      header: 'Hours',
+      numeric: true,
+      render: (r) => (Number.isInteger(r.totalHours) ? String(r.totalHours) : r.totalHours.toFixed(1)),
+    },
+    {
+      key: 'rate',
+      header: 'Actual',
+      numeric: true,
+      render: (r) => <span>{r.avgPerHour > 0 ? `${r.avgPerHour.toFixed(1)} ${r.unit}/hr` : '—'}</span>,
+    },
+    {
+      key: 'bid',
+      header: 'Bid rate',
+      numeric: true,
+      render: (r) =>
+        r.bidRate !== null ? (
+          <span>
+            {formatMoney(r.bidRate)}
+            <span style={{ color: 'var(--m-ink-3)', fontSize: 12 }}>/{r.unit}</span>
+          </span>
+        ) : (
+          <span style={{ color: 'var(--m-ink-3)' }}>—</span>
+        ),
+    },
+    {
+      // Estimated value of the work actually completed at the bid rate — the
+      // estimate side of the per-item comparison. When the bid rate is unknown
+      // (no catalog default_rate) we can't price it, so show a dash.
+      key: 'est',
+      header: 'Est. value',
+      numeric: true,
+      render: (r) =>
+        r.estimatedValue !== null ? formatMoney(r.estimatedValue) : <span style={{ color: 'var(--m-ink-3)' }}>—</span>,
+    },
+  ]
+
   return (
     <div className="d-content">
       <div className="d-stack">
@@ -193,6 +311,24 @@ export function OwnerJobCosts() {
             empty="No division rollup yet."
           />
         ) : null}
+
+        {/* Per-LINE-ITEM estimate-vs-actual — the granularity Cavy asked for
+            ("see actual cost per line item / build-a-bear"). Actuals (qty done,
+            hours, qty/hr) come from /api/analytics/service-item-productivity;
+            the bid rate + estimated value come from the catalog default_rate. */}
+        <DataTable<ServiceItemActualRow>
+          title="By service item"
+          columns={serviceItemColumns}
+          rows={serviceItemRows}
+          rowKey={(r) => r.code}
+          empty={
+            productivity.isLoading
+              ? 'Loading…'
+              : productivity.isError
+                ? 'Could not load per-item productivity.'
+                : 'No per-item actuals yet. Rows appear as crews log labor against service items.'
+          }
+        />
       </div>
     </div>
   )
