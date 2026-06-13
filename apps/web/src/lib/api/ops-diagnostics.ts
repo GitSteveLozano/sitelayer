@@ -43,8 +43,10 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   actor_user_id: string | null
   type: 'session.started' | 'action.requested'
   action_key?: OpsOnsiteDiagnosticActionKey
+  client_action_id?: string | null
   effect: 'audit_only'
   summary: string
+  action_result?: Record<string, unknown> | null
 }
 
 export type OpsOnsiteDiagnosticAgentFeedDelivery = {
@@ -161,6 +163,7 @@ export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
 export type OpsOnsiteDiagnosticActionRequestInput = {
   action_key: OpsOnsiteDiagnosticActionKey
   control_token: string
+  client_action_id?: string
 }
 
 export type OpsOnsiteDiagnosticSessionActionResponse = {

@@ -214,13 +214,17 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     },
   })
   const requestDiagnosticAction = useMutation({
-    mutationFn: (actionKey: OpsOnsiteDiagnosticActionKey) => {
+    mutationFn: (request: { actionKey: OpsOnsiteDiagnosticActionKey; clientActionId: string }) => {
       if (!activeDiagnosticSession || !diagnosticControlToken) {
         return Promise.reject(new Error('diagnostic session is not active'))
       }
       return requestOpsDiagnosticSessionAction(
         activeDiagnosticSession.id,
-        { action_key: actionKey, control_token: diagnosticControlToken },
+        {
+          action_key: request.actionKey,
+          client_action_id: request.clientActionId,
+          control_token: diagnosticControlToken,
+        },
         companySlug,
       )
     },
@@ -650,8 +654,12 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 }
                 supporting={formatDiagnosticActionSummary(action, requestDiagnosticAction.isPending)}
                 onTap={
-                  action.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
-                    ? () => requestDiagnosticAction.mutate(action.key)
+                  action.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending && activeDiagnosticSession
+                    ? () =>
+                        requestDiagnosticAction.mutate({
+                          actionKey: action.key,
+                          clientActionId: diagnosticClientActionId(activeDiagnosticSession.id, action.key),
+                        })
                     : undefined
                 }
               />
@@ -1376,6 +1384,14 @@ function diagnosticActionName(actionKey: OpsOnsiteDiagnosticActionKey): string {
   if (actionKey === 'dispatch_agent_review') return 'Agent review'
   if (actionKey === 'capture_desktop_context') return 'Desktop evidence'
   return 'Field context'
+}
+
+function diagnosticClientActionId(sessionId: string, actionKey: OpsOnsiteDiagnosticActionKey): string {
+  const randomId =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `${sessionId}:${actionKey}:${randomId}`.slice(0, 120)
 }
 
 function diagnosticActionIcon(actionKey: OpsOnsiteDiagnosticActionKey): typeof MI.Camera {

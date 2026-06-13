@@ -67,8 +67,10 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   actor_user_id: string | null
   type: 'session.started' | 'action.requested'
   action_key?: OpsOnsiteDiagnosticActionKey
+  client_action_id?: string | null
   effect: 'audit_only'
   summary: string
+  action_result?: Record<string, unknown> | null
 }
 
 export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
@@ -150,6 +152,8 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
     agent_feed?: OpsOnsiteDiagnosticAgentFeedResult
   }
 }
+
+type OpsOnsiteDiagnosticAcceptedAction = OpsOnsiteDiagnosticSessionActionResponse['accepted_action']
 
 export type OpsOnsiteDiagnosticSessionControlResponse = {
   schema: 'sitelayer.ops_diagnostic_session_control.v1'
@@ -376,6 +380,7 @@ export async function handleOpsDiagnosticsRoutes(
       session.value,
       body.value,
       ctx.getCurrentUserId?.() ?? null,
+      req,
     )
     if (!actionResult.ok) {
       ctx.sendJson(
@@ -609,6 +614,7 @@ async function recordOnsiteDiagnosticAction(
   session: StoredOnsiteDiagnosticSession,
   body: Record<string, unknown>,
   actorUserId: string | null,
+  req: http.IncomingMessage,
 ): Promise<
   | { ok: true; value: OpsOnsiteDiagnosticSessionActionResponse }
   | { ok: false; status: number; error: string; reason?: string }
@@ -622,6 +628,8 @@ async function recordOnsiteDiagnosticAction(
   if (!action) return { ok: false, status: 400, error: 'unknown action_key' }
   if (!action.enabled) return { ok: false, status: 409, error: 'action is not available', reason: action.reason }
 
+  const clientActionId = clientActionIdFromRequest(req, body)
+
   if (ctx.company) {
     const persisted = await recordPersistentOnsiteDiagnosticAction(
       ctx.company.id,
@@ -629,8 +637,24 @@ async function recordOnsiteDiagnosticAction(
       actionKey,
       action.label,
       actorUserId,
+      clientActionId,
     )
     if (!persisted) return { ok: false, status: 404, error: 'diagnostic session not found' }
+    if (persisted.replayed) {
+      const acceptedAction = persisted.acceptedAction ?? {
+        key: actionKey,
+        effect: 'audit_only',
+        ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
+      }
+      return {
+        ok: true,
+        value: {
+          schema: 'sitelayer.ops_diagnostic_session_action.v1',
+          session: publicSession(persisted.session),
+          accepted_action: acceptedAction,
+        },
+      }
+    }
     const options = diagnosticsOptions(ctx)
     const [desktopEvidence, captureRoute] = await Promise.all([
       captureOnsiteDesktopEvidence(ctx, options, {
@@ -647,23 +671,40 @@ async function recordOnsiteDiagnosticAction(
         actorUserId,
       }),
     ])
+    const acceptedAction: OpsOnsiteDiagnosticAcceptedAction = {
+      key: actionKey,
+      effect: 'audit_only',
+      ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
+      ...(captureRoute ? { capture_route: captureRoute } : {}),
+      ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
+    }
+    await persistOnsiteDiagnosticActionResult(ctx.company.id, persisted.session.id, persisted.event.id, acceptedAction)
     return {
       ok: true,
       value: {
         schema: 'sitelayer.ops_diagnostic_session_action.v1',
         session: publicSession(sessionWithDesktopEvidence(persisted.session, desktopEvidence)),
-        accepted_action: {
+        accepted_action: acceptedAction,
+      },
+    }
+  }
+
+  const replayedEvent = clientActionId ? findMemoryActionEvent(session, actionKey, clientActionId) : null
+  if (replayedEvent) {
+    return {
+      ok: true,
+      value: {
+        schema: 'sitelayer.ops_diagnostic_session_action.v1',
+        session: publicSession(session),
+        accepted_action: acceptedActionFromResult(replayedEvent.action_result, actionKey) ?? {
           key: actionKey,
           effect: 'audit_only',
-          ...(desktopEvidence ? { desktop_evidence: desktopEvidence } : {}),
-          ...(captureRoute ? { capture_route: captureRoute } : {}),
-          ...(persisted.agentFeed ? { agent_feed: persisted.agentFeed } : {}),
         },
       },
     }
   }
 
-  const event = recordMemoryOnsiteDiagnosticAction(session, actionKey, action.label, actorUserId)
+  const event = recordMemoryOnsiteDiagnosticAction(session, actionKey, action.label, actorUserId, clientActionId)
   const captureRoute = await deliverOnsiteDiagnosticCaptureRoute(diagnosticsOptions(ctx), {
     session,
     event,
@@ -671,16 +712,18 @@ async function recordOnsiteDiagnosticAction(
     actionLabel: action.label,
     actorUserId,
   })
+  const acceptedAction: OpsOnsiteDiagnosticAcceptedAction = {
+    key: actionKey,
+    effect: 'audit_only',
+    ...(captureRoute ? { capture_route: captureRoute } : {}),
+  }
+  event.action_result = acceptedActionRecord(acceptedAction)
   return {
     ok: true,
     value: {
       schema: 'sitelayer.ops_diagnostic_session_action.v1',
       session: publicSession(session),
-      accepted_action: {
-        key: actionKey,
-        effect: 'audit_only',
-        ...(captureRoute ? { capture_route: captureRoute } : {}),
-      },
+      accepted_action: acceptedAction,
     },
   }
 }
@@ -725,6 +768,7 @@ function recordMemoryOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
+  clientActionId: string | null,
 ): OpsOnsiteDiagnosticAuditEvent {
   const at = new Date().toISOString()
   const event: OpsOnsiteDiagnosticAuditEvent = {
@@ -733,11 +777,27 @@ function recordMemoryOnsiteDiagnosticAction(
     actor_user_id: actorUserId,
     type: 'action.requested',
     action_key: actionKey,
+    client_action_id: clientActionId,
     effect: 'audit_only',
     summary: `Requested ${actionLabel}.`,
   }
   session.audit_events.push(event)
   return event
+}
+
+function findMemoryActionEvent(
+  session: StoredOnsiteDiagnosticSession,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  clientActionId: string,
+): OpsOnsiteDiagnosticAuditEvent | null {
+  return (
+    session.audit_events.find(
+      (event) =>
+        event.type === 'action.requested' &&
+        event.action_key === actionKey &&
+        event.client_action_id === clientActionId,
+    ) ?? null
+  )
 }
 
 function recordMemoryOnsiteDiagnosticControl(
@@ -841,11 +901,14 @@ async function recordPersistentOnsiteDiagnosticAction(
   actionKey: OpsOnsiteDiagnosticActionKey,
   actionLabel: string,
   actorUserId: string | null,
+  clientActionId: string | null,
   runTx: OpsDiagnosticsTxRunner = withMutationTx,
 ): Promise<{
   session: StoredOnsiteDiagnosticSession
   event: OpsOnsiteDiagnosticAuditEvent
   agentFeed: OpsOnsiteDiagnosticAgentFeedResult | null
+  acceptedAction?: OpsOnsiteDiagnosticAcceptedAction
+  replayed: boolean
 } | null> {
   const at = new Date().toISOString()
   const event: OpsOnsiteDiagnosticAuditEvent = {
@@ -854,10 +917,32 @@ async function recordPersistentOnsiteDiagnosticAction(
     actor_user_id: actorUserId,
     type: 'action.requested',
     action_key: actionKey,
+    client_action_id: clientActionId,
     effect: 'audit_only',
     summary: `Requested ${actionLabel}.`,
   }
   const result = await runTx(companyId, async (client: PoolClient) => {
+    if (clientActionId) {
+      const existing = await lookupPersistentActionEventByClientActionIdTx(
+        client,
+        companyId,
+        session.id,
+        actionKey,
+        clientActionId,
+      )
+      if (existing) {
+        const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
+        const workLink = await latestPersistentOnsiteWorkLink(client, companyId, session.id, false)
+        return {
+          event: existing,
+          agentFeed: null,
+          deliveries,
+          workLink,
+          acceptedAction: acceptedActionFromResult(existing.action_result, actionKey) ?? undefined,
+          replayed: true,
+        }
+      }
+    }
     const update = await client.query(
       `update ops_diagnostic_sessions
           set updated_at = $3
@@ -865,12 +950,38 @@ async function recordPersistentOnsiteDiagnosticAction(
       [companyId, session.id, at],
     )
     if (update.rowCount !== 1) return null
-    await client.query(
+    const inserted = await client.query(
       `insert into ops_diagnostic_session_events (
-         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
-       ) values ($1, $2, $3, $4, $5, $6, 'audit_only', $7, $8)`,
-      [event.id, companyId, session.id, actorUserId, event.type, actionKey, event.summary, at],
+         id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at, client_action_id
+       ) values ($1, $2, $3, $4, $5, $6, 'audit_only', $7, $8, $9)
+       on conflict (company_id, session_id, action_key, client_action_id)
+         where event_type = 'action.requested'
+           and action_key is not null
+           and client_action_id is not null
+       do nothing`,
+      [event.id, companyId, session.id, actorUserId, event.type, actionKey, event.summary, at, clientActionId],
     )
+    if (clientActionId && inserted.rowCount === 0) {
+      const existing = await lookupPersistentActionEventByClientActionIdTx(
+        client,
+        companyId,
+        session.id,
+        actionKey,
+        clientActionId,
+      )
+      if (existing) {
+        const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
+        const workLink = await latestPersistentOnsiteWorkLink(client, companyId, session.id, false)
+        return {
+          event: existing,
+          agentFeed: null,
+          deliveries,
+          workLink,
+          acceptedAction: acceptedActionFromResult(existing.action_result, actionKey) ?? undefined,
+          replayed: true,
+        }
+      }
+    }
     let workLink: OpsOnsiteDiagnosticWorkLink | null = null
     if (actionKey === 'capture_field_context') {
       workLink = await ensureOnsiteDiagnosticWorkLinkTx(client, {
@@ -894,18 +1005,23 @@ async function recordPersistentOnsiteDiagnosticAction(
     })
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
     workLink = workLink ?? (await latestPersistentOnsiteWorkLink(client, companyId, session.id, false))
-    return { agentFeed, deliveries, workLink }
+    return { event, agentFeed, deliveries, workLink, acceptedAction: undefined, replayed: false }
   })
   if (!result) return null
   const linkedSession = result.workLink ? sessionWithWorkLink(session, result.workLink) : session
+  const auditEvents = linkedSession.audit_events.some((candidate) => candidate.id === result.event.id)
+    ? linkedSession.audit_events
+    : [...linkedSession.audit_events, result.event]
   return {
     session: {
       ...linkedSession,
-      audit_events: [...linkedSession.audit_events, event],
+      audit_events: auditEvents,
       agent_feed_deliveries: result.deliveries,
     },
-    event,
+    event: result.event,
     agentFeed: result.agentFeed,
+    ...(result.acceptedAction ? { acceptedAction: result.acceptedAction } : {}),
+    replayed: result.replayed,
   }
 }
 
@@ -1818,6 +1934,8 @@ type PersistentEventRow = {
   effect: string
   summary: string
   created_at: string | Date
+  client_action_id: string | null
+  result: unknown
 }
 
 type PersistentAgentFeedDeliveryRow = {
@@ -1897,24 +2015,72 @@ async function listPersistentEvents(
   sessionId: string,
 ): Promise<OpsOnsiteDiagnosticAuditEvent[]> {
   const result = await client.query<PersistentEventRow>(
-    `select id, actor_user_id, event_type, action_key, effect, summary, created_at
+    `select id, actor_user_id, event_type, action_key, effect, summary, created_at, client_action_id, result
        from ops_diagnostic_session_events
       where company_id = $1 and session_id = $2::uuid
       order by created_at asc`,
     [companyId, sessionId],
   )
-  return result.rows.map((row) => {
-    const actionKey = actionKeyValue(row.action_key)
-    return {
-      id: row.id,
-      at: isoString(row.created_at),
-      actor_user_id: row.actor_user_id,
-      type: row.event_type === 'action.requested' ? 'action.requested' : 'session.started',
-      ...(actionKey ? { action_key: actionKey } : {}),
-      effect: 'audit_only',
-      summary: row.summary,
-    }
-  })
+  return result.rows.map(persistentEventFromRow)
+}
+
+async function lookupPersistentActionEventByClientActionIdTx(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  clientActionId: string,
+): Promise<OpsOnsiteDiagnosticAuditEvent | null> {
+  const result = await client.query<PersistentEventRow>(
+    `select id, actor_user_id, event_type, action_key, effect, summary, created_at, client_action_id, result
+       from ops_diagnostic_session_events
+      where company_id = $1
+        and session_id = $2::uuid
+        and action_key = $3
+        and client_action_id = $4
+        and event_type = 'action.requested'
+      order by created_at asc, id asc
+      limit 1`,
+    [companyId, sessionId, actionKey, clientActionId],
+  )
+  const row = result.rows[0]
+  return row ? persistentEventFromRow(row) : null
+}
+
+function persistentEventFromRow(row: PersistentEventRow): OpsOnsiteDiagnosticAuditEvent {
+  const actionKey = actionKeyValue(row.action_key)
+  const actionResult = objectValue(row.result)
+  return {
+    id: row.id,
+    at: isoString(row.created_at),
+    actor_user_id: row.actor_user_id,
+    type: row.event_type === 'action.requested' ? 'action.requested' : 'session.started',
+    ...(actionKey ? { action_key: actionKey } : {}),
+    client_action_id: row.client_action_id ?? null,
+    effect: 'audit_only',
+    summary: row.summary,
+    action_result: actionResult ?? null,
+  }
+}
+
+async function persistOnsiteDiagnosticActionResult(
+  companyId: string,
+  sessionId: string,
+  eventId: string,
+  acceptedAction: OpsOnsiteDiagnosticAcceptedAction,
+): Promise<void> {
+  try {
+    await withMutationTx(companyId, async (client: PoolClient) => {
+      await client.query(
+        `update ops_diagnostic_session_events
+            set result = $4::jsonb
+          where company_id = $1 and session_id = $2::uuid and id = $3::uuid`,
+        [companyId, sessionId, eventId, JSON.stringify(acceptedActionRecord(acceptedAction))],
+      )
+    })
+  } catch {
+    // The action already ran; idempotency result persistence should not mask it.
+  }
 }
 
 async function listPersistentAgentFeedDeliveries(
@@ -2243,6 +2409,44 @@ function boundedString(value: unknown, maxLength: number): string | null {
   return trimmed.slice(0, maxLength)
 }
 
+function clientActionIdFromRequest(req: http.IncomingMessage, body: Record<string, unknown>): string | null {
+  const bodyValue = boundedString(body.client_action_id, 120)
+  if (bodyValue) return bodyValue
+  const header = req.headers?.['idempotency-key']
+  const headerValue = Array.isArray(header) ? header[0] : header
+  return boundedString(headerValue, 120)
+}
+
+function acceptedActionRecord(action: OpsOnsiteDiagnosticAcceptedAction): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(action)) as Record<string, unknown>
+}
+
+function acceptedActionFromResult(
+  result: unknown,
+  fallbackActionKey: OpsOnsiteDiagnosticActionKey,
+): OpsOnsiteDiagnosticAcceptedAction | null {
+  const object = objectValue(result)
+  if (!object) return null
+  const actionKey = actionKeyValue(object.key) ?? fallbackActionKey
+  const acceptedAction: OpsOnsiteDiagnosticAcceptedAction = {
+    key: actionKey,
+    effect: 'audit_only',
+  }
+  const desktopEvidence = objectValue(object.desktop_evidence)
+  if (desktopEvidence) {
+    acceptedAction.desktop_evidence = desktopEvidence as unknown as OpsOnsiteDiagnosticDesktopEvidenceResult
+  }
+  const captureRoute = objectValue(object.capture_route)
+  if (captureRoute) {
+    acceptedAction.capture_route = captureRoute as unknown as OpsOnsiteDiagnosticCaptureRouteResult
+  }
+  const agentFeed = objectValue(object.agent_feed)
+  if (agentFeed) {
+    acceptedAction.agent_feed = agentFeed as unknown as OpsOnsiteDiagnosticAgentFeedResult
+  }
+  return acceptedAction
+}
+
 function hashControlToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex')
 }
@@ -2331,6 +2535,7 @@ export async function __recordPersistentOnsiteDiagnosticActionForTests(
     actionKey: OpsOnsiteDiagnosticActionKey
     actionLabel: string
     actorUserId: string | null
+    clientActionId?: string | null
   },
   runTx: OpsDiagnosticsTxRunner,
 ): ReturnType<typeof recordPersistentOnsiteDiagnosticAction> {
@@ -2340,6 +2545,7 @@ export async function __recordPersistentOnsiteDiagnosticActionForTests(
     args.actionKey,
     args.actionLabel,
     args.actorUserId,
+    args.clientActionId ?? null,
     runTx,
   )
 }
