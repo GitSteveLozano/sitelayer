@@ -233,6 +233,31 @@ check_lockfile_sync() {
   return 0
 }
 
+# Fresh git worktrees do not carry node_modules. The lockfile check above is
+# deliberately dry-run/read-only, but the following static steps execute eslint,
+# prettier, and tsc from the installed dependency tree. Install once per
+# lockfile hash so merge-queue/cache worktrees are self-contained without
+# forcing every hot local run to reinstall.
+ensure_node_modules() {
+  if [ ! -f package-lock.json ]; then
+    warn "no package-lock.json at repo root — dependency install cannot run."
+    return 1
+  fi
+
+  local lock_hash stamp_file stamp_hash
+  lock_hash="$(sha256sum package-lock.json | awk '{print $1}')"
+  stamp_file="node_modules/.sitelayer-lock.sha256"
+  stamp_hash="$(cat "$stamp_file" 2>/dev/null || true)"
+
+  if [ -d node_modules ] && [ "$lock_hash" = "$stamp_hash" ]; then
+    return 0
+  fi
+
+  echo "  -> npm ci (node_modules missing or lockfile changed)"
+  SITELAYER_SKIP_HOOKS=1 npm ci --no-audit --no-fund || return 1
+  printf '%s\n' "$lock_hash" >"$stamp_file"
+}
+
 # ============================================================================
 # Stage: static — shell syntax, lockfile-sync, migration immutability,
 #        dockerfile-import guard, prettier --check, eslint, typecheck
@@ -244,6 +269,8 @@ stage_static() {
 
   echo "  -> package-lock sync (npm ci --dry-run)"
   check_lockfile_sync || return 1
+
+  ensure_node_modules || return 1
 
   if [ -f scripts/check-migrations-immutable.sh ]; then
     echo "  -> migration immutability"
