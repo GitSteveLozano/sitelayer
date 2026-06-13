@@ -293,6 +293,26 @@ describeIntegration('API Integration Tests', () => {
     expect(result.status).toBe(404)
   })
 
+  it('GET /api/integrations/qbo/callback is NOT company-gated — a header-less callback reaches the signed-state handler', async () => {
+    // Regression for the multi-tenant onboarding blocker: the public QBO
+    // OAuth callback runs under the synthetic `qbo-oauth-redirect` identity,
+    // which is a member of NO company, so the company gate (server.ts) would
+    // 404 (`company slug ... not found`) BEFORE routes/qbo.ts could resolve
+    // the tenant from the HMAC-signed `state` param — blocking every tenant
+    // that isn't the env-default company. With the isQboCallback exemption,
+    // the gate is bypassed and the request reaches qbo.ts, which (given no
+    // code/realmId/state) returns `400 {error:'missing code, realmId, or
+    // state'}`. We send NO x-sitelayer-company-slug and NO membership.
+    const result = await rawHttpCall('GET', '/api/integrations/qbo/callback', '', {})
+    // Must NOT be the company-gate 404 (that would mean the exemption is gone).
+    expect(result.status).not.toBe(404)
+    expect(result.body).not.toContain('not found')
+    // Must reach qbo.ts and fail on the missing OAuth params, proving the
+    // signed-state handler ran instead of the premature company 404.
+    expect(result.status).toBe(400)
+    expect(result.body).toContain('missing code, realmId, or state')
+  })
+
   it('POST /api/webhooks/clerk rejects requests with no signature (public path, but svix-required)', async () => {
     // No svix headers → 400 if secret configured, 503 if not. Either way, must NOT 401.
     const result = await rawHttpCall('POST', '/api/webhooks/clerk', '{}', {})

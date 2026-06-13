@@ -930,6 +930,18 @@ const server = http.createServer(async (req, res) => {
               ])
               const workRequestCallbackWorkItemId = matchWorkRequestCallbackWorkItemId(req.method, url.pathname)
               const isWorkRequestCallback = workRequestCallbackWorkItemId !== null
+              // The QBO OAuth callback is public and SELF-RESOLVES its tenant
+              // from the HMAC-signed `state` param inside routes/qbo.ts
+              // (decodeQboState verifies the QBO_STATE_SECRET signature, then
+              // re-checks the user is a member of stateData.companyId). The
+              // synthetic `qbo-oauth-redirect` identity is a member of no
+              // company, so getCompany() returns null below — which would 404
+              // the request at the company gate BEFORE qbo.ts ever runs. Mirror
+              // the isWorkRequestCallback precedent: mark the callback so the
+              // gate hands it a placeholder ActiveCompany and lets qbo.ts do the
+              // real (signed-state) authorization. ctx.company is never read on
+              // the callback path — only stateData.companyId is.
+              const isQboCallback = req.method === 'GET' && url.pathname === '/api/integrations/qbo/callback'
               const isPublicPath = PUBLIC_PATHS.has(url.pathname) || isWorkRequestCallback
               let identity: Identity
               try {
@@ -1082,7 +1094,26 @@ const server = http.createServer(async (req, res) => {
                       const active = await resolveWorkRequestCallbackCompany(pool, workRequestCallbackWorkItemId)
                       return active ? { active, effectiveBuiltin: companyRoleToBuiltin(active.role), grants: [] } : null
                     })()
-                  : await getCompany(req)
+                  : isQboCallback
+                    ? // Placeholder so the company gate doesn't 404 the public,
+                      // self-resolving QBO callback (see isQboCallback above).
+                      // qbo.ts ignores ctx.company on the callback path and binds
+                      // the tenant from the HMAC-signed state instead; this
+                      // ActiveCompany only exists to satisfy the dispatch ctx
+                      // shape. It is NOT a real tenant — no real company id is
+                      // bound, so no tenant data is reachable through it.
+                      {
+                        active: {
+                          id: '00000000-0000-0000-0000-000000000000',
+                          slug: 'qbo-oauth-callback',
+                          name: 'QBO OAuth Callback',
+                          created_at: '',
+                          role: 'member' as CompanyRole,
+                        },
+                        effectiveBuiltin: companyRoleToBuiltin('member'),
+                        grants: [],
+                      }
+                    : await getCompany(req)
               // First-user self-onboard. The Clerk webhook that mirrors
               // org membership into `company_memberships` isn't wired
               // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
@@ -1136,7 +1167,20 @@ const server = http.createServer(async (req, res) => {
               // context. mutation-tx.ts reads this to `SET LOCAL app.company_id`
               // on every withMutationTx() and withCompanyClient() tx, which the
               // RLS policies created by migration 066 use to scope rows.
-              requestContext.companyId = company.active.id
+              //
+              // EXCEPTION: the QBO callback's `company` is a placeholder (no
+              // real tenant id — see the isQboCallback branch above). Binding
+              // the all-zeros placeholder would `SET LOCAL app.company_id` to a
+              // bogus id and make the company_isolation RLS WITH CHECK
+              // (`company_id = app_current_company_id()`) REJECT the connection
+              // INSERT that qbo.ts writes against the real `stateData.companyId`.
+              // Leaving it unset keeps `app_current_company_id()` NULL, which
+              // the policy's NULL branch allows; qbo.ts still scopes correctly
+              // via its explicit `withCompanyClient(stateData.companyId, …)` and
+              // `upsertIntegrationConnection(…, stateData.companyId, …)` calls.
+              if (!isQboCallback) {
+                requestContext.companyId = company.active.id
+              }
               scope.setTag('company_id', company.active.id)
 
               // HTTP-layer idempotency. Resolve the Idempotency-Key header (if
