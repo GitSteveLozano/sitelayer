@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card, MobileButton } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { ErrorState } from '@/components/shell/ErrorState'
+import { MErrorState } from '@/components/m-states'
 import { useCreateMeasurement, useServiceItems, type ServiceItem } from '@/lib/api'
 import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
 
@@ -170,17 +170,12 @@ export function PhotoMeasureScreen() {
 
   if (!projectId) {
     return (
-      <ErrorState
+      <MErrorState
         title="Missing project"
         body="Open this screen from a project so we know where to save the measurement."
-        retry={
-          <Link
-            to="/projects"
-            className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
-          >
-            Pick a project
-          </Link>
-        }
+        code="SLR_400 · MISSING PROJECT"
+        primaryLabel="Pick a project"
+        onPrimary={() => navigate('/projects')}
       />
     )
   }

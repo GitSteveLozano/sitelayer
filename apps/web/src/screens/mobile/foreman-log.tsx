@@ -1,8 +1,9 @@
 /**
  * Daily log builder — `fm-log` (mobile).
  *
- * The end-of-day report. Mirrors `apps/web/src/screens/foreman/daily-log.tsx`
- * scaled for the mobile shell:
+ * The end-of-day report, scaled for the mobile shell. (Its desktop-era
+ * ancestor, screens/foreman/daily-log.tsx, was deleted in the 2026-06-12
+ * legacy purge.)
  *
  *   - Real daily-log row via the daily-logs API (`useCreateDailyLog`,
  *     `usePatchDailyLog`, `useSubmitDailyLog`). The screen finds or

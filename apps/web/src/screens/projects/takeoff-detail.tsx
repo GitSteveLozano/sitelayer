@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill, useConfirmSheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { ErrorState } from '@/components/shell/ErrorState'
+import { MErrorState } from '@/components/m-states'
 import {
   useDeleteMeasurement,
   useProject,
@@ -52,7 +52,7 @@ export function TakeoffDetailScreen() {
   if (!projectId || !measurementId) {
     return (
       <div className="px-5 pt-8">
-        <ErrorState title="Bad URL" body="Missing project or measurement id." />
+        <MErrorState title="Bad URL" body="Missing project or measurement id." code="SLR_400 · BAD URL" />
       </div>
     )
   }
@@ -69,7 +69,11 @@ export function TakeoffDetailScreen() {
         <Link to={`/projects/${projectId}?tab=takeoff`} className="text-accent text-[13px] font-medium">
           ← Measurements
         </Link>
-        <ErrorState title="Measurement not found" body="It may have been deleted on another device." />
+        <MErrorState
+          title="Measurement not found"
+          body="It may have been deleted on another device."
+          code="SLR_404 · NOT FOUND"
+        />
       </div>
     )
   }

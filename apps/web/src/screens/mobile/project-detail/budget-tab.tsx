@@ -129,8 +129,7 @@ function ClosingSummaryCard({ projectId }: { projectId: string }) {
           padding: 14,
           fontSize: 12,
           color: 'var(--m-ink-3)',
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
           background: 'var(--m-card-soft)',
         }}
       >
@@ -147,8 +146,7 @@ function ClosingSummaryCard({ projectId }: { projectId: string }) {
           padding: 14,
           fontSize: 12,
           color: 'var(--m-red)',
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
         }}
       >
         Could not load closeout summary.
@@ -169,8 +167,7 @@ function ClosingSummaryCard({ projectId }: { projectId: string }) {
         <div
           style={{
             padding: '14px 16px',
-            border: '1px solid var(--m-line)',
-            borderRadius: 12,
+            border: '2px solid var(--m-ink)',
             background: 'var(--m-card-soft)',
           }}
         >
@@ -202,8 +199,7 @@ function ClosingSummaryCard({ projectId }: { projectId: string }) {
     <div style={{ padding: '0 16px 12px' }}>
       <div
         style={{
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
           overflow: 'hidden',
           background: 'var(--m-card)',
         }}
@@ -402,8 +398,7 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
           padding: 14,
           fontSize: 12,
           color: 'var(--m-ink-3)',
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
           background: 'var(--m-card-soft)',
         }}
       >
@@ -420,8 +415,7 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
           padding: 14,
           fontSize: 12,
           color: 'var(--m-red)',
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
         }}
       >
         Could not load scope variance.
@@ -436,8 +430,7 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
         <div
           style={{
             padding: '14px 16px',
-            border: '1px solid var(--m-line)',
-            borderRadius: 12,
+            border: '2px solid var(--m-ink)',
             background: 'var(--m-card-soft)',
           }}
         >

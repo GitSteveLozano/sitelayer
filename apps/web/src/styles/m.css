@@ -1,54 +1,10 @@
-/* Mobile design tokens — v2 brutalist (Steve's v2, 2026-05-28).
- * This :root MIRRORS styles/tokens.css (the single source of truth); main.tsx
- * loads m.css AFTER globals.css, so this block wins for shared vars. The two
- * are byte-identical today — keep them in sync. Deduping this into an
- * `@import './tokens.css'` is deferred (load-order/@import-hoist-sensitive,
- * needs a green build to verify); see the header note in tokens.css. */
-:root {
-  --m-sand: #ede7da;
-  --m-sand-2: #e0d8c5;
-  --m-bg: #ede7da;
-  --m-card: #ede7da;
-  --m-card-soft: #f4efe3;
-  --m-line: #0f0e0c;
-  --m-line-2: #c8c0ac;
-
-  --m-ink: #0f0e0c;
-  --m-ink-2: #2e2a23;
-  --m-ink-3: #50493e;
-  --m-ink-4: #8b8474;
-
-  --m-accent: #ffd400;
-  --m-accent-ink: #1f1900;
-  --m-accent-soft: #ffd400;
-  --m-accent-soft-2: #ffd400;
-
-  --m-green: #1a8a4c;
-  --m-green-soft: #1a8a4c;
-  --m-red: #c7331e;
-  --m-red-soft: #c7331e;
-  --m-amber: #c58a14;
-  --m-amber-soft: #c58a14;
-  --m-blue: #2e2a23;
-  --m-blue-soft: #2e2a23;
-
-  --m-r-sm: 0;
-  --m-r: 0;
-  --m-r-lg: 0;
-  --m-r-xl: 0;
-
-  --m-shadow-1: none;
-  --m-shadow-2: 6px 6px 0 var(--m-ink);
-  --m-shadow-card: none;
-  --m-shadow-offset: 6px 6px 0 var(--m-ink);
-  --m-shadow-offset-lg: 8px 8px 0 var(--m-ink);
-
-  --m-stop-hatch: repeating-linear-gradient(135deg, transparent 0 28px, rgba(0, 0, 0, 0.14) 28px 32px);
-
-  --m-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --m-font-display: 'Inter Tight', 'Inter', system-ui, sans-serif;
-  --m-num: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-}
+/* Mobile component CSS — v2 brutalist (Steve's v2, 2026-05-28).
+ * Design tokens (the :root and .m-dark --m-* custom-property blocks) live in
+ * styles/tokens.css ONLY — the single source of truth, loaded BEFORE this file
+ * via globals.css in main.tsx. The duplicate hand-synced blocks that used to
+ * sit here were removed in the 2026-06-12 legacy purge (verified
+ * declaration-identical to tokens.css before deletion, so computed values are
+ * unchanged). Do NOT re-add token declarations here; edit tokens.css. */
 
 /* ============================================================
    FOCUS-VISIBLE — keyboard a11y baseline
@@ -94,42 +50,8 @@ a:focus-visible,
   }
 }
 
-/* v2 WORKER dark theme — mirrors the .m-dark block in tokens.css. Genuinely
- * inverted: bg = ink, text = sand, yellow is the only light source. */
-.m-dark {
-  --m-sand: #0f0e0c;
-  --m-sand-2: #e0d8c5;
-  --m-bg: #0f0e0c;
-  --m-card: #0f0e0c;
-  --m-card-soft: #2e2a23;
-  --m-line: #e0d8c5;
-  --m-line-2: #2e2a23;
-
-  --m-ink: #ede7da;
-  --m-ink-2: #e0d8c5;
-  --m-ink-3: #b8b0a0;
-  --m-ink-4: #8b8474;
-
-  --m-accent: #ffd400;
-  --m-accent-ink: #1f1900;
-  --m-accent-soft: #ffd400;
-  --m-accent-soft-2: #ffd400;
-
-  --m-green: #1a8a4c;
-  --m-green-soft: #1a8a4c;
-  --m-red: #c7331e;
-  --m-red-soft: #c7331e;
-  --m-amber: #c58a14;
-  --m-amber-soft: #c58a14;
-  --m-blue: #e0d8c5;
-  --m-blue-soft: #e0d8c5;
-
-  --m-shadow-1: none;
-  --m-shadow-2: 6px 6px 0 var(--m-sand-2);
-  --m-shadow-card: none;
-  --m-shadow-offset: 6px 6px 0 var(--m-sand-2);
-  --m-shadow-offset-lg: 8px 8px 0 var(--m-sand-2);
-}
+/* v2 WORKER dark theme tokens (.m-dark) live in styles/tokens.css with the
+ * rest of the token blocks — see the header note above. */
 
 /* ============================================================
    MOBILE PRIMITIVES — shared classes used by all phone screens.

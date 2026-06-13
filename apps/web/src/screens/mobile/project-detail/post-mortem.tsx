@@ -115,7 +115,14 @@ export function MobilePostMortem() {
             )}
 
             {worst ? (
-              <div style={{ margin: '12px 16px', padding: 14, background: 'var(--m-accent)', borderRadius: 12 }}>
+              <div
+                style={{
+                  margin: '12px 16px',
+                  padding: 14,
+                  background: 'var(--m-accent)',
+                  border: '2px solid var(--m-ink)',
+                }}
+              >
                 <div
                   className="num"
                   style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--m-accent-ink)' }}

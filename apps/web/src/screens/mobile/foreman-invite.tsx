@@ -41,8 +41,9 @@ export function ForemanInviteScreen() {
   const accept = useAcceptInvite(token ?? '')
 
   const invite = view.data?.invite
-  const company = invite?.company_name ?? searchParams.get('company') ?? 'LA Operations'
-  const owner = searchParams.get('from') ?? 'Steve Lozano'
+  const company = invite?.company_name ?? searchParams.get('company') ?? 'their company'
+  const ownerParam = searchParams.get('from')
+  const owner = ownerParam ?? 'The owner'
 
   const onAccept = async () => {
     setBusy(true)
@@ -68,7 +69,11 @@ export function ForemanInviteScreen() {
   return (
     <div className="m-host">
       <MShell>
-        <MTopBar eyebrow="Invitation" title="You're invited" sub={`From ${owner}`} />
+        <MTopBar
+          eyebrow="Invitation"
+          title="You're invited"
+          sub={ownerParam ? `From ${ownerParam}` : 'Company invitation'}
+        />
         <MBody>
           <div style={{ padding: '20px 20px 0' }}>
             <h1

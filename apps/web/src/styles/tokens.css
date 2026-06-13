@@ -9,17 +9,15 @@
  * JetBrains Mono micro-labels. .m-dark is now the genuinely-inverted v2 worker
  * dark theme (ink bg, yellow is the only light source).
  *
- * SINGLE-SOURCE STATUS (responsive-consolidation Phase A):
+ * SINGLE-SOURCE STATUS:
  *   - tailwind.config.cjs no longer hardcodes a third copy of the font stacks;
  *     its `fontFamily` now READS the --m-font* vars below (like colors/radii/
  *     shadows already do), so this file is the single source for the fonts.
- *   - m.css STILL carries a NEAR-DUPLICATE :root (and .m-dark) block. It loads
- *     after this file via main.tsx and intentionally "wins" for shared vars,
- *     and the two blocks are byte-identical today. Deduping it (e.g. making
- *     m.css `@import './tokens.css'`) was deliberately NOT done here: it is
- *     load-order- / PostCSS-@import-hoist-sensitive and could not be verified
- *     without a build in this change. Until that is done with a green build,
- *     keep the m.css :root + .m-dark blocks byte-in-sync with the ones here.
+ *   - m.css's duplicate :root + .m-dark blocks were REMOVED in the 2026-06-12
+ *     legacy purge (they were verified declaration-identical to the blocks
+ *     below before deletion, so computed values are unchanged). This file —
+ *     loaded before m.css via globals.css in main.tsx — is now the ONLY place
+ *     the --m-* token blocks live. Never re-introduce a second copy.
  *
  * Naming convention: --m-* (mobile) is the canonical prefix because the
  * design is mobile-first; the same tokens drive desktop. Don't add
@@ -86,8 +84,8 @@
   /* Type stacks (v2). Self-hosted woff2 (see styles/fonts.css); field workers
    * are offline-first so we do NOT rely on a webfont CDN. Inter Tight = display
    * + big-numbers; Inter = body + buttons; JetBrains Mono = eyebrows / pills /
-   * tabs / meta and all UPPERCASE micro-labels. Keep in sync with m.css :root
-   * and tailwind.config.cjs fontFamily. */
+   * tabs / meta and all UPPERCASE micro-labels. tailwind.config.cjs fontFamily
+   * reads these vars; m.css no longer carries a copy. */
   --m-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --m-font-display: 'Inter Tight', 'Inter', system-ui, sans-serif;
   --m-num: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;

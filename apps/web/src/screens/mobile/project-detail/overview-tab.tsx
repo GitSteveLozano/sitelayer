@@ -3,7 +3,6 @@ import type { ProjectLifecycleState } from '@/lib/api/project-lifecycle'
 import { MButton, MI, MListInset, MListRow, MSectionH } from '../../../components/m/index.js'
 import { MAiStripe } from '../../../components/m/ai.js'
 import { BidAccuracyCard } from '../../projects/bid-accuracy-card.js'
-import { LifecycleBanner } from '../../../components/lifecycle/banner.js'
 import { CloseoutBanner } from '../../../components/closeout/banner.js'
 import { getActiveCompanySlug } from '../../../lib/api/client.js'
 import { useProjectLifecycle } from '../../../machines/project-lifecycle.js'
@@ -28,10 +27,12 @@ export function Overview({
 
   // Single source for the pipeline state of the per-state CTA card below:
   // the project_lifecycle workflow snapshot (NOT the legacy `status`
-  // regex). The LifecycleBanner above owns the advance-pipeline actions;
-  // this lifted instance feeds ProjectStatePanel's contextual copy so the
-  // two never diverge. Falls back to the row's lifecycle_state, then
-  // 'draft', while the snapshot loads.
+  // regex). This lifted instance feeds ProjectStatePanel's contextual
+  // copy. Falls back to the row's lifecycle_state, then 'draft', while
+  // the snapshot loads. (The legacy LifecycleBanner render — debug noise
+  // that printed API endpoints into this customer surface — was removed
+  // in the 2026-06-12 legacy purge; the desktop owner-project-detail
+  // banner still owns the advance-pipeline actions.)
   const lifecycle = useProjectLifecycle(project.id, getActiveCompanySlug())
   const lifecycleState: ProjectLifecycleState =
     (lifecycle.snapshot?.state as ProjectLifecycleState | undefined) ??
@@ -40,15 +41,6 @@ export function Overview({
 
   return (
     <div style={{ paddingTop: 8 }}>
-      {/* Project-lifecycle workflow banner — server-truth state +
-          next_events from the project-lifecycle reducer
-          (packages/workflows/src/project-lifecycle.ts) consumed via
-          the headless useProjectLifecycle XState machine
-          (apps/web/src/machines/project-lifecycle.ts). See
-          docs/DETERMINISTIC_WORKFLOWS.md. */}
-      <div style={{ padding: '0 16px 12px' }}>
-        <LifecycleBanner projectId={project.id} />
-      </div>
       {/* Project-closeout workflow banner — server-truth state +
           next_events from the project-closeout reducer
           (packages/workflows/src/project-closeout.ts) consumed via

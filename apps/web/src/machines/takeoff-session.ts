@@ -22,7 +22,7 @@ import { calculateLinealLength, calculatePolygonArea, type PitchDriver, type Tak
  *      straight into any state via {@link takeoffSessionSeedActor} (xstate
  *      `resolveState` rehydration — no entry side-effects fire).
  *
- * House style (see docs/DETERMINISTIC_WORKFLOWS.md + machines/onboarding-wizard.ts):
+ * House style (see docs/DETERMINISTIC_WORKFLOWS.md + machines/estimate-push.ts):
  *   - This is an ARCHETYPE B local-orchestration machine. There is NO server
  *     takeoff workflow to mirror, so its states are local UI states.
  *   - Business data (the measurement rows themselves) is NOT mirrored here — it

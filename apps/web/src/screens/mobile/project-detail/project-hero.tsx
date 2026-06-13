@@ -550,8 +550,7 @@ function TerminalHero({
             textTransform: 'uppercase',
             color: 'var(--m-ink)',
             background: 'transparent',
-            border: '1px solid var(--m-line)',
-            borderRadius: 8,
+            border: '2px solid var(--m-ink)',
             padding: '8px 14px',
             cursor: 'pointer',
           }}
