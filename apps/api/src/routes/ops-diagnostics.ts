@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import { createHash, randomUUID } from 'node:crypto'
-import type { PoolClient } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import type { Capability } from '@sitelayer/domain'
 import type { ProjectEventEnvelope, WorkRequest } from '@operator/projectkit'
 import {
@@ -17,7 +17,13 @@ import {
 } from '../context-handoff.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
-import { AGENT_FEED_TOKENS_ENV, insertAgentFeedConcernTx, parseAgentFeedTokens } from './agent-feed.js'
+import {
+  AGENT_FEED_TOKENS_ENV,
+  insertAgentFeedConcernTx,
+  loadAgentFeedAudienceLiveness,
+  parseAgentFeedTokens,
+  type AgentFeedAudienceLiveness,
+} from './agent-feed.js'
 import { insertSupportPacket, supportJsonRecord } from './support-packets.js'
 
 export type OpsDiagnosticStatus = 'ok' | 'degraded' | 'unavailable' | 'error' | 'unauthorized'
@@ -217,12 +223,14 @@ export type OpsDiagnosticsResponse = {
 export type OpsDiagnosticsRouteCtx = {
   requireCapability: (capability: Capability) => Promise<boolean>
   sendJson: (status: number, body: unknown) => void
+  pool?: Pool
   company?: ActiveCompany
   storage?: BlueprintStorage
   buildSha?: string
   readBody?: () => Promise<Record<string, unknown>>
   getCurrentUserId?: () => string
   fetchImpl?: typeof fetch
+  agentFeedLiveness?: AgentFeedAudienceLiveness | null
 }
 
 type ProbeResult = {
@@ -241,6 +249,7 @@ type OpsDiagnosticsBuildOptions = {
   captureRouterUrl?: string
   agentFeedTokensEnv?: string | undefined
   diagnosticAgentAudience?: string | null | undefined
+  agentFeedLiveness?: AgentFeedAudienceLiveness | null
 }
 
 const DEFAULT_TIMEOUT_MS = 900
@@ -275,7 +284,7 @@ export async function handleOpsDiagnosticsRoutes(
     }
     if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
 
-    const response = await buildOpsDiagnostics(diagnosticsOptions(ctx))
+    const response = await buildOpsDiagnosticsForContext(ctx)
     ctx.sendJson(200, response)
     return true
   }
@@ -297,7 +306,7 @@ export async function handleOpsDiagnosticsRoutes(
         ctx.sendJson(400, { error: body.error })
         return true
       }
-      const diagnostics = await buildOpsDiagnostics(diagnosticsOptions(ctx))
+      const diagnostics = await buildOpsDiagnosticsForContext(ctx)
       const created = await createOnsiteDiagnosticSession(ctx, {
         body: body.value,
         plan: diagnostics.onsite_session,
@@ -400,6 +409,23 @@ export async function handleOpsDiagnosticsRoutes(
   return false
 }
 
+async function buildOpsDiagnosticsForContext(ctx: OpsDiagnosticsRouteCtx): Promise<OpsDiagnosticsResponse> {
+  const options = diagnosticsOptions(ctx)
+  if (ctx.agentFeedLiveness !== undefined) {
+    options.agentFeedLiveness = ctx.agentFeedLiveness
+  } else if (ctx.pool) {
+    const audience = boundedString(options.diagnosticAgentAudience, 80)
+    if (audience) {
+      try {
+        options.agentFeedLiveness = await loadAgentFeedAudienceLiveness(ctx.pool, audience)
+      } catch {
+        options.agentFeedLiveness = null
+      }
+    }
+  }
+  return buildOpsDiagnostics(options)
+}
+
 function diagnosticsOptions(ctx: OpsDiagnosticsRouteCtx): OpsDiagnosticsBuildOptions {
   const options: OpsDiagnosticsBuildOptions = {
     timeoutMs: readTimeoutMs(),
@@ -434,7 +460,7 @@ export async function buildOpsDiagnostics(opts: OpsDiagnosticsBuildOptions = {})
     summarizeGatewayDiagnostics(gatewayProbe),
     summarizeScreenCapture(screenProbe),
     summarizeCaptureRouter(routerProbe),
-    summarizeAgentFeedRouting(opts.diagnosticAgentAudience, opts.agentFeedTokensEnv),
+    summarizeAgentFeedRouting(opts.diagnosticAgentAudience, opts.agentFeedTokensEnv, opts.agentFeedLiveness),
   ]
   const summary = {
     total: components.length,
@@ -2442,11 +2468,13 @@ function summarizeCaptureRouter(probe: ProbeResult): OpsDiagnosticComponent {
 function summarizeAgentFeedRouting(
   audienceRaw: string | null | undefined,
   tokensRaw: string | undefined,
+  liveness: AgentFeedAudienceLiveness | null | undefined,
 ): OpsDiagnosticComponent {
   const audience = boundedString(audienceRaw, 80)
   const tokens = parseAgentFeedTokens(tokensRaw)
   const audienceCount = tokens?.size ?? 0
   const audienceHasToken = Boolean(audience && tokens?.has(audience))
+  const audienceLive = Boolean(liveness?.live)
 
   if (!audience) {
     return agentFeedComponent(
@@ -2456,6 +2484,7 @@ function summarizeAgentFeedRouting(
       Boolean(tokens),
       audienceHasToken,
       audienceCount,
+      liveness,
     )
   }
 
@@ -2467,6 +2496,7 @@ function summarizeAgentFeedRouting(
       false,
       audienceHasToken,
       audienceCount,
+      liveness,
     )
   }
 
@@ -2478,16 +2508,30 @@ function summarizeAgentFeedRouting(
       true,
       false,
       audienceCount,
+      liveness,
+    )
+  }
+
+  if (!audienceLive) {
+    return agentFeedComponent(
+      'degraded',
+      'Onsite diagnostic audience has a token, but no recent executor poll is visible.',
+      true,
+      true,
+      true,
+      audienceCount,
+      liveness ?? null,
     )
   }
 
   return agentFeedComponent(
     'ok',
-    'Onsite diagnostic audience has an agent-feed token.',
+    'Onsite diagnostic audience has a token and recent executor poll.',
     true,
     true,
     true,
     audienceCount,
+    liveness,
   )
 }
 
@@ -2498,6 +2542,7 @@ function agentFeedComponent(
   tokensConfigured: boolean,
   audienceHasToken: boolean,
   audienceCount: number,
+  liveness: AgentFeedAudienceLiveness | null | undefined,
 ): OpsDiagnosticComponent {
   return {
     key: 'agent_feed',
@@ -2509,6 +2554,9 @@ function agentFeedComponent(
       audience_configured: audienceConfigured,
       tokens_configured: tokensConfigured,
       audience_has_token: audienceHasToken,
+      audience_live: liveness?.live === true,
+      last_poll_at: liveness?.last_poll_at ?? null,
+      last_poll_age_seconds: liveness?.last_poll_age_seconds ?? null,
       audience_count: audienceCount,
     },
   }
@@ -2538,7 +2586,7 @@ function buildOnsiteDiagnosticSessionPlan(
   const screenOk = screenCapture?.status === 'ok' && screenCapture.facts.recording === true
   const routerOk = captureRouter?.status === 'ok'
   const routerHasSink = typeof captureRouter?.facts.sinks === 'string' && captureRouter.facts.sinks.length > 0
-  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_has_token === true
+  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_live === true
   const canRouteWork = routerOk && routerHasSink && agentFeedReady
   const canDispatchAgentReview = gatewayOk && canRouteWork
   const blockers = [

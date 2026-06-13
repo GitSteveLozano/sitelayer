@@ -17,6 +17,7 @@ import {
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
+  type OpsDiagnosticsRouteCtx,
   type OpsOnsiteDiagnosticAuditEvent,
   type StoredOnsiteDiagnosticSession,
 } from './ops-diagnostics.js'
@@ -33,6 +34,20 @@ const AGENT_FEED_TOKENS_ENV = 'AGENT_FEED_TOKENS'
 const READY_AGENT_FEED_OPTIONS = {
   diagnosticAgentAudience: 'onsite-diagnostics',
   agentFeedTokensEnv: JSON.stringify({ 'onsite-diagnostics': 'ready-test-token' }),
+}
+
+function liveAgentFeedLiveness(overrides: Record<string, unknown> = {}) {
+  return {
+    audience: 'onsite-diagnostics',
+    last_poll_at: '2026-06-12T12:00:00.000Z',
+    last_poll_age_seconds: 10,
+    live: true,
+    ...overrides,
+  }
+}
+
+function readyOpsRouteCtx(ctx: OpsDiagnosticsRouteCtx): OpsDiagnosticsRouteCtx {
+  return { agentFeedLiveness: liveAgentFeedLiveness(), ...ctx }
 }
 
 class MemoryStorage implements BlueprintStorage {
@@ -375,6 +390,7 @@ describe('ops diagnostics', () => {
       captureRouterUrl: 'http://router.local',
       timeoutMs: 500,
       ...READY_AGENT_FEED_OPTIONS,
+      agentFeedLiveness: liveAgentFeedLiveness(),
     })
 
     expect(response.status).toBe('ok')
@@ -405,6 +421,9 @@ describe('ops diagnostics', () => {
         audience_configured: true,
         tokens_configured: true,
         audience_has_token: true,
+        audience_live: true,
+        last_poll_at: '2026-06-12T12:00:00.000Z',
+        last_poll_age_seconds: 10,
         audience_count: 1,
       },
     })
@@ -483,6 +502,46 @@ describe('ops diagnostics', () => {
     expect(JSON.stringify(response)).not.toContain('not-the-onsite-token')
   })
 
+  it('blocks routed actions when the onsite agent feed audience has no recent poll', async () => {
+    const response = await buildOpsDiagnostics({
+      fetchImpl: greenFetch(),
+      gatewayDiagnosticsUrl: 'http://gateway.local/api/diagnostics',
+      screenCaptureUrl: 'http://screen.local',
+      captureRouterUrl: 'http://router.local',
+      timeoutMs: 500,
+      ...READY_AGENT_FEED_OPTIONS,
+      agentFeedLiveness: null,
+    })
+
+    expect(response.status).toBe('degraded')
+    expect(response.components.find((c) => c.key === 'agent_feed')).toMatchObject({
+      status: 'degraded',
+      detail: 'Onsite diagnostic audience has a token, but no recent executor poll is visible.',
+      facts: {
+        audience_configured: true,
+        tokens_configured: true,
+        audience_has_token: true,
+        audience_live: false,
+        last_poll_at: null,
+        last_poll_age_seconds: null,
+      },
+    })
+    expect(response.onsite_session).toMatchObject({
+      status: 'limited',
+      control_level: 'capture',
+      can_capture_desktop: true,
+      can_route_work: false,
+      can_dispatch_agent_review: false,
+    })
+    expect(response.onsite_session.actions).toContainEqual(
+      expect.objectContaining({
+        key: 'dispatch_agent_review',
+        enabled: false,
+        reason: 'Gateway, capture router, and agent feed are not all ready.',
+      }),
+    )
+  })
+
   it('starts an expiring onsite diagnostic session without exposing the control token in later reads', async () => {
     await withReadyOpsAgentFeed(async () => {
       __resetOpsDiagnosticSessionsForTests()
@@ -491,7 +550,7 @@ describe('ops diagnostics', () => {
       const handled = await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async (capability) => {
             capabilities.push(capability)
             return true
@@ -500,7 +559,7 @@ describe('ops diagnostics', () => {
           readBody: async () => ({ label: 'Plant walkdown', intent: 'dispatch_agent_review' }),
           getCurrentUserId: () => 'user_42',
           fetchImpl: greenFetch(),
-        },
+        }),
       )
 
       expect(handled).toBe(true)
@@ -568,13 +627,13 @@ describe('ops diagnostics', () => {
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async () => true,
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({}),
           getCurrentUserId: () => 'user_42',
           fetchImpl,
-        },
+        }),
       )
       const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
 
@@ -695,13 +754,13 @@ describe('ops diagnostics', () => {
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async () => true,
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({ intent: 'capture_field_context' }),
           getCurrentUserId: () => 'user_42',
           fetchImpl,
-        },
+        }),
       )
       const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
 
@@ -755,13 +814,13 @@ describe('ops diagnostics', () => {
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async () => true,
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({ label: 'Plant walkdown', intent: 'dispatch_agent_review' }),
           getCurrentUserId: () => 'user_42',
           fetchImpl: greenFetch(),
-        },
+        }),
       )
       const created = createdResponses[0]?.body as {
         control_token: string
@@ -848,13 +907,13 @@ describe('ops diagnostics', () => {
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async () => true,
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({ label: 'Plant walkdown', intent: 'capture_field_context' }),
           getCurrentUserId: () => 'user_42',
           fetchImpl: greenFetch(),
-        },
+        }),
       )
       const created = createdResponses[0]?.body as {
         control_token: string
@@ -957,13 +1016,13 @@ describe('ops diagnostics', () => {
       await handleOpsDiagnosticsRoutes(
         { method: 'POST' } as http.IncomingMessage,
         new URL('http://localhost/api/ops/diagnostics/sessions'),
-        {
+        readyOpsRouteCtx({
           requireCapability: async () => true,
           sendJson: (status, body) => createdResponses.push({ status, body }),
           readBody: async () => ({ intent: 'capture_desktop_context' }),
           getCurrentUserId: () => 'user_42',
           fetchImpl,
-        },
+        }),
       )
       const created = createdResponses[0]?.body as { control_token: string; session: { id: string } }
 

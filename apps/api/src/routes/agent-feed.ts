@@ -61,6 +61,7 @@ const PENDING_CONCERNS_LIMIT = 20
 export const CAPTURE_ANALYSIS_MARKDOWN_MAX_BYTES = 64 * 1024
 
 export const CAPTURE_ANALYZER_AUDIENCE = 'capture-analyzer'
+const DEFAULT_AUDIENCE_LIVENESS_MAX_AGE_SECONDS = 300
 
 const TERMINAL_CALLBACK_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
 
@@ -79,6 +80,13 @@ export type AgentFeedRouteDeps = {
   sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
   /** Raw AGENT_FEED_TOKENS value; defaults to process.env (injectable for tests). */
   tokensEnv?: string | undefined
+}
+
+export type AgentFeedAudienceLiveness = {
+  audience: string
+  last_poll_at: string | null
+  last_poll_age_seconds: number | null
+  live: boolean
 }
 
 /**
@@ -135,6 +143,49 @@ function resolveTokenAudience(req: http.IncomingMessage, tokens: Map<string, str
     if (constantTimeEquals(presented, token)) matched = audience
   }
   return matched
+}
+
+function agentFeedLivenessMaxAgeSeconds(): number {
+  const parsed = Number(process.env.SITELAYER_AGENT_FEED_LIVENESS_MAX_AGE_SECONDS)
+  if (!Number.isFinite(parsed)) return DEFAULT_AUDIENCE_LIVENESS_MAX_AGE_SECONDS
+  return Math.max(30, Math.min(3600, Math.floor(parsed)))
+}
+
+export async function recordAgentFeedAudiencePoll(executor: LedgerExecutor, audience: string): Promise<void> {
+  await executor.query(
+    `insert into agent_feed_audience_liveness (
+       audience, last_poll_at, updated_at
+     ) values ($1, now(), now())
+     on conflict (audience) do update
+       set last_poll_at = excluded.last_poll_at,
+           updated_at = excluded.updated_at`,
+    [audience],
+  )
+}
+
+export async function loadAgentFeedAudienceLiveness(
+  pool: Pool,
+  audience: string,
+  nowMs: number = Date.now(),
+): Promise<AgentFeedAudienceLiveness | null> {
+  const result = await pool.query<{ audience: string; last_poll_at: string | null }>(
+    `select audience, last_poll_at::text as last_poll_at
+       from agent_feed_audience_liveness
+      where audience = $1
+      limit 1`,
+    [audience],
+  )
+  const row = result.rows[0]
+  if (!row?.last_poll_at) return null
+  const lastPollMs = Date.parse(row.last_poll_at)
+  const ageSeconds = Number.isFinite(lastPollMs) ? Math.max(0, Math.floor((nowMs - lastPollMs) / 1000)) : null
+  const maxAgeSeconds = agentFeedLivenessMaxAgeSeconds()
+  return {
+    audience: row.audience,
+    last_poll_at: row.last_poll_at,
+    last_poll_age_seconds: ageSeconds,
+    live: ageSeconds !== null && ageSeconds <= maxAgeSeconds,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +319,14 @@ type AgentFeedConcernRow = {
 }
 
 async function listPendingConcerns(deps: AgentFeedRouteDeps, audience: string): Promise<void> {
+  try {
+    await recordAgentFeedAudiencePoll(deps.pool, audience)
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), audience },
+      '[agent-feed] failed to record audience poll liveness',
+    )
+  }
   const result = await deps.pool.query<{ concern: Concern }>(
     `select concern
        from agent_feed_concerns

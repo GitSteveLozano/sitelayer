@@ -871,7 +871,7 @@ export function buildFieldReadinessItems({
   const routeSinks =
     typeof captureRouter?.facts.sinks === 'string' ? captureRouter.facts.sinks.split(',').filter(Boolean) : []
   const routerReady = captureRouter?.status === 'ok' && routeSinks.length > 0
-  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_has_token === true
+  const agentFeedReady = agentFeed?.status === 'ok' && agentFeed.facts.audience_live === true
   const canRouteWork = onsiteSession?.can_route_work === true
   const canDispatchAgentReview = onsiteSession?.can_dispatch_agent_review === true
 

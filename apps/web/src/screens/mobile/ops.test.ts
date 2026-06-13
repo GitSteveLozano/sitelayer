@@ -194,7 +194,7 @@ describe('MobileOps field readiness checklist', () => {
       agentFeed: component({
         key: 'agent_feed',
         label: 'Agent Feed',
-        facts: { audience_has_token: true },
+        facts: { audience_has_token: true, audience_live: true },
       }),
       onsiteSession: plan(),
     })
@@ -228,7 +228,7 @@ describe('MobileOps field readiness checklist', () => {
         key: 'agent_feed',
         label: 'Agent Feed',
         status: 'ok',
-        facts: { audience_has_token: true },
+        facts: { audience_has_token: true, audience_live: true },
       }),
       onsiteSession: plan({
         status: 'limited',
