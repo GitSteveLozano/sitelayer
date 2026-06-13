@@ -150,7 +150,7 @@ async function sentryRequest(method, path, body) {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch (err) {
-    throw new Error(`${method} ${path} failed to reach Sentry: ${err?.message ?? err}`)
+    throw new Error(`${method} ${path} failed to reach Sentry: ${err?.message ?? err}`, { cause: err })
   }
   const text = await res.text()
   let json
