@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  actionStatusTone,
   agentFeedDeliveryTone,
   buildFieldReadinessItems,
   buildLeaveBehindCaptureInviteInput,
   canOpenDesktopEvidence,
   desktopEvidenceTone,
+  formatActionStatusSummary,
   formatAgentFeedDeliveryHeadline,
   formatAgentFeedDeliverySummary,
   formatDesktopEvidenceSummary,
+  latestDiagnosticActionStatusLookup,
   reusableLeaveBehindCaptureUrl,
   resolveLatestDesktopEvidence,
   shareOrCopyMobileLink,
@@ -15,6 +18,7 @@ import {
 } from './ops'
 import type {
   OpsDiagnosticComponent,
+  OpsOnsiteDiagnosticActionStatusResponse,
   OpsOnsiteDiagnosticAgentFeedDelivery,
   OpsOnsiteDiagnosticDesktopEvidenceResult,
   OpsOnsiteDiagnosticSessionActionResponse,
@@ -139,6 +143,77 @@ describe('MobileOps agent-feed delivery copy', () => {
     expect(formatAgentFeedDeliverySummary(state, Date.parse('2026-06-12T12:12:00.000Z'))).toBe(
       'Failed 2m ago · callback error recorded',
     )
+  })
+})
+
+describe('MobileOps onsite action status', () => {
+  it('derives the latest status lookup from durable audit events', () => {
+    const current = session({
+      audit_events: [
+        {
+          id: 'event-1',
+          at: '2026-06-12T12:05:00.000Z',
+          actor_user_id: 'user_1',
+          type: 'action.requested',
+          action_key: 'capture_field_context',
+          client_action_id: 'tap-old',
+          effect: 'audit_only',
+          summary: 'Requested field context.',
+        },
+        {
+          id: 'event-2',
+          at: '2026-06-12T12:06:00.000Z',
+          actor_user_id: 'user_1',
+          type: 'action.requested',
+          action_key: 'dispatch_agent_review',
+          client_action_id: 'tap-new',
+          effect: 'audit_only',
+          summary: 'Requested agent review.',
+        },
+      ],
+    })
+
+    expect(latestDiagnosticActionStatusLookup(current)).toEqual({
+      sessionId: 'diag-session-1',
+      actionKey: 'dispatch_agent_review',
+      clientActionId: 'tap-new',
+    })
+    expect(latestDiagnosticActionStatusLookup(session())).toBeNull()
+  })
+
+  it('formats retrying and failed compact action status', () => {
+    const retrying: OpsOnsiteDiagnosticActionStatusResponse['action_status'] = {
+      session_id: 'diag-session-1',
+      action_event_id: 'event-1',
+      action_key: 'dispatch_agent_review',
+      client_action_id: 'tap-new',
+      requested_at: '2026-06-12T12:06:00.000Z',
+      state: 'retrying',
+      summary: 'Action accepted; worker delivery is still pending or retrying.',
+      accepted_action: { key: 'dispatch_agent_review', effect: 'audit_only' },
+      capture_route: {
+        outbox_id: 'outbox-1',
+        outbox_status: 'pending',
+        attempt_count: 2,
+        next_attempt_at: '2026-06-12T12:10:00.000Z',
+        applied_at: null,
+        error: 'router unavailable',
+        result: null,
+      },
+    }
+    const failed: OpsOnsiteDiagnosticActionStatusResponse['action_status'] = {
+      ...retrying,
+      state: 'failed',
+      summary: 'Action delivery failed.',
+      capture_route: { ...retrying.capture_route!, outbox_status: 'failed' },
+    }
+
+    expect(actionStatusTone('retrying')).toBe('amber')
+    expect(actionStatusTone('delivered')).toBe('green')
+    expect(formatActionStatusSummary(retrying)).toBe(
+      'Action accepted; worker delivery is still pending or retrying. Route row is pending.',
+    )
+    expect(formatActionStatusSummary(failed)).toBe('Action delivery failed. router unavailable')
   })
 })
 

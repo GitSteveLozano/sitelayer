@@ -12,6 +12,9 @@ phone, without SSHing into the workstation or exposing local debug ports.
   `onsite_session` plan.
 - `GET /api/ops/diagnostics/sessions` shows active sessions, audit events,
   and routed agent-feed delivery state.
+- `GET /api/ops/diagnostics/sessions/:id/actions/status?action_key=...&client_action_id=...`
+  returns the compact phone status for one tap: accepted, retrying, delivered,
+  or failed.
 
 ## Runtime Contract
 
@@ -103,6 +106,9 @@ Mobile Ops Field checklist should be read before walking onsite:
    action the plan marks disabled.
 2. If the action response shows `accepted_action.capture_route.status=failed`,
    fix the capture-router before assuming the executor saw the request.
+   Use the compact action-status endpoint with the same `client_action_id` to
+   distinguish "worker retrying" from "already delivered" without polling the
+   full session.
 3. If routing is not configured, continue audit-only and copy the support
    packet manually.
 4. If routing is configured but no Concern arrives, verify the audience triplet

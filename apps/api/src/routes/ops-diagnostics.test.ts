@@ -14,6 +14,7 @@ import {
   __desktopEvidenceFromRowForTests,
   __enqueueOnsiteDiagnosticConcernForTests,
   __latestPersistentOnsiteWorkLinkForTests,
+  __lookupPersistentOnsiteDiagnosticActionStatusForTests,
   __persistOnsiteDiagnosticActionResultForTests,
   __recordPersistentOnsiteDiagnosticActionForTests,
   __resetOpsDiagnosticSessionsForTests,
@@ -21,6 +22,7 @@ import {
   handleOpsDiagnosticsRoutes,
   type OpsDiagnosticsRouteCtx,
   type OpsOnsiteDiagnosticAuditEvent,
+  type OpsOnsiteDiagnosticActionStatusResponse,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type StoredOnsiteDiagnosticSession,
 } from './ops-diagnostics.js'
@@ -381,6 +383,33 @@ class PersistentOpsClient {
       )
       return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
+    if (normalized.startsWith('select id::text as id, status, attempt_count')) {
+      const row = this.mutationOutbox.find((candidate) => {
+        const payload = candidate.payload as { action_event_id?: string } | null
+        return (
+          candidate.company_id === params[0] &&
+          candidate.entity_id === params[1] &&
+          candidate.mutation_type === params[2] &&
+          payload?.action_event_id === params[3]
+        )
+      })
+      return {
+        rows: row
+          ? [
+              {
+                id: row.id,
+                status: row.status,
+                attempt_count: row.attempt_count,
+                next_attempt_at: '2026-06-12T12:10:00.000Z',
+                applied_at: row.status === 'applied' ? '2026-06-12T12:06:00.000Z' : null,
+                error: row.error,
+                payload: row.payload,
+              },
+            ]
+          : [],
+        rowCount: row ? 1 : 0,
+      }
+    }
     if (normalized.startsWith('update mutation_outbox')) {
       const row = this.mutationOutbox.find(
         (candidate) => candidate.company_id === params[0] && candidate.idempotency_key === params[1],
@@ -389,6 +418,10 @@ class PersistentOpsClient {
         row.status = String(params[2])
         row.attempt_count += 1
         row.error = (params[3] as string | null) ?? null
+        row.payload = {
+          ...((row.payload as Record<string, unknown> | null) ?? {}),
+          last_result: JSON.parse(String(params[4] ?? 'null')),
+        }
       }
       return { rows: [], rowCount: row ? 1 : 0 }
     }
@@ -1855,6 +1888,90 @@ describe('ops diagnostics', () => {
       1,
     )
     expect(client.mutationOutbox).toHaveLength(1)
+  })
+
+  it('summarizes persistent action delivery status from client action id and outbox retry state', async () => {
+    const client = new PersistentOpsClient()
+    const runTx = async <T,>(companyId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+      expect(companyId).toBe('company-1')
+      return fn(client as unknown as PoolClient)
+    }
+    const first = await __recordPersistentOnsiteDiagnosticActionForTests(
+      {
+        companyId: 'company-1',
+        session: persistentSession(),
+        actionKey: 'dispatch_agent_review',
+        actionLabel: 'Dispatch agent review',
+        actorUserId: 'user_99',
+        clientActionId: 'tap-status',
+      },
+      runTx,
+    )
+    const retryingResult = {
+      request_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+      delivery_id: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review:${first!.event.id}`,
+      outbox_id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+      status: 'failed' as const,
+      http_status: 503,
+      routed: false,
+      accepted: null,
+      error: 'router unavailable',
+    }
+    client.mutationOutbox[0]!.status = 'pending'
+    client.mutationOutbox[0]!.attempt_count = 2
+    client.mutationOutbox[0]!.error = 'router unavailable'
+    client.mutationOutbox[0]!.payload = {
+      ...(client.mutationOutbox[0]!.payload as Record<string, unknown>),
+      last_result: retryingResult,
+    }
+    await __persistOnsiteDiagnosticActionResultForTests(
+      {
+        companyId: 'company-1',
+        sessionId: OPS_SESSION_ID,
+        eventId: first!.event.id,
+        acceptedAction: {
+          key: 'dispatch_agent_review',
+          effect: 'audit_only',
+          capture_route: retryingResult,
+        },
+      },
+      runTx,
+    )
+
+    const lookup = await __lookupPersistentOnsiteDiagnosticActionStatusForTests(
+      {
+        companyId: 'company-1',
+        session: first!.session,
+        actionKey: 'dispatch_agent_review',
+        clientActionId: 'tap-status',
+      },
+      runTx,
+    )
+
+    expect(lookup.ok).toBe(true)
+    const body = (lookup as { ok: true; value: OpsOnsiteDiagnosticActionStatusResponse }).value
+    expect(body).toMatchObject({
+      schema: 'sitelayer.ops_diagnostic_session_action_status.v1',
+      action_status: {
+        session_id: OPS_SESSION_ID,
+        action_event_id: first!.event.id,
+        action_key: 'dispatch_agent_review',
+        client_action_id: 'tap-status',
+        state: 'retrying',
+        summary: 'Action accepted; worker delivery is still pending or retrying.',
+        capture_route: {
+          outbox_id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+          outbox_status: 'pending',
+          attempt_count: 2,
+          error: 'router unavailable',
+          result: {
+            status: 'failed',
+            http_status: 503,
+            error: 'router unavailable',
+          },
+        },
+      },
+    })
   })
 
   it('keeps retryable capture-router delivery failures pending for the worker drain', () => {

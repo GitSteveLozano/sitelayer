@@ -155,6 +155,37 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
 
 type OpsOnsiteDiagnosticAcceptedAction = OpsOnsiteDiagnosticSessionActionResponse['accepted_action']
 type OpsOnsiteDiagnosticActionResultKey = 'desktop_evidence' | 'capture_route' | 'agent_feed'
+export type OpsOnsiteDiagnosticActionDeliveryState = 'accepted' | 'retrying' | 'delivered' | 'failed'
+
+export type OpsOnsiteDiagnosticActionStatusResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_action_status.v1'
+  action_status: {
+    session_id: string
+    action_event_id: string
+    action_key: OpsOnsiteDiagnosticActionKey
+    client_action_id: string | null
+    requested_at: string
+    state: OpsOnsiteDiagnosticActionDeliveryState
+    summary: string
+    accepted_action: OpsOnsiteDiagnosticAcceptedAction
+    capture_route?: {
+      outbox_id: string | null
+      outbox_status: string | null
+      attempt_count: number | null
+      next_attempt_at: string | null
+      applied_at: string | null
+      error: string | null
+      result: OpsOnsiteDiagnosticCaptureRouteResult | null
+    }
+    agent_feed?: {
+      concern_ref: string
+      status: OpsOnsiteDiagnosticAgentFeedDelivery['status']
+      callback_status: string | null
+      callback_error: string | null
+      stale: boolean
+    }
+  }
+}
 
 export type OpsOnsiteDiagnosticSessionControlResponse = {
   schema: 'sitelayer.ops_diagnostic_session_control.v1'
@@ -400,6 +431,39 @@ export async function handleOpsDiagnosticsRoutes(
       return true
     }
     ctx.sendJson(200, controlResult.value)
+    return true
+  }
+
+  const sessionActionStatusMatch = url.pathname.match(
+    /^\/api\/ops\/diagnostics\/sessions\/([^/]+)\/actions\/status$/,
+  )
+  if (sessionActionStatusMatch) {
+    if (req.method !== 'GET') {
+      ctx.sendJson(405, { error: 'method not allowed' })
+      return true
+    }
+    if (!(await ctx.requireCapability(APP_ISSUE_VIEW))) return true
+    const session = await lookupSession(ctx, sessionActionStatusMatch[1] ?? '')
+    if (!session.ok) {
+      ctx.sendJson(session.status, { error: session.error })
+      return true
+    }
+    const actionKey = actionKeyValue(url.searchParams.get('action_key'))
+    const clientActionId = boundedString(url.searchParams.get('client_action_id'), 120)
+    if (!actionKey) {
+      ctx.sendJson(400, { error: 'action_key is required' })
+      return true
+    }
+    if (!clientActionId) {
+      ctx.sendJson(400, { error: 'client_action_id is required' })
+      return true
+    }
+    const actionStatus = await lookupOnsiteDiagnosticActionStatus(ctx, session.value, actionKey, clientActionId)
+    if (!actionStatus.ok) {
+      ctx.sendJson(actionStatus.status, { error: actionStatus.error })
+      return true
+    }
+    ctx.sendJson(200, actionStatus.value)
     return true
   }
 
@@ -805,6 +869,229 @@ async function recordOnsiteDiagnosticAction(
       accepted_action: acceptedAction,
     },
   }
+}
+
+type OpsOnsiteDiagnosticActionStatusLookup =
+  | { ok: true; value: OpsOnsiteDiagnosticActionStatusResponse }
+  | { ok: false; status: number; error: string }
+
+type PersistentCaptureRouteOutboxStatus = {
+  id: string
+  status: string
+  attempt_count: number | null
+  next_attempt_at: string | null
+  applied_at: string | null
+  error: string | null
+  result: OpsOnsiteDiagnosticCaptureRouteResult | null
+}
+
+type OpsDiagnosticsReadRunner = <T>(companyId: string, fn: (client: PoolClient) => Promise<T>) => Promise<T>
+
+async function lookupOnsiteDiagnosticActionStatus(
+  ctx: OpsDiagnosticsRouteCtx,
+  session: StoredOnsiteDiagnosticSession,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  clientActionId: string,
+): Promise<OpsOnsiteDiagnosticActionStatusLookup> {
+  if (ctx.company) {
+    return lookupPersistentOnsiteDiagnosticActionStatus(
+      ctx.company.id,
+      session,
+      actionKey,
+      clientActionId,
+      withCompanyClient,
+    )
+  }
+
+  const event = findMemoryActionEvent(session, actionKey, clientActionId)
+  if (!event) return { ok: false, status: 404, error: 'diagnostic action not found' }
+  return {
+    ok: true,
+    value: buildOnsiteDiagnosticActionStatusResponse(session, event, null, latestAgentFeedDelivery(session, actionKey)),
+  }
+}
+
+async function lookupPersistentOnsiteDiagnosticActionStatus(
+  companyId: string,
+  session: StoredOnsiteDiagnosticSession,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+  clientActionId: string,
+  runRead: OpsDiagnosticsReadRunner,
+): Promise<OpsOnsiteDiagnosticActionStatusLookup> {
+  const status = await runRead(companyId, async (client: PoolClient) => {
+    const event = await lookupPersistentActionEventByClientActionIdTx(
+      client,
+      companyId,
+      session.id,
+      actionKey,
+      clientActionId,
+    )
+    if (!event) return null
+    const [captureRoute, deliveries] = await Promise.all([
+      lookupPersistentCaptureRouteOutboxStatusTx(client, companyId, session.id, event.id),
+      listPersistentAgentFeedDeliveries(client, companyId, session.id),
+    ])
+    return buildOnsiteDiagnosticActionStatusResponse(
+      session,
+      event,
+      captureRoute,
+      latestAgentFeedDelivery({ ...session, agent_feed_deliveries: deliveries }, actionKey),
+    )
+  })
+  if (!status) return { ok: false, status: 404, error: 'diagnostic action not found' }
+  return { ok: true, value: status }
+}
+
+async function lookupPersistentCaptureRouteOutboxStatusTx(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  eventId: string,
+): Promise<PersistentCaptureRouteOutboxStatus | null> {
+  const result = await client.query<{
+    id: string
+    status: string
+    attempt_count: number | string | null
+    next_attempt_at: string | Date | null
+    applied_at: string | Date | null
+    error: string | null
+    payload: unknown
+  }>(
+    `select id::text as id, status, attempt_count, next_attempt_at, applied_at, error, payload
+       from mutation_outbox
+      where company_id = $1
+        and entity_type = 'ops_diagnostic_session'
+        and entity_id = $2
+        and mutation_type = $3
+        and payload->>'action_event_id' = $4
+      order by updated_at desc, created_at desc
+      limit 1`,
+    [companyId, sessionId, OPS_CAPTURE_ROUTE_MUTATION_TYPE, eventId],
+  )
+  const row = result.rows[0]
+  if (!row) return null
+  const payload = objectValue(row.payload)
+  const lastResult = objectValue(payload?.last_result)
+  return {
+    id: row.id,
+    status: row.status,
+    attempt_count: numberFromUnknown(row.attempt_count),
+    next_attempt_at: row.next_attempt_at ? isoString(row.next_attempt_at) : null,
+    applied_at: row.applied_at ? isoString(row.applied_at) : null,
+    error: row.error ?? null,
+    result: lastResult ? (lastResult as unknown as OpsOnsiteDiagnosticCaptureRouteResult) : null,
+  }
+}
+
+function buildOnsiteDiagnosticActionStatusResponse(
+  session: StoredOnsiteDiagnosticSession,
+  event: OpsOnsiteDiagnosticAuditEvent,
+  captureRoute: PersistentCaptureRouteOutboxStatus | null,
+  agentFeed: OpsOnsiteDiagnosticAgentFeedDelivery | null,
+): OpsOnsiteDiagnosticActionStatusResponse {
+  const actionKey = event.action_key ?? 'dispatch_agent_review'
+  const acceptedAction = acceptedActionFromResult(event.action_result, actionKey) ?? {
+    key: actionKey,
+    effect: 'audit_only' as const,
+  }
+  const captureRouteResult = captureRoute?.result ?? acceptedAction.capture_route ?? null
+  const agentFeedView = agentFeedStatusView(agentFeed, acceptedAction.agent_feed)
+  const state = deriveOnsiteDiagnosticActionDeliveryState(acceptedAction, captureRoute, agentFeedView)
+  return {
+    schema: 'sitelayer.ops_diagnostic_session_action_status.v1',
+    action_status: {
+      session_id: session.id,
+      action_event_id: event.id,
+      action_key: actionKey,
+      client_action_id: event.client_action_id ?? null,
+      requested_at: event.at,
+      state,
+      summary: onsiteDiagnosticActionStatusSummary(state),
+      accepted_action: acceptedAction,
+      ...(captureRoute || captureRouteResult
+        ? {
+            capture_route: {
+              outbox_id: captureRoute?.id ?? captureRouteResult?.outbox_id ?? null,
+              outbox_status: captureRoute?.status ?? null,
+              attempt_count: captureRoute?.attempt_count ?? null,
+              next_attempt_at: captureRoute?.next_attempt_at ?? null,
+              applied_at: captureRoute?.applied_at ?? null,
+              error: captureRoute?.error ?? captureRouteResult?.error ?? null,
+              result: captureRouteResult,
+            },
+          }
+        : {}),
+      ...(agentFeedView ? { agent_feed: agentFeedView } : {}),
+    },
+  }
+}
+
+function latestAgentFeedDelivery(
+  session: Pick<StoredOnsiteDiagnosticSession, 'id' | 'agent_feed_deliveries'>,
+  actionKey: OpsOnsiteDiagnosticActionKey,
+): OpsOnsiteDiagnosticAgentFeedDelivery | null {
+  const concernRef = `opsdiag:${session.id}:${actionKey}`
+  const matches = (session.agent_feed_deliveries ?? []).filter((delivery) => delivery.concern_ref === concernRef)
+  return matches[matches.length - 1] ?? null
+}
+
+function agentFeedStatusView(
+  delivery: OpsOnsiteDiagnosticAgentFeedDelivery | null,
+  acceptedAgentFeed: OpsOnsiteDiagnosticAgentFeedResult | undefined,
+): OpsOnsiteDiagnosticActionStatusResponse['action_status']['agent_feed'] | null {
+  if (delivery) {
+    return {
+      concern_ref: delivery.concern_ref,
+      status: delivery.status,
+      callback_status: delivery.callback_status,
+      callback_error: delivery.callback_error,
+      stale: delivery.stale,
+    }
+  }
+  if (!acceptedAgentFeed) return null
+  return {
+    concern_ref: acceptedAgentFeed.concern_ref,
+    status: acceptedAgentFeed.queued ? 'pending' : 'failed',
+    callback_status: null,
+    callback_error: null,
+    stale: false,
+  }
+}
+
+function deriveOnsiteDiagnosticActionDeliveryState(
+  acceptedAction: OpsOnsiteDiagnosticAcceptedAction,
+  captureRoute: PersistentCaptureRouteOutboxStatus | null,
+  agentFeed: OpsOnsiteDiagnosticActionStatusResponse['action_status']['agent_feed'] | null,
+): OpsOnsiteDiagnosticActionDeliveryState {
+  const signals: OpsOnsiteDiagnosticActionDeliveryState[] = []
+  if (captureRoute) {
+    if (captureRoute.status === 'applied') signals.push('delivered')
+    else if (captureRoute.status === 'pending' || captureRoute.status === 'processing') signals.push('retrying')
+    else if (captureRoute.status === 'failed' || captureRoute.status === 'dead') signals.push('failed')
+    else signals.push('accepted')
+  } else if (acceptedAction.capture_route) {
+    signals.push(acceptedAction.capture_route.status === 'accepted' ? 'delivered' : 'failed')
+  }
+  if (agentFeed) {
+    if (agentFeed.status === 'succeeded') signals.push('delivered')
+    else if (agentFeed.status === 'pending' || agentFeed.status === 'claimed') signals.push('retrying')
+    else if (agentFeed.status === 'failed' || agentFeed.status === 'cancelled') signals.push('failed')
+  }
+  if (acceptedAction.desktop_evidence) {
+    if (acceptedAction.desktop_evidence.status === 'attached') signals.push('delivered')
+    else if (acceptedAction.desktop_evidence.status === 'failed') signals.push('failed')
+  }
+  if (signals.includes('failed')) return 'failed'
+  if (signals.includes('retrying')) return 'retrying'
+  if (signals.includes('delivered')) return 'delivered'
+  return 'accepted'
+}
+
+function onsiteDiagnosticActionStatusSummary(state: OpsOnsiteDiagnosticActionDeliveryState): string {
+  if (state === 'delivered') return 'Action delivered.'
+  if (state === 'retrying') return 'Action accepted; worker delivery is still pending or retrying.'
+  if (state === 'failed') return 'Action delivery failed.'
+  return 'Action accepted.'
 }
 
 async function recordOnsiteDiagnosticControl(
@@ -3039,6 +3326,24 @@ export async function __persistOnsiteDiagnosticActionResultForTests(
     args.eventId,
     args.acceptedAction,
     runTx,
+  )
+}
+
+export async function __lookupPersistentOnsiteDiagnosticActionStatusForTests(
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    actionKey: OpsOnsiteDiagnosticActionKey
+    clientActionId: string
+  },
+  runRead: OpsDiagnosticsReadRunner,
+): Promise<OpsOnsiteDiagnosticActionStatusLookup> {
+  return lookupPersistentOnsiteDiagnosticActionStatus(
+    args.companyId,
+    args.session,
+    args.actionKey,
+    args.clientActionId,
+    runRead,
   )
 }
 

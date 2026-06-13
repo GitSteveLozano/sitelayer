@@ -180,6 +180,43 @@ export type OpsOnsiteDiagnosticSessionActionResponse = {
   }
 }
 
+export type OpsOnsiteDiagnosticActionDeliveryState = 'accepted' | 'retrying' | 'delivered' | 'failed'
+
+export type OpsOnsiteDiagnosticActionStatusResponse = {
+  schema: 'sitelayer.ops_diagnostic_session_action_status.v1'
+  action_status: {
+    session_id: string
+    action_event_id: string
+    action_key: OpsOnsiteDiagnosticActionKey
+    client_action_id: string | null
+    requested_at: string
+    state: OpsOnsiteDiagnosticActionDeliveryState
+    summary: string
+    accepted_action: OpsOnsiteDiagnosticSessionActionResponse['accepted_action']
+    capture_route?: {
+      outbox_id: string | null
+      outbox_status: string | null
+      attempt_count: number | null
+      next_attempt_at: string | null
+      applied_at: string | null
+      error: string | null
+      result: OpsOnsiteDiagnosticCaptureRouteResult | null
+    }
+    agent_feed?: {
+      concern_ref: string
+      status: OpsOnsiteDiagnosticAgentFeedDelivery['status']
+      callback_status: string | null
+      callback_error: string | null
+      stale: boolean
+    }
+  }
+}
+
+export type OpsOnsiteDiagnosticActionStatusInput = {
+  action_key: OpsOnsiteDiagnosticActionKey
+  client_action_id: string
+}
+
 export type OpsOnsiteDiagnosticSessionControlInput = {
   action: Exclude<OpsOnsiteDiagnosticControlAction, 'redeem'>
   control_token: string
@@ -238,6 +275,21 @@ export function requestOpsDiagnosticSessionAction(
   return apiPost<OpsOnsiteDiagnosticSessionActionResponse>(
     `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions`,
     input,
+    companySlug,
+  )
+}
+
+export function fetchOpsDiagnosticSessionActionStatus(
+  sessionId: string,
+  input: OpsOnsiteDiagnosticActionStatusInput,
+  companySlug?: string,
+): Promise<OpsOnsiteDiagnosticActionStatusResponse> {
+  const params = new URLSearchParams({
+    action_key: input.action_key,
+    client_action_id: input.client_action_id,
+  })
+  return apiGet<OpsOnsiteDiagnosticActionStatusResponse>(
+    `/api/ops/diagnostics/sessions/${encodeURIComponent(sessionId)}/actions/status?${params.toString()}`,
     companySlug,
   )
 }

@@ -21,6 +21,7 @@ import {
   createOpsDiagnosticSession,
   fetchAppIssueBoard,
   fetchOpsDiagnostics,
+  fetchOpsDiagnosticSessionActionStatus,
   fetchOpsDiagnosticSessions,
   fetchWorkRequestQueueHealth,
   fetchWorkRequests,
@@ -32,10 +33,12 @@ import {
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
   type OpsOnsiteDiagnosticAction,
+  type OpsOnsiteDiagnosticActionDeliveryState,
   type OpsOnsiteDiagnosticCaptureRouteResult,
   type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
   type OpsOnsiteDiagnosticActionKey,
+  type OpsOnsiteDiagnosticActionStatusResponse,
   type OpsOnsiteDiagnosticControlAction,
   type OpsOnsiteDiagnosticSessionActionResponse,
   type OpsOnsiteDiagnosticSessionPlan,
@@ -161,6 +164,33 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const displayedDiagnosticSession = activeDiagnosticSession ?? observedDiagnosticSession
   const displayedDiagnosticSessionId = displayedDiagnosticSession?.id ?? null
   const hasDiagnosticControl = Boolean(activeDiagnosticSession && diagnosticControlToken)
+  const diagnosticActionStatusLookup = useMemo(
+    () => latestDiagnosticActionStatusLookup(displayedDiagnosticSession),
+    [displayedDiagnosticSession],
+  )
+  const diagnosticActionStatus = useQuery({
+    queryKey: [
+      'ops-diagnostic-action-status',
+      companySlug,
+      diagnosticActionStatusLookup?.sessionId,
+      diagnosticActionStatusLookup?.actionKey,
+      diagnosticActionStatusLookup?.clientActionId,
+    ],
+    queryFn: () =>
+      fetchOpsDiagnosticSessionActionStatus(
+        diagnosticActionStatusLookup!.sessionId,
+        {
+          action_key: diagnosticActionStatusLookup!.actionKey,
+          client_action_id: diagnosticActionStatusLookup!.clientActionId,
+        },
+        companySlug,
+      ),
+    enabled: canViewAppIssues && Boolean(diagnosticActionStatusLookup),
+    refetchInterval: (query) => {
+      const state = query.state.data?.action_status.state
+      return state === 'accepted' || state === 'retrying' || !state ? 5_000 : false
+    },
+  })
   useEffect(() => {
     setActiveDiagnosticSession(null)
     setDiagnosticControlToken(null)
@@ -390,6 +420,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const linkedSupportPacketId = latestDiagnosticManifest?.support_packet_id ?? displayedDiagnosticSession?.support_packet_id ?? null
   const latestCaptureRoute = lastDiagnosticAction?.accepted_action.capture_route ?? null
   const latestCaptureRouteAction = lastDiagnosticAction?.accepted_action.key ?? null
+  const latestActionStatus = diagnosticActionStatus.data?.action_status ?? null
   const canCreateLeaveBehindCapture = companyRole === 'admin' && Boolean(companyId)
   const fieldReadinessItems = buildFieldReadinessItems({
     online,
@@ -500,6 +531,14 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               leadingTone={agentFeedDeliveryTone(latestAgentFeedDelivery)}
               headline={formatAgentFeedDeliveryHeadline(latestAgentFeedDelivery)}
               supporting={formatAgentFeedDeliverySummary(latestAgentFeedDelivery)}
+            />
+          ) : null}
+          {latestActionStatus || diagnosticActionStatus.isFetching ? (
+            <MListRow
+              leading={<MI.Clock size={18} />}
+              leadingTone={actionStatusTone(latestActionStatus?.state, diagnosticActionStatus.isFetching)}
+              headline={formatActionStatusHeadline(latestActionStatus)}
+              supporting={formatActionStatusSummary(latestActionStatus, diagnosticActionStatus.isFetching)}
             />
           ) : null}
           {linkedAppIssueId ? (
@@ -1360,6 +1399,60 @@ function latestDiagnosticDelivery(
   const deliveries = session?.agent_feed_deliveries ?? []
   if (deliveries.length === 0) return null
   return [...deliveries].sort((a, b) => Date.parse(b.queued_at) - Date.parse(a.queued_at))[0] ?? null
+}
+
+type DiagnosticActionStatusLookup = {
+  sessionId: string
+  actionKey: OpsOnsiteDiagnosticActionKey
+  clientActionId: string
+}
+
+export function latestDiagnosticActionStatusLookup(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+): DiagnosticActionStatusLookup | null {
+  const events = (session?.audit_events ?? []).filter(
+    (event) => event.type === 'action.requested' && event.action_key && event.client_action_id,
+  )
+  if (!session || events.length === 0) return null
+  const latest = [...events].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0]
+  if (!latest?.action_key || !latest.client_action_id) return null
+  return { sessionId: session.id, actionKey: latest.action_key, clientActionId: latest.client_action_id }
+}
+
+export function actionStatusTone(
+  state: OpsOnsiteDiagnosticActionDeliveryState | undefined,
+  pending = false,
+): 'accent' | 'amber' | 'blue' | 'green' | 'red' {
+  if (pending && !state) return 'blue'
+  if (state === 'delivered') return 'green'
+  if (state === 'failed') return 'red'
+  if (state === 'retrying') return 'amber'
+  return 'blue'
+}
+
+function formatActionStatusHeadline(
+  status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null,
+): string {
+  if (!status) return 'Action status'
+  return `${diagnosticActionName(status.action_key)} status`
+}
+
+export function formatActionStatusSummary(
+  status: OpsOnsiteDiagnosticActionStatusResponse['action_status'] | null,
+  pending = false,
+): string {
+  if (!status) return pending ? 'Checking latest action status.' : 'No action status reported.'
+  const routeStatus = status.capture_route?.outbox_status
+  if (status.state === 'retrying') {
+    return routeStatus
+      ? `${status.summary} Route row is ${routeStatus}.`
+      : status.summary
+  }
+  if (status.state === 'failed') {
+    const error = status.capture_route?.error ?? status.agent_feed?.callback_error
+    return error ? `${status.summary} ${error}` : status.summary
+  }
+  return status.summary
 }
 
 export function agentFeedDeliveryTone(
