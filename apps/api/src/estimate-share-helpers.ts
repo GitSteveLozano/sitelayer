@@ -1,8 +1,15 @@
 import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
+import {
+  projectLifecycleWorkflow,
+  type ProjectLifecycleWorkflowEvent,
+  type ProjectLifecycleWorkflowSnapshot,
+} from '@sitelayer/workflows'
 import { verifyShareToken, type VerifyShareTokenResult } from './estimate-share-token.js'
-import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withMutationTx } from './mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, withMutationTx } from './mutation-tx.js'
 import { listOperatorRecipientUserIds } from './notifications.js'
+import { dispatchWorkflowEvent } from './workflow-dispatch.js'
+import { PROJECT_LIFECYCLE_COLUMNS, rowToSnapshot, type ProjectLifecycleRow } from './routes/project-lifecycle.js'
 
 export const logger = createLogger('api:estimate-shares')
 
@@ -378,21 +385,21 @@ export function buildShareUrl(portalBaseUrl: string, token: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle helper — best-effort transition. The project-lifecycle
-// workflow module (`apps/api/src/routes/project-lifecycle.ts` + the
-// pure reducer in `packages/workflows/src/project-lifecycle.ts`,
-// migration 048) now ships. This helper still writes the SEND/ACCEPT/
-// DECLINE transitions inline using the same column names and
-// `workflow_event_log` shape the lifecycle endpoint uses, rather than
-// delegating to that reducer — an intentional deferred refactor, not a
-// missing dependency.
+// Lifecycle helper — best-effort transition routed through the SAME
+// registered reducer + dispatch primitive the canonical lifecycle route uses
+// (`apps/api/src/routes/project-lifecycle.ts`; reducer in
+// `packages/workflows/src/project-lifecycle.ts`). This previously hand-rolled
+// a parallel SEND/ACCEPT/DECLINE transition table and a hand-built
+// `snapshot_after`, which silently dropped fields the reducer carries forward
+// (e.g. `sent_at` on ACCEPT) and so wrote replay-divergent `workflow_event_log`
+// rows for portal-driven lifecycle events. It now delegates to
+// `dispatchWorkflowEvent`, so the share path and the staff route emit
+// byte-identical event-log rows and stay replay-equal.
 //
-// The transition table here is a strict subset of the canonical reducer
-// (SEND: estimating→sent, ACCEPT: sent→accepted, DECLINE: sent→declined).
-// Anything else is a no-op so the share row remains the source of truth
-// even when the lifecycle is in an unexpected state. A future cleanup
-// should collapse this onto the canonical reducer via the lifecycle event
-// path instead of duplicating the transition table here.
+// Still "best-effort": the portal visitor holds no `state_version`, so we act
+// on whatever the locked row currently is, and an illegal transition (the
+// project isn't in the expected `from` state) is a logged no-op rather than an
+// error — the share row remains the source of truth.
 // ---------------------------------------------------------------------------
 
 export type LifecycleEventKind = 'SEND' | 'ACCEPT' | 'DECLINE'
@@ -402,14 +409,19 @@ export type LifecycleApplyResult =
   | { kind: 'transition_failed'; fromState: string }
   | { kind: 'project_not_found' }
 
-export const LIFECYCLE_TRANSITIONS: Record<LifecycleEventKind, { from: string; to: string }> = {
-  SEND: { from: 'estimating', to: 'sent' },
-  ACCEPT: { from: 'sent', to: 'accepted' },
-  DECLINE: { from: 'sent', to: 'declined' },
+function buildLifecycleEvent(
+  eventType: LifecycleEventKind,
+  actorUserId: string,
+  occurredAt: string,
+  reason: string | undefined,
+): ProjectLifecycleWorkflowEvent {
+  if (eventType === 'DECLINE') {
+    return reason !== undefined
+      ? { type: 'DECLINE', actor_user_id: actorUserId, occurred_at: occurredAt, reason }
+      : { type: 'DECLINE', actor_user_id: actorUserId, occurred_at: occurredAt }
+  }
+  return { type: eventType, actor_user_id: actorUserId, occurred_at: occurredAt }
 }
-
-export const PROJECT_LIFECYCLE_WORKFLOW_NAME = 'project_lifecycle'
-export const PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION = 1
 
 export async function maybeApplyLifecycleEvent(
   client: PoolClient,
@@ -421,129 +433,96 @@ export async function maybeApplyLifecycleEvent(
     reason?: string
   },
 ): Promise<LifecycleApplyResult> {
-  const projectResult = await client.query<{
-    lifecycle_state: string
-    lifecycle_state_version: number
-  }>(
-    `select lifecycle_state, lifecycle_state_version
-     from projects
-     where company_id = $1 and id = $2
-     for update
-     limit 1`,
+  // The portal/admin share path supplies no client `state_version`, so read
+  // the current row under the lock and echo its version as the expected one —
+  // the optimistic check inside dispatchWorkflowEvent then can't conflict.
+  const locked = await client.query<ProjectLifecycleRow>(
+    `select ${PROJECT_LIFECYCLE_COLUMNS}
+       from projects
+      where company_id = $1 and id = $2 and deleted_at is null
+      for update`,
     [args.companyId, args.projectId],
   )
-  const project = projectResult.rows[0]
-  if (!project) return { kind: 'project_not_found' }
-
-  const transition = LIFECYCLE_TRANSITIONS[args.eventType]
-  const fromState = project.lifecycle_state
-  if (fromState !== transition.from) {
-    return { kind: 'transition_failed', fromState }
-  }
-
+  const current = locked.rows[0]
+  if (!current) return { kind: 'project_not_found' }
   const occurredAt = new Date().toISOString()
-  const nextStateVersion = project.lifecycle_state_version + 1
 
-  const setClauses: string[] = ['lifecycle_state = $1', 'lifecycle_state_version = $2', 'updated_at = now()']
-  const params: unknown[] = [transition.to, nextStateVersion]
-  if (args.eventType === 'SEND') {
-    setClauses.push(`lifecycle_sent_at = $${params.length + 1}`)
-    params.push(occurredAt)
-  } else if (args.eventType === 'ACCEPT') {
-    setClauses.push(`lifecycle_accepted_at = $${params.length + 1}`)
-    params.push(occurredAt)
-    setClauses.push('lifecycle_declined_at = NULL')
-    setClauses.push('lifecycle_decline_reason = NULL')
-  } else {
-    setClauses.push(`lifecycle_declined_at = $${params.length + 1}`)
-    params.push(occurredAt)
-    setClauses.push(`lifecycle_decline_reason = $${params.length + 1}`)
-    params.push(args.reason ?? null)
-  }
-
-  params.push(args.companyId, args.projectId)
-  const idIndex = params.length
-  await client.query(
-    `update projects
-     set ${setClauses.join(', ')}
-     where company_id = $${idIndex - 1} and id = $${idIndex}`,
-    params,
-  )
-
-  const eventPayload: Record<string, unknown> = {
-    type: args.eventType,
-    actor_user_id: args.actorUserId,
-    occurred_at: occurredAt,
-  }
-  if (args.eventType === 'DECLINE' && args.reason) {
-    eventPayload.reason = args.reason
-  }
-  const snapshotAfter: Record<string, unknown> = {
-    state: transition.to,
-    state_version: nextStateVersion,
-  }
-  if (args.eventType === 'SEND') snapshotAfter.sent_at = occurredAt
-  if (args.eventType === 'ACCEPT') {
-    snapshotAfter.accepted_at = occurredAt
-    snapshotAfter.declined_at = null
-    snapshotAfter.decline_reason = null
-  }
-  if (args.eventType === 'DECLINE') {
-    snapshotAfter.declined_at = occurredAt
-    snapshotAfter.decline_reason = args.reason ?? null
-  }
-
-  await recordWorkflowEvent(client, {
+  const result = await dispatchWorkflowEvent<
+    ProjectLifecycleRow,
+    ProjectLifecycleWorkflowSnapshot,
+    ProjectLifecycleWorkflowEvent
+  >(client, {
+    definition: projectLifecycleWorkflow,
     companyId: args.companyId,
-    workflowName: PROJECT_LIFECYCLE_WORKFLOW_NAME,
-    schemaVersion: PROJECT_LIFECYCLE_WORKFLOW_SCHEMA_VERSION,
     entityType: 'project',
     entityId: args.projectId,
-    stateVersion: project.lifecycle_state_version,
-    eventType: args.eventType,
-    eventPayload,
-    snapshotAfter,
+    expectedStateVersion: current.lifecycle_state_version,
     actorUserId: args.actorUserId,
+    // Row is already locked above; just shape it for the primitive.
+    loadSnapshot: async () => ({ row: current, snapshot: rowToSnapshot(current) }),
+    buildEvent: () => buildLifecycleEvent(args.eventType, args.actorUserId, occurredAt, args.reason),
+    persist: async (c, nextSnapshot) => {
+      const updated = await c.query<ProjectLifecycleRow>(
+        `update projects
+            set lifecycle_state = $3,
+                lifecycle_state_version = $4,
+                lifecycle_sent_at = $5,
+                lifecycle_accepted_at = $6,
+                lifecycle_declined_at = $7,
+                lifecycle_decline_reason = $8,
+                lifecycle_started_at = $9,
+                lifecycle_completed_at = $10,
+                lifecycle_archived_at = $11,
+                updated_at = now()
+          where company_id = $1 and id = $2
+          returning ${PROJECT_LIFECYCLE_COLUMNS}`,
+        [
+          args.companyId,
+          args.projectId,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.sent_at ?? null,
+          nextSnapshot.accepted_at ?? null,
+          nextSnapshot.declined_at ?? null,
+          nextSnapshot.decline_reason ?? null,
+          nextSnapshot.started_at ?? null,
+          nextSnapshot.completed_at ?? null,
+          nextSnapshot.archived_at ?? null,
+        ],
+      )
+      const row = updated.rows[0]
+      if (!row) throw new Error('project lifecycle update returned no row')
+      return row
+    },
+    // Mirror the canonical route's ACCEPT side effect so a portal accept
+    // enqueues the same foreman-assignment notification a staff-driven ACCEPT
+    // would. Per-state_version idempotency key matches the route shape so a
+    // retry/duplicate ACCEPT upserts one outbox row.
+    sideEffects: async (c, _next, updated) => {
+      if (args.eventType !== 'ACCEPT') return
+      await recordMutationLedger(c, {
+        companyId: args.companyId,
+        entityType: 'project',
+        entityId: updated.id,
+        action: 'notify_foreman_accepted',
+        mutationType: 'notify_foreman_assignment',
+        row: updated,
+        outboxPayload: {
+          project_id: updated.id,
+          project_name: updated.name,
+          customer_name: updated.customer_name,
+          transition: 'accepted',
+          actor_user_id: args.actorUserId,
+          occurred_at: occurredAt,
+        },
+        idempotencyKey: `project_lifecycle:notify_foreman:${updated.id}:${updated.lifecycle_state_version}`,
+      })
+    },
   })
 
-  // Mirror the side-effect that the canonical lifecycle route emits on
-  // ACCEPT/START_WORK so a customer accepting their estimate from the
-  // public portal triggers the same foreman-assignment notification a
-  // staff-driven ACCEPT would. Idempotency key matches the route shape
-  // (project_lifecycle:notify_foreman:<id>:<state_version>) so retries
-  // and duplicate ACCEPTs upsert the same outbox row.
-  if (args.eventType === 'ACCEPT') {
-    const projectMeta = await client.query<{ name: string; customer_name: string | null }>(
-      `select name, customer_name from projects where company_id = $1 and id = $2 limit 1`,
-      [args.companyId, args.projectId],
-    )
-    const meta = projectMeta.rows[0] ?? { name: 'Project', customer_name: null }
-    await recordMutationLedger(client, {
-      companyId: args.companyId,
-      entityType: 'project',
-      entityId: args.projectId,
-      action: 'notify_foreman_assignment',
-      row: { project_id: args.projectId, lifecycle_state: transition.to, state_version: nextStateVersion },
-      syncPayload: {
-        project_id: args.projectId,
-        project_name: meta.name,
-        customer_name: meta.customer_name,
-        transition: 'accepted',
-        actor_user_id: args.actorUserId,
-        occurred_at: occurredAt,
-      },
-      outboxPayload: {
-        project_id: args.projectId,
-        project_name: meta.name,
-        customer_name: meta.customer_name,
-        transition: 'accepted',
-        actor_user_id: args.actorUserId,
-        occurred_at: occurredAt,
-      },
-      mutationType: 'notify_foreman_assignment',
-      idempotencyKey: `project_lifecycle:notify_foreman:${args.projectId}:${nextStateVersion}`,
-    })
+  if (result.kind === 'not_found') return { kind: 'project_not_found' }
+  if (result.kind === 'version_conflict' || result.kind === 'illegal_transition') {
+    return { kind: 'transition_failed', fromState: result.snapshot.state }
   }
-
-  return { kind: 'applied', toState: transition.to }
+  return { kind: 'applied', toState: result.snapshot.state }
 }

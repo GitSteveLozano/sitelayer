@@ -278,6 +278,16 @@ class FakePool {
       const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
       return { rows: project ? [project] : [], rowCount: project ? 1 : 0 }
     }
+    // Full lifecycle-column FOR UPDATE load — the share path now routes
+    // SEND/ACCEPT/DECLINE through the SAME dispatch primitive + reducer the
+    // canonical /lifecycle route uses, so it reads every lifecycle_* column
+    // (incl. lifecycle_archived_at) under the lock instead of the old
+    // two-column pre-read.
+    if (/select[\s\S]*lifecycle_archived_at[\s\S]*from projects[\s\S]*for update/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
+      return { rows: project ? [project] : [], rowCount: project ? 1 : 0 }
+    }
     if (/p\.name as project_name/i.test(sql)) {
       const [companyId, projectId] = params as [string, string]
       const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
@@ -305,29 +315,50 @@ class FakePool {
       }
     }
     if (/update projects/i.test(sql)) {
-      // Lifecycle update — rewrite mapped columns. We don't bother to
-      // parse the SET clause; route tests assert via re-reading the
-      // project after the fact.
-      const projectId = params[params.length - 1] as string
-      const companyId = params[params.length - 2] as string
+      // Lifecycle update now mirrors the canonical project-lifecycle route
+      // shape exactly (the share path routes through the SAME reducer +
+      // dispatch primitive). Params, in order, then a `returning <columns>`:
+      //   [companyId, projectId, state, state_version,
+      //    sent_at, accepted_at, declined_at, decline_reason,
+      //    started_at, completed_at, archived_at]
+      const [
+        companyId,
+        projectId,
+        state,
+        stateVersion,
+        sentAt,
+        acceptedAt,
+        declinedAt,
+        declineReason,
+        startedAt,
+        completedAt,
+        archivedAt,
+      ] = params as [
+        string,
+        string,
+        string,
+        number,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+      ]
       const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
       if (!project) return { rows: [], rowCount: 0 }
-      project.lifecycle_state = params[0]
-      project.lifecycle_state_version = params[1]
-      // Map the remaining params loosely: 3rd param is the timestamp in
-      // SEND/ACCEPT/DECLINE; for ACCEPT we also pass NULLs but those land
-      // as static SET NULL clauses, not parameters.
-      if (project.lifecycle_state === 'sent') project.lifecycle_sent_at = params[2]
-      if (project.lifecycle_state === 'accepted') {
-        project.lifecycle_accepted_at = params[2]
-        project.lifecycle_declined_at = null
-        project.lifecycle_decline_reason = null
-      }
-      if (project.lifecycle_state === 'declined') {
-        project.lifecycle_declined_at = params[2]
-        project.lifecycle_decline_reason = params[3]
-      }
-      return { rows: [], rowCount: 1 }
+      project.lifecycle_state = state
+      project.lifecycle_state_version = stateVersion
+      project.lifecycle_sent_at = sentAt
+      project.lifecycle_accepted_at = acceptedAt
+      project.lifecycle_declined_at = declinedAt
+      project.lifecycle_decline_reason = declineReason
+      project.lifecycle_started_at = startedAt
+      project.lifecycle_completed_at = completedAt
+      project.lifecycle_archived_at = archivedAt
+      // The UPDATE ends with `returning <columns>`, so hand back the row.
+      return { rows: [project], rowCount: 1 }
     }
 
     // ---- workflow_event_log + sync_events + mutation_outbox ----
@@ -1810,8 +1841,11 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
   it('POST /accept marks accepted_at and dispatches lifecycle ACCEPT (sent → accepted)', async () => {
     const pool = new FakePool()
     const { token } = await seedShare(pool)
-    // Sanity: SEND already moved the project to 'sent' during share create.
+    // Sanity: SEND already moved the project to 'sent' during share create
+    // and stamped lifecycle_sent_at.
     expect(pool.projects[0]?.lifecycle_state).toBe('sent')
+    const sentAt = pool.projects[0]?.lifecycle_sent_at
+    expect(sentAt).toBeTruthy()
 
     const { ctx, responses, reads } = makePublicCtx(pool)
     reads.push({
@@ -1829,6 +1863,22 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     expect(pool.projects[0]?.lifecycle_state).toBe('accepted')
     const accept = pool.workflowEvents.find((e) => e.event_type === 'ACCEPT')
     expect(accept).toBeDefined()
+
+    // F4 regression: the portal ACCEPT used to be written by a hand-rolled
+    // transition table that built `snapshot_after` from scratch and DROPPED
+    // sent_at, so replaying the event log diverged from the reducer. The
+    // share path now routes through the registered reducer (which spreads
+    // the prior snapshot), so the ACCEPT snapshot must carry sent_at forward.
+    const acceptSnap = (
+      typeof accept!.snapshot_after === 'string' ? JSON.parse(accept!.snapshot_after) : accept!.snapshot_after
+    ) as Record<string, unknown>
+    expect(acceptSnap.state).toBe('accepted')
+    expect(acceptSnap.sent_at).toBe(sentAt)
+    expect(acceptSnap.accepted_at).toBeTruthy()
+    // The event was dispatched against the BEFORE version (sent = v3).
+    expect(accept!.state_version).toBe(3)
+    // And the persisted row still carries sent_at (ACCEPT must not null it).
+    expect(pool.projects[0]?.lifecycle_sent_at).toBe(sentAt)
   })
 
   it('POST /accept is idempotent — a second accept returns the existing accepted_at', async () => {

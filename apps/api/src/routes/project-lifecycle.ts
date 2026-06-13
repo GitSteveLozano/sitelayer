@@ -28,7 +28,12 @@ export type ProjectLifecycleRouteCtx = {
   sendJson: (status: number, body: unknown) => void
 }
 
-const PROJECT_LIFECYCLE_COLUMNS = `
+// Exported so the estimate-share path (`estimate-share-helpers.ts`) can route
+// portal-driven SEND/ACCEPT/DECLINE through the SAME column mapping + reducer
+// instead of hand-rolling a parallel transition table (which silently dropped
+// reducer-carried fields like `sent_at` and produced replay-divergent
+// workflow_event_log rows). One canonical mapping, two call sites.
+export const PROJECT_LIFECYCLE_COLUMNS = `
   id, company_id, name, customer_name, status,
   lifecycle_state, lifecycle_state_version,
   lifecycle_sent_at, lifecycle_accepted_at,
@@ -37,7 +42,7 @@ const PROJECT_LIFECYCLE_COLUMNS = `
   version, created_at, updated_at
 `
 
-type ProjectLifecycleRow = {
+export type ProjectLifecycleRow = {
   id: string
   company_id: string
   name: string
@@ -57,7 +62,7 @@ type ProjectLifecycleRow = {
   updated_at: string
 }
 
-function rowToSnapshot(row: ProjectLifecycleRow): ProjectLifecycleWorkflowSnapshot {
+export function rowToSnapshot(row: ProjectLifecycleRow): ProjectLifecycleWorkflowSnapshot {
   return {
     state: projectStatusToLifecycleState(row.lifecycle_state),
     state_version: row.lifecycle_state_version,
