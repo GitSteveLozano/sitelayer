@@ -314,6 +314,11 @@ describe('ops diagnostics', () => {
           label?: string | null
           plan?: { control_level?: string; recommended_entry?: string }
           audit_events?: Array<{ type: string; effect: string }>
+          diagnostic_manifest?: {
+            schema: string
+            readiness: { work_evidence: string; agent_handoff: string }
+            evidence: { refs: Array<{ type: string; id: string }> }
+          }
         }
       }
       expect(created.control_token).toEqual(expect.any(String))
@@ -325,6 +330,16 @@ describe('ops diagnostics', () => {
       expect(created.session?.audit_events).toEqual([
         expect.objectContaining({ type: 'session.started', effect: 'audit_only' }),
       ])
+      expect(created.session?.diagnostic_manifest).toMatchObject({
+        schema: 'sitelayer.ops_diagnostic_manifest.v1',
+        readiness: {
+          work_evidence: 'audit_only',
+          agent_handoff: 'not_requested',
+        },
+      })
+      expect(created.session?.diagnostic_manifest?.evidence.refs).toContainEqual(
+        expect.objectContaining({ type: 'ops_diagnostic_session', id: created.session?.id }),
+      )
       expect(JSON.stringify(created.session)).not.toContain(String(created.control_token))
 
       const reads: Array<{ status: number; body: unknown }> = []
@@ -405,6 +420,15 @@ describe('ops diagnostics', () => {
               effect: 'audit_only',
             }),
           ],
+          diagnostic_manifest: expect.objectContaining({
+            readiness: expect.objectContaining({
+              work_evidence: 'audit_only',
+              agent_handoff: 'not_requested',
+            }),
+            agent_handoff: expect.objectContaining({
+              callback_expected: false,
+            }),
+          }),
         },
       })
       expect(routedEnvelopes).toHaveLength(1)
@@ -427,6 +451,17 @@ describe('ops diagnostics', () => {
                   requested_action: 'dispatch_agent_review',
                   requested_by: 'user_99',
                   ops_diagnostic_session_id: created.session.id,
+                  agent_tool_manifest_path: '/api/agent-tools/manifest',
+                  callback_expectation: expect.objectContaining({
+                    expected: false,
+                    terminal_statuses: ['succeeded', 'failed', 'cancelled'],
+                  }),
+                  diagnostic_manifest: expect.objectContaining({
+                    schema: 'sitelayer.ops_diagnostic_manifest.v1',
+                    readiness: expect.objectContaining({
+                      work_evidence: 'audit_only',
+                    }),
+                  }),
                 }),
               }),
             },

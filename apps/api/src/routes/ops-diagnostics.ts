@@ -59,6 +59,47 @@ export type OpsOnsiteDiagnosticAuditEvent = {
   summary: string
 }
 
+export type OpsOnsiteDiagnosticManifest = {
+  schema: 'sitelayer.ops_diagnostic_manifest.v1'
+  generated_at: string
+  ops_diagnostic_session_id: string
+  worker_issue_id: string | null
+  capture_session_id: string | null
+  support_packet_id: string | null
+  context_work_item_id: string | null
+  operator_next_step: string
+  needs_attention: boolean
+  readiness: {
+    plan: OpsOnsiteDiagnosticSessionPlan['status']
+    control_level: OpsOnsiteDiagnosticSessionPlan['control_level']
+    desktop_evidence: 'attached' | 'failed' | 'not_configured' | 'not_captured'
+    work_evidence: 'work_item_attached' | 'capture_artifact_only' | 'audit_only'
+    agent_handoff: 'not_requested' | 'queued' | 'claimed' | 'succeeded' | 'failed' | 'stale'
+  }
+  evidence: {
+    refs: Array<{ type: string; id: string; path?: string }>
+    audit_events_total: number
+    latest_action: OpsOnsiteDiagnosticActionKey | null
+    desktop_evidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  }
+  agent_handoff: {
+    audiences: string[]
+    deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[]
+    callback_expected: boolean
+    stale: boolean
+  }
+  consent_receipts: Array<{
+    source: string
+    consent_version: string
+    actor_user_id: string | null
+    authority: string
+    streams: string[]
+    retention_days: number
+    status: 'active' | 'missing'
+  }>
+  gaps: string[]
+}
+
 export type OpsOnsiteDiagnosticSessionRecord = {
   id: string
   state: 'active'
@@ -71,6 +112,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
   audit_events: OpsOnsiteDiagnosticAuditEvent[]
   agent_feed_deliveries?: OpsOnsiteDiagnosticAgentFeedDelivery[]
   desktop_evidence?: OpsOnsiteDiagnosticDesktopEvidenceResult | null
+  diagnostic_manifest?: OpsOnsiteDiagnosticManifest
 }
 
 export type OpsOnsiteDiagnosticSessionCreateResponse = {
@@ -120,6 +162,7 @@ export type OpsOnsiteDiagnosticDesktopEvidenceResult = {
 }
 
 export type OpsOnsiteDiagnosticAgentFeedDelivery = {
+  id: string
   action_key: OpsOnsiteDiagnosticActionKey
   audience: string
   concern_ref: string
@@ -1054,6 +1097,7 @@ function onsiteDiagnosticExecutorInputs(args: {
   actionKey: OpsOnsiteDiagnosticActionKey
   actorUserId: string | null
 }): Record<string, unknown> {
+  const manifest = buildOpsOnsiteDiagnosticManifest(sessionWithAuditEvent(args.session, args.event))
   return {
     ops_diagnostic_session_id: args.session.id,
     action_event_id: args.event.id,
@@ -1067,6 +1111,14 @@ function onsiteDiagnosticExecutorInputs(args: {
     can_dispatch_agent_review: args.session.plan.can_dispatch_agent_review,
     blockers: args.session.plan.blockers,
     ready_actions: args.session.plan.actions.filter((action) => action.enabled).map((action) => action.key),
+    diagnostic_manifest: manifest,
+    evidence_refs: manifest.evidence.refs,
+    agent_tool_manifest_path: '/api/agent-tools/manifest',
+    callback_expectation: {
+      expected: manifest.agent_handoff.callback_expected,
+      audience: manifest.agent_handoff.audiences[0] ?? null,
+      terminal_statuses: ['succeeded', 'failed', 'cancelled'],
+    },
   }
 }
 
@@ -1175,6 +1227,7 @@ function agentFeedDeliveryFromRow(
     Number.isFinite(staleBase) &&
     nowMs - staleBase > AGENT_FEED_DELIVERY_STALE_MS
   return {
+    id: row.id,
     action_key: actionKey,
     audience: row.audience,
     concern_ref: row.concern_ref,
@@ -1366,8 +1419,167 @@ function persistentSessionFromRow(
 }
 
 function publicSession(session: StoredOnsiteDiagnosticSession): OpsOnsiteDiagnosticSessionRecord {
-  const { control_token: _controlToken, control_token_hash: _controlTokenHash, ...rest } = session
-  return { ...rest, agent_feed_deliveries: rest.agent_feed_deliveries ?? [] }
+  const {
+    control_token: _controlToken,
+    control_token_hash: _controlTokenHash,
+    diagnostic_manifest: _diagnosticManifest,
+    ...rest
+  } = session
+  const record = { ...rest, agent_feed_deliveries: rest.agent_feed_deliveries ?? [] }
+  return { ...record, diagnostic_manifest: buildOpsOnsiteDiagnosticManifest(record) }
+}
+
+function sessionWithAuditEvent(
+  session: StoredOnsiteDiagnosticSession,
+  event: OpsOnsiteDiagnosticAuditEvent,
+): StoredOnsiteDiagnosticSession {
+  if (session.audit_events.some((candidate) => candidate.id === event.id)) return session
+  return { ...session, audit_events: [...session.audit_events, event] }
+}
+
+function buildOpsOnsiteDiagnosticManifest(
+  session: Omit<OpsOnsiteDiagnosticSessionRecord, 'diagnostic_manifest'>,
+): OpsOnsiteDiagnosticManifest {
+  const desktopEvidence = session.desktop_evidence ?? null
+  const deliveries = session.agent_feed_deliveries ?? []
+  const latestAction =
+    [...session.audit_events].reverse().find((event) => event.type === 'action.requested')?.action_key ?? null
+  const agentHandoff = summarizeAgentHandoff(deliveries)
+  const captureSessionId = desktopEvidence?.capture_session_id ?? null
+  const supportPacketId = null
+  const contextWorkItemId = null
+  const evidenceRefs: OpsOnsiteDiagnosticManifest['evidence']['refs'] = [
+    {
+      type: 'ops_diagnostic_session',
+      id: session.id,
+      path: `/ops?diagnostic_session=${encodeURIComponent(session.id)}`,
+    },
+    ...session.audit_events.map((event) => ({ type: 'ops_diagnostic_event', id: event.id })),
+  ]
+  if (captureSessionId) {
+    evidenceRefs.push({ type: 'capture_session', id: captureSessionId })
+  }
+  if (desktopEvidence?.artifact_id) {
+    evidenceRefs.push({
+      type: 'capture_artifact',
+      id: desktopEvidence.artifact_id,
+      ...(desktopEvidence.file_path ? { path: desktopEvidence.file_path } : {}),
+    })
+  }
+  for (const delivery of deliveries) {
+    evidenceRefs.push({
+      type: 'agent_feed_concern',
+      id: delivery.id,
+      path: `/api/agent-feed/concerns?audience=${encodeURIComponent(delivery.audience)}`,
+    })
+  }
+
+  const desktopReadiness = desktopEvidence
+    ? desktopEvidence.status === 'attached'
+      ? 'attached'
+      : desktopEvidence.status
+    : 'not_captured'
+  const workEvidence = contextWorkItemId
+    ? 'work_item_attached'
+    : captureSessionId
+      ? 'capture_artifact_only'
+      : 'audit_only'
+  const gaps = [
+    ...session.plan.blockers,
+    ...(workEvidence === 'audit_only'
+      ? ['No capture_session_id, support_packet_id, or context_work_item_id is attached to this onsite diagnostic yet.']
+      : []),
+    ...(workEvidence === 'capture_artifact_only'
+      ? ['Desktop evidence is attached as a capture artifact, but no support packet or work item is linked yet.']
+      : []),
+    ...(agentHandoff.status === 'stale' ? ['Agent handoff is stale and needs callback follow-up.'] : []),
+    ...(agentHandoff.status === 'failed' ? ['Agent handoff failed or was cancelled.'] : []),
+    ...(desktopEvidence?.status === 'failed' && desktopEvidence.error ? [desktopEvidence.error] : []),
+  ]
+  const operatorNextStep =
+    agentHandoff.status === 'stale'
+      ? 'check_agent_callback'
+      : agentHandoff.status === 'failed'
+        ? 'retry_agent_handoff'
+        : desktopEvidence?.status === 'failed'
+          ? 'retry_desktop_capture'
+          : workEvidence === 'audit_only'
+            ? session.plan.recommended_entry
+            : agentHandoff.status === 'succeeded'
+              ? 'review_agent_callback'
+              : session.plan.recommended_entry
+
+  return {
+    schema: 'sitelayer.ops_diagnostic_manifest.v1',
+    generated_at: new Date().toISOString(),
+    ops_diagnostic_session_id: session.id,
+    worker_issue_id: null,
+    capture_session_id: captureSessionId,
+    support_packet_id: supportPacketId,
+    context_work_item_id: contextWorkItemId,
+    operator_next_step: operatorNextStep,
+    needs_attention: session.plan.status !== 'ready' || gaps.length > 0,
+    readiness: {
+      plan: session.plan.status,
+      control_level: session.plan.control_level,
+      desktop_evidence: desktopReadiness,
+      work_evidence: workEvidence,
+      agent_handoff: agentHandoff.status,
+    },
+    evidence: {
+      refs: evidenceRefs,
+      audit_events_total: session.audit_events.length,
+      latest_action: latestAction,
+      desktop_evidence: desktopEvidence,
+    },
+    agent_handoff: {
+      audiences: agentHandoff.audiences,
+      deliveries,
+      callback_expected: agentHandoff.callbackExpected,
+      stale: agentHandoff.status === 'stale',
+    },
+    consent_receipts: buildOpsConsentReceipts(session, desktopEvidence),
+    gaps,
+  }
+}
+
+function summarizeAgentHandoff(deliveries: OpsOnsiteDiagnosticAgentFeedDelivery[]): {
+  status: OpsOnsiteDiagnosticManifest['readiness']['agent_handoff']
+  audiences: string[]
+  callbackExpected: boolean
+} {
+  const audiences = Array.from(new Set(deliveries.map((delivery) => delivery.audience))).sort()
+  if (deliveries.length === 0) return { status: 'not_requested', audiences, callbackExpected: false }
+  if (deliveries.some((delivery) => delivery.stale)) return { status: 'stale', audiences, callbackExpected: true }
+  if (deliveries.some((delivery) => delivery.status === 'failed' || delivery.status === 'cancelled')) {
+    return { status: 'failed', audiences, callbackExpected: true }
+  }
+  if (deliveries.some((delivery) => delivery.status === 'succeeded')) {
+    return { status: 'succeeded', audiences, callbackExpected: false }
+  }
+  if (deliveries.some((delivery) => delivery.status === 'claimed')) {
+    return { status: 'claimed', audiences, callbackExpected: true }
+  }
+  return { status: 'queued', audiences, callbackExpected: true }
+}
+
+function buildOpsConsentReceipts(
+  session: Omit<OpsOnsiteDiagnosticSessionRecord, 'diagnostic_manifest'>,
+  desktopEvidence: OpsOnsiteDiagnosticDesktopEvidenceResult | null,
+): OpsOnsiteDiagnosticManifest['consent_receipts'] {
+  const desktopRequested = session.audit_events.some((event) => event.action_key === 'capture_desktop_context')
+  if (!desktopRequested && desktopEvidence?.status !== 'attached') return []
+  return [
+    {
+      source: 'ops_diagnostic_desktop_capture',
+      consent_version: OPS_DESKTOP_EVIDENCE_CONSENT_VERSION,
+      actor_user_id: session.operator_user_id,
+      authority: 'authenticated_company_user',
+      streams: ['screen_video'],
+      retention_days: OPS_DESKTOP_EVIDENCE_RETENTION_DAYS,
+      status: desktopEvidence?.status === 'attached' ? 'active' : 'missing',
+    },
+  ]
 }
 
 async function latestPersistentDesktopEvidence(
