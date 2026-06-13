@@ -171,6 +171,121 @@ describe('replayOfflineQueue — Web Locks cross-tab guard', () => {
     expect(removeMock).toHaveBeenCalledWith('mut-capture-upload')
   })
 
+  it('replays queued worker issue submissions with attachments after create returns an id', async () => {
+    ;(navigator as unknown as { locks: unknown }).locks = {
+      request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {
+        return cb({ name: _name })
+      },
+    }
+    const photo = new Blob(['photo'], { type: 'image/jpeg' })
+    const row = {
+      id: 'mut-worker-issue-submit',
+      kind: 'worker_issue_submit' as const,
+      enqueued_at: Date.now(),
+      attempt_count: 0,
+      payload: {
+        companySlug: 'acme',
+        body: {
+          kind: 'safety',
+          message: 'Crew is stopped',
+          severity: 'stopped',
+          client_request_id: 'worker-issue-1',
+        },
+        attachments: [
+          {
+            kind: 'photo',
+            payload: photo,
+            fileName: 'site.jpg',
+            clientUploadId: 'worker-issue-1:0:photo:site.jpg',
+          },
+        ],
+      },
+    }
+    const removeMock = vi.fn(async () => undefined)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ attachment: { id: 'att-1' } }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.doMock('./queue', () => ({
+      listOfflineMutations: vi.fn(async () => [row]),
+      removeOfflineMutation: removeMock,
+      updateOfflineMutation: vi.fn(async () => undefined),
+    }))
+    vi.doMock('@/lib/api/client', async (orig) => {
+      const actual = await orig<typeof import('@/lib/api/client')>()
+      return {
+        ...actual,
+        request: vi.fn(async () => ({ worker_issue: { id: 'wi-1' } })),
+        buildAuthHeaders: vi.fn(async () => new Headers({ 'x-sitelayer-company-slug': 'acme' })),
+        API_URL: 'https://api.test',
+      }
+    })
+
+    const { replayOfflineQueue } = await import('./replay')
+    const result = await replayOfflineQueue()
+
+    expect(result.replayed).toBe(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.test/api/worker-issues/wi-1/attachments',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.any(Headers),
+        body: expect.any(FormData),
+      }),
+    )
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit | undefined]>
+    const headers = fetchCalls[0]?.[1]?.headers as Headers
+    expect(headers.get('Idempotency-Key')).toBe('worker-issue-1:0:photo:site.jpg')
+    expect(removeMock).toHaveBeenCalledWith('mut-worker-issue-submit')
+  })
+
+  it('replays queued worker issue attachment uploads directly when the issue id is known', async () => {
+    ;(navigator as unknown as { locks: unknown }).locks = {
+      request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {
+        return cb({ name: _name })
+      },
+    }
+    const voice = new Blob(['voice'], { type: 'audio/webm' })
+    const row = {
+      id: 'mut-worker-issue-attachment',
+      kind: 'worker_issue_attachment_upload' as const,
+      enqueued_at: Date.now(),
+      attempt_count: 0,
+      payload: {
+        companySlug: 'acme',
+        issueId: 'wi-1',
+        kind: 'voice',
+        file: voice,
+        fileName: 'voice.webm',
+        client_upload_id: 'worker-issue-1:0:voice:voice.webm',
+      },
+    }
+    const removeMock = vi.fn(async () => undefined)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ attachment: { id: 'att-1' } }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.doMock('./queue', () => ({
+      listOfflineMutations: vi.fn(async () => [row]),
+      removeOfflineMutation: removeMock,
+      updateOfflineMutation: vi.fn(async () => undefined),
+    }))
+    vi.doMock('@/lib/api/client', async (orig) => {
+      const actual = await orig<typeof import('@/lib/api/client')>()
+      return {
+        ...actual,
+        buildAuthHeaders: vi.fn(async () => new Headers({ 'x-sitelayer-company-slug': 'acme' })),
+        API_URL: 'https://api.test',
+      }
+    })
+
+    const { replayOfflineQueue } = await import('./replay')
+    const result = await replayOfflineQueue()
+
+    expect(result.replayed).toBe(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.test/api/worker-issues/wi-1/attachments',
+      expect.objectContaining({ method: 'POST', headers: expect.any(Headers), body: expect.any(FormData) }),
+    )
+    expect(removeMock).toHaveBeenCalledWith('mut-worker-issue-attachment')
+  })
+
   it('replays queued portal capture session starts before later artifacts', async () => {
     ;(navigator as unknown as { locks: unknown }).locks = {
       request: async (_name: string, _opts: unknown, cb: (lock: unknown) => Promise<unknown>) => {

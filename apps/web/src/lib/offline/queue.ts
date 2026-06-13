@@ -44,6 +44,8 @@ export type OfflineMutationKind =
   | 'capture_session_start'
   | 'capture_artifact_upload'
   | 'capture_session_finalize'
+  | 'worker_issue_submit'
+  | 'worker_issue_attachment_upload'
 
 export interface OfflineMutation {
   /** Auto-generated. */
@@ -105,6 +107,8 @@ const BLOB_SLOTS: Record<OfflineMutationKind, readonly string[]> = {
   capture_session_start: [],
   capture_artifact_upload: ['file'],
   capture_session_finalize: [],
+  worker_issue_submit: ['attachments'],
+  worker_issue_attachment_upload: ['file'],
 }
 
 function isBlobLike(value: unknown): value is Blob {
@@ -124,9 +128,8 @@ function validatePayloadBlobs(kind: OfflineMutationKind, payload: Record<string,
   const allowed = new Set(BLOB_SLOTS[kind] ?? [])
   function walk(value: unknown, path: string): void {
     if (isBlobLike(value)) {
-      // Top-level blob in an allowed slot is fine.
-      const isTopLevelAllowed = !path.includes('.') && allowed.has(path)
-      if (isTopLevelAllowed) return
+      const topLevelSlot = path.split(/[.[\]]/, 1)[0] ?? path
+      if (allowed.has(topLevelSlot)) return
       throw new OfflineQueuePayloadError(kind, path, `offline kind ${kind} does not accept a Blob/File at ${path}`)
     }
     if (value === null || typeof value !== 'object') return

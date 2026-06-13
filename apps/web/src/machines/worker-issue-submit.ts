@@ -3,7 +3,8 @@ import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
 import { apiPost } from '@/lib/api'
-import { API_URL, buildAuthHeaders } from '../lib/api/client'
+import { enqueueOfflineMutation } from '@/lib/offline/queue'
+import { API_URL, NetworkError, buildAuthHeaders, nextRequestId } from '../lib/api/client'
 
 /**
  * UI state machine for the worker_issues create-with-attachments flow.
@@ -39,6 +40,7 @@ export interface PendingAttachment {
   /** Already-named binary payload. */
   payload: Blob | File
   fileName: string
+  clientUploadId?: string
 }
 
 export interface WorkerIssueCreateBody {
@@ -55,6 +57,7 @@ export interface WorkerIssueCreateBody {
   material_label?: string
   material_quantity?: number
   material_unit?: string
+  client_request_id?: string
 }
 
 export interface WorkerIssueSubmitPayload {
@@ -76,6 +79,7 @@ interface MachineContext {
   /** Last error string for the issue-create call (separate from
    *  attachment failures, which we keep going through). */
   error: string | null
+  clientRequestId: string | null
 }
 
 type MachineEvent =
@@ -83,30 +87,80 @@ type MachineEvent =
   | { type: 'RETRY_ATTACHMENTS' }
   | { type: 'DISMISS_ERROR' }
 
-type CreateInput = { companySlug: string; body: WorkerIssueCreateBody }
-type CreateOutput = { issueId: string }
+type CreateInput = {
+  companySlug: string
+  body: WorkerIssueCreateBody
+  attachments: PendingAttachment[]
+  clientRequestId: string
+}
+type CreateOutput = { issueId: string } | { queued: true }
 
 type UploadInput = { companySlug: string; issueId: string; attachment: PendingAttachment }
 
+function nextWorkerIssueClientId(): string {
+  return nextRequestId().replace(/^web-/, 'worker-issue-')
+}
+
+function attachmentClientUploadId(clientRequestId: string, attachment: PendingAttachment, index: number): string {
+  return `${clientRequestId}:${index}:${attachment.kind}:${attachment.fileName}`
+}
+
+function prepareAttachments(clientRequestId: string, attachments: PendingAttachment[]): PendingAttachment[] {
+  return attachments.map((attachment, index) => ({
+    ...attachment,
+    clientUploadId: attachment.clientUploadId ?? attachmentClientUploadId(clientRequestId, attachment, index),
+  }))
+}
+
 async function createWorkerIssue(input: CreateInput): Promise<CreateOutput> {
-  const response = await apiPost<{ worker_issue: { id: string } }>('/api/worker-issues', input.body, input.companySlug)
-  const id = response?.worker_issue?.id
-  if (!id) {
-    throw new Error('worker issue create response missing id')
+  const body = { ...input.body, client_request_id: input.clientRequestId }
+  try {
+    const response = await apiPost<{ worker_issue: { id: string } }>('/api/worker-issues', body, input.companySlug)
+    const id = response?.worker_issue?.id
+    if (!id) {
+      throw new Error('worker issue create response missing id')
+    }
+    return { issueId: id }
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      await enqueueOfflineMutation('worker_issue_submit', {
+        companySlug: input.companySlug,
+        body,
+        attachments: input.attachments,
+      })
+      return { queued: true }
+    }
+    throw err
   }
-  return { issueId: id }
 }
 
 async function uploadAttachment(input: UploadInput): Promise<void> {
+  const clientUploadId =
+    input.attachment.clientUploadId ?? attachmentClientUploadId(`worker-issue-${input.issueId}`, input.attachment, 0)
   const form = new FormData()
   form.append('kind', input.attachment.kind)
+  form.append('client_upload_id', clientUploadId)
   // Busboy delivers fields in wire order; `kind` must arrive before the
   // file part so the file handler can read it. Same convention as the
   // original handler in worker-issue.tsx.
   form.append('file', input.attachment.payload, input.attachment.fileName)
-  const headers = await buildAuthHeaders()
+  const headers = await buildAuthHeaders({ companySlug: input.companySlug })
+  headers.set('Idempotency-Key', clientUploadId)
   const path = `/api/worker-issues/${encodeURIComponent(input.issueId)}/attachments`
-  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: form })
+  } catch (err) {
+    await enqueueOfflineMutation('worker_issue_attachment_upload', {
+      companySlug: input.companySlug,
+      issueId: input.issueId,
+      kind: input.attachment.kind,
+      file: input.attachment.payload,
+      fileName: input.attachment.fileName,
+      client_upload_id: clientUploadId,
+    })
+    return
+  }
   if (!response.ok) {
     const ct = response.headers.get('content-type') ?? ''
     let detail = ''
@@ -143,20 +197,25 @@ export const workerIssueSubmitMachine = setup({
     pending: [],
     failed: [],
     error: null,
+    clientRequestId: null,
   },
   states: {
     idle: {
       on: {
         SUBMIT: {
           target: 'creating',
-          actions: assign(({ event }) => ({
-            companySlug: event.payload.companySlug,
-            body: event.payload.body,
-            issueId: null,
-            pending: event.payload.attachments,
-            failed: [],
-            error: null,
-          })),
+          actions: assign(({ event }) => {
+            const clientRequestId = event.payload.body.client_request_id ?? nextWorkerIssueClientId()
+            return {
+              companySlug: event.payload.companySlug,
+              body: { ...event.payload.body, client_request_id: clientRequestId },
+              issueId: null,
+              pending: prepareAttachments(clientRequestId, event.payload.attachments),
+              failed: [],
+              error: null,
+              clientRequestId,
+            }
+          }),
         },
         DISMISS_ERROR: { actions: assign({ error: () => null }) },
       },
@@ -168,12 +227,30 @@ export const workerIssueSubmitMachine = setup({
           if (!context.companySlug || !context.body) {
             throw new Error('creating entered without companySlug/body — SUBMIT not assigned')
           }
-          return { companySlug: context.companySlug, body: context.body }
+          if (!context.clientRequestId) {
+            throw new Error('creating entered without clientRequestId — SUBMIT not assigned')
+          }
+          return {
+            companySlug: context.companySlug,
+            body: context.body,
+            attachments: context.pending,
+            clientRequestId: context.clientRequestId,
+          }
         },
-        onDone: {
-          target: 'processing',
-          actions: assign({ issueId: ({ event }) => event.output.issueId, error: () => null }),
-        },
+        onDone: [
+          {
+            guard: ({ event }) => 'queued' in event.output,
+            target: 'doneAll',
+            actions: assign({ issueId: () => null, pending: () => [], error: () => null }),
+          },
+          {
+            target: 'processing',
+            actions: assign({
+              issueId: ({ event }) => ('issueId' in event.output ? event.output.issueId : null),
+              error: () => null,
+            }),
+          },
+        ],
         onError: {
           target: 'idle',
           actions: assign({
@@ -221,14 +298,18 @@ export const workerIssueSubmitMachine = setup({
       on: {
         SUBMIT: {
           target: 'creating',
-          actions: assign(({ event }) => ({
-            companySlug: event.payload.companySlug,
-            body: event.payload.body,
-            issueId: null,
-            pending: event.payload.attachments,
-            failed: [],
-            error: null,
-          })),
+          actions: assign(({ event }) => {
+            const clientRequestId = event.payload.body.client_request_id ?? nextWorkerIssueClientId()
+            return {
+              companySlug: event.payload.companySlug,
+              body: { ...event.payload.body, client_request_id: clientRequestId },
+              issueId: null,
+              pending: prepareAttachments(clientRequestId, event.payload.attachments),
+              failed: [],
+              error: null,
+              clientRequestId,
+            }
+          }),
         },
       },
     },
@@ -246,14 +327,18 @@ export const workerIssueSubmitMachine = setup({
           // Reset and start a fresh submission (e.g. user dismissed and
           // opened the form again).
           target: 'creating',
-          actions: assign(({ event }) => ({
-            companySlug: event.payload.companySlug,
-            body: event.payload.body,
-            issueId: null,
-            pending: event.payload.attachments,
-            failed: [],
-            error: null,
-          })),
+          actions: assign(({ event }) => {
+            const clientRequestId = event.payload.body.client_request_id ?? nextWorkerIssueClientId()
+            return {
+              companySlug: event.payload.companySlug,
+              body: { ...event.payload.body, client_request_id: clientRequestId },
+              issueId: null,
+              pending: prepareAttachments(clientRequestId, event.payload.attachments),
+              failed: [],
+              error: null,
+              clientRequestId,
+            }
+          }),
         },
       },
     },
