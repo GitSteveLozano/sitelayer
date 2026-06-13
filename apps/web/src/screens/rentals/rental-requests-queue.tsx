@@ -25,10 +25,9 @@
  *   - Approve opens a confirmation Sheet with the line preview.
  *   - Decline opens a Sheet asking for an optional reason string.
  */
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MBanner, MBody, MButton, MButtonRow, MListInset, MListRow, MTopBar } from '@/components/m'
-import { Sheet } from '@/components/mobile'
+import { MBanner, MBody, MButton, MButtonRow, MI, MListInset, MListRow, MTopBar } from '@/components/m'
 import {
   useDispatchRentalRequestEvent,
   useRentalRequests,
@@ -151,27 +150,89 @@ function RentalRequestCard({ request, onError, onActed }: RentalRequestCardProps
         </MButtonRow>
       </div>
 
-      <Sheet open={active?.kind === 'approve'} onClose={() => setActive(null)} title="Approve request?">
-        {active?.kind === 'approve' ? (
+      {active?.kind === 'approve' ? (
+        <MSheet title="Approve request?" onClose={() => setActive(null)}>
           <ApproveSheetBody
             request={active.request}
             isPending={dispatch.isPending}
             onCancel={() => setActive(null)}
             onConfirm={() => runDispatch('APPROVE')}
           />
-        ) : null}
-      </Sheet>
+        </MSheet>
+      ) : null}
 
-      <Sheet open={active?.kind === 'decline'} onClose={() => setActive(null)} title="Decline request">
-        {active?.kind === 'decline' ? (
+      {active?.kind === 'decline' ? (
+        <MSheet title="Decline request" onClose={() => setActive(null)}>
           <DeclineSheetBody
             request={active.request}
             isPending={dispatch.isPending}
             onCancel={() => setActive(null)}
             onConfirm={(reason) => runDispatch('DECLINE', reason || null)}
           />
-        ) : null}
-      </Sheet>
+        </MSheet>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow). Replaces the legacy
+ * mobile-kit Sheet (rounded-t-[24px]) this screen used pre-v2.
+ * ESC and backdrop-tap dismiss. Same local-helper pattern as
+ * screens/mobile/schedule.tsx and screens/financial/generate-payroll-export-sheet.tsx.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
     </div>
   )
 }
@@ -248,7 +309,7 @@ function DeclineSheetBody({ request, isPending, onCancel, onConfirm }: DeclineSh
           padding: 10,
           fontSize: 14,
           border: '1px solid var(--m-line-2, #ddd)',
-          borderRadius: 8,
+          borderRadius: 0,
           fontFamily: 'inherit',
         }}
       />

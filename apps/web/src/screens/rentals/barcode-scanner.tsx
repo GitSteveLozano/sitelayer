@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { MButton, MI, MPill } from '@/components/m'
 
 /**
  * Camera-driven barcode + QR scanner. Uses the browser's
@@ -142,11 +142,11 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
   if (!open) return null
 
   return (
-    <Sheet open onClose={onClose} title="Scan barcode or QR">
+    <MSheet title="Scan barcode or QR" onClose={onClose}>
       <div className="space-y-3">
         {!supported ? (
           <div className="space-y-2">
-            <Pill tone="warn">Not supported</Pill>
+            <MPill tone="amber">Not supported</MPill>
             <div className="text-[12px] text-ink-2">
               This browser doesn't expose the BarcodeDetector API yet. Type the asset code in the field instead — it
               works the same way once entered.
@@ -154,7 +154,7 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="relative aspect-[4/3] rounded-md overflow-hidden bg-black">
+            <div className="relative aspect-[4/3] overflow-hidden bg-black">
               <video
                 ref={videoRef}
                 playsInline
@@ -162,22 +162,85 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
                 className="w-full h-full object-cover"
                 aria-label="Camera preview"
               />
+              {/* Scan frame — square corners per the v2 brand (msg__71). */}
               <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="w-3/4 aspect-square border-2 border-white/80 rounded-md shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                <div className="w-3/4 aspect-square border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
               </div>
             </div>
             <div className="flex items-center justify-between text-[12px] text-ink-3">
               <span>{scanning ? 'Aim at the sticker — auto-fills on read.' : 'Starting camera…'}</span>
-              {scanning ? <Pill tone="good">Live</Pill> : null}
+              {scanning ? <MPill tone="green">Live</MPill> : null}
             </div>
           </div>
         )}
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <MobileButton variant="ghost" onClick={onClose}>
+        <MButton variant="ghost" onClick={onClose}>
           Cancel
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow). Replaces the legacy
+ * mobile-kit Sheet (rounded-t-[24px]) this sheet used pre-v2.
+ * ESC and backdrop-tap dismiss. Same local-helper pattern as
+ * screens/mobile/schedule.tsx and screens/financial/generate-payroll-export-sheet.tsx.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 

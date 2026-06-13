@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
+import { MButton, MButtonRow, MI, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import {
   useCreateContractLine,
@@ -64,20 +64,20 @@ export function ProjectRentalContractScreen() {
       </p>
 
       {contracts.isPending ? (
-        <Card tight className="mt-6">
+        <div className="m-card m-card-tight mt-6">
           <div className="text-[12px] text-ink-3">Loading…</div>
-        </Card>
+        </div>
       ) : !activeContract ? (
         <div className="mt-6 space-y-3">
-          <Card>
+          <div className="m-card">
             <div className="text-[13px] font-semibold">No active contract</div>
             <div className="text-[12px] text-ink-3 mt-1">Create one to start billing rentals on this project.</div>
             <div className="mt-3">
-              <MobileButton variant="primary" onClick={() => setCreatingContract(true)}>
+              <MButton variant="primary" onClick={() => setCreatingContract(true)}>
                 + New contract
-              </MobileButton>
+              </MButton>
             </div>
-          </Card>
+          </div>
           {creatingContract ? (
             <NewContractSheet
               onClose={() => setCreatingContract(false)}
@@ -102,7 +102,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
   const createLine = useCreateContractLine(contract.id)
   const preview = usePreviewBillingRun(contract.id)
   const generate = useGenerateBillingRun(contract.id)
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirm()
   const [editingLine, setEditingLine] = useState<RentalContractLine | 'new' | null>(null)
   const [previewData, setPreviewData] = useState<BillingRunPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -142,7 +142,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
 
   return (
     <div className="mt-6 space-y-3">
-      <Card>
+      <div className="m-card">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Contract</div>
@@ -154,14 +154,14 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
               {contract.last_billed_through ? ` · last ${contract.last_billed_through}` : ''}
             </div>
           </div>
-          <Pill tone={contract.status === 'active' ? 'good' : 'default'}>{contract.status}</Pill>
+          <MPill tone={contract.status === 'active' ? 'green' : undefined}>{contract.status}</MPill>
         </div>
         <div className="mt-3">
-          <MobileButton variant="ghost" onClick={() => setEditingHeader(true)}>
+          <MButton variant="ghost" onClick={() => setEditingHeader(true)}>
             Edit contract
-          </MobileButton>
+          </MButton>
         </div>
-      </Card>
+      </div>
 
       <div className="flex items-center justify-between pt-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Lines</div>
@@ -172,13 +172,13 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
 
       <div className="space-y-2">
         {lines.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : (lines.data?.lines ?? []).length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No lines yet — add the first one.</div>
-          </Card>
+          </div>
         ) : (
           lines.data?.lines.map((line) => {
             const item = items.data?.inventoryItems.find((i) => i.id === line.inventory_item_id)
@@ -189,7 +189,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
                 onClick={() => setEditingLine(line)}
                 className="block w-full text-left"
               >
-                <Card tight>
+                <div className="m-card m-card-tight">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">
@@ -200,27 +200,27 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
                         {line.off_rent_date ? ` → off ${line.off_rent_date}` : ''}
                       </div>
                     </div>
-                    <Pill tone={line.status === 'active' ? 'good' : 'default'}>{line.status}</Pill>
+                    <MPill tone={line.status === 'active' ? 'green' : undefined}>{line.status}</MPill>
                   </div>
-                </Card>
+                </div>
               </button>
             )
           })
         )}
       </div>
 
-      <Card className="mt-4">
+      <div className="m-card mt-4">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Generate billing run</div>
         <div className="text-[12px] text-ink-3 mt-1">
           Preview the next cycle, then generate an approvable run. Approval + post happens on the Financial tab.
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <MobileButton variant="ghost" onClick={onPreview} disabled={preview.isPending}>
+          <MButton variant="ghost" onClick={onPreview} disabled={preview.isPending}>
             {preview.isPending ? 'Computing…' : 'Preview'}
-          </MobileButton>
-          <MobileButton variant="primary" onClick={onGenerate} disabled={generate.isPending || !previewData}>
+          </MButton>
+          <MButton variant="primary" onClick={onGenerate} disabled={generate.isPending || !previewData}>
             {generate.isPending ? 'Generating…' : 'Generate run'}
-          </MobileButton>
+          </MButton>
         </div>
         {previewData ? (
           <div className="mt-3 pt-3 border-t border-dashed border-line-2">
@@ -236,7 +236,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
           </div>
         ) : null}
         {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
-      </Card>
+      </div>
 
       <div className="mt-2">
         <Attribution source="POST /api/rental-contracts/:id/billing-runs[/preview] · then approve via Financial tab" />
@@ -246,7 +246,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
           /api/rentals ledger by rental id. Operators reach this surface
           when the contract-line return path doesn't yet apply (Avontus
           style rentals, ad-hoc dispatches). */}
-      <Card className="mt-3">
+      <div className="m-card mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Reconcile rental return</div>
         <div className="text-[12px] text-ink-3 mt-1">
           Paste a rental id to record returned counts (good / damaged / lost) or transfer it to another project.
@@ -259,14 +259,14 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
           className="mt-2 w-full text-[13px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
         />
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <MobileButton variant="ghost" onClick={() => setReturnSheetOpen(true)} disabled={!reconcileRentalId}>
+          <MButton variant="ghost" onClick={() => setReturnSheetOpen(true)} disabled={!reconcileRentalId}>
             Receive return
-          </MobileButton>
-          <MobileButton variant="ghost" onClick={() => setTransferSheetOpen(true)} disabled={!reconcileRentalId}>
+          </MButton>
+          <MButton variant="ghost" onClick={() => setTransferSheetOpen(true)} disabled={!reconcileRentalId}>
             Transfer
-          </MobileButton>
+          </MButton>
         </div>
-      </Card>
+      </div>
 
       {reconcileRentalId ? (
         <>
@@ -344,17 +344,17 @@ function NewContractSheet({
   }
 
   return (
-    <Sheet open onClose={onClose} title="New contract">
-      <div className="space-y-3">
+    <MSheet title="New contract" onClose={onClose}>
+      <div className="space-y-3 pb-4">
         <Field label="Billing start date" value={start} onChange={setStart} type="date" />
         <Field label="Cycle days" value={cycle} onChange={setCycle} placeholder="25" />
         <Select label="Mode" value={mode} onChange={setMode} options={['arrears', 'in_advance']} />
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <MobileButton variant="primary" onClick={submit} disabled={!start}>
+        <MButton variant="primary" onClick={submit} disabled={!start}>
           Create
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
   )
 }
 
@@ -397,19 +397,19 @@ function ContractHeaderSheet({
   }
 
   return (
-    <Sheet open onClose={onClose} title="Edit contract">
-      <div className="space-y-3">
+    <MSheet title="Edit contract" onClose={onClose}>
+      <div className="space-y-3 pb-4">
         <Field label="Billing start date" value={start} onChange={setStart} type="date" />
         <Field label="Next billing date" value={next} onChange={setNext} type="date" />
         <Field label="Cycle days" value={cycle} onChange={setCycle} placeholder="25" />
         <Select label="Mode" value={mode} onChange={setMode} options={['arrears', 'in_advance']} />
         <Select label="Status" value={status} onChange={setStatus} options={['draft', 'active', 'paused', 'closed']} />
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <MobileButton variant="primary" onClick={submit}>
+        <MButton variant="primary" onClick={submit}>
           Save
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
   )
 }
 
@@ -434,7 +434,7 @@ function LineForm({
   const items = useInventoryItems()
   const patch = usePatchContractLine(line?.id ?? '')
   const del = useDeleteContractLine()
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirm()
   const [itemId, setItemId] = useState(line?.inventory_item_id ?? '')
   const [quantity, setQuantity] = useState(line?.quantity ?? '1')
   const [rate, setRate] = useState(line?.agreed_rate ?? '0')
@@ -483,8 +483,8 @@ function LineForm({
   }
 
   return (
-    <Sheet open onClose={onClose} title={line ? 'Edit line' : 'New line'}>
-      <div className="space-y-3">
+    <MSheet title={line ? 'Edit line' : 'New line'} onClose={onClose}>
+      <div className="space-y-3 pb-4">
         <Select
           label="Item"
           value={itemId}
@@ -510,22 +510,23 @@ function LineForm({
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         {line ? <RateTierPanel lineId={line.id} /> : null}
         <div className={line ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton
-            variant="primary"
-            onClick={submit}
-            disabled={!itemId || Number(quantity) <= 0 || patch.isPending}
-          >
+          <MButton variant="primary" onClick={submit} disabled={!itemId || Number(quantity) <= 0 || patch.isPending}>
             {line ? 'Save' : 'Add'}
-          </MobileButton>
+          </MButton>
           {line ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
+            <MButton
+              variant="ghost"
+              onClick={remove}
+              disabled={del.isPending}
+              style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+            >
               Delete
-            </MobileButton>
+            </MButton>
           ) : null}
         </div>
       </div>
       {confirmNode}
-    </Sheet>
+    </MSheet>
   )
 }
 
@@ -610,9 +611,9 @@ function RateTierPanel({ lineId }: { lineId: string }) {
         />
       </div>
       {err ? <div className="text-[11px] text-warn mt-1">{err}</div> : null}
-      <MobileButton variant="ghost" onClick={addTier} disabled={create.isPending}>
+      <MButton variant="ghost" size="sm" onClick={addTier} disabled={create.isPending} className="mt-2">
         Add tier
-      </MobileButton>
+      </MButton>
     </div>
   )
 }
@@ -672,4 +673,115 @@ function Select({
       </select>
     </label>
   )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * `.m-sheet` replacement for the legacy `useConfirmSheet` hook — same
+ * `[node, ask]` API, resolves the promise with the user's choice.
+ * `destructive` keeps the legacy red-confirm treatment.
+ */
+function useMConfirm() {
+  const [state, setState] = useState<{
+    title: string
+    body: string
+    confirmLabel: string
+    destructive?: boolean
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok)
+    setState(null)
+  }
+
+  const node =
+    state !== null ? (
+      <MSheet title={state.title} onClose={() => settle(false)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.body}</div>
+          <MButtonRow>
+            <MButton variant="ghost" onClick={() => settle(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              variant="primary"
+              onClick={() => settle(true)}
+              style={
+                state.destructive ? { background: 'var(--m-red)', borderColor: 'var(--m-red)', color: '#fff' } : {}
+              }
+            >
+              {state.confirmLabel}
+            </MButton>
+          </MButtonRow>
+        </div>
+      </MSheet>
+    ) : null
+
+  const ask = (props: { title: string; body: string; confirmLabel: string; destructive?: boolean }): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ ...props, resolve })
+    })
+
+  return [node, ask] as const
 }

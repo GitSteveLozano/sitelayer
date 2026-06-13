@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom'
-import { Card } from '@/components/mobile'
+import { useNavigate } from 'react-router-dom'
+import { MBody, MListPlain, MListRow, MTopBar } from '@/components/m'
 import { useActiveCompanyModules, useInventoryItems, useInventoryLocations } from '@/lib/api'
 import type { CompanyModules } from '@/lib/api'
 
@@ -40,6 +40,7 @@ export function InventoryAdminHubScreen() {
   const items = useInventoryItems()
   const locations = useInventoryLocations()
   const moduleFlags = useActiveCompanyModules()?.modules
+  const navigate = useNavigate()
 
   const visibleEntries = ENTRIES.filter((e) => {
     if (!e.requires) return true
@@ -51,35 +52,24 @@ export function InventoryAdminHubScreen() {
   })
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more" className="text-[12px] text-ink-3">
-        ← More
-      </Link>
-      <h1 className="mt-2 font-display text-[26px] font-bold tracking-tight leading-tight">Inventory admin</h1>
-      <p className="text-[12px] text-ink-3 mt-1">
-        {items.data?.inventoryItems.length ?? 0} items · {locations.data?.inventoryLocations.length ?? 0} locations
-      </p>
-      <p className="text-[12px] text-ink-3 mt-1">
-        Day-to-day rental dispatch lives in the Rentals tab. This is the configuration side.
-      </p>
-
-      <div className="mt-6 space-y-3">
-        {visibleEntries.map((e) => (
-          <Link key={e.to} to={e.to} className="block">
-            <Card>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[14px] font-semibold">{e.label}</div>
-                  <div className="text-[12px] text-ink-3 mt-0.5">{e.detail}</div>
-                </div>
-                <span className="text-ink-4" aria-hidden="true">
-                  ›
-                </span>
-              </div>
-            </Card>
-          </Link>
-        ))}
-      </div>
-    </div>
+    <>
+      <MTopBar
+        back
+        eyebrow="Settings"
+        title="Inventory admin"
+        sub={`${items.data?.inventoryItems.length ?? 0} items · ${locations.data?.inventoryLocations.length ?? 0} locations`}
+        onBack={() => navigate('/more')}
+      />
+      <MBody>
+        <p className="m-quiet-sm" style={{ padding: '14px 16px 4px', margin: 0 }}>
+          Day-to-day rental dispatch lives in the Rentals tab. This is the configuration side.
+        </p>
+        <MListPlain>
+          {visibleEntries.map((e) => (
+            <MListRow key={e.to} headline={e.label} supporting={e.detail} chev onTap={() => navigate(e.to)} />
+          ))}
+        </MListPlain>
+      </MBody>
+    </>
   )
 }

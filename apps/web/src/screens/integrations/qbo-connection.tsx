@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { useNavigate } from 'react-router-dom'
+import { MBody, MButton, MListInset, MListRow, MPill, MSelect, MTopBar, type MTone } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { ApiError } from '@/lib/api/client'
 import {
@@ -29,7 +29,15 @@ function extractRunId(value: unknown): string | null {
   return null
 }
 
+/** Connection-status pill tone — same mapping as the designed
+ *  IntegrationsStatusList connector rows in settings-home (msg__88). */
+const STATUS_TONE: Record<string, MTone> = {
+  connected: 'green',
+  error: 'red',
+}
+
 export function QboConnectionScreen() {
+  const navigate = useNavigate()
   const qbo = useQboConnection()
   const sync = useTriggerQboSync()
   const [error, setError] = useState<string | null>(null)
@@ -94,94 +102,88 @@ export function QboConnectionScreen() {
   }
 
   if (qbo.isPending) {
-    return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading QBO state…</div>
+    return (
+      <>
+        <MTopBar back eyebrow="Integrations" title="QuickBooks Online" onBack={() => navigate('/more/integrations')} />
+        <MBody>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            Loading QBO state…
+          </div>
+        </MBody>
+      </>
+    )
   }
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/integrations" className="text-[12px] text-ink-3">
-        ← Integrations
-      </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">QuickBooks Online</h1>
-        <Pill tone={status === 'connected' ? 'good' : status === 'error' ? 'warn' : 'default'}>{status}</Pill>
-      </div>
-
-      <div className="mt-6 space-y-3">
-        <Card>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Connection</div>
-          {conn ? (
-            <div className="text-[12px] text-ink-2 mt-1 space-y-1">
-              <div>
-                Realm: <span className="font-mono">{conn.provider_account_id ?? '—'}</span>
-              </div>
-              <div>Last synced: {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : '—'}</div>
-              <div>
-                Cursor: <span className="font-mono">{conn.sync_cursor ?? '—'}</span>
-              </div>
-              <div>v{conn.version}</div>
+    <>
+      <MTopBar back eyebrow="Integrations" title="QuickBooks Online" onBack={() => navigate('/more/integrations')} />
+      <MBody>
+        <div className="m-card-stack" style={{ paddingTop: 16, paddingBottom: 12 }}>
+          <div className="m-card">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Connection</div>
+              <MPill tone={STATUS_TONE[status]} dot>
+                {status}
+              </MPill>
             </div>
-          ) : (
-            <div className="text-[12px] text-ink-3 mt-1">No connection yet.</div>
-          )}
-          <div className="mt-3">
-            <MobileButton variant="primary" onClick={onConnect} disabled={authPending}>
-              {authPending ? 'Redirecting…' : conn ? 'Reconnect (OAuth)' : 'Connect to QBO'}
-            </MobileButton>
+            {conn ? (
+              <div className="text-[12px] text-ink-2 mt-1 space-y-1">
+                <div>
+                  Realm: <span className="font-mono">{conn.provider_account_id ?? '—'}</span>
+                </div>
+                <div>Last synced: {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : '—'}</div>
+                <div>
+                  Cursor: <span className="font-mono">{conn.sync_cursor ?? '—'}</span>
+                </div>
+                <div>v{conn.version}</div>
+              </div>
+            ) : (
+              <div className="text-[12px] text-ink-3 mt-1">No connection yet.</div>
+            )}
+            <div className="mt-3">
+              <MButton variant="primary" onClick={onConnect} disabled={authPending}>
+                {authPending ? 'Redirecting…' : conn ? 'Reconnect (OAuth)' : 'Connect to QBO'}
+              </MButton>
+            </div>
           </div>
-        </Card>
 
-        <QboSyncMonitorCard
-          hasConnection={Boolean(conn)}
-          runId={activeRunId}
-          runSnapshot={runSnapshot}
-          pendingOutbox={syncStatus.data?.pendingOutboxCount ?? 0}
-          pendingEvents={syncStatus.data?.pendingSyncEventCount ?? 0}
-          failedCount={countFailedOutbox(outbox.data)}
-          loading={syncStatus.isPending || outbox.isPending}
-          inFlight={inFlight}
-          triggering={sync.isPending}
-          onSync={onSync}
-        />
+          <QboSyncMonitorCard
+            hasConnection={Boolean(conn)}
+            runId={activeRunId}
+            runSnapshot={runSnapshot}
+            pendingOutbox={syncStatus.data?.pendingOutboxCount ?? 0}
+            pendingEvents={syncStatus.data?.pendingSyncEventCount ?? 0}
+            failedCount={countFailedOutbox(outbox.data)}
+            loading={syncStatus.isPending || outbox.isPending}
+            inFlight={inFlight}
+            triggering={sync.isPending}
+            onSync={onSync}
+          />
+        </div>
 
-        <Link to="/more/integrations/qbo/mappings" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Entity mappings</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Map customers / service items / divisions to their QBO IDs.
-                </div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
+        <MListInset>
+          <MListRow
+            headline="Entity mappings"
+            supporting="Map customers / service items / divisions to their QBO IDs."
+            chev
+            onTap={() => navigate('/more/integrations/qbo/mappings')}
+          />
+          <MListRow
+            headline="Custom fields"
+            supporting="Map QBO custom-field definitions per entity (Estimate / Invoice / Bill / PO)."
+            chev
+            onTap={() => navigate('/more/integrations/qbo/custom-fields')}
+          />
+        </MListInset>
 
-        <Link to="/more/integrations/qbo/custom-fields" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Custom fields</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Map QBO custom-field definitions per entity (Estimate / Invoice / Bill / PO).
-                </div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
+        <div className="m-card-stack" style={{ paddingTop: 12, paddingBottom: 24 }}>
+          <QboOvertimeMappingCard />
 
-        <QboOvertimeMappingCard />
-
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <Attribution source="GET /api/integrations/qbo · GET /api/sync/status · GET /api/sync/outbox · POST /api/integrations/qbo/sync" />
-      </div>
-    </div>
+          {error ? <div className="text-[12px] text-warn">{error}</div> : null}
+          <Attribution source="GET /api/integrations/qbo · GET /api/sync/status · GET /api/sync/outbox · POST /api/integrations/qbo/sync" />
+        </div>
+      </MBody>
+    </>
   )
 }
 
@@ -195,33 +197,33 @@ export function QboConnectionScreen() {
  */
 function presentRun(args: { snapshot: QboSyncRunSnapshot | null; triggering: boolean }): {
   label: string
-  tone: 'good' | 'warn' | 'default'
+  tone: MTone | undefined
   detail: string
 } {
   if (args.triggering && !args.snapshot) {
-    return { label: 'Syncing', tone: 'default', detail: 'Starting sync…' }
+    return { label: 'Syncing', tone: undefined, detail: 'Starting sync…' }
   }
   const snap = args.snapshot
   if (!snap) {
-    return { label: 'Idle', tone: 'default', detail: 'No sync has run yet — run one to backfill from QBO.' }
+    return { label: 'Idle', tone: undefined, detail: 'No sync has run yet — run one to backfill from QBO.' }
   }
   const ctx = snap.context
   switch (snap.state) {
     case 'pending':
     case 'syncing':
-      return { label: 'Syncing', tone: 'default', detail: 'Sync in progress…' }
+      return { label: 'Syncing', tone: undefined, detail: 'Sync in progress…' }
     case 'retrying':
-      return { label: 'Retrying', tone: 'default', detail: 'Retry queued — starting again…' }
+      return { label: 'Retrying', tone: undefined, detail: 'Retry queued — starting again…' }
     case 'failed':
       return {
         label: 'Failed',
-        tone: 'warn',
+        tone: 'amber',
         detail: ctx.error ?? 'Last sync attempt failed. Retry to run it again.',
       }
     case 'succeeded':
       return {
         label: 'Succeeded',
-        tone: 'good',
+        tone: 'green',
         detail: ctx.succeeded_at
           ? `Last synced ${new Date(ctx.succeeded_at).toLocaleString()}.`
           : 'Last sync succeeded.',
@@ -277,10 +279,10 @@ function QboSyncMonitorCard({
     dispatchEvent.error instanceof Error ? dispatchEvent.error.message : dispatchEvent.error ? 'Retry failed' : null
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="flex items-center justify-between gap-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Sync</div>
-        <Pill tone={run.tone}>{run.label}</Pill>
+        <MPill tone={run.tone}>{run.label}</MPill>
       </div>
 
       <div className="text-[12px] text-ink-2 mt-1">{loading && !runSnapshot ? 'Loading sync state…' : run.detail}</div>
@@ -306,19 +308,14 @@ function QboSyncMonitorCard({
         </div>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        <MobileButton variant="primary" fullWidth={false} onClick={onSync} disabled={triggering || inFlight}>
+      <div className="mt-3 flex gap-2.5">
+        <MButton variant="primary" onClick={onSync} disabled={triggering || inFlight}>
           {triggering ? 'Starting…' : inFlight ? 'Syncing…' : 'Run sync now'}
-        </MobileButton>
+        </MButton>
         {retryEvent ? (
-          <MobileButton
-            variant="ghost"
-            fullWidth={false}
-            onClick={onRetry}
-            disabled={dispatchEvent.isPending || inFlight}
-          >
+          <MButton variant="ghost" onClick={onRetry} disabled={dispatchEvent.isPending || inFlight}>
             {dispatchEvent.isPending ? 'Retrying…' : retryEvent.label}
-          </MobileButton>
+          </MButton>
         ) : null}
       </div>
       {dispatchError ? <div className="text-[12px] text-warn mt-2">{dispatchError}</div> : null}
@@ -327,7 +324,7 @@ function QboSyncMonitorCard({
           No QBO credentials yet — sync runs in simulated mode and backfills mappings from local data.
         </div>
       ) : null}
-    </Card>
+    </div>
   )
 }
 
@@ -379,7 +376,7 @@ function QboOvertimeMappingCard() {
   }
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">QBO Overtime mapping</div>
       {settings.isPending || items.isPending ? (
         <div className="text-[12px] text-ink-3 mt-2">Loading…</div>
@@ -396,31 +393,25 @@ function QboOvertimeMappingCard() {
             )}
           </div>
           <label className="block mt-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-              Overtime service item
-            </div>
-            <select
-              value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-            >
+            <span className="m-field-l">Overtime service item</span>
+            <MSelect value={selected} onChange={(e) => setSelected(e.target.value)}>
               <option value="">— None (single TimeActivity, no OT split) —</option>
               {labels.map((item) => (
                 <option key={item.code} value={item.code}>
                   {item.code} · {item.name}
                 </option>
               ))}
-            </select>
+            </MSelect>
           </label>
           {saveError ? <div className="text-[12px] text-warn mt-2">{saveError}</div> : null}
           {saved && !dirty ? <div className="text-[12px] text-good mt-2">Saved.</div> : null}
           <div className="mt-3">
-            <MobileButton variant="primary" onClick={save} disabled={!dirty || patch.isPending || !companyId}>
+            <MButton variant="primary" onClick={save} disabled={!dirty || patch.isPending || !companyId}>
               {patch.isPending ? 'Saving…' : 'Save'}
-            </MobileButton>
+            </MButton>
           </div>
         </>
       )}
-    </Card>
+    </div>
   )
 }

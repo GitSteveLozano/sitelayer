@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useEffect, useMemo, type ReactNode } from 'react'
+import { MButton, MI, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { useRentalReturn, type RentalRow } from '@/lib/api'
 import { useRentalReturn as useRentalReturnMachine } from '@/machines/rental-return'
@@ -90,8 +90,10 @@ export function RentalReturnSheet({
     onClose()
   }
 
+  if (!open) return null
+
   return (
-    <Sheet open={open} onClose={onClose} title={itemLabel ? `Return — ${itemLabel}` : 'Return'}>
+    <MSheet title={itemLabel ? `Return — ${itemLabel}` : 'Return'} onClose={onClose}>
       <div className="space-y-3">
         {originalQty != null ? (
           <div className="text-[12px] text-ink-3">
@@ -123,7 +125,7 @@ export function RentalReturnSheet({
           onChange={(v) => machine.setCount('qty_lost', v)}
         />
 
-        <Card tight>
+        <div className="m-card m-card-tight">
           <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
             Damage charge (cents)
           </label>
@@ -140,7 +142,7 @@ export function RentalReturnSheet({
               Suggested ${(suggestedCents / 100).toFixed(2)} based on damaged/lost counts
             </div>
           ) : null}
-        </Card>
+        </div>
 
         <PhotoSlot
           photos={machine.photos}
@@ -157,11 +159,11 @@ export function RentalReturnSheet({
 
         <Attribution source="POST /api/rentals/:id/return — sets returned_on=now() and status='returned'" />
 
-        <MobileButton variant="primary" onClick={onSubmit} disabled={machine.isSubmitting || overcommit || sum <= 0}>
+        <MButton variant="primary" onClick={onSubmit} disabled={machine.isSubmitting || overcommit || sum <= 0}>
           {machine.isSubmitting ? 'Saving…' : 'Receive return'}
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
   )
 }
 
@@ -178,19 +180,19 @@ function CountRow({
   value: number
   onChange: (next: number) => void
 }) {
-  const pillTone: 'good' | 'warn' | 'default' = tone === 'good' ? 'good' : tone === 'warn' ? 'warn' : 'warn'
+  const pillTone: 'green' | 'amber' = tone === 'good' ? 'green' : 'amber'
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <Pill tone={pillTone}>{label}</Pill>
+          <MPill tone={pillTone}>{label}</MPill>
           <div className="text-[11px] text-ink-3 mt-1">{help}</div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             aria-label={`Decrease ${label}`}
-            className="w-9 h-9 rounded-md bg-card-soft text-[18px] font-semibold"
+            className="w-9 h-9 bg-card-soft text-[18px] font-semibold"
             onClick={() => onChange(Math.max(0, value - 1))}
           >
             −
@@ -199,14 +201,14 @@ function CountRow({
           <button
             type="button"
             aria-label={`Increase ${label}`}
-            className="w-9 h-9 rounded-md bg-card-soft text-[18px] font-semibold"
+            className="w-9 h-9 bg-card-soft text-[18px] font-semibold"
             onClick={() => onChange(value + 1)}
           >
             +
           </button>
         </div>
       </div>
-    </Card>
+    </div>
   )
 }
 
@@ -227,7 +229,7 @@ function PhotoSlot({
   required: boolean
 }) {
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-center justify-between">
         <div>
           <div className="text-[12px] font-semibold">
@@ -270,6 +272,68 @@ function PhotoSlot({
           ))}
         </ul>
       ) : null}
-    </Card>
+    </div>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow). Replaces the legacy
+ * mobile-kit Sheet (rounded-t-[24px]) this sheet used pre-v2.
+ * ESC and backdrop-tap dismiss. Same local-helper pattern as
+ * screens/mobile/schedule.tsx and screens/financial/generate-payroll-export-sheet.tsx.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }

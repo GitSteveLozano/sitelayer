@@ -1,5 +1,5 @@
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill, type MTone } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { useInventoryItems, useInventoryMovements, useInventoryUtilization, type InventoryMovement } from '@/lib/api'
 import { getActiveCompanySlug } from '@/lib/api/client'
@@ -63,10 +63,10 @@ export function RentalsItemDetailScreen() {
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mt-2">{item.code}</div>
         <h1 className="mt-1 font-display text-[24px] font-bold tracking-tight leading-tight">{item.description}</h1>
         <div className="mt-2 flex items-center gap-2">
-          <Pill tone={Number(util?.on_rent_quantity ?? 0) > 0 ? 'good' : 'default'}>
+          <MPill tone={Number(util?.on_rent_quantity ?? 0) > 0 ? 'green' : undefined}>
             {Number(util?.on_rent_quantity ?? 0).toFixed(0)} on rent
-          </Pill>
-          <Pill tone="default">{Number(util?.available_quantity ?? 0).toFixed(0)} avail</Pill>
+          </MPill>
+          <MPill>{Number(util?.available_quantity ?? 0).toFixed(0)} avail</MPill>
           <span className="num text-[12px] text-ink-3">
             ${Number(item.default_rental_rate).toFixed(2)}/{item.unit}
           </span>
@@ -76,13 +76,13 @@ export function RentalsItemDetailScreen() {
       <div className="px-4 pb-8 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Recent movements</div>
         {movements.isPending ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No movements yet.</div>
-          </Card>
+          </div>
         ) : (
           rows.map((m) => <MovementRow key={m.id} movement={m} />)
         )}
@@ -110,11 +110,11 @@ export function RentalsItemDetailScreen() {
 // in its lifecycle, and what's the next legal step" surface.
 // ---------------------------------------------------------------------------
 
-const LIFECYCLE_TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
-  active: 'good',
-  returned: 'default',
-  invoiced_pending: 'warn',
-  closed: 'default',
+const LIFECYCLE_TONE_BY_STATE: Record<string, MTone | undefined> = {
+  active: 'green',
+  returned: undefined,
+  invoiced_pending: 'amber',
+  closed: undefined,
 }
 
 // XState machine is created once at module scope (XState machines must
@@ -185,20 +185,20 @@ export function RentalLifecycleDetailScreen() {
             {ctx.returned_on ? ` · returned ${ctx.returned_on}` : ''} · v{snapshot.state_version}
           </div>
         </div>
-        <Pill tone={LIFECYCLE_TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+        <MPill tone={LIFECYCLE_TONE_BY_STATE[snapshot.state]}>{snapshot.state}</MPill>
       </div>
 
       {outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
           <div className="text-[12px] text-ink-2 mt-1">
             Rental state moved on the server. Reloaded — pick the next action again.
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {error && !outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
@@ -208,12 +208,12 @@ export function RentalLifecycleDetailScreen() {
               dismiss
             </button>
           </div>
-        </Card>
+        </div>
       ) : null}
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Billing</div>
-        <Card tight>
+        <div className="m-card m-card-tight">
           <LifecycleRow label="Cadence" value={`${ctx.invoice_cadence_days}d`} />
           <LifecycleRow label="Next invoice" value={ctx.next_invoice_at ?? '—'} />
           <LifecycleRow
@@ -221,34 +221,34 @@ export function RentalLifecycleDetailScreen() {
             value={ctx.last_invoice_amount ? `$${Number(ctx.last_invoice_amount).toFixed(2)}` : '—'}
           />
           <LifecycleRow label="Billed through" value={ctx.last_invoiced_through ?? '—'} />
-        </Card>
+        </div>
       </div>
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Trail</div>
-        <Card tight>
+        <div className="m-card m-card-tight">
           <LifecycleTrail label="Returned" at={ctx.returned_at} />
           <LifecycleTrail label="Closed" at={ctx.closed_at} />
-        </Card>
+        </div>
       </div>
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Actions</div>
         {snapshot.next_events.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
-          </Card>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {snapshot.next_events.map((ev) => (
-              <MobileButton
+              <MButton
                 key={ev.type}
                 variant={ev.type === 'CLOSE' ? 'ghost' : 'primary'}
                 disabled={isSubmitting}
                 onClick={() => onEvent(ev.type)}
               >
                 {ev.label}
-              </MobileButton>
+              </MButton>
             ))}
           </div>
         )}
@@ -303,14 +303,14 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
               : movement.movement_type === 'repair'
                 ? 'Repair'
                 : 'Adjusted'
-  const tone: 'good' | 'warn' | 'default' =
+  const tone: MTone | undefined =
     movement.movement_type === 'damaged' || movement.movement_type === 'lost' || movement.movement_type === 'repair'
-      ? 'warn'
+      ? 'amber'
       : movement.movement_type === 'deliver'
-        ? 'good'
-        : 'default'
+        ? 'green'
+        : undefined
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-center justify-between">
         <div>
           <div className="text-[13px] font-semibold">
@@ -320,7 +320,7 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
             {movement.project_name ?? 'no project'} · {movement.occurred_on}
           </div>
         </div>
-        <Pill tone={tone}>{movement.movement_type}</Pill>
+        <MPill tone={tone}>{movement.movement_type}</MPill>
       </div>
       {movement.scanned_at ? (
         <div className="text-[11px] text-ink-3 mt-1">
@@ -336,6 +336,6 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
             : ''}
         </div>
       ) : null}
-    </Card>
+    </div>
   )
 }

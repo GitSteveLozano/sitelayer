@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { MButton, MI, MPill, type MTone } from '@/components/m'
 import { useProjects } from '@/lib/api'
 import { useCreateDamageCharge, useDamageCharges, type DamageCharge } from '@/lib/api/damage-charges'
 import {
@@ -53,7 +53,7 @@ export function DamageChargesAdminScreen() {
         Per-project queue. Invoicing posts a single-line QBO invoice via mutation_outbox.
       </p>
 
-      <Card tight>
+      <div className="m-card m-card-tight">
         <label className="block">
           <span className="text-[12px] text-ink-3">Project</span>
           <select
@@ -72,7 +72,7 @@ export function DamageChargesAdminScreen() {
             ))}
           </select>
         </label>
-      </Card>
+      </div>
 
       {projectId ? (
         <>
@@ -81,23 +81,23 @@ export function DamageChargesAdminScreen() {
               {rows.length} charge{rows.length === 1 ? '' : 's'} ·{' '}
               <span className="font-semibold text-ink">${openTotal.toFixed(2)} open</span>
             </div>
-            <MobileButton variant="primary" onClick={() => setCreating(true)}>
+            <MButton variant="primary" size="sm" onClick={() => setCreating(true)}>
               + New charge
-            </MobileButton>
+            </MButton>
           </div>
 
           <div className="mt-4 space-y-2">
             {damage.isPending ? (
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="text-[12px] text-ink-3">Loading…</div>
-              </Card>
+              </div>
             ) : rows.length === 0 ? (
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="text-[12px] text-ink-3">No damage charges on this project.</div>
-              </Card>
+              </div>
             ) : (
               rows.map((c) => (
-                <Card key={c.id} tight>
+                <div key={c.id} className="m-card m-card-tight">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[13px] font-semibold truncate">{c.description}</div>
@@ -107,31 +107,32 @@ export function DamageChargesAdminScreen() {
                         {c.qbo_invoice_id ? <> · QBO #{c.qbo_invoice_id}</> : null}
                       </div>
                     </div>
-                    <Pill tone={c.status === 'invoiced' ? 'good' : c.status === 'waived' ? 'default' : 'warn'}>
+                    <MPill tone={c.status === 'invoiced' ? 'green' : c.status === 'waived' ? undefined : 'amber'}>
                       {c.status}
-                    </Pill>
+                    </MPill>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    <MobileButton
+                    <MButton
                       variant={c.status === 'open' ? 'primary' : 'ghost'}
+                      size="sm"
                       onClick={() => setSettlingId(c.id)}
                     >
                       {c.status === 'open' ? 'Settle' : 'View'}
-                    </MobileButton>
+                    </MButton>
                   </div>
-                </Card>
+                </div>
               ))
             )}
           </div>
         </>
       ) : (
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[12px] text-ink-3 mt-4">Pick a project to see its damage charges.</div>
-        </Card>
+        </div>
       )}
 
       {creating ? (
-        <Sheet open onClose={() => setCreating(false)} title="New damage charge">
+        <MSheet title="New damage charge" onClose={() => setCreating(false)}>
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -188,30 +189,30 @@ export function DamageChargesAdminScreen() {
               </label>
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <MobileButton type="button" variant="ghost" onClick={() => setCreating(false)}>
+              <MButton type="button" variant="ghost" size="sm" onClick={() => setCreating(false)}>
                 Cancel
-              </MobileButton>
-              <MobileButton type="submit" variant="primary" disabled={create.isPending}>
+              </MButton>
+              <MButton type="submit" variant="primary" size="sm" disabled={create.isPending}>
                 Save
-              </MobileButton>
+              </MButton>
             </div>
           </form>
-        </Sheet>
+        </MSheet>
       ) : null}
 
       {settlingId ? (
-        <Sheet open onClose={() => setSettlingId(null)} title="Settle charge">
+        <MSheet title="Settle charge" onClose={() => setSettlingId(null)}>
           <DamageChargeSettlementPanel id={settlingId} onClose={() => setSettlingId(null)} />
-        </Sheet>
+        </MSheet>
       ) : null}
     </div>
   )
 }
 
-const SETTLEMENT_TONE: Record<string, 'good' | 'warn' | 'default'> = {
-  open: 'warn',
-  invoiced: 'good',
-  waived: 'default',
+const SETTLEMENT_TONE: Record<string, MTone | undefined> = {
+  open: 'amber',
+  invoiced: 'green',
+  waived: undefined,
 }
 
 /**
@@ -237,9 +238,9 @@ function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () 
     return (
       <div className="space-y-3">
         <div className="text-[12px] text-warn">Could not load this charge.</div>
-        <MobileButton variant="ghost" onClick={onClose}>
+        <MButton variant="ghost" size="sm" onClick={onClose}>
           Close
-        </MobileButton>
+        </MButton>
       </div>
     )
   }
@@ -279,24 +280,24 @@ function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () 
             {ctx.qbo_invoice_id ? <> · QBO #{ctx.qbo_invoice_id}</> : null}
           </div>
         </div>
-        <Pill tone={SETTLEMENT_TONE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+        <MPill tone={SETTLEMENT_TONE[snapshot.state]}>{snapshot.state}</MPill>
       </div>
 
       {isStale ? (
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
           <div className="text-[12px] text-ink-2 mt-1">
             This charge moved on the server. Reloaded — pick the next action again.
           </div>
-        </Card>
+        </div>
       ) : dispatchError ? (
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
           <div className="text-[12px] text-ink-2 mt-1">{dispatchError}</div>
-        </Card>
+        </div>
       ) : null}
 
-      <Card tight>
+      <div className="m-card m-card-tight">
         <Trail label="Invoiced" at={ctx.invoiced_at} />
         <Trail label="Waived" at={ctx.waived_at} />
         {ctx.waive_reason ? (
@@ -305,7 +306,7 @@ function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () 
             <div className="text-ink-2 text-right">{ctx.waive_reason}</div>
           </div>
         ) : null}
-      </Card>
+      </div>
 
       {showWaive ? (
         <label className="block">
@@ -323,20 +324,20 @@ function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () 
       <div>
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 mb-2">Actions</div>
         {snapshot.next_events.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Terminal — this charge is settled.</div>
-          </Card>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {snapshot.next_events.map((ev) => (
-              <MobileButton
+              <MButton
                 key={ev.type}
                 variant={ev.type === 'WAIVE' ? 'ghost' : 'primary'}
                 disabled={dispatch.isPending}
                 onClick={() => onEvent(ev.type)}
               >
                 {ev.label}
-              </MobileButton>
+              </MButton>
             ))}
           </div>
         )}
@@ -358,6 +359,67 @@ function Trail({ label, at }: { label: string; at: string | null }) {
               minute: '2-digit',
             })
           : '—'}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
       </div>
     </div>
   )

@@ -1,6 +1,19 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  MBody,
+  MButton,
+  MChip,
+  MChipRow,
+  MI,
+  MInput,
+  MListPlain,
+  MListRow,
+  MPill,
+  MSelect,
+  MTopBar,
+  type MTone,
+} from '@/components/m'
 import {
   useDispatchMovement,
   useInventoryItems,
@@ -20,14 +33,14 @@ const TYPES: ReadonlyArray<InventoryMovement['movement_type']> = [
   'repair',
 ]
 
-const TONE_BY_TYPE: Record<InventoryMovement['movement_type'], 'good' | 'warn' | 'default'> = {
-  deliver: 'good',
-  return: 'default',
-  transfer: 'default',
-  adjustment: 'default',
-  damaged: 'warn',
-  lost: 'warn',
-  repair: 'warn',
+const TONE_BY_TYPE: Record<InventoryMovement['movement_type'], MTone | undefined> = {
+  deliver: 'green',
+  return: undefined,
+  transfer: undefined,
+  adjustment: undefined,
+  damaged: 'amber',
+  lost: 'amber',
+  repair: 'amber',
 }
 
 export function InventoryMovementsAdminScreen() {
@@ -35,79 +48,70 @@ export function InventoryMovementsAdminScreen() {
   const movements = useInventoryMovements(filterType === 'all' ? {} : { type: filterType })
   const [recording, setRecording] = useState(false)
   const rows = movements.data?.inventoryMovements ?? []
+  const navigate = useNavigate()
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/inventory" className="text-[12px] text-ink-3">
-        ← Inventory admin
-      </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Movements</h1>
-          <p className="text-[12px] text-ink-3 mt-1">{rows.length} in this slice</p>
-        </div>
-        <MobileButton variant="primary" onClick={() => setRecording(true)}>
-          + Record
-        </MobileButton>
-      </div>
+    <>
+      <MTopBar
+        back
+        eyebrow="Inventory admin"
+        title="Movements"
+        sub={`${rows.length} in this slice`}
+        actionLabel="Record movement"
+        actionIcon={<span style={{ fontSize: 22, fontWeight: 800 }}>+</span>}
+        onBack={() => navigate('/more/inventory')}
+        onAction={() => setRecording(true)}
+      />
+      <MBody>
+        <MChipRow>
+          {(['all', ...TYPES] as const).map((t) => (
+            <MChip key={t} active={filterType === t} outline onClick={() => setFilterType(t)}>
+              {t}
+            </MChip>
+          ))}
+        </MChipRow>
 
-      <div className="mt-4 flex gap-1.5 overflow-x-auto scrollbar-hide pb-2">
-        {(['all', ...TYPES] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setFilterType(t)}
-            className={`px-3 py-1.5 rounded-full text-[12px] font-medium border shrink-0 ${
-              filterType === t ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
-            }`}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-2 space-y-2">
         {movements.isPending ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            Loading…
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">No movements in this slice.</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            No movements in this slice.
+          </div>
         ) : (
-          rows.map((m) => (
-            <Card key={m.id} tight>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">
-                    {m.item_code ?? m.inventory_item_id} · {Number(m.quantity).toFixed(0)}
-                  </div>
-                  <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+          <MListPlain>
+            {rows.map((m) => (
+              <MListRow
+                key={m.id}
+                headline={`${m.item_code ?? m.inventory_item_id} · ${Number(m.quantity).toFixed(0)}`}
+                supporting={
+                  <>
                     {m.from_location_name ?? '—'} → {m.to_location_name ?? '—'}
                     {m.project_name ? ` · ${m.project_name}` : ''} · {m.occurred_on}
-                  </div>
-                  {m.scanned_at ? (
-                    <div className="text-[11px] text-ink-3 mt-0.5">
-                      scan{' '}
-                      {new Date(m.scanned_at).toLocaleString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-                <Pill tone={TONE_BY_TYPE[m.movement_type] ?? 'default'}>{m.movement_type}</Pill>
-              </div>
-            </Card>
-          ))
+                    {m.scanned_at ? (
+                      <>
+                        <br />
+                        scan{' '}
+                        {new Date(m.scanned_at).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </>
+                    ) : null}
+                  </>
+                }
+                trailing={<MPill tone={TONE_BY_TYPE[m.movement_type]}>{m.movement_type}</MPill>}
+              />
+            ))}
+          </MListPlain>
         )}
-      </div>
+      </MBody>
 
       {recording ? <RecordSheet onClose={() => setRecording(false)} /> : null}
-    </div>
+    </>
   )
 }
 
@@ -149,8 +153,8 @@ function RecordSheet({ onClose }: { onClose: () => void }) {
   const canSubmit = Boolean(itemId) && Number(quantity) > 0 && !dispatch.isPending
 
   return (
-    <Sheet open onClose={onClose} title="Record movement">
-      <div className="space-y-3">
+    <MSheet title="Record movement" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
         <Select
           label="Item"
           value={itemId}
@@ -199,12 +203,73 @@ function RecordSheet({ onClose }: { onClose: () => void }) {
         />
         <Field label="Ticket # (optional)" value={ticket} onChange={setTicket} placeholder="DELV-1234" />
         <Field label="Notes (optional)" value={notes} onChange={setNotes} placeholder="" />
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <MobileButton variant="primary" onClick={submit} disabled={!canSubmit}>
+        {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+        <MButton variant="primary" onClick={submit} disabled={!canSubmit}>
           {dispatch.isPending ? 'Recording…' : 'Record movement'}
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -220,15 +285,9 @@ function Field({
   placeholder?: string
 }) {
   return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-      />
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      <MInput value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
     </label>
   )
 }
@@ -245,19 +304,15 @@ function Select({
   options: ReadonlyArray<{ value: string; label: string }>
 }) {
   return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-      >
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      <MSelect value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => (
           <option key={o.value || '_'} value={o.value}>
             {o.label}
           </option>
         ))}
-      </select>
+      </MSelect>
     </label>
   )
 }

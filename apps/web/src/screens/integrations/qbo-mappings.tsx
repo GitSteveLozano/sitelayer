@@ -1,6 +1,19 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  MBody,
+  MButton,
+  MButtonRow,
+  MChip,
+  MChipRow,
+  MI,
+  MInput,
+  MListPlain,
+  MListRow,
+  MPill,
+  MSelect,
+  MTopBar,
+} from '@/components/m'
 import {
   useDeleteQboMapping,
   usePatchQboMapping,
@@ -19,6 +32,7 @@ const ENTITY_TYPES: ReadonlyArray<{ value: string; label: string }> = [
 ]
 
 export function QboMappingsScreen() {
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<string>('')
   const mappings = useQboMappings(filter ? { entityType: filter as QboEntityType } : {})
   const upsert = useUpsertQboMapping()
@@ -26,65 +40,48 @@ export function QboMappingsScreen() {
   const rows = mappings.data?.mappings ?? []
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/integrations/qbo" className="text-[12px] text-ink-3">
-        ← QBO
-      </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">QBO mappings</h1>
-          <p className="text-[12px] text-ink-3 mt-1">{rows.length} active</p>
-        </div>
-        <MobileButton variant="primary" onClick={() => setEditing('new')}>
-          + New
-        </MobileButton>
-      </div>
+    <>
+      <MTopBar
+        back
+        eyebrow="QuickBooks Online"
+        title="QBO mappings"
+        sub={`${rows.length} active`}
+        actionLabel="New mapping"
+        actionIcon={<span style={{ fontSize: 22, fontWeight: 800 }}>+</span>}
+        onBack={() => navigate('/more/integrations/qbo')}
+        onAction={() => setEditing('new')}
+      />
+      <MBody>
+        <MChipRow>
+          {ENTITY_TYPES.map((t) => (
+            <MChip key={t.value || 'all'} active={filter === t.value} onClick={() => setFilter(t.value)}>
+              {t.label}
+            </MChip>
+          ))}
+        </MChipRow>
 
-      <div className="mt-4 flex gap-1.5 overflow-x-auto scrollbar-hide pb-2">
-        {ENTITY_TYPES.map((t) => (
-          <button
-            key={t.value || 'all'}
-            type="button"
-            onClick={() => setFilter(t.value)}
-            className={`px-3 py-1.5 rounded-full text-[12px] font-medium border shrink-0 ${
-              filter === t.value ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-2 space-y-2">
         {mappings.isPending ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            Loading…
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">No mappings in this slice.</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            No mappings in this slice.
+          </div>
         ) : (
-          rows.map((m) => (
-            <button key={m.id} type="button" onClick={() => setEditing(m)} className="block w-full text-left">
-              <Card tight>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-semibold truncate">
-                      {m.entity_type} · {m.local_ref}
-                    </div>
-                    <div className="text-[11px] text-ink-3 mt-0.5 truncate">
-                      QBO #{m.external_id}
-                      {m.label ? ` · ${m.label}` : ''}
-                    </div>
-                  </div>
-                  <Pill tone={m.status === 'active' ? 'good' : 'default'}>{m.status}</Pill>
-                </div>
-              </Card>
-            </button>
-          ))
+          <MListPlain>
+            {rows.map((m) => (
+              <MListRow
+                key={m.id}
+                headline={`${m.entity_type} · ${m.local_ref}`}
+                supporting={`QBO #${m.external_id}${m.label ? ` · ${m.label}` : ''}`}
+                trailing={<MPill tone={m.status === 'active' ? 'green' : undefined}>{m.status}</MPill>}
+                onTap={() => setEditing(m)}
+              />
+            ))}
+          </MListPlain>
         )}
-      </div>
+      </MBody>
 
       {editing !== null ? (
         <MappingForm
@@ -97,7 +94,7 @@ export function QboMappingsScreen() {
           }}
         />
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -118,7 +115,7 @@ function MappingForm({
 }) {
   const patch = usePatchQboMapping(mapping?.id ?? '')
   const del = useDeleteQboMapping()
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirm()
   const [entityType, setEntityType] = useState(mapping?.entity_type ?? 'customer')
   const [localRef, setLocalRef] = useState(mapping?.local_ref ?? '')
   const [externalId, setExternalId] = useState(mapping?.external_id ?? '')
@@ -159,7 +156,6 @@ function MappingForm({
       title: 'Delete QBO mapping?',
       body: `Unlink ${mapping.entity_type} from QBO #${mapping.external_id}.`,
       confirmLabel: 'Delete',
-      destructive: true,
     })
     if (!ok) return
     try {
@@ -171,89 +167,181 @@ function MappingForm({
   }
 
   return (
-    <Sheet open onClose={onClose} title={mapping ? 'Edit mapping' : 'New mapping'}>
-      <div className="space-y-3">
-        <Select
-          label="Entity type"
-          value={entityType}
-          onChange={setEntityType}
-          options={['customer', 'service_item', 'division', 'project']}
-        />
-        <Field label="Local ref (uuid or code)" value={localRef} onChange={setLocalRef} placeholder="customer uuid" />
-        <Field label="QBO external id" value={externalId} onChange={setExternalId} placeholder="123" />
-        <Field label="Label (optional)" value={label} onChange={setLabel} placeholder="ACME Inc" />
-        <Select label="Status" value={status} onChange={setStatus} options={['active', 'inactive']} />
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <div className={mapping ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton
+    <MSheet title={mapping ? 'Edit mapping' : 'New mapping'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+        <Field label="Entity type">
+          <MSelect value={entityType} onChange={(e) => setEntityType(e.target.value)}>
+            {['customer', 'service_item', 'division', 'project'].map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </MSelect>
+        </Field>
+        <Field label="Local ref (uuid or code)">
+          <MInput value={localRef} onChange={(e) => setLocalRef(e.target.value)} placeholder="customer uuid" />
+        </Field>
+        <Field label="QBO external id">
+          <MInput value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="123" />
+        </Field>
+        <Field label="Label (optional)">
+          <MInput value={label} onChange={(e) => setLabel(e.target.value)} placeholder="ACME Inc" />
+        </Field>
+        <Field label="Status">
+          <MSelect value={status} onChange={(e) => setStatus(e.target.value)}>
+            {['active', 'inactive'].map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </MSelect>
+        </Field>
+        {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+        {mapping ? (
+          <MButtonRow>
+            <MButton
+              variant="primary"
+              onClick={submit}
+              disabled={!localRef.trim() || !externalId.trim() || patch.isPending}
+            >
+              Save
+            </MButton>
+            <MButton
+              variant="ghost"
+              onClick={remove}
+              disabled={del.isPending}
+              style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+            >
+              Delete
+            </MButton>
+          </MButtonRow>
+        ) : (
+          <MButton
             variant="primary"
             onClick={submit}
             disabled={!localRef.trim() || !externalId.trim() || patch.isPending}
           >
-            {mapping ? 'Save' : 'Create'}
-          </MobileButton>
-          {mapping ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
-              Delete
-            </MobileButton>
-          ) : null}
-        </div>
+            Create
+          </MButton>
+        )}
       </div>
       {confirmNode}
-    </Sheet>
+    </MSheet>
   )
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-}) {
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-      />
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      {children}
     </label>
   )
 }
 
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  options: readonly string[]
-}) {
-  return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
+/**
+ * `.m-sheet` replacement for the legacy `useConfirmSheet` hook — same
+ * `[node, ask]` API, resolves the promise with the user's choice.
+ */
+function useMConfirm() {
+  const [state, setState] = useState<{
+    title: string
+    body: string
+    confirmLabel: string
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok)
+    setState(null)
+  }
+
+  const node =
+    state !== null ? (
+      <MSheet title={state.title} onClose={() => settle(false)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.body}</div>
+          <MButtonRow>
+            <MButton variant="ghost" onClick={() => settle(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              variant="primary"
+              onClick={() => settle(true)}
+              style={{ background: 'var(--m-red)', borderColor: 'var(--m-red)', color: '#fff' }}
+            >
+              {state.confirmLabel}
+            </MButton>
+          </MButtonRow>
+        </div>
+      </MSheet>
+    ) : null
+
+  const ask = (props: { title: string; body: string; confirmLabel: string }): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ ...props, resolve })
+    })
+
+  return [node, ask] as const
 }

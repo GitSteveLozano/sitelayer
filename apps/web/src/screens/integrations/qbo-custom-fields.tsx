@@ -1,6 +1,18 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Sheet, useConfirmSheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  MBody,
+  MButton,
+  MButtonRow,
+  MChip,
+  MChipRow,
+  MI,
+  MInput,
+  MListPlain,
+  MListRow,
+  MSelect,
+  MTopBar,
+} from '@/components/m'
 import { Attribution } from '@/components/ai'
 import {
   QBO_CUSTOM_FIELD_ENTITIES,
@@ -17,6 +29,7 @@ const ENTITY_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
 ]
 
 export function QboCustomFieldsScreen() {
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<string>('')
   const fields = useQboCustomFields()
   const upsert = useUpsertQboCustomField()
@@ -26,65 +39,62 @@ export function QboCustomFieldsScreen() {
   const rows = filter ? all.filter((f) => f.entity_type === filter) : all
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/integrations/qbo" className="text-[12px] text-ink-3">
-        ← QBO
-      </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div>
-          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">QBO custom fields</h1>
-          <p className="text-[12px] text-ink-3 mt-1">{rows.length} defined</p>
-        </div>
-        <MobileButton variant="primary" onClick={() => setEditing('new')}>
-          + New
-        </MobileButton>
-      </div>
+    <>
+      <MTopBar
+        back
+        eyebrow="QuickBooks Online"
+        title="QBO custom fields"
+        sub={`${rows.length} defined`}
+        actionLabel="New custom field"
+        actionIcon={<span style={{ fontSize: 22, fontWeight: 800 }}>+</span>}
+        onBack={() => navigate('/more/integrations/qbo')}
+        onAction={() => setEditing('new')}
+      />
+      <MBody>
+        <MChipRow>
+          {ENTITY_FILTERS.map((t) => (
+            <MChip key={t.value || 'all'} active={filter === t.value} onClick={() => setFilter(t.value)}>
+              {t.label}
+            </MChip>
+          ))}
+        </MChipRow>
 
-      <div className="mt-4 flex gap-1.5 overflow-x-auto scrollbar-hide pb-2">
-        {ENTITY_FILTERS.map((t) => (
-          <button
-            key={t.value || 'all'}
-            type="button"
-            onClick={() => setFilter(t.value)}
-            className={`px-3 py-1.5 rounded-full text-[12px] font-medium border shrink-0 ${
-              filter === t.value ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-2 space-y-2">
         {fields.isPending ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            Loading…
+          </div>
         ) : rows.length === 0 ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">No custom fields defined in this slice.</div>
-          </Card>
+          <div className="m-quiet-sm" style={{ padding: '14px 16px' }}>
+            No custom fields defined in this slice.
+          </div>
         ) : (
-          rows.map((f) => (
-            <button key={f.id} type="button" onClick={() => setEditing(f)} className="block w-full text-left">
-              <Card tight>
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">
-                    {f.entity_type} · {f.field_name}
-                  </div>
-                  <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+          <MListPlain>
+            {rows.map((f) => (
+              <MListRow
+                key={f.id}
+                headline={`${f.entity_type} · ${f.field_name}`}
+                supporting={
+                  <>
                     QBO def #{f.qbo_definition_id}
                     {f.qbo_label ? ` · ${f.qbo_label}` : ''}
-                  </div>
-                  {f.notes ? <div className="text-[11px] text-ink-3 mt-0.5 truncate">{f.notes}</div> : null}
-                </div>
-              </Card>
-            </button>
-          ))
+                    {f.notes ? (
+                      <>
+                        <br />
+                        {f.notes}
+                      </>
+                    ) : null}
+                  </>
+                }
+                onTap={() => setEditing(f)}
+              />
+            ))}
+          </MListPlain>
         )}
-      </div>
 
-      <Attribution source="GET/PUT/DELETE /api/qbo/custom-fields" />
+        <div style={{ padding: '8px 16px 24px' }}>
+          <Attribution source="GET/PUT/DELETE /api/qbo/custom-fields" />
+        </div>
+      </MBody>
 
       {editing !== null ? (
         <CustomFieldForm
@@ -97,7 +107,7 @@ export function QboCustomFieldsScreen() {
           }}
         />
       ) : null}
-    </div>
+    </>
   )
 }
 
@@ -117,7 +127,7 @@ function CustomFieldForm({
   }) => Promise<void>
 }) {
   const del = useDeleteQboCustomField()
-  const [confirmNode, askConfirm] = useConfirmSheet()
+  const [confirmNode, askConfirm] = useMConfirm()
   const [entityType, setEntityType] = useState<QboCustomFieldEntity>(
     (field?.entity_type as QboCustomFieldEntity) ?? 'Estimate',
   )
@@ -150,7 +160,6 @@ function CustomFieldForm({
       title: 'Delete custom field?',
       body: `Remove the ${field.entity_type} · ${field.field_name} → QBO def #${field.qbo_definition_id} mapping.`,
       confirmLabel: 'Delete',
-      destructive: true,
     })
     if (!ok) return
     try {
@@ -162,90 +171,171 @@ function CustomFieldForm({
   }
 
   return (
-    <Sheet open onClose={onClose} title={field ? 'Edit custom field' : 'New custom field'}>
-      <div className="space-y-3">
-        <Select
-          label="Entity type"
-          value={entityType}
-          onChange={(v) => setEntityType(v as QboCustomFieldEntity)}
-          options={QBO_CUSTOM_FIELD_ENTITIES}
-        />
-        <Field label="Field name" value={fieldName} onChange={setFieldName} placeholder="sqft_total" />
-        <Field
-          label="QBO definition id"
-          value={definitionId}
-          onChange={setDefinitionId}
-          placeholder="QBO custom field DefinitionId"
-        />
-        <Field label="QBO label (optional)" value={label} onChange={setLabel} placeholder="Total Sq Ft" />
-        <Field label="Notes (optional)" value={notes} onChange={setNotes} placeholder="why this mapping exists" />
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <div className={field ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton variant="primary" onClick={submit} disabled={!fieldName.trim() || !definitionId.trim()}>
-            {field ? 'Save' : 'Create'}
-          </MobileButton>
-          {field ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
+    <MSheet title={field ? 'Edit custom field' : 'New custom field'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+        <Field label="Entity type">
+          <MSelect value={entityType} onChange={(e) => setEntityType(e.target.value as QboCustomFieldEntity)}>
+            {QBO_CUSTOM_FIELD_ENTITIES.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </MSelect>
+        </Field>
+        <Field label="Field name">
+          <MInput value={fieldName} onChange={(e) => setFieldName(e.target.value)} placeholder="sqft_total" />
+        </Field>
+        <Field label="QBO definition id">
+          <MInput
+            value={definitionId}
+            onChange={(e) => setDefinitionId(e.target.value)}
+            placeholder="QBO custom field DefinitionId"
+          />
+        </Field>
+        <Field label="QBO label (optional)">
+          <MInput value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Total Sq Ft" />
+        </Field>
+        <Field label="Notes (optional)">
+          <MInput value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="why this mapping exists" />
+        </Field>
+        {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+        {field ? (
+          <MButtonRow>
+            <MButton variant="primary" onClick={submit} disabled={!fieldName.trim() || !definitionId.trim()}>
+              Save
+            </MButton>
+            <MButton
+              variant="ghost"
+              onClick={remove}
+              disabled={del.isPending}
+              style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+            >
               Delete
-            </MobileButton>
-          ) : null}
-        </div>
+            </MButton>
+          </MButtonRow>
+        ) : (
+          <MButton variant="primary" onClick={submit} disabled={!fieldName.trim() || !definitionId.trim()}>
+            Create
+          </MButton>
+        )}
       </div>
       {confirmNode}
-    </Sheet>
+    </MSheet>
   )
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder?: string
-}) {
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-      />
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      {children}
     </label>
   )
 }
 
-function Select({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  options: readonly string[]
-}) {
-  return (
-    <label className="block">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    </label>
-  )
+/**
+ * `.m-sheet` replacement for the legacy `useConfirmSheet` hook — same
+ * `[node, ask]` API, resolves the promise with the user's choice.
+ */
+function useMConfirm() {
+  const [state, setState] = useState<{
+    title: string
+    body: string
+    confirmLabel: string
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok)
+    setState(null)
+  }
+
+  const node =
+    state !== null ? (
+      <MSheet title={state.title} onClose={() => settle(false)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.body}</div>
+          <MButtonRow>
+            <MButton variant="ghost" onClick={() => settle(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              variant="primary"
+              onClick={() => settle(true)}
+              style={{ background: 'var(--m-red)', borderColor: 'var(--m-red)', color: '#fff' }}
+            >
+              {state.confirmLabel}
+            </MButton>
+          </MButtonRow>
+        </div>
+      </MSheet>
+    ) : null
+
+  const ask = (props: { title: string; body: string; confirmLabel: string }): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ ...props, resolve })
+    })
+
+  return [node, ask] as const
 }

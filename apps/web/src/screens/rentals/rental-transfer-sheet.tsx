@@ -1,7 +1,6 @@
-import { useState } from 'react'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Attribution } from '@/components/ai'
-import { MBanner } from '@/components/m'
+import { MBanner, MButton, MI, MPill } from '@/components/m'
 import { useProjects, useRentalTransfer, type RentalTransferResponse } from '@/lib/api'
 
 /**
@@ -56,10 +55,12 @@ export function RentalTransferSheet({
     }
   }
 
+  if (!open) return null
+
   return (
-    <Sheet open={open} onClose={onClose} title={itemLabel ? `Transfer — ${itemLabel}` : 'Transfer rental'}>
+    <MSheet title={itemLabel ? `Transfer — ${itemLabel}` : 'Transfer rental'} onClose={onClose}>
       <div className="space-y-3">
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Target project</div>
           {projects.isPending ? (
             <div className="text-[12px] text-ink-3">Loading projects…</div>
@@ -75,8 +76,8 @@ export function RentalTransferSheet({
                   aria-pressed={targetId === p.id}
                   className={
                     targetId === p.id
-                      ? 'block w-full text-left rounded-md bg-accent/10 border border-accent px-3 py-2'
-                      : 'block w-full text-left rounded-md border border-line px-3 py-2'
+                      ? 'block w-full text-left bg-accent/10 border border-accent px-3 py-2'
+                      : 'block w-full text-left border border-line px-3 py-2'
                   }
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -84,15 +85,15 @@ export function RentalTransferSheet({
                       <div className="text-[13px] font-semibold truncate">{p.name}</div>
                       <div className="text-[11px] text-ink-3 mt-0.5">{p.customer_name ?? 'no customer'}</div>
                     </div>
-                    <Pill tone="default">{p.status}</Pill>
+                    <MPill>{p.status}</MPill>
                   </div>
                 </button>
               ))}
             </div>
           )}
-        </Card>
+        </div>
 
-        <Card tight>
+        <div className="m-card m-card-tight">
           <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
             Transferred on
           </label>
@@ -105,16 +106,78 @@ export function RentalTransferSheet({
           <div className="text-[11px] text-ink-3 mt-1">
             Source rental closes on this date and a new active rental opens on the target project.
           </div>
-        </Card>
+        </div>
 
         {error ? <MBanner tone="error" title="Could not transfer" body={error} /> : null}
 
         <Attribution source="POST /api/rentals/:id/transfer — closes source + creates a new linked rental" />
 
-        <MobileButton variant="primary" onClick={onSubmit} disabled={!targetId || transfer.isPending}>
+        <MButton variant="primary" onClick={onSubmit} disabled={!targetId || transfer.isPending}>
           {transfer.isPending ? 'Transferring…' : 'Transfer rental'}
-        </MobileButton>
+        </MButton>
       </div>
-    </Sheet>
+    </MSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow). Replaces the legacy
+ * mobile-kit Sheet (rounded-t-[24px]) this sheet used pre-v2.
+ * ESC and backdrop-tap dismiss. Same local-helper pattern as
+ * screens/mobile/schedule.tsx and screens/financial/generate-payroll-export-sheet.tsx.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
