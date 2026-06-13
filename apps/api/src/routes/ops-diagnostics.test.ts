@@ -8,9 +8,11 @@ import {
   __buildOpsOnsiteDiagnosticManifestForTests,
   __captureOnsiteDesktopEvidenceForTests,
   __agentFeedDeliveryFromRowForTests,
+  __anchorPersistentOnsiteWorkLinkForTests,
   __cancelOnsiteDiagnosticAgentFeedForTests,
   __desktopEvidenceFromRowForTests,
   __enqueueOnsiteDiagnosticConcernForTests,
+  __latestPersistentOnsiteWorkLinkForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
@@ -1157,6 +1159,32 @@ describe('ops diagnostics', () => {
         expect.objectContaining({ type: 'context_work_item', id: OPS_WORK_ITEM_ID }),
       )
     })
+  })
+
+  it('surfaces newest onsite work while keeping routed agent work anchored', async () => {
+    const latestClient = new PersistentOpsClient()
+    await __latestPersistentOnsiteWorkLinkForTests(
+      latestClient as unknown as PoolClient,
+      'company-1',
+      OPS_SESSION_ID,
+    )
+    const latestLookup = latestClient.calls.find((call) =>
+      call.sql.startsWith('select id::text as context_work_item_id'),
+    )
+    expect(latestLookup?.sql).toContain('order by created_at desc, id desc')
+    expect(latestLookup?.sql).not.toContain('for update')
+
+    const anchorClient = new PersistentOpsClient()
+    await __anchorPersistentOnsiteWorkLinkForTests(
+      anchorClient as unknown as PoolClient,
+      'company-1',
+      OPS_SESSION_ID,
+    )
+    const anchorLookup = anchorClient.calls.find((call) =>
+      call.sql.startsWith('select id::text as context_work_item_id'),
+    )
+    expect(anchorLookup?.sql).toContain('order by created_at asc, id asc')
+    expect(anchorLookup?.sql).toContain('limit 1 for update')
   })
 
   it('cancels pending and claimed routed agent-feed work when onsite control is cancelled', async () => {

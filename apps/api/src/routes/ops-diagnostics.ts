@@ -976,7 +976,7 @@ async function ensureOnsiteDiagnosticWorkLinkTx(
     requestedAt: string
   },
 ): Promise<OpsOnsiteDiagnosticWorkLink> {
-  const existing = await latestPersistentOnsiteWorkLink(client, args.companyId, args.session.id, true)
+  const existing = await anchorPersistentOnsiteWorkLink(client, args.companyId, args.session.id, true)
   if (existing) return existing
 
   const captureSessionId = args.session.desktop_evidence?.capture_session_id ?? null
@@ -1796,6 +1796,31 @@ async function latestPersistentOnsiteWorkLink(
   sessionId: string,
   forUpdate: boolean,
 ): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  return persistentOnsiteWorkLink(client, companyId, sessionId, {
+    forUpdate,
+    newestFirst: true,
+  })
+}
+
+async function anchorPersistentOnsiteWorkLink(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  forUpdate: boolean,
+): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  return persistentOnsiteWorkLink(client, companyId, sessionId, {
+    forUpdate,
+    newestFirst: false,
+  })
+}
+
+async function persistentOnsiteWorkLink(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  opts: { forUpdate: boolean; newestFirst: boolean },
+): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  const orderDirection = opts.newestFirst ? 'desc' : 'asc'
   const result = await client.query<PersistentOnsiteWorkLinkRow>(
     `select id::text as context_work_item_id,
             support_packet_id::text as support_packet_id,
@@ -1804,8 +1829,8 @@ async function latestPersistentOnsiteWorkLink(
       where company_id = $1
         and entity_type = 'ops_diagnostic_session'
         and entity_id = $2
-      order by created_at asc, id asc
-      limit 1${forUpdate ? ' for update' : ''}`,
+      order by created_at ${orderDirection}, id ${orderDirection}
+      limit 1${opts.forUpdate ? ' for update' : ''}`,
     [companyId, sessionId],
   )
   const row = result.rows[0]
@@ -2257,6 +2282,22 @@ export async function __cancelOnsiteDiagnosticAgentFeedForTests(
   cancelledAt: string,
 ): Promise<number> {
   return cancelOnsiteDiagnosticAgentFeedTx(client, companyId, sessionId, cancelledAt)
+}
+
+export async function __latestPersistentOnsiteWorkLinkForTests(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  return latestPersistentOnsiteWorkLink(client, companyId, sessionId, false)
+}
+
+export async function __anchorPersistentOnsiteWorkLinkForTests(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+): Promise<OpsOnsiteDiagnosticWorkLink | null> {
+  return anchorPersistentOnsiteWorkLink(client, companyId, sessionId, true)
 }
 
 export function __buildOpsOnsiteDiagnosticManifestForTests(
