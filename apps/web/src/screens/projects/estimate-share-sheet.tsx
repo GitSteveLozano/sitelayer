@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Banner, MobileButton, Row, Sheet } from '@/components/mobile'
+import { MBanner, MButton, MI, MListRow } from '@/components/m'
 import { useEstimateShareMachine } from '@/machines/estimate-share'
 import { useEstimateShares } from '@/lib/api/estimate-shares'
 
@@ -64,8 +64,10 @@ export function EstimateShareSheet({ open, onClose, projectId, defaultEmail, def
     }
   }
 
+  if (!open) return null
+
   return (
-    <Sheet open={open} onClose={onClose} title="Send estimate to client">
+    <MSheet title="Send estimate to client" onClose={onClose}>
       {!machine.result ? (
         <FormPhase
           email={email}
@@ -93,9 +95,9 @@ export function EstimateShareSheet({ open, onClose, projectId, defaultEmail, def
         <div className="mt-5">
           <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Previously sent</div>
           {shares.data.shares.length > 0 ? (
-            <div className="bg-card border border-line rounded-[12px] overflow-hidden">
+            <div className="m-list-inset" style={{ margin: 0 }}>
               {shares.data.shares.slice(0, 8).map((share) => (
-                <Row
+                <MListRow
                   key={share.id}
                   leadingTone={statusTone(share.status)}
                   leading={<span className="text-[10px] font-semibold">{statusInitial(share.status)}</span>}
@@ -105,13 +107,73 @@ export function EstimateShareSheet({ open, onClose, projectId, defaultEmail, def
               ))}
             </div>
           ) : (
-            <div className="text-[12px] text-ink-3 px-3 py-4 bg-card border border-line rounded-[12px]">
-              No share links sent yet.
-            </div>
+            <div className="m-card m-card-tight text-[12px] text-ink-3">No share links sent yet.</div>
           )}
         </div>
       ) : null}
-    </Sheet>
+    </MSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3) and the R1
+ * SettingsSheet; replaces the retired wave-2 kit Sheet. ESC and backdrop-tap
+ * dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -169,15 +231,17 @@ function FormPhase({
       </Field>
 
       {error ? (
-        <Banner tone="error" title="Could not send">
-          {error}
-        </Banner>
+        // `.m-banner` carries 10/16 margins; pull them back so the banner
+        // lines up with the sheet-body fields.
+        <div className="-mx-4 -my-2.5">
+          <MBanner tone="error" title="Could not send" body={error} />
+        </div>
       ) : null}
 
       <div className="pt-1">
-        <MobileButton variant="primary" disabled={isSending || !email.trim()} onClick={onSubmit}>
+        <MButton variant="primary" disabled={isSending || !email.trim()} onClick={onSubmit}>
           {isSending ? 'Creating link…' : 'Create share link'}
-        </MobileButton>
+        </MButton>
       </div>
     </div>
   )
@@ -229,25 +293,25 @@ function SentPhase({
 
   return (
     <div className="flex flex-col gap-3">
-      <Banner tone="ok" title="Share link created">
-        Send it to the customer below.
-      </Banner>
-      <div className="bg-card border border-line rounded-[12px] overflow-hidden">
+      <div className="-mx-4 -my-2.5">
+        <MBanner tone="ok" title="Share link created" body="Send it to the customer below." />
+      </div>
+      <div className="m-list-inset" style={{ margin: 0 }}>
         {rows.map((r, i) => (
-          <Row
+          <MListRow
             key={i}
             leadingTone="accent"
             leading={r.icon}
             headline={r.headline}
             supporting={r.supporting}
-            onClick={r.onClick}
+            onTap={r.onClick}
           />
         ))}
       </div>
       <div className="pt-1">
-        <MobileButton variant="ghost" onClick={onSendAnother}>
+        <MButton variant="ghost" onClick={onSendAnother}>
           Create another link
-        </MobileButton>
+        </MButton>
       </div>
     </div>
   )

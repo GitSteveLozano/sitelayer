@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { useProjectSetup } from '@/machines/project-setup'
 
@@ -76,7 +76,7 @@ export function ProjectSetupScreen() {
       </div>
 
       <div className="px-4 pb-12 space-y-3">
-        <Card>
+        <div className="m-card">
           <div className="text-[13px] font-semibold mb-2">Basics</div>
           <Field label="Project name" required>
             <input
@@ -86,11 +86,11 @@ export function ProjectSetupScreen() {
             />
           </Field>
           <Field label="Status">
-            <Pill tone={project.status === 'active' ? 'good' : 'warn'}>{project.status}</Pill>
+            <MPill tone={project.status === 'active' ? 'green' : 'amber'}>{project.status}</MPill>
           </Field>
-        </Card>
+        </div>
 
-        <Card>
+        <div className="m-card">
           <div className="text-[13px] font-semibold mb-2">Geofence</div>
           <div className="text-[11px] text-ink-3 mb-3">
             Workers entering this radius auto-clock in (when enabled). Drag the geofence on a map comes in Phase 5; for
@@ -134,9 +134,9 @@ export function ProjectSetupScreen() {
           {hasGeofence ? (
             <MapPreview lat={Number(form.siteLat)} lng={Number(form.siteLng)} radius={form.siteRadius} />
           ) : null}
-        </Card>
+        </div>
 
-        <Card>
+        <div className="m-card">
           <div className="text-[13px] font-semibold mb-2">Auto clock-in policy</div>
           <Field label="Mode">
             <div className="flex gap-2">
@@ -187,9 +187,9 @@ export function ProjectSetupScreen() {
               The "wait, that wasn't me" window on wk-clockin (per-event correctible_until).
             </div>
           </Field>
-        </Card>
+        </div>
 
-        <Card>
+        <div className="m-card">
           <div className="text-[13px] font-semibold mb-2">Daily budget</div>
           <div className="text-[11px] text-ink-3 mb-2">
             Sets the denominator for fm-today-v2's "% under plan". 0 = no plan tracking.
@@ -203,7 +203,7 @@ export function ProjectSetupScreen() {
               className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
             />
           </Field>
-        </Card>
+        </div>
 
         <Attribution source="Saved via PATCH /api/projects/:id (version-checked)" />
 
@@ -215,12 +215,12 @@ export function ProjectSetupScreen() {
         {error && !outOfSync ? <div className="text-[13px] text-bad px-1">{error}</div> : null}
 
         <div className="flex gap-2 pt-2">
-          <MobileButton variant="ghost" onClick={() => navigate(`/projects/${project.id}`)}>
+          <MButton variant="ghost" onClick={() => navigate(`/projects/${project.id}`)}>
             Cancel
-          </MobileButton>
-          <MobileButton variant="primary" onClick={onSave} disabled={isSubmitting}>
+          </MButton>
+          <MButton variant="primary" onClick={onSave} disabled={isSubmitting}>
             {isSubmitting ? 'Saving…' : 'Save'}
-          </MobileButton>
+          </MButton>
         </div>
       </div>
     </div>

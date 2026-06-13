@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { MButton, MI, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
@@ -167,7 +167,7 @@ export function EstimateBuilderScreen() {
             {project.data?.project.name ?? 'Project estimate'}
           </h1>
           <div className="text-[11px] text-ink-3 mt-0.5 flex items-center gap-2">
-            <Pill tone="default">{lifecycle}</Pill>
+            <MPill>{lifecycle}</MPill>
             <span>·</span>
             <span>
               {lines.length} line{lines.length === 1 ? '' : 's'}
@@ -192,14 +192,14 @@ export function EstimateBuilderScreen() {
             // open the full keystone in a sheet — see `keystoneSheetOpen`.
             <BidAccuracyCard projectId={projectId} compact onCompactClick={() => setKeystoneSheetOpen(true)} />
           ) : null}
-          <MobileButton
+          <MButton
             variant="ghost"
             size="sm"
             disabled={builder.isRecomputing || builder.isLoading}
             onClick={() => builder.recompute()}
           >
             {builder.isRecomputing ? 'Recomputing…' : 'Recompute from takeoff'}
-          </MobileButton>
+          </MButton>
         </div>
       </div>
 
@@ -210,11 +210,11 @@ export function EstimateBuilderScreen() {
         snapshot={builder.snapshot}
         onRecompute={() => builder.recompute()}
         recomputing={builder.isRecomputing}
-        className="mx-0 mt-0 mb-3"
+        className="-mx-4 mb-1"
       />
 
       {builder.error ? (
-        <Card tight className="mb-3">
+        <div className="m-card m-card-tight mb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">
@@ -226,11 +226,11 @@ export function EstimateBuilderScreen() {
                   : builder.error}
               </div>
             </div>
-            <MobileButton variant="ghost" size="sm" onClick={() => builder.dismissError()}>
+            <MButton variant="ghost" size="sm" onClick={() => builder.dismissError()}>
               Dismiss
-            </MobileButton>
+            </MButton>
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {builder.isLoading ? (
@@ -274,7 +274,7 @@ export function EstimateBuilderScreen() {
           {isCompactKeystone ? null : (
             <div className="space-y-3">
               <BidAccuracyCard projectId={projectId} />
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1">Totals</div>
                 <div className="flex items-baseline justify-between mb-1">
                   <span className="text-[12px] text-ink-2">Scope</span>
@@ -291,7 +291,7 @@ export function EstimateBuilderScreen() {
                       ? 'Small drift — review before sending.'
                       : 'Mismatch — resolve before sending.'}
                 </div>
-              </Card>
+              </div>
               <Attribution source={`Live from /api/projects/${projectId.slice(0, 8)}…/estimate/scope-vs-bid`} />
             </div>
           )}
@@ -304,20 +304,17 @@ export function EstimateBuilderScreen() {
        * comparables / attribution / dismiss affordance without committing
        * the right-rail real-estate full-time.
        */}
-      <Sheet
-        open={keystoneSheetOpen}
-        onClose={() => setKeystoneSheetOpen(false)}
-        title="Bid accuracy"
-        ariaLabel="Bid accuracy keystone"
-      >
-        <BidAccuracyCard projectId={projectId} onDismiss={() => setKeystoneSheetOpen(false)} />
-      </Sheet>
+      {keystoneSheetOpen ? (
+        <MSheet title="Bid accuracy" onClose={() => setKeystoneSheetOpen(false)}>
+          <BidAccuracyCard projectId={projectId} onDismiss={() => setKeystoneSheetOpen(false)} />
+        </MSheet>
+      ) : null}
 
       {/* Footer. */}
       <div className="mt-6 flex items-center justify-end gap-2 pt-4 border-t border-line">
-        <MobileButton variant="primary" disabled={lines.length === 0} onClick={() => setShareSheetOpen(true)}>
+        <MButton variant="primary" disabled={lines.length === 0} onClick={() => setShareSheetOpen(true)}>
           Send to client
-        </MobileButton>
+        </MButton>
       </div>
 
       <EstimateShareSheet open={shareSheetOpen} onClose={() => setShareSheetOpen(false)} projectId={projectId} />
@@ -341,7 +338,7 @@ function ScopeTreePane({ lines, items, selectedCategory, onSelect }: ScopeTreePa
   const allTotal = grouped.reduce((sum, g) => sum + g.total, 0)
 
   return (
-    <Card tight className="lg:sticky lg:top-4 self-start">
+    <div className="m-card m-card-tight lg:sticky lg:top-4 self-start">
       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Scope</div>
       <ul className="space-y-1">
         <li>
@@ -381,7 +378,7 @@ function ScopeTreePane({ lines, items, selectedCategory, onSelect }: ScopeTreePa
           + Add scope item
         </button>
       </div>
-    </Card>
+    </div>
   )
 }
 
@@ -446,7 +443,7 @@ function LineItemsPane({ lines, items, selectedCategory, onEdit, pending, pricin
   const subtotal = filtered.reduce((sum, l) => sum + Number(l.amount), 0)
 
   return (
-    <Card>
+    <div className="m-card">
       <div className="flex items-baseline justify-between mb-2">
         <div className="text-[13px] font-semibold">{selectedCategory ?? 'All line items'}</div>
         <div className="text-[10px] text-ink-3 num">
@@ -470,7 +467,7 @@ function LineItemsPane({ lines, items, selectedCategory, onEdit, pending, pricin
           ))}
         </ul>
       )}
-    </Card>
+    </div>
   )
 }
 
@@ -585,6 +582,72 @@ function LineItemRow({ line, item, pending, onEdit, pricingProfileConfig }: Line
           />
         </div>
       </details>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sheet
+// ---------------------------------------------------------------------------
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3) and the R1
+ * SettingsSheet; replaces the retired wave-2 kit Sheet. ESC and backdrop-tap
+ * dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
     </div>
   )
 }

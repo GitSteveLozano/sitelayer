@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Card, MobileButton } from '@/components/mobile'
+import { MButton } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { MErrorState } from '@/components/m-states'
 import { useCreateMeasurement, useServiceItems, type ServiceItem } from '@/lib/api'
@@ -195,7 +195,7 @@ export function PhotoMeasureScreen() {
 
       <div className="px-4 space-y-3">
         {!imageUrl ? (
-          <Card>
+          <div className="m-card">
             <div className="text-[13px] font-semibold mb-2">Capture or pick</div>
             <p className="text-[12px] text-ink-3 mb-3">
               Mobile browsers open the camera directly. On desktop you'll get a file picker.
@@ -208,13 +208,13 @@ export function PhotoMeasureScreen() {
               onChange={onPickFile}
               className="hidden"
             />
-            <MobileButton variant="primary" onClick={() => fileRef.current?.click()}>
+            <MButton variant="primary" onClick={() => fileRef.current?.click()}>
               Open camera
-            </MobileButton>
-          </Card>
+            </MButton>
+          </div>
         ) : (
           <>
-            <Card className="!p-0 overflow-hidden">
+            <div className="m-card !p-0 overflow-hidden">
               <div className="relative">
                 <img
                   ref={imgRef}
@@ -260,10 +260,10 @@ export function PhotoMeasureScreen() {
                   New photo
                 </button>
               </div>
-            </Card>
+            </div>
 
             {rect ? (
-              <Card>
+              <div className="m-card">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Reference</div>
                 <div className="flex gap-1.5 mb-3">
                   {(['w', 'h'] as const).map((a) => (
@@ -324,11 +324,11 @@ export function PhotoMeasureScreen() {
                     </div>
                   </div>
                 ) : null}
-              </Card>
+              </div>
             ) : null}
 
             {rect && computed ? (
-              <Card tight>
+              <div className="m-card m-card-tight">
                 <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
                   Service item
                 </label>
@@ -344,14 +344,14 @@ export function PhotoMeasureScreen() {
                     </option>
                   ))}
                 </select>
-              </Card>
+              </div>
             ) : null}
 
             {error ? <div className="text-[12px] text-warn">{error}</div> : null}
 
-            <MobileButton variant="primary" disabled={!canSave} onClick={onSave}>
+            <MButton variant="primary" disabled={!canSave} onClick={onSave}>
               {create.isPending ? 'Saving…' : 'Save measurement'}
-            </MobileButton>
+            </MButton>
 
             <Attribution source="POST /api/projects/:id/takeoff/measurement · kind=lineal · photo metadata in notes" />
           </>

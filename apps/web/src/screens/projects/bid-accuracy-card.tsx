@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { Pill } from '@/components/mobile'
-import { MAiAgent, Spark } from '@/components/m'
+import { MAiAgent, MPill, Spark } from '@/components/m'
 import { useBidAccuracy, type AccuracyConfidence, type BidAccuracyProject } from '@/lib/api/bid-accuracy'
 
 /**
@@ -180,20 +179,20 @@ function ComparableRow({ project }: { project: BidAccuracyProject }) {
           ${Number(project.bid_total).toLocaleString()} bid · {project.customer_name ?? 'no customer'}
         </div>
       </div>
-      <Pill tone={project.confidence === 'high' ? 'good' : project.confidence === 'med' ? 'default' : 'warn'}>
+      <MPill tone={project.confidence === 'high' ? 'green' : project.confidence === 'med' ? undefined : 'amber'}>
         {sign}
         {abs}%
-      </Pill>
+      </MPill>
     </li>
   )
 }
 
 function ConfidencePill({ confidence, label }: { confidence: AccuracyConfidence | null; label: string }) {
   if (!confidence) {
-    return <Pill tone="default">{label}</Pill>
+    return <MPill>{label}</MPill>
   }
-  const tone = confidence === 'high' ? 'good' : confidence === 'med' ? 'default' : 'warn'
-  return <Pill tone={tone}>{label} confidence</Pill>
+  const tone = confidence === 'high' ? 'green' : confidence === 'med' ? undefined : 'amber'
+  return <MPill tone={tone}>{label} confidence</MPill>
 }
 
 function confidenceLabel(c: AccuracyConfidence): string {

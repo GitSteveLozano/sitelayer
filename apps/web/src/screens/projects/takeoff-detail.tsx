@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill, useConfirmSheet } from '@/components/mobile'
+import { MButton, MI, MPill } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { MErrorState } from '@/components/m-states'
 import {
@@ -26,8 +26,9 @@ import { EstimateLineAssembly } from './estimate-line-assembly'
  * Editing routes to the consolidated est-canvas takeoff editor
  * (deep-link-to-measurement pre-selection is a planned est-canvas
  * enhancement; see docs/TAKEOFF_CANVAS_CONSOLIDATION_PLAN.md). Delete
- * confirms via ConfirmSheet then sends DELETE /api/takeoff/measurements/:id
- * with the row's expected_version for optimistic concurrency.
+ * confirms via the `.m-sheet` confirm (useMConfirm below) then sends
+ * DELETE /api/takeoff/measurements/:id with the row's expected_version
+ * for optimistic concurrency.
  */
 export function TakeoffDetailScreen() {
   const params = useParams<{ id: string; measurementId: string }>()
@@ -41,7 +42,7 @@ export function TakeoffDetailScreen() {
   const items = useServiceItems()
   const deleteMutation = useDeleteMeasurement()
   const [error, setError] = useState<string | null>(null)
-  const [confirm, askConfirm] = useConfirmSheet()
+  const [confirm, askConfirm] = useMConfirm()
   const [tagSheetOpen, setTagSheetOpen] = useState(false)
 
   const measurement: TakeoffMeasurement | undefined = useMemo(
@@ -89,7 +90,6 @@ export function TakeoffDetailScreen() {
       title: 'Delete this measurement?',
       body: 'This removes the polygon and any tags attached to it. Cannot be undone.',
       confirmLabel: 'Delete',
-      destructive: true,
     })
     if (!ok) return
     setError(null)
@@ -121,39 +121,39 @@ export function TakeoffDetailScreen() {
             className="w-full rounded-lg border border-line"
           />
         ) : (
-          <Card>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Geometry</div>
+          <div className="m-card">
+            <div className="m-field-l mb-0">Geometry</div>
             <div className="text-[13px] mt-1">
               {kind ? `${kind} measurement` : 'No geometry recorded'}
               {kind === 'polygon' && hasPoints(measurement) ? ` · ${pointCount(measurement)} vertices` : ''}
               {kind === 'lineal' && hasPoints(measurement) ? ` · ${pointCount(measurement)} segments` : ''}
               {kind === 'count' && hasPoints(measurement) ? ` · ${pointCount(measurement)} markers` : ''}
             </div>
-          </Card>
+          </div>
         )}
 
-        <Card>
+        <div className="m-card">
           <div className="flex items-baseline justify-between">
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Quantity</div>
+              <div className="m-field-l mb-0">Quantity</div>
               <div className="font-mono tabular-nums text-[28px] font-bold tracking-tight leading-none mt-1">
                 {Number.isFinite(qty) ? qty.toFixed(2) : '0.00'}
                 <span className="text-[14px] text-ink-3 ml-1.5">{measurement.unit}</span>
               </div>
             </div>
-            {elevation !== 'none' ? <Pill tone="default">{elevation}</Pill> : null}
+            {elevation !== 'none' ? <MPill>{elevation}</MPill> : null}
           </div>
           {measurement.notes ? (
             <div className="text-[12px] text-ink-2 mt-3 leading-relaxed">{measurement.notes}</div>
           ) : null}
-          <div className="text-[11px] text-ink-3 mt-3">
+          <div className="m-quiet text-[11px] mt-3">
             Saved {formatTimestamp(measurement.created_at)} · v{measurement.version}
           </div>
-        </Card>
+        </div>
 
-        <Card>
+        <div className="m-card">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Multi-condition tags</div>
+            <div className="m-field-l mb-0">Multi-condition tags</div>
             <button
               type="button"
               onClick={() => setTagSheetOpen(true)}
@@ -193,7 +193,7 @@ export function TakeoffDetailScreen() {
           <div className="mt-2 pt-2 border-t border-dashed border-line-2">
             <Attribution source="GET /api/takeoff/measurements/:id/tags" />
           </div>
-        </Card>
+        </div>
 
         {/* Assembly drill-down — exposes materials + waste + labor for the
             measurement's primary service item. Renders nothing when the
@@ -206,12 +206,17 @@ export function TakeoffDetailScreen() {
         {error ? <div className="text-[12px] text-bad">{error}</div> : null}
 
         <div className="grid grid-cols-2 gap-2 pt-2">
-          <Link to={canvasPath(projectId ?? '')} className="block">
-            <MobileButton variant="primary">Edit on canvas</MobileButton>
-          </Link>
-          <MobileButton variant="ghost" onClick={onDelete} disabled={deleteMutation.isPending}>
+          <MButton variant="primary" onClick={() => navigate(canvasPath(projectId ?? ''))}>
+            Edit on canvas
+          </MButton>
+          <MButton
+            variant="ghost"
+            onClick={onDelete}
+            disabled={deleteMutation.isPending}
+            style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+          >
             {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
-          </MobileButton>
+          </MButton>
         </div>
       </div>
 
@@ -245,4 +250,111 @@ function formatTimestamp(iso: string): string {
     ' ' +
     d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * `.m-sheet` replacement for the legacy `useConfirmSheet` hook — same
+ * `[node, ask]` API, resolves the promise with the user's choice.
+ */
+function useMConfirm() {
+  const [state, setState] = useState<{
+    title: string
+    body: string
+    confirmLabel: string
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const settle = (ok: boolean) => {
+    state?.resolve(ok)
+    setState(null)
+  }
+
+  const node =
+    state !== null ? (
+      <MSheet title={state.title} onClose={() => settle(false)}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 16 }}>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{state.body}</div>
+          <div className="grid grid-cols-2 gap-2">
+            <MButton variant="ghost" onClick={() => settle(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              variant="primary"
+              onClick={() => settle(true)}
+              style={{ background: 'var(--m-red)', borderColor: 'var(--m-red)', color: '#fff' }}
+            >
+              {state.confirmLabel}
+            </MButton>
+          </div>
+        </div>
+      </MSheet>
+    ) : null
+
+  const ask = (props: { title: string; body: string; confirmLabel: string }): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      setState({ ...props, resolve })
+    })
+
+  return [node, ask] as const
 }

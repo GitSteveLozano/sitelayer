@@ -1,4 +1,3 @@
-import { Card } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { useAssemblyByServiceItem, type AssemblyComponent } from '@/lib/api/assemblies'
 
@@ -28,20 +27,20 @@ export function EstimateLineAssembly({ serviceItemCode, lineLabel }: EstimateLin
 
   if (assembly.isPending) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <div className="text-[12px] text-ink-3">Loading assembly…</div>
-      </Card>
+      </div>
     )
   }
   if (assembly.isError || !assembly.data) {
     return (
-      <Card tight>
+      <div className="m-card m-card-tight">
         <div className="text-[12px] font-semibold mb-1">No assembly defined</div>
         <div className="text-[11px] text-ink-3">
           {serviceItemCode} doesn't have a PlanSwift-style assembly yet — the rate falls back to the service item's
           default. Configure components in Settings → Pricebook to break this line down by material/labor/waste.
         </div>
-      </Card>
+      </div>
     )
   }
 
@@ -52,7 +51,7 @@ export function EstimateLineAssembly({ serviceItemCode, lineLabel }: EstimateLin
   const other = components.filter((c) => c.kind === 'sub' || c.kind === 'freight')
 
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-baseline justify-between gap-3 mb-2">
         <div className="min-w-0">
           <div className="text-[13px] font-semibold truncate">{header.name}</div>
@@ -77,7 +76,7 @@ export function EstimateLineAssembly({ serviceItemCode, lineLabel }: EstimateLin
       <div className="mt-3 pt-2 border-t border-dashed border-line">
         <Attribution source={`Live from /api/assemblies/${header.id.slice(0, 8)}…`} />
       </div>
-    </Card>
+    </div>
   )
 }
 

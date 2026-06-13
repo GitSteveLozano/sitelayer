@@ -1,4 +1,4 @@
-import { Banner, MobileButton } from '@/components/mobile'
+import { MBanner, MButton } from '@/components/m'
 import { isEstimateStale, type ScopeVsBidResponse } from '@/lib/api'
 
 /**
@@ -31,19 +31,19 @@ export function EstimateStalenessBanner({
   className?: string
 }) {
   if (!isEstimateStale(snapshot)) return null
-  return (
-    <Banner
+  const banner = (
+    <MBanner
       tone="warn"
       title="Estimate out of date"
-      className={className}
+      body="A measurement, assembly, or rate changed after this estimate was last computed. Recompute from the takeoff before sending."
       action={
-        <MobileButton variant="ghost" size="sm" disabled={recomputing} onClick={onRecompute}>
+        <MButton variant="ghost" size="sm" disabled={recomputing} onClick={onRecompute}>
           {recomputing ? 'Recomputing…' : 'Recompute'}
-        </MobileButton>
+        </MButton>
       }
-    >
-      A measurement, assembly, or rate changed after this estimate was last computed. Recompute from the takeoff before
-      sending.
-    </Banner>
+    />
   )
+  // `.m-banner` carries its own 10/16 margins; the className hook lets
+  // callers position the banner in their layout (same contract as before).
+  return className ? <div className={className}>{banner}</div> : banner
 }

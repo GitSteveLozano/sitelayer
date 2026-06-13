@@ -1,15 +1,15 @@
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { MButton, MPill, type MTone } from '@/components/m'
 import { useShipmentWorkflow, type ShipmentWorkflowState } from '@/lib/api/shipment-workflow'
 
-const STATUS_TONE: Record<ShipmentWorkflowState, 'default' | 'good' | 'warn' | 'bad' | 'info'> = {
-  planned: 'default',
-  picking: 'info',
-  shipped: 'info',
-  delivered: 'good',
-  returning: 'warn',
-  closed: 'default',
-  voided: 'bad',
+const STATUS_TONE: Record<ShipmentWorkflowState, MTone | undefined> = {
+  planned: undefined,
+  picking: 'blue',
+  shipped: 'blue',
+  delivered: 'green',
+  returning: 'amber',
+  closed: undefined,
+  voided: 'red',
 }
 
 export function ShipmentDetailScreen() {
@@ -21,18 +21,18 @@ export function ShipmentDetailScreen() {
   if (isLoading && !snapshot) {
     return (
       <div className="px-5 pt-6 pb-12 max-w-2xl">
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[12px] text-ink-3">Loading shipment…</div>
-        </Card>
+        </div>
       </div>
     )
   }
   if (!snapshot) {
     return (
       <div className="px-5 pt-6 pb-12 max-w-2xl">
-        <Card tight>
+        <div className="m-card m-card-tight">
           <div className="text-[12px] text-ink-3">Shipment not found.</div>
-        </Card>
+        </div>
       </div>
     )
   }
@@ -55,20 +55,20 @@ export function ShipmentDetailScreen() {
             {ctx.driver ? <> · driver {ctx.driver}</> : null}
           </p>
         </div>
-        <Pill tone={STATUS_TONE[snapshot.state]}>{snapshot.state}</Pill>
+        <MPill tone={STATUS_TONE[snapshot.state]}>{snapshot.state}</MPill>
       </div>
 
       {outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
           <div className="text-[12px] text-ink-2 mt-1">
             Shipment state moved on the server. Reloaded — pick the next action again.
           </div>
-        </Card>
+        </div>
       ) : null}
 
       {error && !outOfSync ? (
-        <Card tight className="mt-4">
+        <div className="m-card m-card-tight mt-4">
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
@@ -78,18 +78,18 @@ export function ShipmentDetailScreen() {
               dismiss
             </button>
           </div>
-        </Card>
+        </div>
       ) : null}
 
       <h2 className="mt-6 text-[14px] font-semibold">Lines</h2>
       <div className="mt-2 space-y-1">
         {ctx.lines.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No lines on this shipment yet.</div>
-          </Card>
+          </div>
         ) : (
           ctx.lines.map((line) => (
-            <Card key={line.id} tight>
+            <div key={line.id} className="m-card m-card-tight">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[13px] font-semibold">
@@ -105,7 +105,7 @@ export function ShipmentDetailScreen() {
                   </div>
                 </div>
               </div>
-            </Card>
+            </div>
           ))
         )}
       </div>
@@ -113,20 +113,20 @@ export function ShipmentDetailScreen() {
       <h2 className="mt-6 text-[14px] font-semibold">Next steps</h2>
       <div className="mt-2">
         {snapshot.next_events.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
-          </Card>
+          </div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {snapshot.next_events.map((ev) => (
-              <MobileButton
+              <MButton
                 key={ev.type}
                 variant={ev.type === 'VOID' ? 'ghost' : 'primary'}
                 disabled={isSubmitting || !!ev.disabled_reason}
                 onClick={() => dispatch(ev.type)}
               >
                 {ev.label}
-              </MobileButton>
+              </MButton>
             ))}
           </div>
         )}
@@ -135,12 +135,12 @@ export function ShipmentDetailScreen() {
       <h2 className="mt-6 text-[14px] font-semibold">Event log</h2>
       <div className="mt-2 space-y-1">
         {ctx.events.length === 0 ? (
-          <Card tight>
+          <div className="m-card m-card-tight">
             <div className="text-[12px] text-ink-3">No events recorded yet.</div>
-          </Card>
+          </div>
         ) : (
           ctx.events.map((ev) => (
-            <Card key={ev.id} tight>
+            <div key={ev.id} className="m-card m-card-tight">
               <div className="text-[12px]">
                 <span className="font-semibold">{ev.event_type}</span>
                 <span className="text-ink-3">
@@ -151,7 +151,7 @@ export function ShipmentDetailScreen() {
               <div className="text-[11px] text-ink-3 mt-0.5">
                 {new Date(ev.created_at).toLocaleString()} · by {ev.produced_by}
               </div>
-            </Card>
+            </div>
           ))
         )}
       </div>

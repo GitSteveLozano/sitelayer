@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton } from '@/components/mobile'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { MButton, MChip, MChipRow } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
@@ -22,6 +22,7 @@ import { useTakeoffCanvasPath } from '@/lib/takeoff/canvas-route'
  */
 export function TakeoffSummaryScreen() {
   const { id: projectId } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const canvasPath = useTakeoffCanvasPath()
   const measurements = useProjectMeasurements(projectId)
   const serviceItems = useServiceItems()
@@ -129,22 +130,13 @@ export function TakeoffSummaryScreen() {
         </div>
       </div>
 
-      <div className="px-4 pb-2 flex gap-1.5">
+      <MChipRow>
         {(['item', 'elevation'] as const).map((g) => (
-          <button
-            key={g}
-            type="button"
-            onClick={() => setGroupBy(g)}
-            className={
-              groupBy === g
-                ? 'shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium bg-accent text-white'
-                : 'shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium bg-card-soft text-ink-2 border border-line'
-            }
-          >
+          <MChip key={g} active={groupBy === g} outline={groupBy !== g} onClick={() => setGroupBy(g)}>
             {g === 'item' ? 'By item' : 'By elevation'}
-          </button>
+          </MChip>
         ))}
-      </div>
+      </MChipRow>
 
       <div className="px-4 pb-8 space-y-2">
         {measurements.isPending ? (
@@ -169,12 +161,12 @@ export function TakeoffSummaryScreen() {
             ))}
             <Attribution source="Live from /api/projects/:id/takeoff/measurements + /api/service-items" />
             <div className="pt-2 grid grid-cols-2 gap-2">
-              <Link to={canvasPath(projectId)} className="block">
-                <MobileButton variant="primary">Add measurement</MobileButton>
-              </Link>
-              <Link to={`/projects/${projectId}/takeoff-preview`} className="block">
-                <MobileButton variant="ghost">3D view</MobileButton>
-              </Link>
+              <MButton variant="primary" onClick={() => navigate(canvasPath(projectId))}>
+                Add measurement
+              </MButton>
+              <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}/takeoff-preview`)}>
+                3D view
+              </MButton>
             </div>
           </>
         )}
@@ -203,7 +195,7 @@ function SummaryRow({
   const ratio = maxQty > 0 ? group.totalQty / maxQty : 0
   return (
     <Link to={canvasPath(projectId)} className="block">
-      <Card>
+      <div className="m-card">
         <div className="flex items-baseline justify-between gap-3 mb-1.5">
           <div className="min-w-0 flex items-baseline gap-2">
             {group.thumbnail ? (
@@ -228,14 +220,14 @@ function SummaryRow({
             <div className="text-[11px] text-ink-3 mt-0.5">{group.unit}</div>
           </div>
         </div>
-        <div className="h-1.5 bg-card-soft rounded-full overflow-hidden">
+        <div className="h-1.5 bg-card-soft overflow-hidden">
           <div
-            className="h-full bg-accent rounded-full transition-[width] duration-300"
+            className="h-full bg-accent transition-[width] duration-300"
             style={{ width: `${Math.max(2, ratio * 100)}%` }}
             aria-hidden="true"
           />
         </div>
-      </Card>
+      </div>
     </Link>
   )
 }

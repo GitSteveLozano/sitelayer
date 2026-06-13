@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { MButton, MI, MInput, MPill, MSelect } from '@/components/m'
 import { Attribution } from '@/components/ai'
 import {
   useAddTakeoffTag,
@@ -129,19 +129,21 @@ export function TakeoffTagSheet({ open, onClose, measurementId, defaultQuantity,
     }
   }
 
+  if (!open) return null
+
   return (
-    <Sheet open={open} onClose={onClose} title="Multi-condition tags">
+    <MSheet title="Multi-condition tags" onClose={onClose}>
       <div className="space-y-3">
         {tags.isPending ? (
-          <div className="text-[12px] text-ink-3">Loading conditions…</div>
+          <div className="m-quiet-sm">Loading conditions…</div>
         ) : tagRows.length === 0 ? (
-          <Card>
+          <div className="m-card">
             <div className="text-[13px] font-semibold">No conditions yet</div>
-            <div className="text-[12px] text-ink-3 mt-1 leading-snug">
+            <div className="m-quiet-sm mt-1 leading-snug">
               One physical surface can carry several billable lines (EPS + basecoat + finish coat + air barrier). Add a
               condition to attach a service item with its own quantity and rate.
             </div>
-          </Card>
+          </div>
         ) : (
           <ul className="space-y-2">
             {tagRows.map((t) => (
@@ -166,84 +168,80 @@ export function TakeoffTagSheet({ open, onClose, measurementId, defaultQuantity,
         )}
 
         {adding ? (
-          <Card>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1">Add condition</div>
-            <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mt-2">
+          <div className="m-card">
+            <div className="m-field-l mb-1">Add condition</div>
+            <label className="m-field-l mt-2" htmlFor="takeoff-tag-item">
               Service item
             </label>
-            <select
-              value={draftCode}
-              onChange={(e) => onSelectDraftItem(e.target.value)}
-              className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-            >
+            <MSelect id="takeoff-tag-item" value={draftCode} onChange={(e) => onSelectDraftItem(e.target.value)}>
               {availableItems.length === 0 ? <option value="">No catalog items left</option> : null}
               {availableItems.map((it) => (
                 <option key={it.code} value={it.code}>
                   {it.code} — {it.name}
                 </option>
               ))}
-            </select>
+            </MSelect>
 
-            <div className="grid grid-cols-3 gap-2 mt-2">
-              <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Qty</label>
-                <input
+            <div className="grid grid-cols-3 gap-2 mt-3">
+              <label className="block">
+                <span className="m-field-l">Qty</span>
+                <MInput
                   type="number"
                   inputMode="decimal"
                   value={draftQty}
                   onChange={(e) => setDraftQty(e.target.value)}
-                  className="mt-1 w-full text-[14px] py-1.5 bg-transparent border-b border-line focus:outline-none focus:border-accent font-mono tabular-nums"
+                  className="font-mono tabular-nums"
                 />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Unit</label>
-                <input
-                  type="text"
-                  value={draftUnit}
-                  onChange={(e) => setDraftUnit(e.target.value)}
-                  className="mt-1 w-full text-[14px] py-1.5 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Rate</label>
-                <input
+              </label>
+              <label className="block">
+                <span className="m-field-l">Unit</span>
+                <MInput type="text" value={draftUnit} onChange={(e) => setDraftUnit(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className="m-field-l">Rate</span>
+                <MInput
                   type="number"
                   inputMode="decimal"
                   value={draftRate}
                   onChange={(e) => setDraftRate(e.target.value)}
-                  className="mt-1 w-full text-[14px] py-1.5 bg-transparent border-b border-line focus:outline-none focus:border-accent font-mono tabular-nums"
+                  className="font-mono tabular-nums"
                 />
-              </div>
+              </label>
             </div>
 
-            {error ? <div className="text-[12px] text-bad mt-2">{error}</div> : null}
+            {error ? <div style={{ color: 'var(--m-red)', fontSize: 12, marginTop: 8 }}>{error}</div> : null}
 
             <div className="grid grid-cols-2 gap-2 mt-3">
-              <MobileButton variant="ghost" onClick={cancelAdd}>
+              <MButton variant="ghost" onClick={cancelAdd}>
                 Cancel
-              </MobileButton>
-              <MobileButton variant="primary" onClick={onSubmitAdd} disabled={add.isPending}>
+              </MButton>
+              <MButton variant="primary" onClick={onSubmitAdd} disabled={add.isPending}>
                 {add.isPending ? 'Adding…' : 'Add condition'}
-              </MobileButton>
+              </MButton>
             </div>
-          </Card>
+          </div>
         ) : (
           <div>
-            <MobileButton variant="primary" onClick={beginAdd} disabled={availableItems.length === 0 || !measurementId}>
+            <MButton
+              variant="primary"
+              style={{ width: '100%' }}
+              onClick={beginAdd}
+              disabled={availableItems.length === 0 || !measurementId}
+            >
               + Add condition
-            </MobileButton>
+            </MButton>
             {availableItems.length === 0 && tagRows.length > 0 ? (
-              <div className="text-[11px] text-ink-3 mt-2">All catalog items already attached.</div>
+              <div className="m-quiet-sm mt-2">All catalog items already attached.</div>
             ) : null}
           </div>
         )}
 
-        {error && !adding ? <div className="text-[12px] text-bad">{error}</div> : null}
+        {error && !adding ? <div style={{ color: 'var(--m-red)', fontSize: 12 }}>{error}</div> : null}
 
         <div className="flex items-center justify-between pt-1">
-          <Pill tone="default">
+          <MPill>
             {tagRows.length} condition{tagRows.length === 1 ? '' : 's'}
-          </Pill>
+          </MPill>
           <button type="button" onClick={onClose} className="text-[13px] font-semibold text-accent">
             Done
           </button>
@@ -251,7 +249,68 @@ export function TakeoffTagSheet({ open, onClose, measurementId, defaultQuantity,
 
         <Attribution source="GET / POST / PATCH / DELETE /api/takeoff/measurements/:id/tags · /api/takeoff/tags/:id" />
       </div>
-    </Sheet>
+    </MSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Same pattern as the
+ * AssignmentSheet swap in screens/mobile/schedule.tsx (e9b7c7f3); replaces
+ * the retired wave-2 kit Sheet. ESC and backdrop-tap dismiss.
+ */
+function MSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -284,56 +343,51 @@ function TagEditorRow({ tag, serviceItems, onCommit, onRemove, busy }: TagEditor
   }
 
   return (
-    <Card tight>
+    <div className="m-card m-card-tight">
       <div className="flex items-baseline justify-between gap-2">
         <div className="min-w-0">
           <div className="text-[13px] font-semibold truncate">{tag.service_item_code}</div>
-          {item ? <div className="text-[11px] text-ink-3 truncate">{item.name}</div> : null}
+          {item ? <div className="m-quiet text-[11px] truncate">{item.name}</div> : null}
         </div>
         <button
           type="button"
           onClick={onRemove}
           disabled={busy}
           aria-label="Remove condition"
-          className="text-[12px] text-ink-3 hover:text-bad px-1.5 py-0.5"
+          className="m-quiet text-[12px] px-1.5 py-0.5"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
           ×
         </button>
       </div>
       <div className="grid grid-cols-3 gap-2 mt-2">
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Qty</span>
-          <input
+          <span className="m-field-l">Qty</span>
+          <MInput
             type="number"
             inputMode="decimal"
             value={qty}
             onChange={(e) => setQty(e.target.value)}
             onBlur={commit}
-            className="mt-0.5 w-full text-[13px] py-1 bg-transparent border-b border-line focus:outline-none focus:border-accent font-mono tabular-nums"
+            className="font-mono tabular-nums"
           />
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Unit</span>
-          <input
-            type="text"
-            value={unit}
-            onChange={(e) => setUnit(e.target.value)}
-            onBlur={commit}
-            className="mt-0.5 w-full text-[13px] py-1 bg-transparent border-b border-line focus:outline-none focus:border-accent"
-          />
+          <span className="m-field-l">Unit</span>
+          <MInput type="text" value={unit} onChange={(e) => setUnit(e.target.value)} onBlur={commit} />
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Rate</span>
-          <input
+          <span className="m-field-l">Rate</span>
+          <MInput
             type="number"
             inputMode="decimal"
             value={rate}
             onChange={(e) => setRate(e.target.value)}
             onBlur={commit}
-            className="mt-0.5 w-full text-[13px] py-1 bg-transparent border-b border-line focus:outline-none focus:border-accent font-mono tabular-nums"
+            className="font-mono tabular-nums"
           />
         </label>
       </div>
-    </Card>
+    </div>
   )
 }

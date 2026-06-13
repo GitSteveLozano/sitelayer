@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { Link, useNavigate } from 'react-router-dom'
+import { MButton, MListRow, MPill, MTextarea } from '@/components/m'
 import { AgentSurface, Attribution, Spark, useRejectSheet } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
@@ -85,13 +85,13 @@ export function TakeoffListScreen({ projectId }: TakeoffListScreenProps) {
           }
         />
       ) : (
-        <ul className="space-y-2">
+        // `.m-list-inset` hard-bordered container; margin zeroed because the
+        // surrounding tab panel already provides the horizontal gutter.
+        <div className="m-list-inset" style={{ margin: 0 }}>
           {rows.map((m) => (
-            <li key={m.id}>
-              <MeasurementRow projectId={projectId} measurement={m} />
-            </li>
+            <MeasurementRow key={m.id} projectId={projectId} measurement={m} />
           ))}
-        </ul>
+        </div>
       )}
 
       {/* Takeoff → bid agent — collapsed by default; PMs only need it
@@ -112,50 +112,54 @@ interface MeasurementRowProps {
 }
 
 function MeasurementRow({ projectId, measurement }: MeasurementRowProps) {
+  const navigate = useNavigate()
   const items = useServiceItems()
   const item = items.data?.serviceItems.find((s) => s.code === measurement.service_item_code)
   const elevation = readElevation(measurement)
   const qty = Number(measurement.quantity)
   const kind = measurement.geometry && 'kind' in measurement.geometry ? measurement.geometry.kind : null
   return (
-    <Link to={`/projects/${projectId}/takeoff/${measurement.id}`} className="block">
-      <Card tight>
-        <div className="flex items-center gap-3">
-          {measurement.image_thumbnail ? (
-            <img
-              src={measurement.image_thumbnail}
-              alt=""
-              className="w-12 h-12 rounded-md object-cover shrink-0 border border-line"
-              aria-hidden="true"
-            />
-          ) : (
-            <div
-              className="w-12 h-12 rounded-md bg-card-soft border border-line shrink-0 flex items-center justify-center text-[10px] text-ink-3"
-              aria-hidden="true"
-            >
-              {kind ? kind[0]?.toUpperCase() : '—'}
-            </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2">
-              <span className="text-[13px] font-semibold truncate">{measurement.service_item_code}</span>
-              {elevation !== 'none' ? (
-                <Pill tone="default">{elevation}</Pill>
-              ) : kind ? (
-                <span className="text-[10px] text-ink-3 uppercase tracking-[0.04em]">{kind}</span>
-              ) : null}
-            </div>
-            <div className="text-[11px] text-ink-3 mt-0.5 truncate">{item?.name ?? 'Unmapped service item'}</div>
-          </div>
-          <div className="text-right shrink-0">
-            <div className="font-mono tabular-nums text-[14px] font-semibold leading-none">
-              {Number.isFinite(qty) ? qty.toFixed(2) : '0.00'}
-            </div>
-            <div className="text-[10px] text-ink-3 mt-0.5">{measurement.unit}</div>
-          </div>
-        </div>
-      </Card>
-    </Link>
+    <MListRow
+      leading={
+        measurement.image_thumbnail ? (
+          <img
+            src={measurement.image_thumbnail}
+            alt=""
+            style={{ width: 44, height: 44, objectFit: 'cover' }}
+            aria-hidden="true"
+          />
+        ) : (
+          <span aria-hidden="true" style={{ fontFamily: 'var(--m-font-display)', fontSize: 15, fontWeight: 800 }}>
+            {kind ? kind[0]?.toUpperCase() : '—'}
+          </span>
+        )
+      }
+      headline={
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <span className="truncate">{measurement.service_item_code}</span>
+          {elevation !== 'none' ? (
+            <MPill>{elevation}</MPill>
+          ) : kind ? (
+            <span className="m-quiet" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              {kind}
+            </span>
+          ) : null}
+        </span>
+      }
+      supporting={item?.name ?? 'Unmapped service item'}
+      trailing={
+        <span style={{ textAlign: 'right' }}>
+          <span
+            className="font-mono tabular-nums"
+            style={{ display: 'block', fontSize: 14, fontWeight: 700, lineHeight: 1, color: 'var(--m-ink)' }}
+          >
+            {Number.isFinite(qty) ? qty.toFixed(2) : '0.00'}
+          </span>
+          <span style={{ display: 'block', fontSize: 10, marginTop: 2 }}>{measurement.unit}</span>
+        </span>
+      }
+      onTap={() => navigate(`/projects/${projectId}/takeoff/${measurement.id}`)}
+    />
   )
 }
 
@@ -268,9 +272,9 @@ function ProposalBlock({ insightId, payload, onApply, onDismiss, askReject }: Pr
                 {line.unit}
               </span>
             </div>
-            <Pill tone={line.confidence === 'high' ? 'good' : line.confidence === 'med' ? 'default' : 'warn'}>
+            <MPill tone={line.confidence === 'high' ? 'green' : line.confidence === 'med' ? undefined : 'amber'}>
               ${line.amount.toFixed(2)}
-            </Pill>
+            </MPill>
           </div>
         ))}
         {payload.lines.length > 5 ? (
@@ -280,10 +284,10 @@ function ProposalBlock({ insightId, payload, onApply, onDismiss, askReject }: Pr
         ) : null}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <MobileButton variant="primary" onClick={() => void onApply(insightId)}>
+        <MButton variant="primary" onClick={() => void onApply(insightId)}>
           Apply to estimate
-        </MobileButton>
-        <MobileButton
+        </MButton>
+        <MButton
           variant="ghost"
           onClick={async () => {
             const reason = await askReject({
@@ -294,7 +298,7 @@ function ProposalBlock({ insightId, payload, onApply, onDismiss, askReject }: Pr
           }}
         >
           Dismiss
-        </MobileButton>
+        </MButton>
       </div>
     </div>
   )
@@ -335,35 +339,38 @@ function CsvImportPanel({ projectId }: { projectId: string }) {
         <span className="text-ink-3">{open ? '−' : '+'}</span>
       </button>
       {open ? (
-        <Card className="mt-2">
+        <div className="m-card mt-2">
           <div className="text-[11px] text-ink-2 mb-3">
             Paste an export below. First row is the header. Required columns:
-            <code className="bg-card-soft px-1 py-0.5 rounded ml-1">code</code>,
-            <code className="bg-card-soft px-1 py-0.5 rounded ml-1">quantity</code>. Optional:
-            <code className="bg-card-soft px-1 py-0.5 rounded ml-1">unit</code>,
-            <code className="bg-card-soft px-1 py-0.5 rounded ml-1">rate</code>,
-            <code className="bg-card-soft px-1 py-0.5 rounded ml-1">notes</code>.
+            <code className="bg-card-soft px-1 py-0.5 ml-1">code</code>,
+            <code className="bg-card-soft px-1 py-0.5 ml-1">quantity</code>. Optional:
+            <code className="bg-card-soft px-1 py-0.5 ml-1">unit</code>,
+            <code className="bg-card-soft px-1 py-0.5 ml-1">rate</code>,
+            <code className="bg-card-soft px-1 py-0.5 ml-1">notes</code>.
           </div>
-          <textarea
+          <MTextarea
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}
             rows={6}
             placeholder={'code,quantity,unit,rate\nEPS,1284.5,sqft,4.85\nBASE,1284.5,sqft,3.95'}
-            className="w-full p-3 rounded border border-line-2 bg-card text-[12px] font-mono focus:outline-none focus:border-accent resize-none"
+            className="font-mono text-[12px]"
           />
-          {error ? <div className="mt-2 text-[12px] text-bad">{error}</div> : null}
-          {msg ? <div className="mt-2 text-[12px] text-good">{msg}</div> : null}
+          {error ? (
+            <div className="mt-2 text-[12px]" style={{ color: 'var(--m-red)' }}>
+              {error}
+            </div>
+          ) : null}
+          {msg ? (
+            <div className="mt-2 text-[12px]" style={{ color: 'var(--m-green)' }}>
+              {msg}
+            </div>
+          ) : null}
           <div className="mt-3">
-            <MobileButton
-              variant="primary"
-              size="sm"
-              onClick={onImport}
-              disabled={importRows.isPending || !csvText.trim()}
-            >
+            <MButton variant="primary" size="sm" onClick={onImport} disabled={importRows.isPending || !csvText.trim()}>
               {importRows.isPending ? 'Importing…' : 'Import rows'}
-            </MobileButton>
+            </MButton>
           </div>
-        </Card>
+        </div>
       ) : null}
     </div>
   )
