@@ -1,5 +1,10 @@
 # V2 Mobile Port Plan — Brutalist Reskin
 
+> **✅ COMPLETE (2026-06-13).** The v2 brutalist port shipped: tokens.css is the
+> single `--m-*` source, the legacy `components/mobile` kit is deleted (R1–R6
+> boundary test green), inline-radius leaks squared. Kept as the historical plan;
+> for the current design state see `docs/steve-handoff/` + `VISION.md`.
+
 **Status:** plan · **Date:** 2026-05-28 · **Scope:** view-layer only
 
 ## 0. Strategy (foundation-first)

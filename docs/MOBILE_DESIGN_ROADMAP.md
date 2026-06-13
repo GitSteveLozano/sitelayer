@@ -1,5 +1,10 @@
 # Mobile Design Roadmap
 
+> **⚠️ STALE (references a deleted `Design Overview/` source).** The mobile design
+> is now realized: Steve's v2 brutalist system in `apps/web/src/.../tokens.css`,
+> the legacy `components/mobile` kit retired (R1–R6, deleted), one responsive SPA.
+> Design source of truth = `docs/steve-handoff/`. Kept for archaeology.
+
 Implementation plan for the mobile-first design handoff in `Design Overview/`.
 
 **Last updated:** 2026-05-06

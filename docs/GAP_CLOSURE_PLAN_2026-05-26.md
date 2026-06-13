@@ -1,5 +1,10 @@
 # Plan: Close all backend→UI gaps using the v3.3.0 design language
 
+> **⚠️ STALE (2026-05-26; the "v3.3.0 / `docs/handoff/v3.3.0/`" design language no
+> longer exists).** The design source of truth is `docs/steve-handoff/`; the
+> backend→UI gap-closure it describes was largely executed by the data-truth /
+> wiring waves + the R1–R6 legacy-kit retirement. Kept for archaeology.
+
 **As of:** 2026-05-26 · Goal: give every built-but-headless backend capability a front-door screen, reusing Steve's v3.3.0 design system as the guide so almost no new design is required.
 
 ## Guiding principle

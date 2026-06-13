@@ -508,7 +508,7 @@ and both have unit-test coverage (`apps/api/src/auth.test.ts`,
 
 ## Current Infrastructure Snapshot
 
-**Verified with `doctl` and production smoke checks on 2026-04-25.** (The migration history was squashed to a `000_baseline.sql` floor plus additive `001`–`020` files (`docker/postgres/init/`); the old "past migration 136" framing predates that squash. The droplet / managed-Postgres / Spaces topology below is unchanged. **Deploy-path rows updated 2026-06-01: deploys are now local-fleet via `scripts/deploy.sh`, NOT GitHub Actions — see Deploy procedure above.**)
+**Verified with `doctl` and production smoke checks on 2026-04-25.** (The migration history was squashed to a `000_baseline.sql` floor plus the additive `0NN_*.sql` files in `docker/postgres/init/` — the high-water number advances as migrations land, so this doc cites no terminal number; the old "past migration 136" framing predates that squash. The droplet / managed-Postgres / Spaces topology below is unchanged. **Deploy-path rows updated 2026-06-01: deploys are now local-fleet via `scripts/deploy.sh`, NOT GitHub Actions — see Deploy procedure above.**)
 
 | Resource                         | Current State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -585,6 +585,20 @@ sitelayer/
 └── docs/                    # Architecture, requirements, findings
 ```
 
+> **Onsite-ops / capture / issue-board breadth (the emit-seam — read this so it
+> isn't mistaken for scope-creep).** Beyond the construction domain, the tree
+> carries a sizeable onsite/ops-diagnostics + capture + issue-board + agent-feed
+> layer — e.g. `apps/api/src/routes/{ops-diagnostics,capture-sessions,support-packets,agent-feed,work-requests,issues}.ts`,
+> the `app_issue` board, one-time diagnostic-control redeem, leave-behind capture
+> deliveries, and the worker/queue plumbing behind them (migrations in the
+> `0NN_*` range). This is **internal operator/agent-support tooling that EMITS
+> through the published `@operator/projectkit` contract — NOT customer scope.**
+> It is governed by **ADR 0008** (the emit-seam: testbeds that emit, mesh is one
+> swappable subscriber) and the "Capture → issue board" locked decisions below;
+> `app_issue` (software bugs about the app) and `field_request` (the contractor's
+> real-world job problems) are permanently separate domains. See
+> [`VISION.md`](./VISION.md) for why this breadth is the seam, not the product.
+
 ## Core Components
 
 ### Backend (apps/api/src/server.ts)
@@ -629,7 +643,7 @@ Blueprints / takeoff:
 - POST `/api/projects/:id/takeoff-drafts/capture` — run a capture pipeline (`kind` = blueprint_vision | roomplan | drone | photogrammetry); returns a review-required `TakeoffResult` draft
 - POST `/api/projects/:id/takeoff-drafts/:draftId/promote` — promote selected captured quantities into committed `takeoff_measurements`
 
-3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Captured draft `TakeoffGeometry` IS fed into the renderer since `05be647d` (`apps/web/src/lib/takeoff/captured-geometry-3d.ts`, wired through `takeoff-preview.tsx`) — not just manual blueprint polygons. Residual gaps: a scaffold _designer_ is still not built, and RoomPlan walls are metrics-only (no captured wall geometry reaches the scene).
+3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Captured draft `TakeoffGeometry` IS fed into the renderer since `05be647d` (`apps/web/src/lib/takeoff/captured-geometry-3d.ts`, wired through `takeoff-preview.tsx`) — not just manual blueprint polygons. RoomPlan **wall** geometry now reaches the scene too (since `2398be1f`: `TakeoffGeometry.walls[]` in capture-schema → `pipe-roomplan` emits → `captured-geometry-3d.ts` extrudes wall planes). Residual gap: a scaffold _designer_ is still not built. (Drone/photogrammetry raster extraction remains demo-grade, off the pilot path — see VISION.md.)
 
 Estimation:
 

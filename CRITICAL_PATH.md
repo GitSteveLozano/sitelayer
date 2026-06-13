@@ -1,8 +1,22 @@
 # Sitelayer Critical Path to Pilot Launch
 
-**Goal:** First customer onboarded in 4-6 weeks  
-**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images via `scripts/deploy.sh prod` run from the fleet (the GitHub Actions deploy workflows were removed in `70b9584b`, 2026-06-01); Clerk, Spaces, TLS, backups, and baseline observability are wired. Blueprint uploads stream multipart through the API directly to Spaces, with presigned download URLs.
-**Next:** validate live QBO sync end to end, then onboard the first pilot company.
+> Single vision statement: [`VISION.md`](./VISION.md). This doc is the live state
+> against that bar.
+
+**Goal:** First customer (Cavy / `la-operations`) onboarded through the full loop
+(login → upload → takeoff → estimate → QBO sync → rental invoice).
+**State (2026-06-13):** the loop is **wired and tested end-to-end** — shipping it
+is now an **operator/config gate, not a code gate** (the "4-6 weeks of code"
+framing is stale). Infra is live on DigitalOcean; prod deploys use immutable
+registry images via `scripts/deploy.sh prod` from the fleet (Actions removed in
+`70b9584b`); Clerk, Spaces, TLS, backups, observability, multipart blueprint
+upload + presigned download are all wired.
+**Residual PRODUCT gaps (the only code distance to "Cavy runs it daily"):** live
+QBO actual-cost pull, per-customer rate-template editor, volume/count takeoff
+depth (from `docs/CUSTOMER_REQUIREMENTS_CAVY.md`).
+**Residual OPERATOR items (not code):** flip the live QBO env + sandbox smoke;
+provision the pilot company + memberships; run the prod restore drill
+(`scripts/restore-drill.sh` on the droplet) to a recorded PASS.
 
 **Mesh coordination:** project `sitelayer` / ID `282`. (Historical: the task chain `sitelayer-deploy-reconcile-20260423` no longer exists in mesh — pilot-onboarding state has moved past it. Use the live mesh project `sitelayer` / ID `282` and its open health-emitter tasks as the source of truth.)
 

@@ -1,5 +1,10 @@
 # V2 Expanded Plan — Desktop v2 + remaining mobile net-new screens
 
+> **✅ COMPLETE (2026-06-13).** Desktop v2 + the net-new screens shipped (the
+> responsive desktop twins, the designed screens wired, legacy surfaces retired).
+> Kept as the historical plan; for the current design state see
+> `docs/steve-handoff/` + `VISION.md`.
+
 _Authored 2026-05-28. Companion to `V2_MOBILE_PORT_PLAN.md` (the mobile port,
 now ✅ done) and the 3 v2 entities (✅ schema + workflow + API + hooks shipped)._
 

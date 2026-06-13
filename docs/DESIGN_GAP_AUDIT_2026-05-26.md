@@ -1,5 +1,12 @@
 # SiteLayer — Design-Fidelity Gap Audit
 
+> **⚠️ STALE (2026-05-26 snapshot; references the deleted `docs/handoff/v3.3.0/`).**
+> The design source of truth is now `docs/steve-handoff/` (Steve's frozen Stitch
+> spec + the `audit/` corpus). The current design-fidelity assessment is
+> `~/notes/sitelayer-design-fidelity-audit-2026-06-12.md` + the corpus-refresh
+> plan; the R1–R6 legacy-kit retirement closed this audit's biggest finding.
+> Kept for archaeology.
+
 **As of:** 2026-05-26 · **Designs (source of truth):** `docs/handoff/v3.3.0/` (v3.3.0 handoff — screenshots + JSX prototypes + specs)
 
 This audits the **built UI against the v3.3.0 designs**, screen by screen, to make Steve's "halfway between the old version and the new designs" concrete and checkable.

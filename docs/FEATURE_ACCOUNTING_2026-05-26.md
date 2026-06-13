@@ -1,5 +1,10 @@
 # SiteLayer — Feature & Git-History Accounting
 
+> **⚠️ STALE (2026-05-26 snapshot; references the deleted `docs/handoff/v3.3.0/`).**
+> Hundreds of commits have landed since. For the current feature/architecture
+> state use `CLAUDE.md` + `git log`; for the vision use `VISION.md`. Kept for
+> archaeology.
+
 **As of:** 2026-05-26 · Purpose: account for everything built vs. what Steve actually designed (v3.3.0 handoff).
 
 ## Verdict
