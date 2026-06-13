@@ -117,6 +117,7 @@ export type OpsOnsiteDiagnosticSessionRecord = {
 export type OpsOnsiteDiagnosticSessionCreateInput = {
   label?: string
   intent?: OpsOnsiteDiagnosticActionKey
+  worker_issue_id?: string
 }
 
 export type OpsOnsiteDiagnosticSessionCreateResponse = {

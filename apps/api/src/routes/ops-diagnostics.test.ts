@@ -88,6 +88,7 @@ const OPS_CAPTURE_SESSION_ID = '33333333-3333-4333-8333-333333333333'
 const OPS_SUPPORT_PACKET_ID = '44444444-4444-4444-8444-444444444444'
 const OPS_WORK_ITEM_ID = '55555555-5555-4555-8555-555555555555'
 const OPS_FEED_ID = '66666666-6666-4666-8666-666666666666'
+const OPS_WORKER_ISSUE_ID = '88888888-8888-4888-8888-888888888888'
 
 function readyPlan() {
   return {
@@ -581,7 +582,11 @@ describe('ops diagnostics', () => {
             return true
           },
           sendJson: (status, body) => responses.push({ status, body }),
-          readBody: async () => ({ label: 'Plant walkdown', intent: 'dispatch_agent_review' }),
+          readBody: async () => ({
+            label: 'Plant walkdown',
+            intent: 'dispatch_agent_review',
+            worker_issue_id: OPS_WORKER_ISSUE_ID,
+          }),
           getCurrentUserId: () => 'user_42',
           fetchImpl: greenFetch(),
         }),
@@ -596,6 +601,7 @@ describe('ops diagnostics', () => {
           id?: string
           operator_user_id?: string | null
           label?: string | null
+          worker_issue_id?: string | null
           plan?: { control_level?: string; recommended_entry?: string }
           audit_events?: Array<{ type: string; effect: string }>
           diagnostic_manifest?: {
@@ -609,6 +615,7 @@ describe('ops diagnostics', () => {
       expect(created.session).toMatchObject({
         operator_user_id: 'user_42',
         label: 'Plant walkdown',
+        worker_issue_id: OPS_WORKER_ISSUE_ID,
         plan: { control_level: 'route', recommended_entry: 'dispatch_agent_review' },
       })
       expect(created.session?.audit_events).toEqual([
@@ -616,6 +623,7 @@ describe('ops diagnostics', () => {
       ])
       expect(created.session?.diagnostic_manifest).toMatchObject({
         schema: 'sitelayer.ops_diagnostic_manifest.v1',
+        worker_issue_id: OPS_WORKER_ISSUE_ID,
         readiness: {
           work_evidence: 'audit_only',
           agent_handoff: 'not_requested',
@@ -623,6 +631,9 @@ describe('ops diagnostics', () => {
       })
       expect(created.session?.diagnostic_manifest?.evidence.refs).toContainEqual(
         expect.objectContaining({ type: 'ops_diagnostic_session', id: created.session?.id }),
+      )
+      expect(created.session?.diagnostic_manifest?.evidence.refs).toContainEqual(
+        expect.objectContaining({ type: 'worker_issue', id: OPS_WORKER_ISSUE_ID }),
       )
       expect(JSON.stringify(created.session)).not.toContain(String(created.control_token))
 
@@ -640,6 +651,30 @@ describe('ops diagnostics', () => {
       )
       expect(reads[0]?.status).toBe(200)
       expect(JSON.stringify(reads[0]?.body)).not.toContain(String(created.control_token))
+    })
+  })
+
+  it('rejects malformed worker issue links before starting an onsite diagnostic session', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      __resetOpsDiagnosticSessionsForTests()
+      const responses: Array<{ status: number; body: unknown }> = []
+      const handled = await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL('http://localhost/api/ops/diagnostics/sessions'),
+        readyOpsRouteCtx({
+          requireCapability: async () => true,
+          sendJson: (status, body) => responses.push({ status, body }),
+          readBody: async () => ({ worker_issue_id: 'not-a-uuid' }),
+          getCurrentUserId: () => 'user_42',
+          fetchImpl: greenFetch(),
+        }),
+      )
+
+      expect(handled).toBe(true)
+      expect(responses[0]).toEqual({
+        status: 400,
+        body: { error: 'worker_issue_id must be a UUID' },
+      })
     })
   })
 
@@ -1395,9 +1430,10 @@ describe('ops diagnostics', () => {
   it('links routed persistent onsite actions to a support packet and app issue', async () => {
     await withReadyOpsAgentFeed(async () => {
       const client = new PersistentOpsClient()
+      const session = persistentSession({ worker_issue_id: OPS_WORKER_ISSUE_ID })
       const result = await __enqueueOnsiteDiagnosticConcernForTests(client as unknown as PoolClient, {
         companyId: 'company-1',
-        session: persistentSession(),
+        session,
         event: persistentEvent(),
         actionKey: 'dispatch_agent_review',
         actionLabel: 'Dispatch agent review',
@@ -1423,6 +1459,7 @@ describe('ops diagnostics', () => {
         OPS_CAPTURE_SESSION_ID,
       ])
       expect(JSON.stringify(supportInsert?.params)).toContain(OPS_SESSION_ID)
+      expect(JSON.stringify(supportInsert?.params)).toContain(OPS_WORKER_ISSUE_ID)
 
       const workItemInsert = client.calls.find((call) => call.sql.startsWith('insert into context_work_items'))
       expect(workItemInsert?.params.slice(0, 4)).toEqual([
@@ -1433,6 +1470,7 @@ describe('ops diagnostics', () => {
       ])
       expect(workItemInsert?.params).toContain('ops_diagnostic_session')
       expect(workItemInsert?.params).toContain(OPS_SESSION_ID)
+      expect(JSON.stringify(workItemInsert?.params[14])).toContain(OPS_WORKER_ISSUE_ID)
 
       const feedInsert = client.calls.find((call) => call.sql.startsWith('insert into agent_feed_concerns'))
       expect(feedInsert?.params[5]).toBe(OPS_WORK_ITEM_ID)
@@ -1445,6 +1483,7 @@ describe('ops diagnostics', () => {
           work_item_id: OPS_WORK_ITEM_ID,
           support_packet_id: OPS_SUPPORT_PACKET_ID,
           capture_session_id: OPS_CAPTURE_SESSION_ID,
+          worker_issue_id: OPS_WORKER_ISSUE_ID,
         },
       })
       expect(JSON.stringify(concern)).toContain('diagnostic_manifest')
@@ -1457,6 +1496,7 @@ describe('ops diagnostics', () => {
 
       const manifest = __buildOpsOnsiteDiagnosticManifestForTests({
         ...persistentSession({
+          worker_issue_id: OPS_WORKER_ISSUE_ID,
           support_packet_id: OPS_SUPPORT_PACKET_ID,
           context_work_item_id: OPS_WORK_ITEM_ID,
         }),
@@ -1490,6 +1530,9 @@ describe('ops diagnostics', () => {
       )
       expect(manifest.evidence.refs).toContainEqual(
         expect.objectContaining({ type: 'context_work_item', id: OPS_WORK_ITEM_ID }),
+      )
+      expect(manifest.evidence.refs).toContainEqual(
+        expect.objectContaining({ type: 'worker_issue', id: OPS_WORKER_ISSUE_ID }),
       )
     })
   })

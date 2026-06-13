@@ -149,6 +149,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     ? isDispatchConfigured(health.data.config) && health.data.config.scoped_callbacks_enabled
     : null
   const openFieldIssues = (workerIssues.data?.worker_issues ?? []).filter((issue) => !issue.resolved_at)
+  const linkedWorkerIssueId = openFieldIssues[0]?.id
   const appIssueCount = appIssues.data?.issues.length ?? 0
   const systemComponents = opsDiagnostics.data?.components ?? []
   const gateway = componentByKey(systemComponents, 'gateway')
@@ -217,9 +218,11 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   }, [canCaptureAppIssues, companySlug, diagnosticSessions.data?.sessions])
   const startDiagnosticSession = useMutation({
     mutationFn: () => {
-      const input = onsiteSession?.recommended_entry
-        ? { label: 'Mobile ops', intent: onsiteSession.recommended_entry }
-        : { label: 'Mobile ops' }
+      const input = {
+        label: 'Mobile ops',
+        ...(onsiteSession?.recommended_entry ? { intent: onsiteSession.recommended_entry } : {}),
+        ...(linkedWorkerIssueId ? { worker_issue_id: linkedWorkerIssueId } : {}),
+      }
       return createOpsDiagnosticSession(companySlug, input)
     },
     onSuccess: (response) => {

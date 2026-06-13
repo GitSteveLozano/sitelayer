@@ -314,10 +314,16 @@ export async function handleOpsDiagnosticsRoutes(
         return true
       }
       const diagnostics = await buildOpsDiagnosticsForContext(ctx)
+      const workerIssue = await resolveOnsiteDiagnosticWorkerIssueId(ctx, body.value)
+      if (!workerIssue.ok) {
+        ctx.sendJson(workerIssue.status, { error: workerIssue.error })
+        return true
+      }
       const created = await createOnsiteDiagnosticSession(ctx, {
         body: body.value,
         plan: diagnostics.onsite_session,
         actorUserId: ctx.getCurrentUserId?.() ?? null,
+        workerIssueId: workerIssue.value,
       })
       ctx.sendJson(201, {
         schema: 'sitelayer.ops_diagnostic_session.v1',
@@ -532,6 +538,7 @@ async function createOnsiteDiagnosticSession(
     body: Record<string, unknown>
     plan: OpsOnsiteDiagnosticSessionPlan
     actorUserId: string | null
+    workerIssueId: string | null
   },
 ): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken: string }> {
   if (ctx.company) return createPersistentOnsiteDiagnosticSession(ctx.company.id, opts)
@@ -540,10 +547,35 @@ async function createOnsiteDiagnosticSession(
   return { session, controlToken: session.control_token }
 }
 
+async function resolveOnsiteDiagnosticWorkerIssueId(
+  ctx: OpsDiagnosticsRouteCtx,
+  body: Record<string, unknown>,
+): Promise<{ ok: true; value: string | null } | { ok: false; status: number; error: string }> {
+  const workerIssueId = boundedString(body.worker_issue_id, 80)
+  if (!workerIssueId) return { ok: true, value: null }
+  if (!isUuid(workerIssueId)) return { ok: false, status: 400, error: 'worker_issue_id must be a UUID' }
+  if (!ctx.company) return { ok: true, value: workerIssueId }
+
+  const companyId = ctx.company.id
+  const existing = await withCompanyClient(companyId, async (client: PoolClient) => {
+    const result = await client.query<{ id: string }>(
+      `select id::text as id
+         from worker_issues
+        where company_id = $1 and id = $2::uuid
+        limit 1`,
+      [companyId, workerIssueId],
+    )
+    return result.rows[0]?.id ?? null
+  })
+  if (!existing) return { ok: false, status: 404, error: 'worker_issue not found' }
+  return { ok: true, value: existing }
+}
+
 function createMemoryOnsiteDiagnosticSession(opts: {
   body: Record<string, unknown>
   plan: OpsOnsiteDiagnosticSessionPlan
   actorUserId: string | null
+  workerIssueId: string | null
 }): StoredOnsiteDiagnosticSession {
   pruneExpiredSessions()
   const createdAt = new Date()
@@ -560,6 +592,7 @@ function createMemoryOnsiteDiagnosticSession(opts: {
     operator_user_id: opts.actorUserId,
     label: boundedString(opts.body.label, 80),
     intent,
+    worker_issue_id: opts.workerIssueId,
     plan: opts.plan,
     audit_events: [
       {
@@ -584,6 +617,7 @@ async function createPersistentOnsiteDiagnosticSession(
     body: Record<string, unknown>
     plan: OpsOnsiteDiagnosticSessionPlan
     actorUserId: string | null
+    workerIssueId: string | null
   },
 ): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken: string }> {
   const createdAt = new Date()
@@ -592,6 +626,7 @@ async function createPersistentOnsiteDiagnosticSession(
   const intent =
     requestedIntent && actionEnabled(opts.plan, requestedIntent) ? requestedIntent : opts.plan.recommended_entry
   const label = boundedString(opts.body.label, 80)
+  const workerIssueId = opts.workerIssueId
   const controlToken = randomUUID()
   const controlTokenHash = hashControlToken(controlToken)
   const sessionId = randomUUID()
@@ -608,14 +643,16 @@ async function createPersistentOnsiteDiagnosticSession(
   const session = await withMutationTx(companyId, async (client: PoolClient) => {
     await client.query(
       `insert into ops_diagnostic_sessions (
-         id, company_id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at, updated_at
-       ) values ($1, $2, $3, $4, $5, $6::jsonb, $7, 'active', $8, $9, $9)`,
+         id, company_id, operator_user_id, label, intent, worker_issue_id, plan, control_token_hash,
+         state, expires_at, created_at, updated_at
+       ) values ($1, $2, $3, $4, $5, $6::uuid, $7::jsonb, $8, 'active', $9, $10, $10)`,
       [
         sessionId,
         companyId,
         opts.actorUserId,
         label,
         intent,
+        workerIssueId,
         JSON.stringify(opts.plan),
         controlTokenHash,
         expiresAt.toISOString(),
@@ -636,6 +673,7 @@ async function createPersistentOnsiteDiagnosticSession(
       operator_user_id: opts.actorUserId,
       label,
       intent,
+      worker_issue_id: workerIssueId,
       plan: opts.plan,
       audit_events: [event],
       control_token_hash: controlTokenHash,
@@ -967,7 +1005,8 @@ async function recordPersistentOnsiteDiagnosticControl(
               updated_at = $3::timestamptz
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3::timestamptz
         returning id, operator_user_id, label, intent, plan, control_token_hash,
-                  pending_control_transfer_hash, state, expires_at, created_at`,
+                  pending_control_transfer_hash, worker_issue_id::text as worker_issue_id,
+                  state, expires_at, created_at`,
       [companyId, session.id, atIso, nextState, nextExpiresAt, nextControlTokenHash, nextPendingTransferHash],
     )
     const row = updated.rows[0]
@@ -1017,7 +1056,8 @@ async function redeemPersistentOnsiteDiagnosticControl(
           and expires_at > $3::timestamptz
           and pending_control_transfer_hash = $5
         returning id, operator_user_id, label, intent, plan, control_token_hash,
-                  pending_control_transfer_hash, state, expires_at, created_at`,
+                  pending_control_transfer_hash, worker_issue_id::text as worker_issue_id,
+                  state, expires_at, created_at`,
       [companyId, session.id, atIso, hashControlToken(controlToken), hashControlToken(transferToken)],
     )
     const row = updated.rows[0]
@@ -1294,6 +1334,7 @@ async function ensureOnsiteDiagnosticWorkLinkTx(
     action_event_id: args.event.id,
     requested_action: args.actionKey,
     requested_by: args.actorUserId,
+    worker_issue_id: args.session.worker_issue_id ?? null,
     plan: args.session.plan,
     latest_manifest: buildOpsOnsiteDiagnosticManifest(sessionWithAuditEvent(args.session, args.event)),
   })
@@ -1310,6 +1351,7 @@ async function ensureOnsiteDiagnosticWorkLinkTx(
       state: args.session.state,
       control_level: args.session.plan.control_level,
       plan_status: args.session.plan.status,
+      worker_issue_id: args.session.worker_issue_id ?? null,
     },
     audit_events: args.session.audit_events.concat(args.event).slice(-25),
     desktop_evidence: args.session.desktop_evidence ?? null,
@@ -1347,6 +1389,7 @@ async function ensureOnsiteDiagnosticWorkLinkTx(
       ops_diagnostic_session_id: args.session.id,
       action_event_id: args.event.id,
       requested_action: args.actionKey,
+      worker_issue_id: args.session.worker_issue_id ?? null,
       support_packet_expires_at: packet.expires_at ?? expiresAt,
     },
   })
@@ -1370,6 +1413,7 @@ async function ensureOnsiteDiagnosticWorkLinkTx(
       capture_session_id: item.capture_session_id,
       support_packet_id: packet.id,
       ops_diagnostic_session_id: args.session.id,
+      worker_issue_id: args.session.worker_issue_id ?? null,
       requested_action: args.actionKey,
     },
     metadata: {
@@ -1857,6 +1901,7 @@ function onsiteDiagnosticExecutorInputs(args: {
     action_event_id: args.event.id,
     requested_action: args.actionKey,
     requested_by: args.actorUserId,
+    worker_issue_id: args.session.worker_issue_id ?? null,
     plan_status: args.session.plan.status,
     control_level: args.session.plan.control_level,
     recommended_entry: args.session.plan.recommended_entry,
@@ -2028,7 +2073,8 @@ async function lookupPersistentSession(
   const session = await withCompanyClient(companyId, async (client: PoolClient) => {
     const result = await client.query<PersistentSessionRow>(
       `select id, operator_user_id, label, intent, plan, control_token_hash,
-              pending_control_transfer_hash, state, expires_at, created_at
+              pending_control_transfer_hash, worker_issue_id::text as worker_issue_id,
+              state, expires_at, created_at
          from ops_diagnostic_sessions
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > now()
         limit 1`,
@@ -2050,7 +2096,8 @@ async function listPersistentOnsiteDiagnosticSessions(companyId: string): Promis
   return withCompanyClient(companyId, async (client: PoolClient) => {
     const result = await client.query<PersistentSessionRow>(
       `select id, operator_user_id, label, intent, plan, control_token_hash,
-              pending_control_transfer_hash, state, expires_at, created_at
+              pending_control_transfer_hash, worker_issue_id::text as worker_issue_id,
+              state, expires_at, created_at
          from ops_diagnostic_sessions
         where company_id = $1 and state = 'active' and expires_at > now()
         order by created_at desc
@@ -2074,6 +2121,7 @@ type PersistentSessionRow = {
   operator_user_id: string | null
   label: string | null
   intent: string | null
+  worker_issue_id: string | null
   plan: unknown
   control_token_hash: string
   pending_control_transfer_hash: string | null
@@ -2273,6 +2321,7 @@ function persistentSessionFromRow(
       operator_user_id: row.operator_user_id,
       label: row.label,
       intent: actionKeyValue(row.intent),
+      worker_issue_id: row.worker_issue_id,
       plan: row.plan as OpsOnsiteDiagnosticSessionPlan,
       audit_events: events,
       agent_feed_deliveries: deliveries,
@@ -2338,6 +2387,13 @@ function buildOpsOnsiteDiagnosticManifest(
   ]
   if (captureSessionId) {
     evidenceRefs.push({ type: 'capture_session', id: captureSessionId })
+  }
+  if (session.worker_issue_id) {
+    evidenceRefs.push({
+      type: 'worker_issue',
+      id: session.worker_issue_id,
+      path: `/foreman/blocker/${encodeURIComponent(session.worker_issue_id)}`,
+    })
   }
   if (supportPacketId) {
     evidenceRefs.push({
