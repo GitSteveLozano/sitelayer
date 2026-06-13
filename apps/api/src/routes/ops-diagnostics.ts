@@ -15,7 +15,7 @@ import {
   createContextWorkItemTx,
   type ContextWorkItemRow,
 } from '../context-handoff.js'
-import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { buildCaptureArtifactStorageKey, type BlueprintStorage } from '../storage.js'
 import {
   AGENT_FEED_TOKENS_ENV,
@@ -169,6 +169,7 @@ export type OpsOnsiteDiagnosticSessionControlResponse = {
 export type OpsOnsiteDiagnosticCaptureRouteResult = {
   request_ref: string
   delivery_id: string
+  outbox_id?: string | null
   status: 'accepted' | 'failed' | 'not_configured'
   http_status: number | null
   routed: boolean | null
@@ -268,6 +269,7 @@ const OPS_DESKTOP_EVIDENCE_CONSENT_VERSION = 'ops-diagnostic-desktop-v1'
 const OPS_DESKTOP_EVIDENCE_DEFAULT_SECONDS = 20
 const OPS_DESKTOP_EVIDENCE_DEFAULT_TIMEOUT_MS = 7500
 const OPS_DESKTOP_EVIDENCE_RETENTION_DAYS = 14
+const OPS_CAPTURE_ROUTE_MUTATION_TYPE = 'ops_diagnostic_capture_route'
 
 export type StoredOnsiteDiagnosticSession = OpsOnsiteDiagnosticSessionRecord & {
   control_token?: string
@@ -730,7 +732,7 @@ async function recordOnsiteDiagnosticAction(
       }
     }
     const options = diagnosticsOptions(ctx)
-    const [desktopEvidence, captureRoute] = await Promise.all([
+    const [desktopEvidence, rawCaptureRoute] = await Promise.all([
       captureOnsiteDesktopEvidence(ctx, options, {
         session: persisted.session,
         event: persisted.event,
@@ -745,6 +747,8 @@ async function recordOnsiteDiagnosticAction(
         actorUserId,
       }),
     ])
+    const captureRoute = routeResultWithOutbox(rawCaptureRoute, persisted.captureRouteOutbox)
+    await markOnsiteDiagnosticCaptureRouteOutbox(ctx.company.id, persisted.captureRouteOutbox, captureRoute)
     const acceptedAction: OpsOnsiteDiagnosticAcceptedAction = {
       key: actionKey,
       effect: 'audit_only',
@@ -1098,6 +1102,7 @@ async function recordPersistentOnsiteDiagnosticAction(
   event: OpsOnsiteDiagnosticAuditEvent
   agentFeed: OpsOnsiteDiagnosticAgentFeedResult | null
   acceptedAction?: OpsOnsiteDiagnosticAcceptedAction
+  captureRouteOutbox: OpsOnsiteDiagnosticCaptureRouteOutbox | null
   replayed: boolean
 } | null> {
   const at = new Date().toISOString()
@@ -1129,6 +1134,7 @@ async function recordPersistentOnsiteDiagnosticAction(
           deliveries,
           workLink,
           acceptedAction: acceptedActionFromResult(existing.action_result, actionKey) ?? undefined,
+          captureRouteOutbox: null,
           replayed: true,
         }
       }
@@ -1168,6 +1174,7 @@ async function recordPersistentOnsiteDiagnosticAction(
           deliveries,
           workLink,
           acceptedAction: acceptedActionFromResult(existing.action_result, actionKey) ?? undefined,
+          captureRouteOutbox: null,
           replayed: true,
         }
       }
@@ -1195,7 +1202,16 @@ async function recordPersistentOnsiteDiagnosticAction(
     })
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, session.id)
     workLink = workLink ?? (await latestPersistentOnsiteWorkLink(client, companyId, session.id, false))
-    return { event, agentFeed, deliveries, workLink, acceptedAction: undefined, replayed: false }
+    const linkedSession = workLink ? sessionWithWorkLink(session, workLink) : session
+    const captureRouteOutbox = await enqueueOnsiteDiagnosticCaptureRouteOutboxTx(client, {
+      companyId,
+      session: linkedSession,
+      event,
+      actionKey,
+      actionLabel,
+      actorUserId,
+    })
+    return { event, agentFeed, deliveries, workLink, captureRouteOutbox, acceptedAction: undefined, replayed: false }
   })
   if (!result) return null
   const linkedSession = result.workLink ? sessionWithWorkLink(session, result.workLink) : session
@@ -1211,6 +1227,7 @@ async function recordPersistentOnsiteDiagnosticAction(
     event: result.event,
     agentFeed: result.agentFeed,
     ...(result.acceptedAction ? { acceptedAction: result.acceptedAction } : {}),
+    captureRouteOutbox: result.captureRouteOutbox,
     replayed: result.replayed,
   }
 }
@@ -1523,6 +1540,13 @@ async function cancelOnsiteDiagnosticAgentFeedTx(
   return result.rowCount ?? 0
 }
 
+type OpsOnsiteDiagnosticCaptureRouteOutbox = {
+  id: string
+  idempotency_key: string
+  request_ref: string
+  delivery_id: string
+}
+
 function routesToCaptureRouter(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
   return (
     actionKey === 'capture_field_context' ||
@@ -1530,6 +1554,104 @@ function routesToCaptureRouter(actionKey: OpsOnsiteDiagnosticActionKey): boolean
     actionKey === 'route_support_packet' ||
     actionKey === 'dispatch_agent_review'
   )
+}
+
+async function enqueueOnsiteDiagnosticCaptureRouteOutboxTx(
+  client: PoolClient,
+  args: {
+    companyId: string
+    session: StoredOnsiteDiagnosticSession
+    event: OpsOnsiteDiagnosticAuditEvent
+    actionKey: OpsOnsiteDiagnosticActionKey
+    actionLabel: string
+    actorUserId: string | null
+  },
+): Promise<OpsOnsiteDiagnosticCaptureRouteOutbox | null> {
+  if (!routesToCaptureRouter(args.actionKey)) return null
+  const fallbackRequestRef = `opsdiag:${args.session.id}:${args.actionKey}`
+  let envelope: ProjectEventEnvelope
+  try {
+    envelope = buildOnsiteDiagnosticCaptureEnvelope(args)
+  } catch {
+    return null
+  }
+  const workRequest = objectValue(envelope.events[0]?.payload)?.work_request as WorkRequest | undefined
+  const requestRef = typeof workRequest?.request_ref === 'string' ? workRequest.request_ref : fallbackRequestRef
+  const deliveryId = envelope.delivery_id ?? requestRef
+  const idempotencyKey = `${OPS_CAPTURE_ROUTE_MUTATION_TYPE}:${deliveryId}`
+  await recordMutationOutbox(
+    args.companyId,
+    'ops_diagnostic_session',
+    args.session.id,
+    OPS_CAPTURE_ROUTE_MUTATION_TYPE,
+    {
+      schema: 'sitelayer.ops_diagnostic_capture_route.v1',
+      ops_diagnostic_session_id: args.session.id,
+      action_event_id: args.event.id,
+      action_key: args.actionKey,
+      request_ref: requestRef,
+      delivery_id: deliveryId,
+      envelope,
+    },
+    idempotencyKey,
+    'server',
+    args.actorUserId,
+    client,
+  )
+  const result = await client.query<{ id: string }>(
+    `select id::text as id
+       from mutation_outbox
+      where company_id = $1 and idempotency_key = $2
+      limit 1`,
+    [args.companyId, idempotencyKey],
+  )
+  const id = result.rows[0]?.id
+  if (!id) return null
+  return { id, idempotency_key: idempotencyKey, request_ref: requestRef, delivery_id: deliveryId }
+}
+
+function routeResultWithOutbox(
+  result: OpsOnsiteDiagnosticCaptureRouteResult | null,
+  outbox: OpsOnsiteDiagnosticCaptureRouteOutbox | null,
+): OpsOnsiteDiagnosticCaptureRouteResult | null {
+  if (!result || !outbox) return result
+  return { ...result, outbox_id: outbox.id }
+}
+
+async function markOnsiteDiagnosticCaptureRouteOutbox(
+  companyId: string,
+  outbox: OpsOnsiteDiagnosticCaptureRouteOutbox | null,
+  result: OpsOnsiteDiagnosticCaptureRouteResult | null,
+): Promise<void> {
+  if (!outbox || !result) return
+  const status = result.status === 'accepted' ? 'applied' : 'failed'
+  try {
+    await withMutationTx(companyId, async (client: PoolClient) => {
+      await client.query(
+        `update mutation_outbox
+            set status = $3,
+                attempt_count = attempt_count + 1,
+                applied_at = case when $3 = 'applied' then now() else null end,
+                error = $4,
+                payload = payload || jsonb_build_object('last_result', $5::jsonb),
+                next_attempt_at = now(),
+                updated_at = now()
+          where company_id = $1
+            and idempotency_key = $2
+            and mutation_type = $6`,
+        [
+          companyId,
+          outbox.idempotency_key,
+          status,
+          result.error,
+          JSON.stringify(result),
+          OPS_CAPTURE_ROUTE_MUTATION_TYPE,
+        ],
+      )
+    })
+  } catch {
+    // The phone action already completed; a pending outbox row is still a useful retry/visibility signal.
+  }
 }
 
 async function deliverOnsiteDiagnosticCaptureRoute(

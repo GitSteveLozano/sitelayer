@@ -143,6 +143,7 @@ export type OpsOnsiteDiagnosticAgentFeedResult = {
 export type OpsOnsiteDiagnosticCaptureRouteResult = {
   request_ref: string
   delivery_id: string
+  outbox_id?: string | null
   status: 'accepted' | 'failed' | 'not_configured'
   http_status: number | null
   routed: boolean | null

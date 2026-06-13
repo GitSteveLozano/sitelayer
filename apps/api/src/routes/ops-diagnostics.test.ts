@@ -89,6 +89,7 @@ const OPS_SUPPORT_PACKET_ID = '44444444-4444-4444-8444-444444444444'
 const OPS_WORK_ITEM_ID = '55555555-5555-4555-8555-555555555555'
 const OPS_FEED_ID = '66666666-6666-4666-8666-666666666666'
 const OPS_WORKER_ISSUE_ID = '88888888-8888-4888-8888-888888888888'
+const OPS_CAPTURE_ROUTE_OUTBOX_ID = '99999999-9999-4999-8999-999999999999'
 
 function readyPlan() {
   return {
@@ -204,6 +205,18 @@ function handoffEventRow(params: unknown[]) {
 
 class PersistentOpsClient {
   calls: Array<{ sql: string; params: unknown[] }> = []
+  mutationOutbox: Array<{
+    id: string
+    company_id: string
+    entity_type: string
+    entity_id: string
+    mutation_type: string
+    payload: unknown
+    idempotency_key: string
+    status: string
+    attempt_count: number
+    error: string | null
+  }> = []
   sessionEvents: Array<{
     id: string
     actor_user_id: string | null
@@ -292,6 +305,51 @@ class PersistentOpsClient {
       return { rows: [{ id: OPS_FEED_ID }], rowCount: 1 }
     }
     if (normalized.startsWith('update agent_feed_concerns')) return { rows: [], rowCount: 2 }
+    if (normalized.startsWith('insert into mutation_outbox')) {
+      const companyId = String(params[0])
+      const idempotencyKey = String(params[7])
+      const existing = this.mutationOutbox.find(
+        (row) => row.company_id === companyId && row.idempotency_key === idempotencyKey,
+      )
+      const payload = JSON.parse(String(params[6] ?? '{}'))
+      if (existing) {
+        existing.payload = payload
+        existing.status = 'pending'
+        existing.attempt_count += 1
+        existing.error = null
+      } else {
+        this.mutationOutbox.push({
+          id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+          company_id: companyId,
+          entity_type: String(params[3]),
+          entity_id: String(params[4]),
+          mutation_type: String(params[5]),
+          payload,
+          idempotency_key: idempotencyKey,
+          status: 'pending',
+          attempt_count: 0,
+          error: null,
+        })
+      }
+      return { rows: [], rowCount: 1 }
+    }
+    if (normalized.startsWith('select id::text as id from mutation_outbox')) {
+      const row = this.mutationOutbox.find(
+        (candidate) => candidate.company_id === params[0] && candidate.idempotency_key === params[1],
+      )
+      return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
+    }
+    if (normalized.startsWith('update mutation_outbox')) {
+      const row = this.mutationOutbox.find(
+        (candidate) => candidate.company_id === params[0] && candidate.idempotency_key === params[1],
+      )
+      if (row) {
+        row.status = String(params[2])
+        row.attempt_count += 1
+        row.error = (params[3] as string | null) ?? null
+      }
+      return { rows: [], rowCount: row ? 1 : 0 }
+    }
     throw new Error(`unexpected query: ${normalized}`)
   }
 }
@@ -1581,6 +1639,11 @@ describe('ops diagnostics', () => {
 
     expect(result).toMatchObject({
       agentFeed: null,
+      captureRouteOutbox: {
+        id: OPS_CAPTURE_ROUTE_OUTBOX_ID,
+        request_ref: `opsdiag:${OPS_SESSION_ID}:capture_field_context`,
+        delivery_id: expect.stringContaining(`opsdiag:${OPS_SESSION_ID}:capture_field_context:`),
+      },
       session: {
         support_packet_id: OPS_SUPPORT_PACKET_ID,
         context_work_item_id: OPS_WORK_ITEM_ID,
@@ -1598,6 +1661,7 @@ describe('ops diagnostics', () => {
     const handoffEventTypes = client.calls
       .filter((call) => call.sql.startsWith('insert into context_handoff_events'))
       .map((call) => call.params[2])
+    const routeOutbox = client.mutationOutbox[0]
 
     expect(supportInsert?.params[6]).toBe('Operator requested Capture field context from Mobile Ops.')
     expect(JSON.parse(String(workItemInsert?.params[14] ?? '{}'))).toMatchObject({
@@ -1605,6 +1669,19 @@ describe('ops diagnostics', () => {
     })
     expect(feedInsert).toBeUndefined()
     expect(handoffEventTypes).toEqual(['work_item.created'])
+    expect(routeOutbox).toMatchObject({
+      entity_type: 'ops_diagnostic_session',
+      entity_id: OPS_SESSION_ID,
+      mutation_type: 'ops_diagnostic_capture_route',
+      idempotency_key: expect.stringContaining(`opsdiag:${OPS_SESSION_ID}:capture_field_context:`),
+      status: 'pending',
+    })
+    expect(routeOutbox?.payload).toMatchObject({
+      schema: 'sitelayer.ops_diagnostic_capture_route.v1',
+      ops_diagnostic_session_id: OPS_SESSION_ID,
+      action_key: 'capture_field_context',
+      request_ref: `opsdiag:${OPS_SESSION_ID}:capture_field_context`,
+    })
   })
 
   it('replays persistent onsite action retries without duplicating work evidence', async () => {
@@ -1650,6 +1727,7 @@ describe('ops diagnostics', () => {
     expect(client.calls.filter((call) => call.sql.startsWith('insert into support_debug_packets'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_work_items'))).toHaveLength(1)
     expect(client.calls.filter((call) => call.sql.startsWith('insert into context_handoff_events'))).toHaveLength(1)
+    expect(client.mutationOutbox).toHaveLength(1)
   })
 
   it('cancels pending and claimed routed agent-feed work when onsite control is cancelled', async () => {
