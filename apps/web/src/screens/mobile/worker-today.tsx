@@ -51,9 +51,21 @@ type ClockEvent = {
   lng: string | null
 }
 
+// Open worker_issue row as returned by GET /api/worker-issues?resolved=false.
+// Same fetch the foreman home uses; we only read `severity` + `project_id` to
+// detect a live safety stop on the crew's current site. `severity === 'stopped'`
+// IS the signal — no migration, no backend change.
+type OpenIssueRow = {
+  id: string
+  project_id: string | null
+  severity?: 'question' | 'slowing' | 'stopped' | null
+  resolved_at: string | null
+}
+
 export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [events, setEvents] = useState<readonly ClockEvent[]>([])
+  const [openIssues, setOpenIssues] = useState<readonly OpenIssueRow[]>([])
   const [busy, setBusy] = useState<'in' | 'out' | null>(null)
   const [tick, setTick] = useState(() => Date.now())
 
@@ -80,12 +92,47 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
     }
   }, [companySlug])
 
+  // Open field issues for the company — the same fetch the foreman home uses
+  // (apiGet '/api/worker-issues?resolved=false'). Read-only: we only look at
+  // the `severity` + `project_id` fields to detect a live STOP WORK on the
+  // crew's site so we can surface the safety takeover to a worker.
+  useEffect(() => {
+    let cancelled = false
+    apiGet<{ worker_issues: OpenIssueRow[] }>('/api/worker-issues?resolved=false', companySlug)
+      .then((res) => {
+        if (!cancelled) setOpenIssues(res.worker_issues ?? [])
+      })
+      .catch(() => {
+        // Non-fatal — without the feed we simply don't surface the banner.
+        if (!cancelled) setOpenIssues([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companySlug])
+
   const latest = useMemo(() => {
     return [...events].sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0))[0]
   }, [events])
 
   const isClockedIn = latest?.event_type === 'in'
   const project = bootstrap?.projects.find((p) => p.id === latest?.project_id)
+
+  // Active safety stop on the worker's CURRENT site. Prefer the clocked-in
+  // project; otherwise fall back to any of the worker's active projects so a
+  // pre-shift crew member still sees the muster takeover. An OPEN worker_issue
+  // with `severity === 'stopped'` IS the signal — no migration, no backend.
+  const stopWorkProjectId = useMemo(() => {
+    const stopped = openIssues.filter((i) => !i.resolved_at && i.severity === 'stopped' && i.project_id)
+    if (stopped.length === 0) return null
+    if (latest?.project_id && stopped.some((i) => i.project_id === latest.project_id)) {
+      return latest.project_id
+    }
+    const activeIds = new Set(
+      (bootstrap?.projects ?? []).filter((p) => /progress|active/i.test(p.status)).map((p) => p.id),
+    )
+    return stopped.find((i) => i.project_id && activeIds.has(i.project_id))?.project_id ?? null
+  }, [openIssues, latest?.project_id, bootstrap?.projects])
   const elapsedSec = isClockedIn && latest ? Math.floor((tick - new Date(latest.occurred_at).valueOf()) / 1000) : 0
   const approachingOt = isClockedIn && elapsedSec >= APPROACHING_OT_SEC
 
@@ -268,6 +315,9 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         onBell={() => navigate('/notifications')}
       />
       <MBody pad>
+        {stopWorkProjectId ? (
+          <StopWorkBanner onOpen={() => navigate(`/projects/${stopWorkProjectId}/stop-work`)} />
+        ) : null}
         <MLargeHead
           title={new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           right={<MAvatar initials={userInitials} tone="2" />}
@@ -847,6 +897,88 @@ function OffClockCard({
         Clock in manually
       </MButton>
     </div>
+  )
+}
+
+/**
+ * Crew-facing entry into the full-screen STOP WORK safety takeover. Renders at
+ * the very top of `wk-today` when an OPEN `worker_issue` with
+ * `severity === 'stopped'` exists on the crew's current/active site. Wears the
+ * hazard look — `--m-red` fill, the `--m-stop-hatch` 135° overlay, white text,
+ * 2px ink border — matching the full takeover (`stop-work.tsx`) so it reads as
+ * the same safety surface. Tapping it opens `/projects/<id>/stop-work`.
+ */
+function StopWorkBanner({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label="Stop work in effect — view muster instructions"
+      style={{
+        display: 'flex',
+        width: '100%',
+        alignItems: 'center',
+        gap: 14,
+        marginBottom: 12,
+        padding: '16px 18px',
+        background: 'var(--m-red)',
+        backgroundImage: 'var(--m-stop-hatch)',
+        color: '#fff',
+        border: '2px solid var(--m-ink)',
+        textAlign: 'left',
+        fontFamily: 'var(--m-font)',
+        cursor: 'pointer',
+        animation: 'm-pulse 1.1s ease-in-out infinite',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 40,
+          height: 40,
+          flexShrink: 0,
+          border: '3px solid #fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'var(--m-font-display)',
+          fontWeight: 900,
+          fontSize: 22,
+          lineHeight: 1,
+        }}
+      >
+        !
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            display: 'block',
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 16,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.1,
+          }}
+        >
+          STOP WORK IN EFFECT
+        </span>
+        <span
+          style={{
+            display: 'block',
+            marginTop: 4,
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            opacity: 0.92,
+          }}
+        >
+          View muster instructions
+        </span>
+      </span>
+      <span style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 18, flexShrink: 0 }}>→</span>
+    </button>
   )
 }
 
