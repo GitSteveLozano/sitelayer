@@ -8,6 +8,7 @@ import {
   __buildOpsOnsiteDiagnosticManifestForTests,
   __captureOnsiteDesktopEvidenceForTests,
   __agentFeedDeliveryFromRowForTests,
+  __cancelOnsiteDiagnosticAgentFeedForTests,
   __desktopEvidenceFromRowForTests,
   __enqueueOnsiteDiagnosticConcernForTests,
   __resetOpsDiagnosticSessionsForTests,
@@ -203,6 +204,7 @@ class PersistentOpsClient {
     if (normalized.startsWith('insert into agent_feed_concerns')) {
       return { rows: [{ id: OPS_FEED_ID }], rowCount: 1 }
     }
+    if (normalized.startsWith('update agent_feed_concerns')) return { rows: [], rowCount: 2 }
     throw new Error(`unexpected query: ${normalized}`)
   }
 }
@@ -729,6 +731,113 @@ describe('ops diagnostics', () => {
     })
   })
 
+  it('transfers and revokes onsite diagnostic control tokens', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      __resetOpsDiagnosticSessionsForTests()
+      const createdResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL('http://localhost/api/ops/diagnostics/sessions'),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => createdResponses.push({ status, body }),
+          readBody: async () => ({ label: 'Plant walkdown', intent: 'capture_field_context' }),
+          getCurrentUserId: () => 'user_42',
+          fetchImpl: greenFetch(),
+        },
+      )
+      const created = createdResponses[0]?.body as {
+        control_token: string
+        session: { id: string }
+      }
+
+      const transferResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => transferResponses.push({ status, body }),
+          readBody: async () => ({ control_token: created.control_token, action: 'transfer' }),
+          getCurrentUserId: () => 'user_99',
+        },
+      )
+      const transferred = transferResponses[0]?.body as {
+        control: { action: string; control_token: string }
+        session: { audit_events: Array<{ summary: string }> }
+      }
+      expect(transferResponses[0]?.status).toBe(200)
+      expect(transferred.control).toMatchObject({ action: 'transfer', control_token: expect.any(String) })
+      expect(transferred.control.control_token).not.toBe(created.control_token)
+      expect(transferred.session.audit_events.map((event) => event.summary)).toContain(
+        'Transferred onsite diagnostic control token.',
+      )
+
+      const oldTokenResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => oldTokenResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: created.control_token,
+            action_key: 'capture_field_context',
+          }),
+        },
+      )
+      expect(oldTokenResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+
+      const newTokenResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => newTokenResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: transferred.control.control_token,
+            action_key: 'capture_field_context',
+          }),
+        },
+      )
+      expect(newTokenResponses[0]?.status).toBe(202)
+
+      const revokeResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/control`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => revokeResponses.push({ status, body }),
+          readBody: async () => ({ control_token: transferred.control.control_token, action: 'revoke' }),
+          getCurrentUserId: () => 'user_99',
+        },
+      )
+      expect(revokeResponses[0]?.status).toBe(200)
+      expect(revokeResponses[0]?.body).toMatchObject({
+        control: { action: 'revoke' },
+        session: { state: 'active' },
+      })
+      expect(JSON.stringify(revokeResponses[0]?.body)).not.toContain(transferred.control.control_token)
+
+      const revokedTokenResponses: Array<{ status: number; body: unknown }> = []
+      await handleOpsDiagnosticsRoutes(
+        { method: 'POST' } as http.IncomingMessage,
+        new URL(`http://localhost/api/ops/diagnostics/sessions/${created.session.id}/actions`),
+        {
+          requireCapability: async () => true,
+          sendJson: (status, body) => revokedTokenResponses.push({ status, body }),
+          readBody: async () => ({
+            control_token: transferred.control.control_token,
+            action_key: 'capture_field_context',
+          }),
+        },
+      )
+      expect(revokedTokenResponses).toEqual([{ status: 403, body: { error: 'invalid control token' } }])
+    })
+  })
+
   it('keeps the phone action accepted when capture-router delivery fails', async () => {
     await withReadyOpsAgentFeed(async () => {
       __resetOpsDiagnosticSessionsForTests()
@@ -1048,6 +1157,26 @@ describe('ops diagnostics', () => {
         expect.objectContaining({ type: 'context_work_item', id: OPS_WORK_ITEM_ID }),
       )
     })
+  })
+
+  it('cancels pending and claimed routed agent-feed work when onsite control is cancelled', async () => {
+    const client = new PersistentOpsClient()
+    const cancelled = await __cancelOnsiteDiagnosticAgentFeedForTests(
+      client as unknown as PoolClient,
+      'company-1',
+      OPS_SESSION_ID,
+      '2026-06-12T12:15:00.000Z',
+    )
+
+    expect(cancelled).toBe(2)
+    const cancelUpdate = client.calls.find((call) => call.sql.startsWith('update agent_feed_concerns'))
+    expect(cancelUpdate?.params).toEqual([
+      'company-1',
+      [`opsdiag:${OPS_SESSION_ID}:route_support_packet`, `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`],
+      '2026-06-12T12:15:00.000Z',
+    ])
+    expect(cancelUpdate?.sql).toContain("status in ('pending', 'claimed')")
+    expect(cancelUpdate?.sql).toContain("status = 'cancelled'")
   })
 
   it('rejects onsite diagnostic actions that were unavailable when the session started', async () => {

@@ -66,7 +66,7 @@ export type OpsOnsiteDiagnosticAuditEvent = {
 }
 
 export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
-export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer'
 
 export type OpsOnsiteDiagnosticManifest = {
   schema: 'sitelayer.ops_diagnostic_manifest.v1'
@@ -151,6 +151,7 @@ export type OpsOnsiteDiagnosticSessionControlResponse = {
   control: {
     action: OpsOnsiteDiagnosticControlAction
     expires_at: string
+    control_token?: string
   }
 }
 
@@ -671,12 +672,13 @@ async function recordOnsiteDiagnosticControl(
   if (!token || !controlTokenMatches(session, token)) return { ok: false, status: 403, error: 'invalid control token' }
 
   const action = controlActionValue(body.action)
-  if (!action) return { ok: false, status: 400, error: 'action must be extend or cancel' }
+  if (!action) return { ok: false, status: 400, error: 'action must be extend, cancel, revoke, or transfer' }
 
-  const nextSession = ctx.company
+  const controlResult = ctx.company
     ? await recordPersistentOnsiteDiagnosticControl(ctx.company.id, session, action, actorUserId)
     : recordMemoryOnsiteDiagnosticControl(session, action, actorUserId)
-  if (!nextSession) return { ok: false, status: 404, error: 'diagnostic session not found' }
+  if (!controlResult) return { ok: false, status: 404, error: 'diagnostic session not found' }
+  const { session: nextSession, controlToken } = controlResult
 
   return {
     ok: true,
@@ -686,6 +688,7 @@ async function recordOnsiteDiagnosticControl(
       control: {
         action,
         expires_at: nextSession.expires_at,
+        ...(controlToken ? { control_token: controlToken } : {}),
       },
     },
   }
@@ -715,7 +718,7 @@ function recordMemoryOnsiteDiagnosticControl(
   session: StoredOnsiteDiagnosticSession,
   action: OpsOnsiteDiagnosticControlAction,
   actorUserId: string | null,
-): StoredOnsiteDiagnosticSession | null {
+): { session: StoredOnsiteDiagnosticSession; controlToken?: string } | null {
   if (session.state !== 'active' || Date.parse(session.expires_at) <= Date.now()) return null
   const at = new Date()
   const event: OpsOnsiteDiagnosticAuditEvent = {
@@ -724,16 +727,25 @@ function recordMemoryOnsiteDiagnosticControl(
     actor_user_id: actorUserId,
     type: 'action.requested',
     effect: 'audit_only',
-    summary: action === 'extend' ? 'Extended onsite diagnostic control.' : 'Cancelled onsite diagnostic control.',
+    summary: controlActionSummary(action),
   }
   session.audit_events.push(event)
   if (action === 'extend') {
     session.expires_at = new Date(at.getTime() + SESSION_TTL_MS).toISOString()
-    return session
+    return { session }
+  }
+  if (action === 'transfer') {
+    const controlToken = randomUUID()
+    session.control_token = controlToken
+    return { session, controlToken }
+  }
+  if (action === 'revoke') {
+    session.control_token = randomUUID()
+    return { session }
   }
   session.state = 'cancelled'
   onsiteDiagnosticSessions.delete(session.id)
-  return session
+  return { session }
 }
 
 async function recordPersistentOnsiteDiagnosticControl(
@@ -741,27 +753,36 @@ async function recordPersistentOnsiteDiagnosticControl(
   session: StoredOnsiteDiagnosticSession,
   action: OpsOnsiteDiagnosticControlAction,
   actorUserId: string | null,
-): Promise<StoredOnsiteDiagnosticSession | null> {
+): Promise<{ session: StoredOnsiteDiagnosticSession; controlToken?: string } | null> {
   const at = new Date()
+  const atIso = at.toISOString()
   const nextExpiresAt = action === 'extend' ? new Date(at.getTime() + SESSION_TTL_MS).toISOString() : session.expires_at
   const nextState: OpsOnsiteDiagnosticSessionState = action === 'cancel' ? 'cancelled' : 'active'
+  const controlToken = action === 'transfer' ? randomUUID() : null
+  const nextControlTokenHash =
+    controlToken
+      ? hashControlToken(controlToken)
+      : action === 'revoke'
+        ? hashControlToken(randomUUID())
+        : session.control_token_hash
   const event: OpsOnsiteDiagnosticAuditEvent = {
     id: randomUUID(),
-    at: at.toISOString(),
+    at: atIso,
     actor_user_id: actorUserId,
     type: 'action.requested',
     effect: 'audit_only',
-    summary: action === 'extend' ? 'Extended onsite diagnostic control.' : 'Cancelled onsite diagnostic control.',
+    summary: controlActionSummary(action),
   }
   return withMutationTx(companyId, async (client: PoolClient) => {
     const updated = await client.query<PersistentSessionRow>(
       `update ops_diagnostic_sessions
           set state = $4,
               expires_at = $5::timestamptz,
+              control_token_hash = $6,
               updated_at = $3::timestamptz
         where company_id = $1 and id = $2::uuid and state = 'active' and expires_at > $3::timestamptz
         returning id, operator_user_id, label, intent, plan, control_token_hash, state, expires_at, created_at`,
-      [companyId, session.id, at.toISOString(), nextState, nextExpiresAt],
+      [companyId, session.id, atIso, nextState, nextExpiresAt, nextControlTokenHash],
     )
     const row = updated.rows[0]
     if (!row) return null
@@ -769,14 +790,23 @@ async function recordPersistentOnsiteDiagnosticControl(
       `insert into ops_diagnostic_session_events (
          id, company_id, session_id, actor_user_id, event_type, action_key, effect, summary, created_at
        ) values ($1, $2, $3, $4, 'action.requested', null, 'audit_only', $5, $6)`,
-      [event.id, companyId, session.id, actorUserId, event.summary, at.toISOString()],
+      [event.id, companyId, session.id, actorUserId, event.summary, atIso],
     )
+    if (action === 'cancel') await cancelOnsiteDiagnosticAgentFeedTx(client, companyId, session.id, atIso)
     const events = await listPersistentEvents(client, companyId, row.id)
     const deliveries = await listPersistentAgentFeedDeliveries(client, companyId, row.id)
     const desktopEvidence = await latestPersistentDesktopEvidence(client, companyId, row.id)
     const workLink = await latestPersistentOnsiteWorkLink(client, companyId, row.id, false)
-    return persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
+    const nextSession = persistentSessionFromRow(row, events, deliveries, desktopEvidence, workLink)
+    return controlToken ? { session: nextSession, controlToken } : { session: nextSession }
   })
+}
+
+function controlActionSummary(action: OpsOnsiteDiagnosticControlAction): string {
+  if (action === 'extend') return 'Extended onsite diagnostic control.'
+  if (action === 'transfer') return 'Transferred onsite diagnostic control token.'
+  if (action === 'revoke') return 'Revoked onsite diagnostic control token.'
+  return 'Cancelled onsite diagnostic control.'
 }
 
 async function recordPersistentOnsiteDiagnosticAction(
@@ -1115,6 +1145,33 @@ function routedAgentFeedConcernRefs(sessionId: string): string[] {
   return (['route_support_packet', 'dispatch_agent_review'] satisfies OpsOnsiteDiagnosticActionKey[]).map(
     (actionKey) => `opsdiag:${sessionId}:${actionKey}`,
   )
+}
+
+async function cancelOnsiteDiagnosticAgentFeedTx(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  cancelledAt: string,
+): Promise<number> {
+  const result = await client.query(
+    `update agent_feed_concerns
+        set status = 'cancelled',
+            callback = coalesce(
+              callback,
+              jsonb_build_object(
+                'status', 'cancelled',
+                'reason', 'ops_diagnostic_session_cancelled',
+                'completed_at', $3::text
+              )
+            ),
+            completed_at = coalesce(completed_at, $3::timestamptz),
+            updated_at = $3::timestamptz
+      where company_id = $1
+        and concern_ref = any($2::text[])
+        and status in ('pending', 'claimed')`,
+    [companyId, routedAgentFeedConcernRefs(sessionId), cancelledAt],
+  )
+  return result.rowCount ?? 0
 }
 
 function routesToCaptureRouter(actionKey: OpsOnsiteDiagnosticActionKey): boolean {
@@ -2102,7 +2159,7 @@ function actionKeyValue(value: unknown): OpsOnsiteDiagnosticActionKey | null {
 }
 
 function controlActionValue(value: unknown): OpsOnsiteDiagnosticControlAction | null {
-  return value === 'extend' || value === 'cancel' ? value : null
+  return value === 'extend' || value === 'cancel' || value === 'revoke' || value === 'transfer' ? value : null
 }
 
 function boundedString(value: unknown, maxLength: number): string | null {
@@ -2191,6 +2248,15 @@ export async function __enqueueOnsiteDiagnosticConcernForTests(
   },
 ): Promise<OpsOnsiteDiagnosticAgentFeedResult | null> {
   return enqueueOnsiteDiagnosticConcernTx(client, args)
+}
+
+export async function __cancelOnsiteDiagnosticAgentFeedForTests(
+  client: PoolClient,
+  companyId: string,
+  sessionId: string,
+  cancelledAt: string,
+): Promise<number> {
+  return cancelOnsiteDiagnosticAgentFeedTx(client, companyId, sessionId, cancelledAt)
 }
 
 export function __buildOpsOnsiteDiagnosticManifestForTests(

@@ -1,11 +1,13 @@
 import type { OpsOnsiteDiagnosticSessionRecord } from '@/lib/api'
 
 const OPS_DIAGNOSTIC_CONTROL_STORAGE_KEY = 'sitelayer.ops-diagnostic-control.v1'
+const OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY = 'ops_control'
 
 export type StoredOpsDiagnosticControl = {
   session_id: string
   control_token: string
   expires_at: string
+  company_slug?: string
 }
 
 export function readOpsDiagnosticControl(companySlug: string, nowMs = Date.now()): StoredOpsDiagnosticControl | null {
@@ -35,18 +37,11 @@ export function persistOpsDiagnosticControl(
   session: OpsOnsiteDiagnosticSessionRecord,
   controlToken: string,
 ): void {
-  const storage = sessionStorageSafe()
-  if (!storage || !controlToken.trim()) return
-  const payload: StoredOpsDiagnosticControl = {
+  writeOpsDiagnosticControl(companySlug, {
     session_id: session.id,
     control_token: controlToken,
     expires_at: session.expires_at,
-  }
-  try {
-    storage.setItem(opsDiagnosticControlStorageKey(companySlug), JSON.stringify(payload))
-  } catch {
-    /* storage disabled: active control remains in memory only */
-  }
+  })
 }
 
 export function clearOpsDiagnosticControl(companySlug: string): void {
@@ -56,6 +51,85 @@ export function clearOpsDiagnosticControl(companySlug: string): void {
     storage.removeItem(opsDiagnosticControlStorageKey(companySlug))
   } catch {
     /* storage disabled */
+  }
+}
+
+export function createOpsDiagnosticControlTransferUrl(
+  companySlug: string,
+  session: OpsOnsiteDiagnosticSessionRecord,
+  controlToken: string,
+  href: string = currentHref(),
+): string | null {
+  if (!controlToken.trim()) return null
+  let url: URL
+  try {
+    url = new URL(href)
+  } catch {
+    return null
+  }
+  const params = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash)
+  params.set(
+    OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY,
+    encodeTransferPayload({
+      session_id: session.id,
+      control_token: controlToken,
+      expires_at: session.expires_at,
+      company_slug: companySlug,
+    }),
+  )
+  url.hash = params.toString()
+  return url.toString()
+}
+
+export function importOpsDiagnosticControlFromUrl(
+  companySlug: string,
+  nowMs = Date.now(),
+  href: string = currentHref(),
+  stripFragment = true,
+): StoredOpsDiagnosticControl | null {
+  let url: URL
+  try {
+    url = new URL(href)
+  } catch {
+    return null
+  }
+  const params = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash)
+  const raw = params.get(OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY)
+  if (!raw) return null
+  const parsed = parseStoredOpsDiagnosticControl(decodeTransferPayload(raw))
+  if (stripFragment) stripControlFragment(url, params)
+  if (!parsed) return null
+  if (parsed.company_slug && parsed.company_slug !== companySlug) return null
+  if (Date.parse(parsed.expires_at) <= nowMs) return null
+  writeOpsDiagnosticControl(companySlug, parsed)
+  return parsed
+}
+
+function writeOpsDiagnosticControl(companySlug: string, control: StoredOpsDiagnosticControl): void {
+  const storage = sessionStorageSafe()
+  if (!storage || !control.control_token.trim()) return
+  try {
+    storage.setItem(opsDiagnosticControlStorageKey(companySlug), JSON.stringify(control))
+  } catch {
+    /* storage disabled: active control remains in memory only */
+  }
+}
+
+function encodeTransferPayload(payload: StoredOpsDiagnosticControl): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function decodeTransferPayload(raw: string): string | null {
+  try {
+    const base64 = raw.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(raw.length / 4) * 4, '=')
+    const binary = atob(base64)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
   }
 }
 
@@ -75,7 +149,25 @@ function parseStoredOpsDiagnosticControl(raw: string | null): StoredOpsDiagnosti
     session_id: candidate.session_id,
     control_token: candidate.control_token,
     expires_at: candidate.expires_at,
+    ...(candidate.company_slug?.trim() ? { company_slug: candidate.company_slug } : {}),
   }
+}
+
+function stripControlFragment(url: URL, params: URLSearchParams): void {
+  if (typeof window === 'undefined') return
+  params.delete(OPS_DIAGNOSTIC_CONTROL_FRAGMENT_KEY)
+  const hash = params.toString()
+  const next = `${url.pathname}${url.search}${hash ? `#${hash}` : ''}`
+  try {
+    window.history.replaceState(window.history.state, '', next)
+  } catch {
+    /* navigation history unavailable */
+  }
+}
+
+function currentHref(): string {
+  if (typeof window === 'undefined') return 'http://localhost/'
+  return window.location.href
 }
 
 function opsDiagnosticControlStorageKey(companySlug: string): string {

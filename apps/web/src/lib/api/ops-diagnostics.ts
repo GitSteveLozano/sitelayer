@@ -17,7 +17,7 @@ export type OpsOnsiteDiagnosticActionKey =
   | 'route_support_packet'
   | 'dispatch_agent_review'
 export type OpsOnsiteDiagnosticSessionState = 'active' | 'cancelled'
-export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel'
+export type OpsOnsiteDiagnosticControlAction = 'extend' | 'cancel' | 'revoke' | 'transfer'
 
 export type OpsOnsiteDiagnosticAction = {
   key: OpsOnsiteDiagnosticActionKey
@@ -186,6 +186,7 @@ export type OpsOnsiteDiagnosticSessionControlResponse = {
   control: {
     action: OpsOnsiteDiagnosticControlAction
     expires_at: string
+    control_token?: string
   }
 }
 

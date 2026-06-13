@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   clearOpsDiagnosticControl,
+  createOpsDiagnosticControlTransferUrl,
+  importOpsDiagnosticControlFromUrl,
   persistOpsDiagnosticControl,
   readOpsDiagnosticControl,
 } from './ops-diagnostic-control'
@@ -64,5 +66,50 @@ describe('ops diagnostic control storage', () => {
     clearOpsDiagnosticControl('acme')
 
     expect(readOpsDiagnosticControl('acme', Date.parse('2026-06-12T16:30:00.000Z'))).toBeNull()
+  })
+
+  it('builds and imports a fragment-only control handoff link', () => {
+    const url = createOpsDiagnosticControlTransferUrl(
+      'acme',
+      SESSION,
+      'handoff-token',
+      'https://app.sitelayer.test/ops?tab=onsite',
+    )
+
+    expect(url).toContain('#ops_control=')
+    expect(url).not.toContain('?ops_control=')
+    expect(url).not.toContain('handoff-token')
+
+    const imported = importOpsDiagnosticControlFromUrl(
+      'acme',
+      Date.parse('2026-06-12T16:30:00.000Z'),
+      url ?? '',
+      false,
+    )
+
+    expect(imported).toMatchObject({
+      session_id: 'opsdiag_1',
+      control_token: 'handoff-token',
+      expires_at: '2026-06-12T17:00:00.000Z',
+      company_slug: 'acme',
+    })
+    expect(readOpsDiagnosticControl('acme', Date.parse('2026-06-12T16:30:00.000Z'))).toMatchObject({
+      session_id: 'opsdiag_1',
+      control_token: 'handoff-token',
+    })
+  })
+
+  it('rejects handoff links for another company', () => {
+    const url = createOpsDiagnosticControlTransferUrl(
+      'acme',
+      SESSION,
+      'handoff-token',
+      'https://app.sitelayer.test/ops',
+    )
+
+    expect(
+      importOpsDiagnosticControlFromUrl('globex', Date.parse('2026-06-12T16:30:00.000Z'), url ?? '', false),
+    ).toBeNull()
+    expect(readOpsDiagnosticControl('globex', Date.parse('2026-06-12T16:30:00.000Z'))).toBeNull()
   })
 })

@@ -50,6 +50,8 @@ import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
 import {
   clearOpsDiagnosticControl,
+  createOpsDiagnosticControlTransferUrl,
+  importOpsDiagnosticControlFromUrl,
   persistOpsDiagnosticControl,
   readOpsDiagnosticControl,
 } from './ops-diagnostic-control'
@@ -90,6 +92,8 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
   const [lastDiagnosticAction, setLastDiagnosticAction] = useState<OpsOnsiteDiagnosticSessionActionResponse | null>(
     null,
   )
+  const [diagnosticControlTransferUrl, setDiagnosticControlTransferUrl] = useState<string | null>(null)
+  const [diagnosticControlTransferCopied, setDiagnosticControlTransferCopied] = useState(false)
   const [leaveBehindCaptureUrl, setLeaveBehindCaptureUrl] = useState<string | null>(null)
   const [leaveBehindCaptureCopied, setLeaveBehindCaptureCopied] = useState(false)
 
@@ -157,9 +161,19 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     setActiveDiagnosticSession(null)
     setDiagnosticControlToken(null)
     setLastDiagnosticAction(null)
+    setDiagnosticControlTransferUrl(null)
+    setDiagnosticControlTransferCopied(false)
     setLeaveBehindCaptureUrl(null)
     setLeaveBehindCaptureCopied(false)
   }, [companySlug])
+  useEffect(() => {
+    if (!canCaptureAppIssues) return
+    const importedControl = importOpsDiagnosticControlFromUrl(companySlug)
+    if (!importedControl) return
+    setDiagnosticControlToken(importedControl.control_token)
+    setDiagnosticControlTransferUrl(null)
+    setDiagnosticControlTransferCopied(false)
+  }, [canCaptureAppIssues, companySlug])
   useEffect(() => {
     if (!canCaptureAppIssues) return
     const storedControl = readOpsDiagnosticControl(companySlug)
@@ -229,15 +243,41 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
         companySlug,
       )
     },
-    onSuccess: (response, action) => {
+    onSuccess: async (response, action) => {
       setLastDiagnosticAction(null)
-      if (action === 'cancel') {
+      if (action === 'cancel' || action === 'revoke') {
         clearOpsDiagnosticControl(companySlug)
         setActiveDiagnosticSession(null)
         setDiagnosticControlToken(null)
+        setDiagnosticControlTransferUrl(null)
+        setDiagnosticControlTransferCopied(false)
       } else {
+        const nextControlToken = response.control.control_token ?? diagnosticControlToken
         setActiveDiagnosticSession(response.session)
-        if (diagnosticControlToken) persistOpsDiagnosticControl(companySlug, response.session, diagnosticControlToken)
+        if (nextControlToken) {
+          setDiagnosticControlToken(nextControlToken)
+          persistOpsDiagnosticControl(companySlug, response.session, nextControlToken)
+        }
+        if (action === 'transfer' && response.control.control_token) {
+          const transferUrl = createOpsDiagnosticControlTransferUrl(
+            companySlug,
+            response.session,
+            response.control.control_token,
+          )
+          setDiagnosticControlTransferUrl(transferUrl)
+          setDiagnosticControlTransferCopied(false)
+          if (transferUrl && navigator.clipboard?.writeText) {
+            try {
+              await navigator.clipboard.writeText(transferUrl)
+              setDiagnosticControlTransferCopied(true)
+            } catch {
+              setDiagnosticControlTransferCopied(false)
+            }
+          }
+        } else {
+          setDiagnosticControlTransferUrl(null)
+          setDiagnosticControlTransferCopied(false)
+        }
       }
       void qc.invalidateQueries({ queryKey: ['ops-diagnostic-sessions', companySlug] })
       void qc.invalidateQueries({ queryKey: ['ops-diagnostics', companySlug] })
@@ -250,6 +290,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
       }
     },
   })
+  const copyDiagnosticControlTransferLink = () => {
+    if (!diagnosticControlTransferUrl || !navigator.clipboard?.writeText) return
+    navigator.clipboard
+      .writeText(diagnosticControlTransferUrl)
+      .then(() => setDiagnosticControlTransferCopied(true))
+      .catch(() => setDiagnosticControlTransferCopied(false))
+  }
   const createLeaveBehindCaptureInvite = useCreateFeedbackInvite(companyId ?? '')
   const copyLeaveBehindCaptureInvite = useMutation({
     mutationFn: async () => {
@@ -416,11 +463,13 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
               onTap={
                 hasDiagnosticControl && activeDiagnosticSession
                   ? () => navigate(onsiteSessionRoute(activeDiagnosticSession.plan))
+                  : displayedDiagnosticSession
+                    ? () => navigate(onsiteSessionRoute(displayedDiagnosticSession.plan))
                   : startDiagnosticSession.isPending
                     ? undefined
                     : () => startDiagnosticSession.mutate()
               }
-              chev={hasDiagnosticControl}
+              chev={Boolean(displayedDiagnosticSession)}
             />
           ) : null}
           {latestAgentFeedDelivery ? (
@@ -625,6 +674,54 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
                 controlDiagnosticSession.isPending
                   ? undefined
                   : () => controlDiagnosticSession.mutate('extend')
+              }
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.Users size={18} />}
+              leadingTone={
+                controlDiagnosticSession.isPending
+                  ? 'blue'
+                  : diagnosticControlTransferCopied
+                    ? 'green'
+                    : diagnosticControlTransferUrl
+                      ? 'amber'
+                      : 'accent'
+              }
+              headline={
+                controlDiagnosticSession.isPending
+                  ? 'Preparing handoff'
+                  : diagnosticControlTransferCopied
+                    ? 'Control handoff copied'
+                    : diagnosticControlTransferUrl
+                      ? 'Copy control handoff'
+                      : 'Transfer phone control'
+              }
+              supporting={
+                diagnosticControlTransferUrl
+                  ? 'Open the copied link on another phone to import control.'
+                  : 'Rotate the token and copy a short-lived handoff link.'
+              }
+              onTap={
+                controlDiagnosticSession.isPending
+                  ? undefined
+                  : diagnosticControlTransferUrl
+                    ? copyDiagnosticControlTransferLink
+                    : () => controlDiagnosticSession.mutate('transfer')
+              }
+            />
+          ) : null}
+          {hasDiagnosticControl && activeDiagnosticSession ? (
+            <MListRow
+              leading={<MI.X size={18} />}
+              leadingTone={controlDiagnosticSession.isPending ? 'blue' : 'amber'}
+              headline={controlDiagnosticSession.isPending ? 'Updating control token' : 'Revoke this phone'}
+              supporting="Invalidate this phone's token while leaving the diagnostic session visible."
+              onTap={
+                controlDiagnosticSession.isPending
+                  ? undefined
+                  : () => controlDiagnosticSession.mutate('revoke')
               }
             />
           ) : null}
