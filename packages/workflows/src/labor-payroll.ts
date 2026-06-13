@@ -198,12 +198,20 @@ export function transitionLaborPayrollWorkflow(
       failed_at: null,
     }
   }
-  assertLaborPayrollTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
-  return {
-    ...snapshot,
-    state: 'voided',
-    state_version: nextVersion,
+  if (event.type === 'VOID') {
+    assertLaborPayrollTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
+    return {
+      ...snapshot,
+      state: 'voided',
+      state_version: nextVersion,
+    }
   }
+  // Exhaustiveness guard: every member of LaborPayrollWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type without a branch is
+  // a compile error — it can no longer silently misroute into the old VOID
+  // catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled labor_payroll_run event ${JSON.stringify(exhaustive)}`)
 }
 
 export type LaborPayrollHumanEventType = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'

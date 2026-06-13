@@ -173,12 +173,20 @@ export function transitionRentalBillingWorkflow(
       error: event.error,
     }
   }
-  assertRentalBillingTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
-  return {
-    ...snapshot,
-    state: 'voided',
-    state_version: nextVersion,
+  if (event.type === 'VOID') {
+    assertRentalBillingTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
+    return {
+      ...snapshot,
+      state: 'voided',
+      state_version: nextVersion,
+    }
   }
+  // Exhaustiveness guard: every member of RentalBillingWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type without a branch is
+  // a compile error — it can no longer silently misroute into the old VOID
+  // catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled rental_billing_run event ${JSON.stringify(exhaustive)}`)
 }
 
 export type RentalBillingHumanEventType = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'CANCEL_POST' | 'VOID'

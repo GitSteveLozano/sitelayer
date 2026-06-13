@@ -201,24 +201,32 @@ export function transitionFieldEventWorkflow(
       escalation_reason: null,
     }
   }
-  // REOPEN: any non-open state can re-enter `open`. Clear every per-
-  // state column so the row's shape matches a freshly-filed ticket.
-  assertFieldEventTransition(snapshot.state, ['resolved', 'escalated', 'dismissed'], event.type)
-  return {
-    ...snapshot,
-    state: 'open',
-    state_version: nextVersion,
-    last_actor_user_id: event.reopener_user_id,
-    reopened_at: event.reopened_at,
-    resolved_at: null,
-    resolved_by_user_id: null,
-    resolved_action: null,
-    resolution_message: null,
-    escalated_to_estimator_at: null,
-    escalation_reason: null,
-    dismissed_at: null,
-    dismissed_by_user_id: null,
+  if (event.type === 'REOPEN') {
+    // REOPEN: any non-open state can re-enter `open`. Clear every per-
+    // state column so the row's shape matches a freshly-filed ticket.
+    assertFieldEventTransition(snapshot.state, ['resolved', 'escalated', 'dismissed'], event.type)
+    return {
+      ...snapshot,
+      state: 'open',
+      state_version: nextVersion,
+      last_actor_user_id: event.reopener_user_id,
+      reopened_at: event.reopened_at,
+      resolved_at: null,
+      resolved_by_user_id: null,
+      resolved_action: null,
+      resolution_message: null,
+      escalated_to_estimator_at: null,
+      escalation_reason: null,
+      dismissed_at: null,
+      dismissed_by_user_id: null,
+    }
   }
+  // Exhaustiveness guard: every member of FieldEventWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type added to the union
+  // without a branch is a compile error — it can no longer silently misroute
+  // into the old REOPEN catch-all and wipe a ticket's audit fields.
+  const exhaustive: never = event
+  throw new Error(`unhandled field_event event ${JSON.stringify(exhaustive)}`)
 }
 
 export type FieldEventHumanEventType = 'RESOLVE' | 'ESCALATE' | 'DISMISS' | 'REOPEN'

@@ -137,14 +137,22 @@ export function transitionEstimateShareWorkflow(
       state_version: nextVersion,
     }
   }
-  // REVOKE — estimator-initiated invalidation from any non-terminal state.
-  assertEstimateShareTransition(snapshot.state, ['sent', 'viewed'], event.type)
-  return {
-    ...snapshot,
-    state: 'revoked',
-    state_version: nextVersion,
-    revoked_at: event.revoked_at,
+  if (event.type === 'REVOKE') {
+    // REVOKE — estimator-initiated invalidation from any non-terminal state.
+    assertEstimateShareTransition(snapshot.state, ['sent', 'viewed'], event.type)
+    return {
+      ...snapshot,
+      state: 'revoked',
+      state_version: nextVersion,
+      revoked_at: event.revoked_at,
+    }
   }
+  // Exhaustiveness guard: every member of EstimateShareWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type without a branch is a
+  // compile error — it can no longer silently misroute into the old REVOKE
+  // catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled estimate_share event ${JSON.stringify(exhaustive)}`)
 }
 
 export type EstimateShareHumanEventType = 'REVOKE'

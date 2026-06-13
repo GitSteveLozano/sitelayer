@@ -99,15 +99,22 @@ export function transitionRentalWorkflow(
     // the next billing window. CLOSE is the explicit exit.
     return { ...snapshot, state: 'returned', state_version: nextVersion }
   }
-  // CLOSE
-  assertRentalTransition(snapshot.state, ['active', 'returned', 'invoiced_pending'], event.type)
-  return {
-    ...snapshot,
-    state: 'closed',
-    state_version: nextVersion,
-    closed_at: event.closed_at,
-    closed_by: event.closed_by,
+  if (event.type === 'CLOSE') {
+    assertRentalTransition(snapshot.state, ['active', 'returned', 'invoiced_pending'], event.type)
+    return {
+      ...snapshot,
+      state: 'closed',
+      state_version: nextVersion,
+      closed_at: event.closed_at,
+      closed_by: event.closed_by,
+    }
   }
+  // Exhaustiveness guard: every member of RentalWorkflowEvent is handled
+  // above, so `event` narrows to `never` here. Adding a new event type to
+  // the union without a branch is a compile error — it can no longer
+  // silently misroute into the old CLOSE catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled rental event ${JSON.stringify(exhaustive)}`)
 }
 
 export type RentalHumanEventType = 'RETURN' | 'CLOSE'

@@ -114,6 +114,14 @@ export function transitionShipmentWorkflow(
     case 'VOID':
       assertTransition(snapshot.state, ['planned', 'picking', 'shipped', 'delivered', 'returning'], event.type)
       return { ...snapshot, state: 'voided', state_version: nextVersion }
+    default: {
+      // Exhaustiveness guard: the switch covers every ShipmentWorkflowEvent
+      // member, so `event` narrows to `never`. A new event type without a case
+      // is a compile error, and an unknown event arriving across the JSON
+      // boundary throws here instead of falling through to `return undefined`.
+      const exhaustive: never = event
+      throw new Error(`unhandled shipment event ${JSON.stringify(exhaustive)}`)
+    }
   }
 }
 

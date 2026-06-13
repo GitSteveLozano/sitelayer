@@ -252,24 +252,32 @@ export function transitionNotificationWorkflow(
       failure_kind: null,
     }
   }
-  // VOID — terminal. Allowed from any non-terminal, non-sending state.
-  // Excluding `sending` keeps in-flight dispatches from being voided
-  // out from under the runner; excluding the terminal states (`sent`,
-  // `failed_clerk_not_found`, `voided`) preserves the no-double-
-  // terminal invariant.
-  assertNotificationTransition(
-    snapshot.state,
-    ['pending', 'hydrating', 'failed_provider', 'failed_clerk_unreachable'],
-    event.type,
-  )
-  return {
-    ...snapshot,
-    state: 'voided',
-    state_version: nextVersion,
-    voided_at: event.voided_at,
-    error: event.reason ?? null,
-    failure_kind: null,
+  if (event.type === 'VOID') {
+    // VOID — terminal. Allowed from any non-terminal, non-sending state.
+    // Excluding `sending` keeps in-flight dispatches from being voided
+    // out from under the runner; excluding the terminal states (`sent`,
+    // `failed_clerk_not_found`, `voided`) preserves the no-double-
+    // terminal invariant.
+    assertNotificationTransition(
+      snapshot.state,
+      ['pending', 'hydrating', 'failed_provider', 'failed_clerk_unreachable'],
+      event.type,
+    )
+    return {
+      ...snapshot,
+      state: 'voided',
+      state_version: nextVersion,
+      voided_at: event.voided_at,
+      error: event.reason ?? null,
+      failure_kind: null,
+    }
   }
+  // Exhaustiveness guard: every member of NotificationWorkflowEvent is
+  // handled above, so `event` narrows to `never`. A new event type added to
+  // the union without a branch is a compile error — it can no longer
+  // silently misroute into the old VOID catch-all and void a live row.
+  const exhaustive: never = event
+  throw new Error(`unhandled notification event ${JSON.stringify(exhaustive)}`)
 }
 
 export type NotificationHumanEventType = 'RETRY' | 'VOID'

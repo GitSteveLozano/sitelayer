@@ -183,13 +183,20 @@ export function transitionEstimatePushWorkflow(
       failed_at: null,
     }
   }
-  // VOID
-  assertEstimatePushTransition(snapshot.state, ['drafted', 'reviewed', 'approved', 'failed'], event.type)
-  return {
-    ...snapshot,
-    state: 'voided',
-    state_version: nextVersion,
+  if (event.type === 'VOID') {
+    assertEstimatePushTransition(snapshot.state, ['drafted', 'reviewed', 'approved', 'failed'], event.type)
+    return {
+      ...snapshot,
+      state: 'voided',
+      state_version: nextVersion,
+    }
   }
+  // Exhaustiveness guard: every member of EstimatePushWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type without a branch is
+  // a compile error — it can no longer silently misroute into the old VOID
+  // catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled estimate_push event ${JSON.stringify(exhaustive)}`)
 }
 
 export type EstimatePushHumanEventType = 'REVIEW' | 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'

@@ -193,6 +193,14 @@ export function transitionAssetDeploymentWorkflow(
         state_version: nextVersion,
         write_off_reason: event.write_off_reason ?? null,
       }
+    default: {
+      // Exhaustiveness guard: the switch covers every AssetDeploymentWorkflowEvent
+      // member, so `event` narrows to `never`. A new event type without a case is
+      // a compile error, and an unknown event arriving across the JSON boundary
+      // throws here instead of falling through to an implicit `return undefined`.
+      const exhaustive: never = event
+      throw new Error(`unhandled asset_deployment event ${JSON.stringify(exhaustive)}`)
+    }
   }
 }
 

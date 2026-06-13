@@ -103,24 +103,31 @@ export function transitionTimeReviewWorkflow(
       approved_at: null,
     }
   }
-  // REOPEN
-  assertTimeReviewTransition(snapshot.state, ['approved', 'rejected'], event.type)
-  return {
-    ...snapshot,
-    state: 'pending',
-    state_version: nextVersion,
-    reopened_at: event.reopened_at,
-    reviewer_user_id: event.reviewer_user_id,
-    // Clear the prior decision fields. Migration 027's
-    // time_review_runs_decision_chk requires approved_at, rejected_at,
-    // and rejection_reason all be NULL when state='pending'; without
-    // this clear the persisted UPDATE would violate the constraint.
-    // The full audit trail of the prior approval/rejection lives in
-    // workflow_event_log keyed on (entity_id, workflow_name, state_version).
-    approved_at: null,
-    rejected_at: null,
-    rejection_reason: null,
+  if (event.type === 'REOPEN') {
+    assertTimeReviewTransition(snapshot.state, ['approved', 'rejected'], event.type)
+    return {
+      ...snapshot,
+      state: 'pending',
+      state_version: nextVersion,
+      reopened_at: event.reopened_at,
+      reviewer_user_id: event.reviewer_user_id,
+      // Clear the prior decision fields. Migration 027's
+      // time_review_runs_decision_chk requires approved_at, rejected_at,
+      // and rejection_reason all be NULL when state='pending'; without
+      // this clear the persisted UPDATE would violate the constraint.
+      // The full audit trail of the prior approval/rejection lives in
+      // workflow_event_log keyed on (entity_id, workflow_name, state_version).
+      approved_at: null,
+      rejected_at: null,
+      rejection_reason: null,
+    }
   }
+  // Exhaustiveness guard: every member of TimeReviewWorkflowEvent is handled
+  // above, so `event` narrows to `never`. A new event type without a branch is
+  // a compile error — it can no longer silently misroute into the old REOPEN
+  // catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled time_review_run event ${JSON.stringify(exhaustive)}`)
 }
 
 export type TimeReviewHumanEventType = 'APPROVE' | 'REJECT' | 'REOPEN'

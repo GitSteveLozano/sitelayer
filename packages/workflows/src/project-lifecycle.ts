@@ -222,30 +222,37 @@ export function transitionProjectLifecycleWorkflow(
       archived_at: event.occurred_at,
     }
   }
-  // REOPEN
-  assertProjectLifecycleTransition(snapshot.state, ['done', 'archived'], event.type)
-  return {
-    ...snapshot,
-    state: 'in_progress',
-    state_version: nextVersion,
-    // Clear the terminal-ish timestamps; the audit trail of the prior
-    // COMPLETE/ARCHIVE lives in workflow_event_log keyed on
-    // (entity_id, state_version).
-    //
-    // CONTRACT (read alongside the route's PROJECT_LIFECYCLE_COLUMNS):
-    //   lifecycle_completed_at / lifecycle_archived_at mean "completed /
-    //   archived IN THE CURRENT lifecycle pass", NOT "ever". A REOPEN
-    //   intentionally nulls them so the in-row snapshot can never lie
-    //   about the current state (a reopened project is in_progress, not
-    //   done/archived). Any "was this project ever completed?" reader
-    //   must query workflow_event_log for a COMPLETE/ARCHIVE event for
-    //   this entity_id rather than reading the projects row — the row is
-    //   the live snapshot, the log is the history. Audited 2026-05-31:
-    //   the only readers of these columns are the lifecycle route's
-    //   GET snapshot (current-pass semantics, correct).
-    completed_at: null,
-    archived_at: null,
+  if (event.type === 'REOPEN') {
+    assertProjectLifecycleTransition(snapshot.state, ['done', 'archived'], event.type)
+    return {
+      ...snapshot,
+      state: 'in_progress',
+      state_version: nextVersion,
+      // Clear the terminal-ish timestamps; the audit trail of the prior
+      // COMPLETE/ARCHIVE lives in workflow_event_log keyed on
+      // (entity_id, state_version).
+      //
+      // CONTRACT (read alongside the route's PROJECT_LIFECYCLE_COLUMNS):
+      //   lifecycle_completed_at / lifecycle_archived_at mean "completed /
+      //   archived IN THE CURRENT lifecycle pass", NOT "ever". A REOPEN
+      //   intentionally nulls them so the in-row snapshot can never lie
+      //   about the current state (a reopened project is in_progress, not
+      //   done/archived). Any "was this project ever completed?" reader
+      //   must query workflow_event_log for a COMPLETE/ARCHIVE event for
+      //   this entity_id rather than reading the projects row — the row is
+      //   the live snapshot, the log is the history. Audited 2026-05-31:
+      //   the only readers of these columns are the lifecycle route's
+      //   GET snapshot (current-pass semantics, correct).
+      completed_at: null,
+      archived_at: null,
+    }
   }
+  // Exhaustiveness guard: every member of ProjectLifecycleWorkflowEvent is
+  // handled above, so `event` narrows to `never`. A new event type without a
+  // branch is a compile error — it can no longer silently misroute into the
+  // old REOPEN catch-all.
+  const exhaustive: never = event
+  throw new Error(`unhandled project_lifecycle event ${JSON.stringify(exhaustive)}`)
 }
 
 export type ProjectLifecycleHumanEventType =
