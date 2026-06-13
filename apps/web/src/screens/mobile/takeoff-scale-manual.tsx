@@ -2,12 +2,22 @@
  * `mb-takeoff-scale-manual` — mobile two-point manual scale calibration.
  *
  * Implements Steve's handoff design `SCALE · A-201 / MANUAL` (msg18). The
- * estimator overrides the AI auto-scale by tapping two points on the sheet and
- * typing the real-world length of that line; the screen derives the scale
- * ratio and writes it through the REAL calibration endpoint
+ * estimator overrides the AI auto-scale by tapping two points ON THE REAL
+ * SHEET and typing the real-world length of that line; the screen derives the
+ * scale ratio and writes it through the REAL calibration endpoint
  * (`POST /api/blueprint-pages/:id/calibrate`, via `useCalibratePage`) — the
- * same two-point payload the desktop canvas uses. Until both points are placed
- * the line shows as PROVISIONAL.
+ * same two-point payload the desktop canvas uses.
+ *
+ * The board renders the actual blueprint page under the taps — PDFium
+ * (`usePdfDocument` + `PdfPageCanvas`, the same engine the est-canvas mobile
+ * body uses) for PDF blueprints, the server raster (`useAuthenticatedObjectUrl`
+ * on the page file) otherwise — stretched objectFit:'fill' over a square
+ * 0–100 board exactly like `MobileCanvasSurface`, so the persisted points
+ * live in the same board space the canvas reads back. When the sheet image
+ * cannot be rendered, calibration is BLOCKED (taps ignored, Apply disabled)
+ * rather than letting taps on a blank board persist a wrong scale — the
+ * previous version drew a synthetic placeholder rectangle and still POSTed
+ * real calibration from taps on it (audit M04 #5, wrong-quantities risk).
  *
  * Reached from the autoscale verify list (a sheet's manual override) and from
  * the ingest manual-fallback. Route:
@@ -16,6 +26,9 @@
 import { useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { MButton, MI } from '../../components/m/index.js'
+import { useAuthenticatedObjectUrl } from '../../lib/api/blob-url.js'
+import { PdfPageCanvas, usePdfDocument } from '../../lib/pdf/pdf-page-canvas.js'
+import { buildBlueprintReference } from '../../lib/takeoff/blueprint-reference.js'
 import { useBlueprintPages, useCalibratePage, useProjectBlueprints } from '../../lib/api/takeoff.js'
 
 type Pt = { x: number; y: number }
@@ -42,6 +55,20 @@ export function TakeoffScaleManual({ companySlug }: { companySlug: string }) {
   const pageParam = searchParams.get('page')
   const page = (pagesQuery.data?.pages ?? []).find((p) => p.id === pageParam) ?? pagesQuery.data?.pages[0] ?? null
 
+  // --- Real sheet underlay (same engines as est-canvas mobile-body) --------
+  const blueprintIsPdf = (latestDoc?.file_name ?? '').toLowerCase().endsWith('.pdf')
+  const reference = useMemo(() => buildBlueprintReference(latestDoc, page), [latestDoc, page])
+  const pdfDocUrl = useAuthenticatedObjectUrl(
+    blueprintIsPdf && latestDoc ? `/api/blueprints/${encodeURIComponent(latestDoc.id)}/file` : null,
+  )
+  const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
+  const rasterImage = useAuthenticatedObjectUrl(!blueprintIsPdf ? (reference?.texturePath ?? null) : null)
+  const underlayReady = blueprintIsPdf ? Boolean(pdfDocState.doc) : Boolean(rasterImage.url)
+  const underlayLoading =
+    blueprintsQuery.isLoading ||
+    pagesQuery.isLoading ||
+    (blueprintIsPdf ? pdfDocUrl.loading || pdfDocState.loading : rasterImage.loading)
+
   const calibrate = useCalibratePage()
 
   // Two tapped points in board space (0–100). The active endpoint gets the loupe.
@@ -52,6 +79,8 @@ export function TakeoffScaleManual({ companySlug }: { companySlug: string }) {
   const [error, setError] = useState<string | null>(null)
 
   const onTap = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // Calibration taps only count against the real sheet — never a blank board.
+    if (!underlayReady) return
     const svg = e.currentTarget
     const ctm = svg.getScreenCTM()
     if (!ctm) return
@@ -82,7 +111,8 @@ export function TakeoffScaleManual({ companySlug }: { companySlug: string }) {
   const back = () => navigate(`/projects/${projectId}/takeoff-ai/autoscale`)
 
   const apply = async () => {
-    if (!complete || worldLen <= 0 || !page) return
+    // Refuse to persist a calibration that wasn't tapped on the real sheet.
+    if (!complete || worldLen <= 0 || !page || !underlayReady) return
     setError(null)
     try {
       const a = points[0]!
@@ -125,94 +155,150 @@ export function TakeoffScaleManual({ companySlug }: { companySlug: string }) {
         </div>
       </div>
 
-      {/* Canvas — tap two points; loupe over the active endpoint. */}
-      <div style={{ flex: 1, background: 'var(--m-card-soft)', position: 'relative', overflow: 'hidden' }}>
-        <svg
-          viewBox="0 0 100 100"
-          width="100%"
-          height="100%"
-          preserveAspectRatio="xMidYMid slice"
-          onPointerDown={onTap}
-          style={{ position: 'absolute', inset: 0, touchAction: 'none', cursor: 'crosshair' }}
+      {/* Board — the REAL page (PDFium / server raster) stretched over the
+          square 0–100 board, identical mapping to MobileCanvasSurface so the
+          persisted points mean the same thing the canvas reads back. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--m-card-soft)' }}>
+        <div
+          style={{
+            position: 'relative',
+            width: '100%',
+            aspectRatio: '1 / 1',
+            background: 'var(--m-ink-2)',
+            overflow: 'hidden',
+            borderBottom: '2px solid var(--m-ink)',
+          }}
         >
-          <defs>
-            <pattern id="scale-grid" width="5" height="5" patternUnits="userSpaceOnUse">
-              <path d="M 5 0 L 0 0 0 5" stroke="var(--m-ink-3)" strokeWidth="0.15" fill="none" />
-            </pattern>
-          </defs>
-          <rect width="100" height="100" fill="url(#scale-grid)" />
-
-          {/* A reference rectangle so there is something to scale against. */}
-          <rect x="12" y="22" width="62" height="42" fill="none" stroke="var(--m-ink)" strokeWidth="0.6" />
-          <line x1="43" y1="22" x2="43" y2="64" stroke="var(--m-ink)" strokeWidth="0.6" />
-
-          {/* The two-point measurement line. */}
-          {a && b ? <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--m-accent)" strokeWidth="0.8" /> : null}
-          {[a, b].map((p, i) =>
-            p ? (
-              <rect
-                key={i}
-                x={p.x - 1.2}
-                y={p.y - 1.2}
-                width={2.4}
-                height={2.4}
-                fill="var(--m-accent)"
-                stroke="var(--m-ink)"
-                strokeWidth="0.5"
-              />
-            ) : null,
-          )}
-
-          {/* Loupe / magnifier over the active endpoint. */}
-          {loupe ? (
-            <g>
-              <circle
-                cx={loupe.x}
-                cy={loupe.y}
-                r="9"
-                fill="rgba(15,14,12,0.04)"
-                stroke="var(--m-ink)"
-                strokeWidth="0.8"
-              />
-              <line
-                x1={loupe.x - 9}
-                y1={loupe.y}
-                x2={loupe.x + 9}
-                y2={loupe.y}
-                stroke="var(--m-accent)"
-                strokeWidth="0.3"
-              />
-              <line
-                x1={loupe.x}
-                y1={loupe.y - 9}
-                x2={loupe.x}
-                y2={loupe.y + 9}
-                stroke="var(--m-accent)"
-                strokeWidth="0.3"
-              />
-            </g>
+          {blueprintIsPdf && pdfDocState.doc ? (
+            <PdfPageCanvas
+              doc={pdfDocState.doc}
+              pageNumber={page?.page_number ?? 1}
+              scale={3}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill' }}
+            />
+          ) : !blueprintIsPdf && rasterImage.url ? (
+            <img
+              src={rasterImage.url}
+              alt=""
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill' }}
+            />
           ) : null}
-        </svg>
 
-        {!complete ? (
-          <div
+          <svg
+            viewBox="0 0 100 100"
+            onPointerDown={onTap}
             style={{
               position: 'absolute',
-              top: 12,
-              left: 12,
-              right: 12,
-              padding: '8px 12px',
-              background: 'var(--m-ink)',
-              color: 'var(--m-sand)',
-              fontFamily: 'var(--m-num)',
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.04em',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              touchAction: 'none',
+              cursor: underlayReady ? 'crosshair' : 'not-allowed',
             }}
           >
-            TAP {points.length === 0 ? 'THE FIRST' : 'THE SECOND'} POINT OF A KNOWN-LENGTH LINE
-          </div>
-        ) : null}
+            {/* The two-point measurement line. */}
+            {a && b ? <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="var(--m-accent)" strokeWidth="0.8" /> : null}
+            {[a, b].map((p, i) =>
+              p ? (
+                <rect
+                  key={i}
+                  x={p.x - 1.2}
+                  y={p.y - 1.2}
+                  width={2.4}
+                  height={2.4}
+                  fill="var(--m-accent)"
+                  stroke="var(--m-ink)"
+                  strokeWidth="0.5"
+                />
+              ) : null,
+            )}
+
+            {/* Loupe / magnifier over the active endpoint. */}
+            {loupe ? (
+              <g>
+                <circle
+                  cx={loupe.x}
+                  cy={loupe.y}
+                  r="9"
+                  fill="rgba(15,14,12,0.04)"
+                  stroke="var(--m-ink)"
+                  strokeWidth="0.8"
+                />
+                <line
+                  x1={loupe.x - 9}
+                  y1={loupe.y}
+                  x2={loupe.x + 9}
+                  y2={loupe.y}
+                  stroke="var(--m-accent)"
+                  strokeWidth="0.3"
+                />
+                <line
+                  x1={loupe.x}
+                  y1={loupe.y - 9}
+                  x2={loupe.x}
+                  y2={loupe.y + 9}
+                  stroke="var(--m-accent)"
+                  strokeWidth="0.3"
+                />
+              </g>
+            ) : null}
+          </svg>
+
+          {underlayReady && !complete ? (
+            <div
+              style={{
+                position: 'absolute',
+                top: 12,
+                left: 12,
+                right: 12,
+                padding: '8px 12px',
+                background: 'var(--m-ink)',
+                color: 'var(--m-sand)',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+              }}
+            >
+              TAP {points.length === 0 ? 'THE FIRST' : 'THE SECOND'} POINT OF A KNOWN-LENGTH LINE
+            </div>
+          ) : null}
+
+          {/* Honest blocked state — no sheet rendered means no calibration. */}
+          {!underlayReady ? (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 24,
+                textAlign: 'center',
+              }}
+            >
+              <div
+                style={{
+                  padding: '14px 16px',
+                  background: 'var(--m-ink)',
+                  color: 'var(--m-sand)',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  lineHeight: 1.6,
+                  maxWidth: 420,
+                }}
+              >
+                {underlayLoading
+                  ? 'LOADING THE SHEET…'
+                  : page
+                    ? 'SHEET IMAGE UNAVAILABLE — CALIBRATION IS BLOCKED SO A WRONG SCALE CAN’T BE SAVED. OPEN THE TAKEOFF CANVAS TO CALIBRATE THIS PAGE.'
+                    : 'NO BLUEPRINT PAGE TO CALIBRATE — UPLOAD A DRAWING FIRST.'}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Real-world length entry + derived ratio (ink slab, msg18). */}
@@ -333,7 +419,7 @@ export function TakeoffScaleManual({ companySlug }: { companySlug: string }) {
           <MButton
             variant="primary"
             onClick={() => void apply()}
-            disabled={!complete || worldLen <= 0 || !page || calibrate.isPending}
+            disabled={!complete || worldLen <= 0 || !page || !underlayReady || calibrate.isPending}
           >
             {calibrate.isPending ? 'Applying…' : 'Verify · Apply'}
           </MButton>

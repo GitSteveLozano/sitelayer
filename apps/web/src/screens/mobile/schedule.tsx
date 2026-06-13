@@ -24,7 +24,6 @@ import {
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
-import { Sheet } from '../../components/mobile/Sheet.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { shortDate, statusTone } from './format.js'
 
@@ -75,6 +74,7 @@ export function MobileSchedule({
           scheduled_for: s.scheduled_for,
           crew: Array.isArray(s.crew) ? s.crew : [],
           status: s.status,
+          scope: s.scope ?? null,
           version: s.version,
           deleted_at: s.deleted_at,
           created_at: s.created_at,
@@ -234,6 +234,7 @@ export function MobileSchedule({
                   project: projects.find((p) => p.id === e.project_id)?.name ?? 'Unknown project',
                   crewCount: Array.isArray(e.crew) ? e.crew.length : 0,
                   status: e.status,
+                  scope: e.scope ?? null,
                 }))}
               />
             ))}
@@ -277,9 +278,10 @@ function CreateAssignmentSheet({
   // start/end pair (both-or-neither); we default the end to start + 8h so the
   // foreman only has to pick the start, matching the design's single-time UX.
   const [startTime, setStartTime] = useState('07:00')
-  // SCOPE is captured client-side only — crew_schedules has no scope/notes
-  // column, so we follow the foreman-time-entry.tsx precedent and surface it
-  // for the foreman's intent without a schema change.
+  // SCOPE is real end-to-end (migration 019): it travels in the POST body,
+  // persists on crew_schedules.scope, and the crew-facing schedule surfaces
+  // render it. (It was previously captured client-side only and silently
+  // dropped — audit M09 #10.)
   const [scope, setScope] = useState('')
   const [pickedCrew, setPickedCrew] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -334,6 +336,7 @@ function CreateAssignmentSheet({
         project_id: projectId,
         scheduled_for: scheduledFor,
         crew: Array.from(pickedCrew),
+        scope: scope.trim() || null,
         ...(startTime ? { start_time: startTime, end_time: endTime } : {}),
       })
       onCreated(schedule as unknown as ScheduleRow)
@@ -345,8 +348,9 @@ function CreateAssignmentSheet({
     }
   }
 
+  if (!open) return null
   return (
-    <Sheet open={open} onClose={resetAndClose} title="New assignment" className="max-w-[720px] mx-auto">
+    <AssignmentSheet title="New assignment" onClose={resetAndClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Project">
           <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)}>
@@ -390,7 +394,7 @@ function CreateAssignmentSheet({
                   style={{
                     border: '1px solid var(--m-line)',
                     background: pickedCrew.has(w.id) ? 'var(--m-accent-soft)' : 'var(--m-card)',
-                    borderRadius: 12,
+                    borderRadius: 0,
                     padding: '10px 12px',
                     color: 'inherit',
                     font: 'inherit',
@@ -425,7 +429,7 @@ function CreateAssignmentSheet({
           <div
             style={{
               border: '1px solid var(--m-line)',
-              borderRadius: 12,
+              borderRadius: 0,
               padding: '11px 12px',
               color: 'var(--m-ink-2)',
               fontSize: 14,
@@ -447,7 +451,68 @@ function CreateAssignmentSheet({
           </MButton>
         </MButtonRow>
       </div>
-    </Sheet>
+    </AssignmentSheet>
+  )
+}
+
+/**
+ * Bottom sheet in the `.m-sheet` idiom (styles/m.css — square corners, 2px
+ * ink top rule, hard offset shadow, no grabber/blur). Replaces the legacy
+ * `components/mobile/Sheet.tsx` (rounded-t-[24px] + blur) this screen used
+ * pre-v2 (audit M09 #21). ESC and backdrop-tap dismiss.
+ */
+function AssignmentSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 40,
+        background: 'rgba(15, 14, 12, 0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="m-sheet" style={{ maxWidth: 720 }}>
+        <div className="m-sheet-header">
+          <div className="m-sheet-title">{title}</div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 4,
+              color: 'var(--m-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <MI.X size={20} />
+          </button>
+        </div>
+        <div className="m-sheet-body" style={{ padding: '16px 20px 0' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -465,6 +530,8 @@ type DayEntry = {
   project: string
   crewCount: number
   status: string
+  /** Free-text work scope (migration 019); null when none was given. */
+  scope: string | null
 }
 
 // Two-letter mono badge code from a project name (e.g. "Hillcrest Ph 4" → "HP").
@@ -522,21 +589,35 @@ function DayCard({ date, entries }: { date: string; entries: readonly DayEntry[]
             >
               {projectCode(e.project)}
             </div>
-            <div
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                flex: 1,
-                minWidth: 0,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {e.project} · {e.crewCount} CREW
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {e.project} · {e.crewCount} CREW
+              </div>
+              {e.scope ? (
+                <div
+                  style={{
+                    marginTop: 3,
+                    fontSize: 12,
+                    color: 'var(--m-ink-2)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {e.scope}
+                </div>
+              ) : null}
             </div>
           </div>
         ))}

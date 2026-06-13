@@ -34,6 +34,7 @@ type ScheduleRow = {
   start_time: string | null
   end_time: string | null
   takeoff_measurement_id: string | null
+  scope: string | null
   deleted_at: string | null
   created_at: string
 }
@@ -81,16 +82,8 @@ class FakePool {
     }
 
     if (/^insert into crew_schedules/i.test(sql)) {
-      const [companyId, projectId, scheduledFor, crewJson, createdBy, startTime, endTime, takeoffId] = params as [
-        string,
-        string,
-        string,
-        string,
-        string,
-        string | null,
-        string | null,
-        string | null,
-      ]
+      const [companyId, projectId, scheduledFor, crewJson, createdBy, startTime, endTime, takeoffId, scope] =
+        params as [string, string, string, string, string, string | null, string | null, string | null, string | null]
       const row: ScheduleRow = {
         id: NEW_ID,
         company_id: companyId,
@@ -106,6 +99,7 @@ class FakePool {
         start_time: startTime,
         end_time: endTime,
         takeoff_measurement_id: takeoffId,
+        scope: scope ?? null,
         deleted_at: null,
         created_at: '2026-05-31T00:00:00.000Z',
       }
@@ -216,6 +210,33 @@ describe('handleScheduleRoutes — POST /api/schedules (create)', () => {
     expect(created.state_version).toBe(2)
     expect(created.confirmed_by).toBe('u-1')
     expect(created.confirmed_at).not.toBeNull()
+  })
+
+  it('persists the SCOPE field on the row (migration 019 — the M09 silent no-op regression)', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool, {
+      project_id: VALID_PROJECT,
+      scheduled_for: '2026-05-31',
+      crew: ['w-1'],
+      scope: '  EPS East — anchor + plate top to bottom.  ',
+    })
+    await handleScheduleRoutes({ method: 'POST' } as never, buildUrl('/api/schedules'), ctx)
+
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    // Trimmed before insert; blank-only scope would store NULL.
+    expect(pool.schedules[0]?.scope).toBe('EPS East — anchor + plate top to bottom.')
+  })
+
+  it('stores NULL scope when the field is omitted or blank', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool, {
+      project_id: VALID_PROJECT,
+      scheduled_for: '2026-05-31',
+      scope: '   ',
+    })
+    await handleScheduleRoutes({ method: 'POST' } as never, buildUrl('/api/schedules'), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    expect(pool.schedules[0]?.scope).toBeNull()
   })
 
   it('logs the genesis CREATE at state_version 0 and the auto-confirm CONFIRM at 1 (no collision)', async () => {

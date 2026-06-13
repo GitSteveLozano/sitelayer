@@ -24,16 +24,28 @@
  * /takeoff, /takeoff-ai). Each surface keeps its original blueprint-selection
  * semantics too (desktop = primary/first non-deleted doc; mobile = latest upload).
  *
- * GAP (both surfaces, unchanged): there is no live parsing-progress STREAM
- * (cross-sheet ref linking, scale auto-detect, scope pre-classify are not
- * exposed as a progress feed), so the parsing/done/failed states stay selectable
- * via `?state=parsing|done|failed` (+ a dev toggle) and the sub-step copy stays
- * presentational. A SSE/poll ingest-progress endpoint is the suggested fill.
+ * REAL state source (2026-06-12, audit D09 #11 / M03 #12): the screen is
+ * driven by the async takeoff-capture pipeline. Pass a draft id — route param
+ * `:draftId` if the mounting route carries one, or query string `?draft=<id>`
+ * (alias `?draftId=`) — and the screen polls
+ * GET /api/takeoff-drafts/:id/result (useTakeoffDraftResult, 2.5s cadence)
+ * until `status` leaves 'processing':
+ *   - processing → parsing rail
+ *   - ready      → done rail + CONFIRM SCALE CTA
+ *   - failed     → honest error state showing the draft's capture_error
+ * With NO draft id the screen shows an honest empty state — it never fakes
+ * progress. The `?state=` override + DevStateToggle exist ONLY in dev builds
+ * (`import.meta.env.DEV`) and only without a draft id, as a design preview.
+ *
+ * Residual GAP: the intermediate sub-steps (cross-sheet refs, scale
+ * auto-detect, scope pre-classify) are not exposed as a per-step feed by the
+ * pipeline, so the rail advances on the coarse processing→ready transition.
  */
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { DEyebrow, DH1 } from '@/components/d'
 import { MButton, MButtonStack, MI, Spark } from '../../components/m/index.js'
+import { draftResultStatus, useTakeoffDraftResult } from '../../lib/api/takeoff-drafts.js'
 import {
   useBlueprintPages,
   useProjectBlueprints,
@@ -138,11 +150,18 @@ function sheetTile(p: BlueprintPage): string {
 
 export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
   void companySlug
-  const { projectId: projectIdParam } = useParams<{ projectId: string }>()
+  const { projectId: projectIdParam, draftId: draftIdParam } = useParams<{ projectId: string; draftId?: string }>()
   const projectId = projectIdParam ?? ''
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+
+  // The capture draft this screen reports on. Accepted via route param
+  // (`:draftId`) AND query string (`?draft=` primary, `?draftId=` alias) so
+  // either upstream wiring works.
+  const draftId = (draftIdParam ?? searchParams.get('draft') ?? searchParams.get('draftId') ?? '').trim() || null
+  const resultQuery = useTakeoffDraftResult(draftId)
+  const pollStatus = draftResultStatus(resultQuery.data)
 
   // Surface detection — this one component mounts on BOTH the /desktop/* and the
   // mobile /projects/* route trees. The navigation graph + a couple of copy/
@@ -166,14 +185,39 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
   // collapses the size segment when unknown rather than fabricating one).
   const fileSize = formatBytes(null)
 
-  const stateParam = (searchParams.get('state') as IngestState | null) ?? 'parsing'
-  const [state, setStateLocal] = useState<IngestState>(stateParam)
+  // Dev-only preview state. ONLY honored in dev builds AND only when no real
+  // draft id is present — a production user can never be shown fake progress.
+  const devPreview = !draftId && import.meta.env.DEV
+  const stateParam = searchParams.get('state') as IngestState | null
+  const [devState, setDevState] = useState<IngestState>(
+    stateParam === 'parsing' || stateParam === 'done' || stateParam === 'failed' ? stateParam : 'parsing',
+  )
   const setState = (s: IngestState) => {
-    setStateLocal(s)
+    setDevState(s)
     const sp = new URLSearchParams(searchParams)
     sp.set('state', s)
     setSearchParams(sp, { replace: true })
   }
+
+  // Effective state. Driven by the REAL poll when a draft id is present;
+  // by the dev toggle in dev preview; null (honest empty state) otherwise.
+  const state: IngestState | null = draftId
+    ? resultQuery.isError || pollStatus === 'failed'
+      ? 'failed'
+      : pollStatus === 'ready'
+        ? 'done'
+        : 'parsing'
+    : devPreview
+      ? devState
+      : null
+
+  // Real failure detail for the failed state: the draft's capture_error (the
+  // result endpoint's `error` field) or the fetch error itself.
+  const failureDetail = draftId
+    ? (resultQuery.data?.error ??
+      (resultQuery.error instanceof Error ? resultQuery.error.message : null) ??
+      'The capture pipeline reported a failure.')
+    : null
 
   // Per-surface navigation targets — preserved verbatim from each twin.
   const back = () => navigate(isDesktop ? '/desktop/takeoff' : `/projects/${projectId}/takeoff-ai`)
@@ -186,6 +230,71 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
   const goUploadBetter = () => navigate(isDesktop ? `/desktop/canvas/${projectId}` : `/projects/${projectId}/takeoff`)
   // Desktop's "Replace" header action.
   const goReplace = () => navigate(`/desktop/canvas/${projectId}`)
+
+  // ---- EMPTY state (no draft id, not a dev preview) ----
+  // Honest: nothing is being ingested, so say so — never a fake "parsing".
+  if (state === null) {
+    return (
+      <>
+        {/* Mobile empty render (default; hidden ≥lg) */}
+        <div
+          className="lg:hidden"
+          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto' }}
+        >
+          <div className="m-topbar">
+            <button type="button" className="m-topbar-back" aria-label="Back" onClick={back}>
+              <MI.ChevLeft size={22} />
+            </button>
+            <div className="m-topbar-title">
+              <div className="m-topbar-eyebrow">PLAN INGEST</div>
+              <div className="m-h1">NO CAPTURE RUNNING</div>
+            </div>
+          </div>
+          <div style={{ padding: '24px 20px' }}>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 26, lineHeight: 1.05 }}>
+              No plan capture in progress.
+            </div>
+            <div style={{ marginTop: 10, fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
+              This screen tracks an AI plan-set capture. Upload a blueprint and run an AI capture to watch its progress
+              here{fileName ? ` — latest upload: ${fileName}` : ''}.
+            </div>
+          </div>
+          <div style={{ padding: '0 20px 20px' }}>
+            <MButtonStack>
+              <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/takeoff-ai`)}>
+                Start an AI capture
+              </MButton>
+              <MButton variant="ghost" onClick={goProceedManual}>
+                Open the takeoff canvas
+              </MButton>
+            </MButtonStack>
+          </div>
+        </div>
+
+        {/* Desktop empty render (≥lg) */}
+        <div className="hidden lg:block d-content">
+          <div className="d-stack">
+            <div>
+              <DEyebrow>Plan ingest · From a blueprint</DEyebrow>
+              <DH1>No plan capture in progress.</DH1>
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--m-ink-2)', maxWidth: 560, lineHeight: 1.5 }}>
+              This screen tracks an AI plan-set capture. Upload a blueprint and run an AI capture to watch its progress
+              here{fileName ? ` — latest upload: ${fileName}` : ''}.
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <MButton variant="primary" onClick={() => navigate(`/desktop/canvas/${projectId}`)}>
+                Open the canvas
+              </MButton>
+              <MButton variant="ghost" onClick={back}>
+                Back
+              </MButton>
+            </div>
+          </div>
+        </div>
+      </>
+    )
+  }
 
   const isParsing = state === 'parsing'
   const isDone = state === 'done'
@@ -238,7 +347,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                 marginTop: 14,
               }}
             >
-              This PDF has no text layer.
+              {failureDetail ? 'Couldn’t read the plan set.' : 'This PDF has no text layer.'}
             </div>
             <div
               style={{
@@ -250,7 +359,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                 lineHeight: 1.5,
               }}
             >
-              SCANNED OR IMAGE-ONLY · WE CAN&apos;T READ TITLE BLOCKS OR SCALES AUTOMATICALLY.
+              {failureDetail ?? "SCANNED OR IMAGE-ONLY · WE CAN'T READ TITLE BLOCKS OR SCALES AUTOMATICALLY."}
             </div>
           </div>
 
@@ -302,7 +411,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
           </div>
 
           <div style={{ flex: 1 }} />
-          <DevStateToggle state={state} onChange={setState} variant="mobile" />
+          {devPreview ? <DevStateToggle state={devState} onChange={setState} variant="mobile" /> : null}
         </div>
 
         {/* Desktop failure render (≥lg) */}
@@ -334,7 +443,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                   marginTop: 12,
                 }}
               >
-                This PDF has no text layer.
+                {failureDetail ? 'Couldn’t read the plan set.' : 'This PDF has no text layer.'}
               </div>
               <div
                 style={{
@@ -346,7 +455,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                   lineHeight: 1.5,
                 }}
               >
-                SCANNED OR IMAGE-ONLY · WE CAN&apos;T READ TITLE BLOCKS OR SCALES AUTOMATICALLY.
+                {failureDetail ?? "SCANNED OR IMAGE-ONLY · WE CAN'T READ TITLE BLOCKS OR SCALES AUTOMATICALLY."}
               </div>
             </div>
 
@@ -392,7 +501,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
               </div>
             </div>
 
-            <DevStateToggle state={state} onChange={setState} variant="desktop" />
+            {devPreview ? <DevStateToggle state={devState} onChange={setState} variant="desktop" /> : null}
           </div>
         </div>
       </>
@@ -413,7 +522,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
           </button>
           <div className="m-topbar-title">
             <div className="m-topbar-eyebrow">STEP 3 / 3 · PLAN INGEST</div>
-            <div className="m-h1">HILLCREST PH4</div>
+            <div className="m-h1">{isDone ? 'PLAN SET READY' : 'READING PLAN SET'}</div>
           </div>
         </div>
 
@@ -530,12 +639,12 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                 fontWeight: 600,
               }}
             >
-              ~22 SECONDS REMAINING
+              LIVE CAPTURE RUNNING · CHECKING EVERY FEW SECONDS
             </div>
           </div>
         ) : null}
 
-        <DevStateToggle state={state} onChange={setState} variant="mobile" />
+        {devPreview ? <DevStateToggle state={devState} onChange={setState} variant="mobile" /> : null}
       </div>
 
       {/* Desktop render (≥lg) — two-column detected-sheets + AI INGEST rail */}
@@ -562,7 +671,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
                 whiteSpace: 'nowrap',
               }}
             >
-              {isDone ? '■ PARSED' : '■ PARSING · 22S LEFT'}
+              {isDone ? '■ PARSED' : '■ PARSING'}
             </span>
           </div>
 
@@ -780,7 +889,7 @@ export function TakeoffIngest({ companySlug }: { companySlug?: string }) {
             </div>
           )}
 
-          <DevStateToggle state={state} onChange={setState} variant="desktop" />
+          {devPreview ? <DevStateToggle state={devState} onChange={setState} variant="desktop" /> : null}
         </div>
       </div>
     </>

@@ -5,18 +5,18 @@
  * a two-up KPI strip, a "LOG SERVICE" primary action that opens an inline
  * form, and a full-bleed list of past service entries.
  *
- * There is NO dedicated service-log API yet. We derive a (currently empty)
- * history from the inventory items so the screen has real asset context,
- * and keep newly-logged entries in local component state. When a
- * maintenance endpoint lands, swap `entries` over to a query/mutation pair.
- *
- * TODO(maintenance-api): wire a real `/api/inventory/service-log` (list +
- * POST) endpoint and replace the local-state `entries` array + `LOG SERVICE`
- * submit handler with `useQuery` / `useMutation` hooks in `@/lib/api/rentals`.
+ * DURABLE: entries are inventory_service_tickets rows via the real API
+ * (`/api/inventory/service-tickets`, routes/inventory-service-tickets.ts) —
+ * the same backend the desktop owner rentals screens use. `service_type` and
+ * `cost_cents` (migration 019) make the design's headline SPENT·YTD KPI a
+ * real sum over this year's recorded costs, never a fabricated figure.
+ * (This file previously held entries in component state behind a stale TODO
+ * claiming "no API yet" — audit M10 #9.)
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useInventoryItems, type InventoryItem } from '@/lib/api/rentals'
+import { useOpenServiceTicket, useServiceTickets, type ServiceTicket } from '@/lib/api/inventory-service-tickets'
 import {
   MBody,
   MButton,
@@ -28,25 +28,12 @@ import {
   MListRow,
   MPill,
   MSectionH,
+  MSelect,
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { formatMoney } from './format.js'
-
-type ServiceStatus = 'open' | 'done'
-
-type ServiceEntry = {
-  id: string
-  /** ISO date (yyyy-mm-dd) the service was performed / logged. */
-  date: string
-  /** Short maintenance type, e.g. "Oil change". */
-  type: string
-  notes: string
-  status: ServiceStatus
-  /** Maintenance cost in dollars (feeds the SPENT · YTD total). */
-  cost: number
-}
 
 export function MobileRentalsService() {
   const navigate = useNavigate()
@@ -55,45 +42,73 @@ export function MobileRentalsService() {
   const { assetId } = useParams<{ assetId?: string }>()
   const { data, isLoading, isError } = useInventoryItems()
 
-  // Locally-logged service entries. Persisted only in component state until a
-  // maintenance endpoint exists (see file-level TODO).
-  const [entries, setEntries] = useState<readonly ServiceEntry[]>([])
+  // Durable service tickets, scoped to the asset when one is in the route.
+  const ticketsQuery = useServiceTickets(assetId ? { itemId: assetId } : {})
+  const tickets = useMemo<ServiceTicket[]>(() => ticketsQuery.data?.service_tickets ?? [], [ticketsQuery.data])
+
+  const openTicket = useOpenServiceTicket()
   const [showForm, setShowForm] = useState(false)
   const [formType, setFormType] = useState('')
   const [formNotes, setFormNotes] = useState('')
   const [formCost, setFormCost] = useState('')
-  const [formDate, setFormDate] = useState(() => new Date().toISOString().slice(0, 10))
+  // Yard-wide mode has no :assetId — the form needs an explicit asset pick.
+  const [formItemId, setFormItemId] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
 
+  const items = useMemo<InventoryItem[]>(
+    () => (data?.inventoryItems ?? []).filter((i) => !i.deleted_at),
+    [data?.inventoryItems],
+  )
   const asset: InventoryItem | undefined = useMemo(() => {
     if (!assetId) return undefined
-    return data?.inventoryItems.find((i) => i.id === assetId)
-  }, [data, assetId])
+    return items.find((i) => i.id === assetId)
+  }, [items, assetId])
+  const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
 
-  const openCount = entries.filter((e) => e.status === 'open').length
+  const openCount = tickets.filter((t) => t.status !== 'done').length
 
-  // Cumulative maintenance spend across all logged entries — the design's
-  // "SPENT · YTD" headline KPI.
-  const spentYtd = useMemo(() => entries.reduce((sum, e) => sum + (e.cost || 0), 0), [entries])
+  // Real maintenance spend this calendar year — the design's "SPENT · YTD"
+  // headline KPI, summed from recorded ticket costs (cost_cents, migration
+  // 019). Tickets without a recorded cost contribute nothing.
+  const spentYtd = useMemo(() => {
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime()
+    return (
+      tickets.reduce((sum, t) => {
+        const openedAt = new Date(t.opened_at).getTime()
+        if (Number.isNaN(openedAt) || openedAt < yearStart) return sum
+        return sum + (t.cost_cents ?? 0)
+      }, 0) / 100
+    )
+  }, [tickets])
 
-  const submit = () => {
-    if (!formType.trim()) return
-    // TODO(maintenance-api): POST to the service-log endpoint instead of
-    // mutating local state. Idempotency + server id once that lands.
-    const entry: ServiceEntry = {
-      id: `local-${Date.now()}`,
-      date: formDate,
-      type: formType.trim(),
-      notes: formNotes.trim(),
-      status: 'open',
-      cost: Number(formCost) || 0,
+  const targetItemId = assetId ?? formItemId
+
+  const submit = async () => {
+    if (!formType.trim() || !targetItemId || openTicket.isPending) return
+    setFormError(null)
+    const dollars = formCost.trim() === '' ? null : Number(formCost)
+    if (dollars != null && (!Number.isFinite(dollars) || dollars < 0)) {
+      setFormError('Cost must be a non-negative number.')
+      return
     }
-    setEntries((prev) => [entry, ...prev])
-    setFormType('')
-    setFormNotes('')
-    setFormCost('')
-    setFormDate(new Date().toISOString().slice(0, 10))
-    setShowForm(false)
+    try {
+      await openTicket.mutateAsync({
+        inventory_item_id: targetItemId,
+        service_type: formType.trim(),
+        notes: formNotes.trim() || null,
+        cost_cents: dollars == null ? null : Math.round(dollars * 100),
+      })
+      setFormType('')
+      setFormNotes('')
+      setFormCost('')
+      setFormItemId('')
+      setShowForm(false)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Could not save the service entry.')
+    }
   }
+
+  const loading = isLoading || ticketsQuery.isLoading
 
   return (
     <>
@@ -122,7 +137,6 @@ export function MobileRentalsService() {
             style={{
               margin: '0 16px 12px',
               border: '1px solid var(--m-line)',
-              borderRadius: 'var(--m-r)',
               background: 'var(--m-card)',
               padding: 14,
               display: 'flex',
@@ -130,6 +144,19 @@ export function MobileRentalsService() {
               gap: 10,
             }}
           >
+            {!assetId ? (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span className="m-kpi-eyebrow">Asset</span>
+                <MSelect value={formItemId} onChange={(e) => setFormItemId(e.currentTarget.value)}>
+                  <option value="">Pick an asset…</option>
+                  {items.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.code} · {i.description}
+                    </option>
+                  ))}
+                </MSelect>
+              </label>
+            ) : null}
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span className="m-kpi-eyebrow">Type</span>
               <MInput
@@ -159,15 +186,17 @@ export function MobileRentalsService() {
                 onChange={(e) => setFormCost(e.currentTarget.value)}
               />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span className="m-kpi-eyebrow">Date</span>
-              <MInput type="date" value={formDate} onChange={(e) => setFormDate(e.currentTarget.value)} />
-            </label>
+            {formError ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{formError}</div> : null}
             <div style={{ display: 'flex', gap: 8 }}>
-              <MButton variant="primary" onClick={submit} disabled={!formType.trim()} style={{ flex: 1 }}>
-                Save entry
+              <MButton
+                variant="primary"
+                onClick={() => void submit()}
+                disabled={!formType.trim() || !targetItemId || openTicket.isPending}
+                style={{ flex: 1 }}
+              >
+                {openTicket.isPending ? 'Saving…' : 'Save entry'}
               </MButton>
-              <MButton variant="ghost" onClick={() => setShowForm(false)}>
+              <MButton variant="ghost" onClick={() => setShowForm(false)} disabled={openTicket.isPending}>
                 Cancel
               </MButton>
             </div>
@@ -176,11 +205,11 @@ export function MobileRentalsService() {
 
         <MSectionH>History{openCount > 0 ? ` · ${openCount} open` : ''}</MSectionH>
 
-        {isLoading ? (
+        {loading ? (
           <MSkeletonList count={3} />
-        ) : isError ? (
-          <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>Could not load inventory context.</div>
-        ) : entries.length === 0 ? (
+        ) : isError || ticketsQuery.isError ? (
+          <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>Could not load the service log.</div>
+        ) : tickets.length === 0 ? (
           <MEmptyState
             title="No service logged"
             body="Maintenance, inspections, and repairs will appear here once logged. Tap Log service to add the first entry."
@@ -190,27 +219,39 @@ export function MobileRentalsService() {
         ) : (
           <div style={{ paddingBottom: 40 }}>
             <MListInset>
-              {entries.map((entry) => (
-                <MListRow
-                  key={entry.id}
-                  leading={fmtDate(entry.date)}
-                  leadingTone={entry.status === 'open' ? 'red' : 'green'}
-                  headline={entry.type}
-                  supporting={entry.notes || undefined}
-                  trailing={
-                    entry.cost > 0 ? (
-                      <span className="num" style={{ fontWeight: 700, fontSize: 13 }}>
-                        {formatMoney(entry.cost)}
-                      </span>
-                    ) : undefined
-                  }
-                  badge={
-                    <MPill tone={entry.status === 'open' ? 'red' : 'green'} dot>
-                      {entry.status === 'open' ? 'open' : 'done'}
-                    </MPill>
-                  }
-                />
-              ))}
+              {tickets.map((t) => {
+                const open = t.status !== 'done'
+                const item = itemById.get(t.inventory_item_id)
+                const headline = t.service_type?.trim() || 'Service'
+                const supporting = [
+                  // Yard-wide mode shows which asset the ticket is against.
+                  !assetId && item ? item.code : null,
+                  t.notes || null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+                return (
+                  <MListRow
+                    key={t.id}
+                    leading={fmtDate(t.opened_at)}
+                    leadingTone={open ? 'red' : 'green'}
+                    headline={headline}
+                    supporting={supporting || undefined}
+                    trailing={
+                      t.cost_cents != null && t.cost_cents > 0 ? (
+                        <span className="num" style={{ fontWeight: 700, fontSize: 13 }}>
+                          {formatMoney(t.cost_cents / 100)}
+                        </span>
+                      ) : undefined
+                    }
+                    badge={
+                      <MPill tone={open ? 'red' : 'green'} dot>
+                        {t.status === 'in_service' ? 'in service' : t.status}
+                      </MPill>
+                    }
+                  />
+                )
+              })}
             </MListInset>
           </div>
         )}
@@ -219,9 +260,9 @@ export function MobileRentalsService() {
   )
 }
 
-/** Compact mono date for the leading column / KPI (e.g. "5/24"). */
+/** Compact mono date for the leading column (e.g. "5/24") from an ISO timestamp. */
 function fmtDate(iso: string): string {
-  const [, m, d] = iso.split('-')
-  if (!m || !d) return iso
-  return `${Number(m)}/${Number(d)}`
+  const d = new Date(iso)
+  if (Number.isNaN(d.valueOf())) return iso.slice(5, 10)
+  return `${d.getMonth() + 1}/${d.getDate()}`
 }

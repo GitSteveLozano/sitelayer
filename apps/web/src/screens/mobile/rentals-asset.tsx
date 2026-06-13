@@ -8,9 +8,10 @@
  * `var(--m-*)` tokens. There is no single-asset endpoint — the asset is
  * located in the inventory list (`useInventoryItems`) by `:assetId`.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useInventoryItems, type InventoryItem } from '@/lib/api'
+import { useOpenServiceTicket } from '@/lib/api/inventory-service-tickets'
 import {
   MBody,
   MButton,
@@ -30,6 +31,11 @@ export function MobileRentalsAsset() {
   const navigate = useNavigate()
   const { assetId } = useParams<{ assetId: string }>()
   const { data, isLoading, error } = useInventoryItems()
+  // FLAG FOR SERVICE opens a REAL inventory_service_tickets row (the durable
+  // backend the service log reads) before navigating to the log — it was a
+  // bare navigate that persisted nothing (audit M10 #9).
+  const openTicket = useOpenServiceTicket()
+  const [flagError, setFlagError] = useState<string | null>(null)
 
   const item = useMemo<InventoryItem | undefined>(
     () => data?.inventoryItems.find((i) => i.id === assetId),
@@ -182,12 +188,26 @@ export function MobileRentalsAsset() {
             </MButton>
             <MButton
               variant="ghost"
-              onClick={() => navigate(`/rentals/service/${encodeURIComponent(item.id)}`)}
+              disabled={openTicket.isPending}
+              onClick={() => {
+                setFlagError(null)
+                openTicket
+                  .mutateAsync({
+                    inventory_item_id: item.id,
+                    service_type: 'Flagged for service',
+                    notes: 'Flagged from the asset detail screen.',
+                  })
+                  .then(() => navigate(`/rentals/service/${encodeURIComponent(item.id)}`))
+                  .catch((err: unknown) => {
+                    setFlagError(err instanceof Error ? err.message : 'Could not open a service ticket.')
+                  })
+              }}
               style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
             >
-              FLAG FOR SERVICE
+              {openTicket.isPending ? 'FLAGGING…' : 'FLAG FOR SERVICE'}
             </MButton>
           </MButtonStack>
+          {flagError ? <div style={{ marginTop: 8, color: 'var(--m-red)', fontSize: 13 }}>{flagError}</div> : null}
         </div>
 
         <MSectionH>Recent movements</MSectionH>

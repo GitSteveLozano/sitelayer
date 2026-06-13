@@ -162,6 +162,8 @@ export type BootstrapResponse = {
     scheduled_for: string
     crew: unknown[]
     status: string
+    /** Free-text work scope (migration 019). Optional so an older API build still type-checks. */
+    scope?: string | null
     version: number
     deleted_at: string | null
     created_at?: string

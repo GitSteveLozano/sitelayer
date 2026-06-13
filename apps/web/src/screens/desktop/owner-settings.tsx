@@ -365,29 +365,15 @@ function CompanyRatesModal({
   )
 }
 
-// The design leads with a full-bleed yellow hero ("YOUR REAL HOURLY COST · $54.20/h
-// · BASE + ALL BURDENS") followed by a "Breakdown · editable" card that labels each
-// burden component. There is no company burden-config endpoint yet, so the breakdown
-// rows are derived presentationally from the blended loaded hourly (base wage + the
-// standard burden splits) with clearly-labeled meta. The live per-worker burden table
-// is kept below as a secondary "Today's crew" view so we don't drop real data.
-interface BurdenRow {
-  label: string
-  meta: string
-  amount: number
-}
-
-// Standard burden split (fractions of the fully-loaded hourly). These mirror the
-// design's breakdown ratios; the subtotal always reconciles back to the loaded rate.
-const BURDEN_SPLIT: Array<{ label: string; meta: string; frac: number }> = [
-  { label: 'Base wage', meta: 'crew average', frac: 0.5904 },
-  { label: 'Payroll tax', meta: '10% of base', frac: 0.059 },
-  { label: 'Workers comp', meta: '17.5% · WCB', frac: 0.1033 },
-  { label: 'Health + benefits', meta: '$1,100/mo ÷ 172h', frac: 0.1181 },
-  { label: 'PTO + holidays', meta: '15 days/yr', frac: 0.0517 },
-  { label: 'Overhead alloc', meta: 'office · trucks', frac: 0.0775 },
-]
-
+// The design leads with a full-bleed yellow hero ("YOUR REAL HOURLY COST ·
+// BASE + ALL BURDENS") followed by a "Breakdown · editable" card. There is NO
+// company burden-config endpoint, so the breakdown cannot be real or editable
+// yet — the previous fabricated rows (hardcoded fractions × blended hourly,
+// with the design mock's $54.20 as fallback) were removed per the 2026-06-12
+// design-fidelity audit (D08 #16). What renders now is only what's real: the
+// blended loaded hourly from GET /api/labor/burden-today (or an honest "no
+// labor logged" state) and an explicit not-yet-configured card for the burden
+// breakdown. The live per-worker burden table stays below.
 function LoadedLaborSection() {
   const burdenQuery = useLaborBurdenToday()
   const summary = burdenQuery.data
@@ -404,21 +390,10 @@ function LoadedLaborSection() {
     )
   }
 
-  // The real fully-loaded hourly cost. Falls back to a representative figure when
-  // no time is logged today so the hero never renders $0.00.
-  const loadedHourly = summary.blended_loaded_hourly_cents > 0 ? summary.blended_loaded_hourly_cents / 100 : 54.2
-
-  // Derive the breakdown so the subtotal reconciles exactly to the loaded hourly.
-  const rawRows: BurdenRow[] = BURDEN_SPLIT.map((b) => ({
-    label: b.label,
-    meta: b.meta,
-    amount: loadedHourly * b.frac,
-  }))
-  const summed = rawRows.reduce((acc, r) => acc + r.amount, 0)
-  // Absorb any rounding drift into the base wage so SUBTOTAL === loadedHourly.
-  const breakdown: BurdenRow[] = rawRows.map((r, i) =>
-    i === 0 ? { ...r, amount: r.amount + (loadedHourly - summed) } : r,
-  )
+  // The real blended fully-loaded hourly cost from clocked time. NO fallback
+  // figure — when nothing is logged today the hero says so instead of showing
+  // the design mock's number.
+  const loadedHourly = summary.blended_loaded_hourly_cents > 0 ? summary.blended_loaded_hourly_cents / 100 : null
 
   const columns: Array<DColumn<LaborBurdenWorkerResult>> = [
     { key: 'worker', header: 'Worker', render: (r) => <span className="d-table-cell-strong">{r.worker_id}</span> },
@@ -462,9 +437,11 @@ function LoadedLaborSection() {
           <span
             style={{ fontSize: 56, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--m-ink)' }}
           >
-            {formatMoney(loadedHourly)}
+            {loadedHourly != null ? formatMoney(loadedHourly) : '—'}
           </span>
-          <span style={{ fontSize: 22, fontWeight: 600, color: 'var(--m-ink)' }}>/h</span>
+          {loadedHourly != null ? (
+            <span style={{ fontSize: 22, fontWeight: 600, color: 'var(--m-ink)' }}>/h</span>
+          ) : null}
         </div>
         <div
           style={{
@@ -477,11 +454,15 @@ function LoadedLaborSection() {
             marginTop: 10,
           }}
         >
-          Base + all burdens
+          {loadedHourly != null
+            ? 'Blended from today’s clocked time · base + recorded burdens'
+            : 'No labor clocked today — log time to compute your real hourly cost'}
         </div>
       </div>
 
-      {/* Breakdown · editable — labeled burden components reconciling to the hero. */}
+      {/* Burden breakdown — honest not-yet-configured state. There is no
+          company burden-config endpoint, so per-component rows (payroll tax,
+          workers comp, benefits, …) cannot be shown or edited truthfully. */}
       <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
           style={{
@@ -492,61 +473,12 @@ function LoadedLaborSection() {
             color: 'var(--m-ink)',
           }}
         >
-          Breakdown · editable
+          Burden breakdown
         </div>
-        {breakdown.map((r) => (
-          <div
-            key={r.label}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) 110px',
-              alignItems: 'center',
-              gap: 12,
-              padding: '14px 18px',
-              borderBottom: '1px solid var(--m-line, rgba(0,0,0,0.08))',
-            }}
-          >
-            <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{r.label}</span>
-            <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>{r.meta}</span>
-            <span className="num" style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>
-              {formatMoney(r.amount)}
-            </span>
-          </div>
-        ))}
-        {/* Yellow SUBTOTAL strip matching the design. */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0,1fr) 110px',
-            alignItems: 'center',
-            gap: 12,
-            padding: '14px 18px',
-          }}
-        >
-          <span
-            style={{
-              fontFamily: 'var(--m-num)',
-              fontSize: 12,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              color: 'var(--m-ink)',
-            }}
-          >
-            Subtotal
-          </span>
-          <span
-            className="num"
-            style={{
-              textAlign: 'right',
-              fontWeight: 800,
-              fontSize: 16,
-              background: 'var(--m-accent)',
-              padding: '6px 10px',
-            }}
-          >
-            {formatMoney(loadedHourly)}
-          </span>
+        <div style={{ padding: '16px 18px', fontSize: 14, color: 'var(--m-ink-3)', lineHeight: 1.5 }}>
+          Not configured yet. Per-component burden rates (payroll tax, workers comp, benefits, PTO, overhead) don’t have
+          a settings backend, so there’s nothing real to show or edit here. Loaded hourly above comes from each worker’s
+          recorded loaded rate on clocked time.
         </div>
       </div>
 

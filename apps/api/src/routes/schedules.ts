@@ -41,6 +41,9 @@ const CreateScheduleBodySchema = z
     start_time: z.string().regex(TIME_OF_DAY_RE, { message: 'must be HH:MM' }).nullish(),
     end_time: z.string().regex(TIME_OF_DAY_RE, { message: 'must be HH:MM' }).nullish(),
     takeoff_measurement_id: z.uuid().nullish(),
+    // Free-text work scope (migration 019). The New Assignment sheet's SCOPE
+    // textarea threads through here so the crew sees what the day is for.
+    scope: z.string().max(2000).nullish(),
   })
   .refine(
     (v) => {
@@ -105,10 +108,10 @@ export async function handleScheduleRoutes(
       const result = await client.query(
         `
         insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version,
-                                    created_by, start_time, end_time, takeoff_measurement_id)
-        values ($1, $2, $3, $4::jsonb, 'draft', 1, $5, $6, $7, $8)
+                                    created_by, start_time, end_time, takeoff_measurement_id, scope)
+        values ($1, $2, $3, $4::jsonb, 'draft', 1, $5, $6, $7, $8, $9)
         returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
-                  deleted_at, created_at, start_time, end_time, takeoff_measurement_id
+                  deleted_at, created_at, start_time, end_time, takeoff_measurement_id, scope
         `,
         [
           ctx.company.id,
@@ -119,6 +122,7 @@ export async function handleScheduleRoutes(
           body.start_time ?? null,
           body.end_time ?? null,
           body.takeoff_measurement_id ?? null,
+          typeof body.scope === 'string' && body.scope.trim() !== '' ? body.scope.trim() : null,
         ],
       )
       const row = result.rows[0]
@@ -205,7 +209,7 @@ export async function handleScheduleRoutes(
                      version = version + 1
                where company_id = $1 and id = $2
                returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
-                         deleted_at, created_at, start_time, end_time, takeoff_measurement_id`,
+                         deleted_at, created_at, start_time, end_time, takeoff_measurement_id, scope`,
             [ctx.company.id, row.id, next.state, next.state_version, next.confirmed_at, next.confirmed_by],
           )
           const confirmedRow = confirmedResult.rows[0]
@@ -257,7 +261,7 @@ export async function handleScheduleRoutes(
       c.query(
         `
       select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version, s.deleted_at, s.created_at,
-             s.start_time, s.end_time, s.takeoff_measurement_id,
+             s.start_time, s.end_time, s.takeoff_measurement_id, s.scope,
              tm.service_item_code as takeoff_service_item_code,
              tm.elevation        as takeoff_elevation,
              tm.quantity         as takeoff_quantity,
@@ -297,7 +301,7 @@ export async function handleScheduleRoutes(
         `
       select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version,
              s.deleted_at, s.created_at,
-             s.start_time, s.end_time, s.takeoff_measurement_id,
+             s.start_time, s.end_time, s.takeoff_measurement_id, s.scope,
              p.name as project_name,
              tm.service_item_code as takeoff_service_item_code,
              tm.elevation        as takeoff_elevation,
@@ -504,7 +508,7 @@ export async function handleScheduleRoutes(
       // Pull all source rows in [fromMonday, fromMonday+6]
       const source = await client.query(
         `
-        select project_id, scheduled_for, crew, start_time, end_time, takeoff_measurement_id
+        select project_id, scheduled_for, crew, start_time, end_time, takeoff_measurement_id, scope
         from crew_schedules
         where company_id = $1
           and deleted_at is null
@@ -543,10 +547,10 @@ export async function handleScheduleRoutes(
         const insert = await client.query(
           `
           insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version,
-                                      start_time, end_time, takeoff_measurement_id)
-          values ($1, $2, $3::date, $4::jsonb, 'draft', 1, $5, $6, $7)
+                                      start_time, end_time, takeoff_measurement_id, scope)
+          values ($1, $2, $3::date, $4::jsonb, 'draft', 1, $5, $6, $7, $8)
           returning id, project_id, scheduled_for, crew, status, version, created_at,
-                    start_time, end_time, takeoff_measurement_id
+                    start_time, end_time, takeoff_measurement_id, scope
           `,
           [
             ctx.company.id,
@@ -556,6 +560,7 @@ export async function handleScheduleRoutes(
             src.start_time,
             src.end_time,
             src.takeoff_measurement_id,
+            src.scope ?? null,
           ],
         )
         const row = insert.rows[0]

@@ -17,6 +17,10 @@ export interface ServiceTicket {
   opened_by: string | null
   completed_at: string | null
   notes: string | null
+  /** Short maintenance type (migration 019), e.g. "Oil change". Null on older rows. */
+  service_type?: string | null
+  /** Maintenance cost in integer cents (migration 019) — sums into SPENT·YTD. Null = not recorded. */
+  cost_cents?: number | null
   tier_origin: string | null
   created_at: string
   updated_at: string
@@ -33,6 +37,10 @@ export interface ServiceTicketResponse {
 export interface OpenServiceTicketInput {
   inventory_item_id: string
   notes?: string | null
+  /** Short maintenance type (migration 019). */
+  service_type?: string | null
+  /** Maintenance cost in integer cents (migration 019). */
+  cost_cents?: number | null
 }
 
 export interface PatchServiceTicketInput {

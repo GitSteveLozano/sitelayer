@@ -183,6 +183,14 @@ export function FmConfirmDay({ bootstrap }: { bootstrap: BootstrapResponse | nul
               : 'No schedule for this day — confirming creates one.'}
           </span>
         </div>
+        {daySchedule?.scope ? (
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', padding: '0 2px' }}>
+            <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em' }}>
+              SCOPE ·{' '}
+            </span>
+            {daySchedule.scope}
+          </div>
+        ) : null}
 
         <div className="d-card" style={{ display: 'grid', gap: 2 }}>
           <div

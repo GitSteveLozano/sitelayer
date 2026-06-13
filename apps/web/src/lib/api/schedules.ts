@@ -19,6 +19,8 @@ export interface CrewScheduleRow {
   start_time?: string | null
   /** HH:MM[:SS] wall-clock; nullability matches start_time (both-or-neither). */
   end_time?: string | null
+  /** Free-text work scope (migration 019). Null when none was given. */
+  scope?: string | null
   /** Optional FK into takeoff_measurements; the next four fields are denormalized for display. */
   takeoff_measurement_id?: string | null
   takeoff_service_item_code?: string | null
@@ -68,6 +70,8 @@ export interface CreateScheduleRequest {
   start_time?: string | null
   /** HH:MM wall-clock crew end; paired with start_time (both-or-neither). */
   end_time?: string | null
+  /** Free-text work scope shown to the crew (migration 019). */
+  scope?: string | null
 }
 
 export function createSchedule(input: CreateScheduleRequest): Promise<CrewScheduleRow> {

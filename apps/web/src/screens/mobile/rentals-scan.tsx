@@ -1,9 +1,14 @@
 /**
  * Canonical mobile rental scan / return flow.
  *
- * This replaces the old full-screen scanner route for the role-aware
- * shell. It keeps camera scanning as a progressive enhancement: browsers
- * without BarcodeDetector still get a fast manual tag entry.
+ * Camera recognition is REAL: the camera button opens BarcodeScannerSheet
+ * (screens/rentals/barcode-scanner.tsx — BarcodeDetector + getUserMedia) and
+ * the decoded value fills the asset-code field. On browsers without
+ * BarcodeDetector the camera path is hidden and manual tag entry is the only
+ * path — genuine progressive enhancement. (The previous version rendered a
+ * static Math.random() faux-QR and autofilled the FIRST available item's
+ * code from the camera button, which could record movements against the
+ * wrong asset — audit M10 #8.)
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -16,6 +21,7 @@ import {
   type InventoryLocation,
 } from '@/lib/api'
 import { uploadMovementPhoto } from '@/lib/api/rentals'
+import { BarcodeScannerSheet, isBarcodeScanSupported } from '../rentals/barcode-scanner.js'
 import {
   MBody,
   MButton,
@@ -44,10 +50,6 @@ const GRADES: ReadonlyArray<{ status: ConditionStatus; label: string; desc: stri
   { status: 'na', label: 'DAMAGE', desc: 'REPAIR NEEDED' },
 ]
 
-// Static faux-QR pattern for the scanner target. Computed once at module load
-// so it stays stable across re-renders (no Math.random in render).
-const QR_CELLS: ReadonlyArray<boolean> = Array.from({ length: 64 }, () => Math.random() > 0.55)
-
 export function MobileRentalScan({
   bootstrap,
   companySlug,
@@ -73,6 +75,10 @@ export function MobileRentalScan({
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Real camera scanner (BarcodeDetector + getUserMedia). Hidden entirely on
+  // browsers without support — manual entry is the fallback path.
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const scanSupported = useMemo(() => isBarcodeScanSupported(), [])
 
   useEffect(() => {
     let cancelled = false
@@ -180,92 +186,31 @@ export function MobileRentalScan({
           </MChip>
         </MChipRow>
 
-        {/* Camera viewport with faux-QR target frame */}
-        <div
-          style={{
-            position: 'relative',
-            margin: '12px 16px 0',
-            aspectRatio: '1',
-            overflow: 'hidden',
-            border: '2px solid var(--m-line)',
-            background: 'var(--m-card-soft)',
-          }}
-        >
-          <div
+        {/* Camera launch — opens the REAL BarcodeDetector scanner. On
+            unsupported browsers this panel says so honestly; manual entry
+            below is the fallback path either way. */}
+        {scanSupported ? (
+          <button
+            type="button"
+            onClick={() => setScannerOpen(true)}
+            aria-label="Open camera scanner"
             style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%,-50%)',
-              width: '56%',
-              aspectRatio: '1',
+              position: 'relative',
+              display: 'block',
+              width: 'calc(100% - 32px)',
+              margin: '12px 16px 0',
+              padding: '28px 16px',
+              border: '2px solid var(--m-line)',
+              background: 'var(--m-card-soft)',
+              color: 'inherit',
+              cursor: 'pointer',
+              textAlign: 'center',
             }}
           >
-            {/* Corner brackets */}
-            <span
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: 32,
-                height: 32,
-                borderTop: '3px solid var(--m-accent)',
-                borderLeft: '3px solid var(--m-accent)',
-              }}
-            />
-            <span
-              style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                width: 32,
-                height: 32,
-                borderTop: '3px solid var(--m-accent)',
-                borderRight: '3px solid var(--m-accent)',
-              }}
-            />
-            <span
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                width: 32,
-                height: 32,
-                borderBottom: '3px solid var(--m-accent)',
-                borderLeft: '3px solid var(--m-accent)',
-              }}
-            />
-            <span
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                right: 0,
-                width: 32,
-                height: 32,
-                borderBottom: '3px solid var(--m-accent)',
-                borderRight: '3px solid var(--m-accent)',
-              }}
-            />
-            {/* Mock QR target */}
+            <MI.Camera size={28} />
             <div
-              aria-hidden
               style={{
-                position: 'absolute',
-                inset: 24,
-                background: 'var(--m-sand)',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(8, 1fr)',
-                gridTemplateRows: 'repeat(8, 1fr)',
-              }}
-            >
-              {QR_CELLS.map((fill, i) => (
-                <span key={i} style={{ background: fill ? 'var(--m-ink)' : 'var(--m-sand)' }} />
-              ))}
-            </div>
-          </div>
-          <div style={{ position: 'absolute', top: 16, left: 0, right: 0, textAlign: 'center' }}>
-            <span
-              style={{
+                marginTop: 10,
                 fontFamily: 'var(--m-num)',
                 fontSize: 11,
                 fontWeight: 700,
@@ -273,10 +218,28 @@ export function MobileRentalScan({
                 color: 'var(--m-ink-2)',
               }}
             >
-              POINT AT TAG ON ASSET
-            </span>
+              SCAN TAG WITH CAMERA
+            </div>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--m-ink-3)' }}>
+              Reads QR + barcode stickers · fills the code below
+            </div>
+          </button>
+        ) : (
+          <div
+            style={{
+              margin: '12px 16px 0',
+              padding: '14px 16px',
+              border: '2px solid var(--m-line)',
+              background: 'var(--m-card-soft)',
+              fontSize: 12,
+              color: 'var(--m-ink-3)',
+              lineHeight: 1.5,
+            }}
+          >
+            Camera scanning isn&apos;t supported in this browser — type the asset code below instead. It works the same
+            once entered.
           </div>
-        </div>
+        )}
 
         <MSectionH>Asset tag</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', gap: 8 }}>
@@ -287,12 +250,11 @@ export function MobileRentalScan({
             autoCapitalize="characters"
             style={{ flex: 1 }}
           />
-          <MButton
-            variant="quiet"
-            onClick={() => setAssetCode((mode === 'return' ? out[0] : available[0])?.code ?? '')}
-          >
-            <MI.Camera size={18} />
-          </MButton>
+          {scanSupported ? (
+            <MButton variant="quiet" onClick={() => setScannerOpen(true)} aria-label="Open camera scanner">
+              <MI.Camera size={18} />
+            </MButton>
+          ) : null}
         </div>
         {assetCode && !item ? (
           <div style={{ padding: '8px 16px 0', color: 'var(--m-amber)', fontSize: 13 }}>
@@ -412,6 +374,17 @@ export function MobileRentalScan({
           </MButtonStack>
         </div>
       </MBody>
+
+      {/* Real camera scanner — the decoded sticker value fills the asset-code
+          field, exactly like typing it. */}
+      <BarcodeScannerSheet
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={(value) => {
+          setAssetCode(value.trim())
+          setScannerOpen(false)
+        }}
+      />
     </div>
   )
 }

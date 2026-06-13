@@ -17,7 +17,7 @@ export type InventoryServiceTicketRouteCtx = {
 
 const TICKET_COLUMNS = `
   id, company_id, inventory_item_id, status, opened_at, opened_by,
-  completed_at, notes, tier_origin, created_at, updated_at
+  completed_at, notes, service_type, cost_cents, tier_origin, created_at, updated_at
 `
 
 // Linear lifecycle: open → in_service → done. Each status names the set of
@@ -43,6 +43,11 @@ const ServiceTicketCreateBodySchema = z
   .object({
     inventory_item_id: z.string().optional(),
     notes: z.string().nullish(),
+    // Short maintenance type + cost in integer cents (migration 019). Both
+    // optional/nullable — the mobile service log sends them; desktop callers
+    // that predate the columns keep working unchanged.
+    service_type: z.string().max(200).nullish(),
+    cost_cents: z.number().int().min(0).nullish(),
   })
   .loose()
 
@@ -64,6 +69,8 @@ type ServiceTicketRow = {
   opened_by: string | null
   completed_at: string | null
   notes: string | null
+  service_type: string | null
+  cost_cents: number | null
   tier_origin: string | null
   created_at: string
   updated_at: string
@@ -79,6 +86,8 @@ function rowToTicket(row: ServiceTicketRow) {
     opened_by: row.opened_by,
     completed_at: row.completed_at,
     notes: row.notes,
+    service_type: row.service_type,
+    cost_cents: row.cost_cents,
     tier_origin: row.tier_origin,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -93,7 +102,8 @@ function rowToTicket(row: ServiceTicketRow) {
  *
  * Company-scoped via withCompanyClient / withMutationTx (SET LOCAL
  * app.company_id) with parameterized SQL throughout. Mutations are
- * role-gated (admin/office) and audited via the `inventory_service_ticket`
+ * role-gated (open: admin/office/foreman — field flagging; advance:
+ * admin/office) and audited via the `inventory_service_ticket`
  * allowlist entry. Mirrors apps/api/src/routes/change-orders.ts.
  */
 export async function handleInventoryServiceTicketRoutes(
@@ -142,7 +152,10 @@ export async function handleInventoryServiceTicketRoutes(
 
   // --- open a ticket -------------------------------------------------------
   if (url.pathname === '/api/inventory/service-tickets' && req.method === 'POST') {
-    if (!ctx.requireRole(['admin', 'office'])) return true
+    // Foremen flag equipment for service from the field (mobile asset detail /
+    // service log), so opening a ticket matches the movements gate; advancing
+    // status (PATCH below) stays admin/office.
+    if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
 
     const parsedBody = parseJsonBody(ServiceTicketCreateBodySchema, await ctx.readBody())
     if (!parsedBody.ok) {
@@ -156,6 +169,8 @@ export async function handleInventoryServiceTicketRoutes(
       return true
     }
     const notes = typeof body.notes === 'string' ? body.notes.trim() || null : null
+    const serviceType = typeof body.service_type === 'string' ? body.service_type.trim() || null : null
+    const costCents = typeof body.cost_cents === 'number' ? body.cost_cents : null
 
     try {
       const created = await withMutationTx(async (client: PoolClient) => {
@@ -166,10 +181,10 @@ export async function handleInventoryServiceTicketRoutes(
         if (!item.rows[0]) return { kind: 'not_found' as const }
         const inserted = await client.query<ServiceTicketRow>(
           `insert into inventory_service_tickets
-             (company_id, inventory_item_id, opened_by, notes)
-           values ($1, $2, $3, $4)
+             (company_id, inventory_item_id, opened_by, notes, service_type, cost_cents)
+           values ($1, $2, $3, $4, $5, $6)
            returning ${TICKET_COLUMNS}`,
-          [ctx.company.id, inventoryItemId, ctx.currentUserId, notes],
+          [ctx.company.id, inventoryItemId, ctx.currentUserId, notes, serviceType, costCents],
         )
         const row = inserted.rows[0]!
         await recordAudit(client, {

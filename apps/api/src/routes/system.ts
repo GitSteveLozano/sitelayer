@@ -222,7 +222,7 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
       // grow without limit as a company accrues daily crew schedules. The full
       // set is available via the dedicated /api/schedules endpoint.
       c.query(
-        'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc limit 500',
+        'select id, project_id, scheduled_for, crew, status, scope from crew_schedules where company_id = $1 order by scheduled_for desc limit 500',
         [companyId],
       ),
       // Bootstrap returns recent labor history only — capped to the last year

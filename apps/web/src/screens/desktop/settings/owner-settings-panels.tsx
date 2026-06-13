@@ -26,12 +26,14 @@
  * CSS. Avatars / pills / buttons / form fields come from `components/m`.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import type { BootstrapResponse } from '@/lib/api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { BootstrapResponse, SessionResponse } from '@/lib/api'
+import { useUserEmail, useUserFullName, useUserInitials } from '@/lib/user'
 import {
   fetchQboAuthUrl,
   getActiveCompanySlug,
   queryKeys,
+  request,
   useActiveCompanyId,
   useCompanyProfile,
   useNotificationPreferences,
@@ -1135,32 +1137,46 @@ export function NotificationsSection() {
 
 // ---- PROFILE -------------------------------------------------------------
 // Account identity is owned by Clerk + company_memberships and is read-only
-// here (per spec, /api/session-backed read is fine; we surface the live
-// company name from bootstrap and leave the rest presentational). The
-// editable surfaces (display name, phone, 2FA, avatar) are Clerk flows, not
-// Sitelayer endpoints.
+// here. Name/email come from the REAL Clerk session (useUserFullName /
+// useUserEmail — null when Clerk isn't configured, e.g. local dev) and the
+// company role comes from /api/session. Nothing here is fabricated: a field
+// with no real value renders "—". The editable surfaces (display name,
+// avatar, password, 2FA) are Clerk flows, not Sitelayer endpoints, so they
+// are deliberately NOT rendered as rows.
 export function ProfileSection() {
   const company = useActiveCompany()
-  // Account identity is owned by Clerk; surfaced read-only here as a placeholder.
-  const displayName = 'Steve Lozano'
+  const fullName = useUserFullName()
+  const initials = useUserInitials()
+  const email = useUserEmail()
+  const slug = getActiveCompanySlug()
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.session(slug),
+    queryFn: () => request<SessionResponse>('/api/session', { companySlug: slug }),
+    enabled: Boolean(slug),
+    staleTime: 60_000,
+  })
+  const role =
+    sessionQuery.data?.memberships?.find((m) => m.slug === slug)?.role ?? sessionQuery.data?.user?.role ?? null
+  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : null
   return (
     <div className="d-stack">
       <SettingsCard eyebrow="Your account">
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 18 }}>
-          <MAvatar initials="SL" size="lg" />
+          <MAvatar initials={initials ?? '·'} size="lg" />
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--m-ink)' }}>{displayName}</div>
-            <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>{company ? `Admin · ${company.name}` : 'Admin'}</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--m-ink)' }}>{fullName ?? 'Signed-in user'}</div>
+            <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>
+              {[roleLabel, company?.name].filter(Boolean).join(' · ') || '—'}
+            </div>
           </div>
         </div>
         <FieldGrid>
-          <Field label="Display name" value={displayName} readOnly hint="Managed in your Clerk profile." />
-          <Field label="Email" type="email" value="stephenlozanorivacoba@gmail.com" hint="Used to sign in." readOnly />
-          <Field label="Mobile phone" type="tel" placeholder="(310) 555-0188" readOnly />
-          <Field label="Company role" value="Admin" readOnly hint="Managed under Roles + Permissions." />
+          <Field label="Display name" value={fullName ?? '—'} readOnly hint="Managed in your Clerk profile." />
+          <Field label="Email" type="email" value={email ?? '—'} hint="Used to sign in." readOnly />
+          <Field label="Company role" value={roleLabel ?? '—'} readOnly hint="Managed under Roles + Permissions." />
         </FieldGrid>
         <div style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 12 }}>
-          Account name, email, photo, and two-factor authentication are managed in your Clerk-hosted profile.
+          Account name, email, photo, password, and two-factor authentication are managed in your Clerk-hosted profile.
           {/* Profile identity is Clerk-owned (read-only). No Sitelayer PATCH for these. */}
         </div>
       </SettingsCard>

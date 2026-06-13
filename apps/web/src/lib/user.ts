@@ -81,6 +81,29 @@ function useUserInitialsWithClerk(): string | null {
 }
 
 /**
+ * Resolve the signed-in user's sign-in email from the Clerk session for the
+ * Settings → Profile identity card. Falls back to `null` when Clerk isn't
+ * configured (local dev) or no email is on the account, so callers render an
+ * honest "—" instead of a fabricated address. Same hook-shape contract as
+ * `useFirstName()`.
+ */
+export function useUserEmail(): string | null {
+  if (isClerkConfigured()) {
+    return useUserEmailWithClerk()
+  }
+  return null
+}
+
+function useUserEmailWithClerk(): string | null {
+  const { user } = useUser()
+  if (!user) return null
+  const primary = user.primaryEmailAddress?.emailAddress?.trim()
+  if (primary) return primary
+  const first = user.emailAddresses?.[0]?.emailAddress?.trim()
+  return first || null
+}
+
+/**
  * Time-of-day greeting word ("morning" / "afternoon" / "evening").
  * Used by the PM busy-day header per Sitemap §03 panel 1.
  */

@@ -6,15 +6,19 @@
  * proposes a square-footage; low-confidence boundaries get a red callout, and
  * an INSIDE/CENTER/OUTSIDE toggle controls which face the area measures to.
  *
- * GAP: there is no single-room "tap to auto-detect a boundary" endpoint. The
- * capture pipeline (POST /api/projects/:id/takeoff-drafts/capture) produces a
- * WHOLE-draft TakeoffResult, not an on-demand per-tap room polygon, and
- * blueprint-pages has no room-segmentation route. So the floor plan, detected
- * rooms, and the low-confidence flag stay presentational; the tool row,
- * measure-to toggle, and tap-to-activate are real local state so the surface
- * is exercisable. Suggested fill: POST /api/projects/:id/takeoff/detect-room
- * { page_id, point:{x,y} } → { polygon, area_sqft, confidence } that the
- * canvas then commits via the existing useCreateMeasurement hook.
+ * ⛔ GATED OFF — intentionally UNREACHABLE (2026-06-12, audit M04 #18).
+ * There is no single-room "tap to auto-detect a boundary" endpoint anywhere
+ * in apps/api: the capture pipeline (POST /api/projects/:id/takeoff-drafts/
+ * capture) produces a WHOLE-draft TakeoffResult, not an on-demand per-tap
+ * room polygon, and blueprint-pages has no room-segmentation route. Until
+ * that endpoint exists this screen is a hardcoded facade (four fixed 820-SF
+ * rectangles, literal "A-201 EAST", confirm() just navigates), so its only
+ * entry — the canvas toolbar's TAP chip (est-canvas/mobile-panels.tsx
+ * MobileToolToolbar) — is rendered disabled ("SOON") and no longer navigates
+ * here. The route mount stays so deep links fail soft; do NOT re-enable the
+ * entry without building POST /api/projects/:id/takeoff/detect-room
+ * { page_id, point:{x,y} } → { polygon, area_sqft, confidence } and wiring
+ * confirm() to commit via useCreateMeasurement.
  */
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'

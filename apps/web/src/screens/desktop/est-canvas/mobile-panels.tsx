@@ -93,18 +93,18 @@ export function MobileAiLaunch({ onLaunch }: { onLaunch: () => void }) {
 // Mono tool toolbar — square brutalist chips (POLY/RECT/LIN/ARC/PT/TAP).
 // POLY/LIN/PT drive the existing draw handlers unchanged. RECT is a polygon
 // alias (tap the 4 corners). ARC tessellates 3 control points into a lineal
-// curve. TAP hands off to the AI tap-to-detect canvas.
+// curve. TAP (AI tap-to-detect) is GATED OFF until a real detect-room
+// endpoint exists: the screen it handed off to was a hardcoded facade (four
+// fixed 820-SF rectangles on a literal "A-201 EAST" sheet — audit M04 #18),
+// so the chip renders disabled with a SOON marker instead of navigating.
 // ---------------------------------------------------------------------------
 export function MobileToolToolbar({
   toolLabel,
   onPickTool,
-  onTap,
 }: {
   toolLabel: 'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC'
   /** Picks a real draw tool (POLY/RECT → polygon, LIN → lineal, ARC → arc, PT → count). */
   onPickTool: (tool: MobileTool, label: 'POLY' | 'RECT' | 'LIN' | 'PT' | 'ARC') => void
-  /** Hands off to the AI tap-to-detect canvas (the TAP chip). */
-  onTap: () => void
 }) {
   return (
     <div
@@ -125,7 +125,8 @@ export function MobileToolToolbar({
           { tool: null, label: 'TAP' },
         ] as const
       ).map((t, i, arr) => {
-        // TAP is the AI hand-off (tool: null); never an active draw tool.
+        // TAP is the gated AI hand-off (tool: null); never an active draw
+        // tool and currently disabled (no detect-room endpoint exists).
         // RECT shares the polygon tool value, so highlight it only when
         // its label is the user's pick (tracked alongside the tool).
         const isTap = t.tool === null
@@ -134,28 +135,35 @@ export function MobileToolToolbar({
           <button
             key={t.label}
             type="button"
+            disabled={isTap}
+            title={isTap ? 'AI tap-to-detect is coming soon' : undefined}
             onClick={() => {
-              if (t.tool === null) {
-                onTap()
-                return
-              }
+              if (t.tool === null) return
               onPickTool(t.tool, t.label)
             }}
             style={{
               flex: 1,
               padding: '14px 0',
               background: on ? 'var(--m-accent)' : 'transparent',
-              color: isTap ? 'var(--m-accent)' : on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+              color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
               border: 'none',
               borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
               fontFamily: 'var(--m-num)',
               fontSize: 11,
               fontWeight: on ? 700 : 600,
               letterSpacing: '0.06em',
-              cursor: 'pointer',
+              cursor: isTap ? 'default' : 'pointer',
+              opacity: isTap ? 0.45 : 1,
             }}
           >
-            {t.label}
+            {isTap ? (
+              <span style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                <span>{t.label}</span>
+                <span style={{ fontSize: 8, letterSpacing: '0.08em' }}>SOON</span>
+              </span>
+            ) : (
+              t.label
+            )}
           </button>
         )
       })}

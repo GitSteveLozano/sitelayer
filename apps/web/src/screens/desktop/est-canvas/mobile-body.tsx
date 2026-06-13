@@ -1202,7 +1202,6 @@ export function TakeoffCanvasMobileBody({ companySlug }: { companySlug: string }
                   <div style={{ padding: '10px 16px 0' }}>
                     <MobileToolToolbar
                       toolLabel={toolLabel}
-                      onTap={() => navigate(`/projects/${projectId}/takeoff-ai/detect`)}
                       onPickTool={(pickedTool, label) => {
                         // SET_TOOL resets the in-progress draft points in
                         // the machine (the old setDraftPoints([]) is now
