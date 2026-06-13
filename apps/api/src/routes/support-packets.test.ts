@@ -213,6 +213,24 @@ describe('support packet sanitization', () => {
     })
   })
 
+  it('redacts secret-shaped values embedded inside strings', () => {
+    expect(
+      sanitizeSupportJson({
+        notes:
+          'Request failed with Authorization: Bearer live-token-123 and url https://app.test/callback?token=abc123&next=/x',
+        env: 'api_key="sk_live_123"; refresh_token=rt-live-456; password=hunter2',
+        cookie: 'Cookie: session=abc123; theme=light',
+        error: 'payload eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.abcdef0123456789',
+      }),
+    ).toEqual({
+      notes:
+        'Request failed with Authorization: Bearer [redacted] and url https://app.test/callback?token=[redacted]&next=/x',
+      env: 'api_key="[redacted]"; refresh_token=[redacted]; password=[redacted]',
+      cookie: '[redacted]',
+      error: 'payload [redacted]',
+    })
+  })
+
   it('collects client and server request ids', () => {
     expect(
       collectRequestIds(

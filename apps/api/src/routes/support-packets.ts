@@ -108,6 +108,17 @@ const MAX_ARRAY_LENGTH = 100
 const MAX_OBJECT_KEYS = 150
 const SENSITIVE_KEY =
   /authorization|cookie|password|passwd|secret|token|jwt|session|csrf|api[-_]?key|access[-_]?token|refresh[-_]?token/i
+const SENSITIVE_VALUE_KEY =
+  /password|passwd|secret|token|jwt|session|csrf|api[-_]?key|access[-_]?token|refresh[-_]?token/i
+const SENSITIVE_ASSIGNMENT_RE = new RegExp(
+  String.raw`\b((?:${SENSITIVE_VALUE_KEY.source})\s*[:=]\s*)(["']?)[^"',\s;&)]+`,
+  'gi',
+)
+const SENSITIVE_QUERY_PARAM_RE = new RegExp(String.raw`([?&](?:${SENSITIVE_VALUE_KEY.source})=)[^&#\s]+`, 'gi')
+const BEARER_TOKEN_RE = /\b(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi
+const BASIC_TOKEN_RE = /\b(Basic\s+)[A-Za-z0-9+/=]{8,}/gi
+const COOKIE_HEADER_RE = /\b((?:Cookie|Set-Cookie)\s*[:=]\s*)[^\n]+/gi
+const JWT_RE = /\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -118,6 +129,12 @@ function redactString(value: string, maxLength = MAX_STRING_LENGTH): string {
   const redacted = value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
     .replace(/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/g, '[phone]')
+    .replace(COOKIE_HEADER_RE, '$1[redacted]')
+    .replace(BEARER_TOKEN_RE, '$1[redacted]')
+    .replace(BASIC_TOKEN_RE, '$1[redacted]')
+    .replace(SENSITIVE_QUERY_PARAM_RE, '$1[redacted]')
+    .replace(SENSITIVE_ASSIGNMENT_RE, '$1$2[redacted]')
+    .replace(JWT_RE, '[redacted]')
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}...[truncated]` : redacted
 }
 
