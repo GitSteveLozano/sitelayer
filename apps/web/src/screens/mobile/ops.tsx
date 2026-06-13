@@ -30,6 +30,7 @@ import {
   type ContextWorkItem,
   type OpsDiagnosticComponent,
   type OpsDiagnosticStatus,
+  type OpsOnsiteDiagnosticAction,
   type OpsOnsiteDiagnosticCaptureRouteResult,
   type OpsOnsiteDiagnosticDesktopEvidenceResult,
   type OpsOnsiteDiagnosticAgentFeedDelivery,
@@ -355,14 +356,7 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
     startDiagnosticSession.error ||
     requestDiagnosticAction.error,
   )
-  const activeDiagnosticAction =
-    hasDiagnosticControl && activeDiagnosticSession
-      ? (activeDiagnosticSession.plan.actions.find(
-          (action) => action.key === (activeDiagnosticSession.intent ?? activeDiagnosticSession.plan.recommended_entry),
-        ) ??
-        activeDiagnosticSession.plan.actions.find((action) => action.enabled) ??
-        null)
-      : null
+  const diagnosticActions = visibleDiagnosticActions(activeDiagnosticSession, hasDiagnosticControl)
   const latestAgentFeedDelivery = latestDiagnosticDelivery(displayedDiagnosticSession)
   const latestDesktopEvidence = resolveLatestDesktopEvidence(lastDiagnosticAction, displayedDiagnosticSession)
   const latestDiagnosticManifest =
@@ -644,29 +638,25 @@ export function MobileOps({ companyRole, companySlug }: { companyRole: CompanyRo
 
         <MSectionH>Next actions</MSectionH>
         <MListInset>
-          {activeDiagnosticAction ? (
-            <MListRow
-              leading={<MI.Camera size={18} />}
-              leadingTone={
-                requestDiagnosticAction.isPending
-                  ? 'blue'
-                  : activeDiagnosticAction.enabled
-                    ? 'blue'
-                    : 'amber'
-              }
-              headline={
-                requestDiagnosticAction.isPending
-                  ? 'Recording action'
-                  : `Record ${lowerFirst(activeDiagnosticAction.label)}`
-              }
-              supporting={formatDiagnosticActionSummary(activeDiagnosticAction, requestDiagnosticAction.isPending)}
-              onTap={
-                activeDiagnosticAction.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
-                  ? () => requestDiagnosticAction.mutate(activeDiagnosticAction.key)
-                  : undefined
-              }
-            />
-          ) : null}
+          {diagnosticActions.map((action) => {
+            const Icon = diagnosticActionIcon(action.key)
+            return (
+              <MListRow
+                key={action.key}
+                leading={<Icon size={18} />}
+                leadingTone={requestDiagnosticAction.isPending ? 'blue' : action.enabled ? 'blue' : 'amber'}
+                headline={
+                  requestDiagnosticAction.isPending ? 'Recording action' : `Record ${lowerFirst(action.label)}`
+                }
+                supporting={formatDiagnosticActionSummary(action, requestDiagnosticAction.isPending)}
+                onTap={
+                  action.enabled && diagnosticControlToken && !requestDiagnosticAction.isPending
+                    ? () => requestDiagnosticAction.mutate(action.key)
+                    : undefined
+                }
+              />
+            )
+          })}
           {hasDiagnosticControl && activeDiagnosticSession ? (
             <MListRow
               leading={<MI.Clock size={18} />}
@@ -974,6 +964,13 @@ function browserMobileLinkShareDeps(): MobileLinkShareDeps {
   }
 }
 
+export function visibleDiagnosticActions(
+  session: OpsOnsiteDiagnosticSessionRecord | null,
+  hasControl: boolean,
+): OpsOnsiteDiagnosticAction[] {
+  return hasControl && session ? session.plan.actions : []
+}
+
 export function reusableLeaveBehindCaptureUrl(
   link: LeaveBehindCaptureLinkState | null,
   session: OpsOnsiteDiagnosticSessionRecord | null,
@@ -1273,7 +1270,7 @@ function formatDiagnosticSessionControl(
   return `Expires ${formatClock(session.expires_at)} · ${session.audit_events.length} event${session.audit_events.length === 1 ? '' : 's'}`
 }
 
-function formatDiagnosticActionSummary(action: { enabled: boolean; reason: string }, pending: boolean): string {
+function formatDiagnosticActionSummary(action: OpsOnsiteDiagnosticAction, pending: boolean): string {
   if (pending) return 'Audit event pending.'
   return action.reason
 }
@@ -1379,6 +1376,13 @@ function diagnosticActionName(actionKey: OpsOnsiteDiagnosticActionKey): string {
   if (actionKey === 'dispatch_agent_review') return 'Agent review'
   if (actionKey === 'capture_desktop_context') return 'Desktop evidence'
   return 'Field context'
+}
+
+function diagnosticActionIcon(actionKey: OpsOnsiteDiagnosticActionKey): typeof MI.Camera {
+  if (actionKey === 'capture_field_context') return MI.Mic
+  if (actionKey === 'capture_desktop_context') return MI.Camera
+  if (actionKey === 'route_support_packet') return MI.Layers
+  return MI.Alert
 }
 
 function formatSince(value: string, nowMs: number): string {

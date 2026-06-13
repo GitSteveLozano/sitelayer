@@ -11,6 +11,7 @@ import {
   reusableLeaveBehindCaptureUrl,
   resolveLatestDesktopEvidence,
   shareOrCopyMobileLink,
+  visibleDiagnosticActions,
 } from './ops'
 import type {
   OpsDiagnosticComponent,
@@ -282,6 +283,30 @@ describe('MobileOps leave-behind capture invite', () => {
     expect(reusableLeaveBehindCaptureUrl(cached, session({ id: 'diag-session-2' }))).toBeNull()
     expect(reusableLeaveBehindCaptureUrl(cached, null)).toBeNull()
     expect(reusableLeaveBehindCaptureUrl({ url: cached.url, session_id: null }, null)).toBe(cached.url)
+  })
+})
+
+describe('MobileOps onsite diagnostic action list', () => {
+  it('shows every planned action only while this phone holds control', () => {
+    const controlledSession = session({
+      plan: plan({
+        actions: [
+          { key: 'capture_field_context', label: 'Capture field context', enabled: true, reason: 'Ready.' },
+          { key: 'capture_desktop_context', label: 'Attach desktop evidence', enabled: true, reason: 'Ready.' },
+          { key: 'route_support_packet', label: 'Route support packet', enabled: false, reason: 'Router offline.' },
+          { key: 'dispatch_agent_review', label: 'Dispatch agent review', enabled: true, reason: 'Ready.' },
+        ],
+      }),
+    })
+
+    expect(visibleDiagnosticActions(controlledSession, true).map((action) => action.key)).toEqual([
+      'capture_field_context',
+      'capture_desktop_context',
+      'route_support_packet',
+      'dispatch_agent_review',
+    ])
+    expect(visibleDiagnosticActions(controlledSession, false)).toEqual([])
+    expect(visibleDiagnosticActions(null, true)).toEqual([])
   })
 })
 
