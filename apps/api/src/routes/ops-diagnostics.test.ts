@@ -5,12 +5,16 @@ import type { PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import type { BlueprintStorage, DownloadUrlOptions, PutStreamOptions } from '../storage.js'
 import {
+  __buildOpsOnsiteDiagnosticManifestForTests,
   __captureOnsiteDesktopEvidenceForTests,
   __agentFeedDeliveryFromRowForTests,
   __desktopEvidenceFromRowForTests,
+  __enqueueOnsiteDiagnosticConcernForTests,
   __resetOpsDiagnosticSessionsForTests,
   buildOpsDiagnostics,
   handleOpsDiagnosticsRoutes,
+  type OpsOnsiteDiagnosticAuditEvent,
+  type StoredOnsiteDiagnosticSession,
 } from './ops-diagnostics.js'
 
 function json(body: unknown, init?: ResponseInit): Response {
@@ -54,6 +58,152 @@ class MemoryStorage implements BlueprintStorage {
 
   async getDownloadUrl(_key: string, _options?: DownloadUrlOptions): Promise<string | null> {
     return null
+  }
+}
+
+const OPS_SESSION_ID = '11111111-1111-4111-8111-111111111111'
+const OPS_EVENT_ID = '22222222-2222-4222-8222-222222222222'
+const OPS_CAPTURE_SESSION_ID = '33333333-3333-4333-8333-333333333333'
+const OPS_SUPPORT_PACKET_ID = '44444444-4444-4444-8444-444444444444'
+const OPS_WORK_ITEM_ID = '55555555-5555-4555-8555-555555555555'
+const OPS_FEED_ID = '66666666-6666-4666-8666-666666666666'
+
+function readyPlan() {
+  return {
+    status: 'ready' as const,
+    control_level: 'route' as const,
+    recommended_entry: 'dispatch_agent_review' as const,
+    can_capture_desktop: true,
+    can_route_work: true,
+    can_dispatch_agent_review: true,
+    blockers: [],
+    actions: [
+      { key: 'capture_field_context' as const, label: 'Capture field context', enabled: true, reason: 'Ready.' },
+      { key: 'capture_desktop_context' as const, label: 'Attach desktop evidence', enabled: true, reason: 'Ready.' },
+      { key: 'route_support_packet' as const, label: 'Route support packet', enabled: true, reason: 'Ready.' },
+      { key: 'dispatch_agent_review' as const, label: 'Dispatch agent review', enabled: true, reason: 'Ready.' },
+    ],
+  }
+}
+
+function persistentSession(overrides: Partial<StoredOnsiteDiagnosticSession> = {}): StoredOnsiteDiagnosticSession {
+  return {
+    id: OPS_SESSION_ID,
+    state: 'active',
+    created_at: '2026-06-12T12:00:00.000Z',
+    expires_at: '2026-06-12T13:00:00.000Z',
+    operator_user_id: 'user_42',
+    label: 'Plant walkdown',
+    intent: 'dispatch_agent_review',
+    plan: readyPlan(),
+    audit_events: [],
+    agent_feed_deliveries: [],
+    desktop_evidence: {
+      capture_session_id: OPS_CAPTURE_SESSION_ID,
+      artifact_id: '77777777-7777-4777-8777-777777777777',
+      storage_key: 'company-1/capture-sessions/33333333-3333-4333-8333-333333333333/clip.mp4',
+      file_path:
+        '/api/capture-sessions/33333333-3333-4333-8333-333333333333/artifacts/77777777-7777-4777-8777-777777777777/file',
+      status: 'attached',
+      content_type: 'video/mp4',
+      byte_size: 1024,
+      error: null,
+    },
+    ...overrides,
+  }
+}
+
+function persistentEvent(overrides: Partial<OpsOnsiteDiagnosticAuditEvent> = {}): OpsOnsiteDiagnosticAuditEvent {
+  return {
+    id: OPS_EVENT_ID,
+    at: '2026-06-12T12:05:00.000Z',
+    actor_user_id: 'user_99',
+    type: 'action.requested',
+    action_key: 'dispatch_agent_review',
+    effect: 'audit_only',
+    summary: 'Requested Dispatch agent review.',
+    ...overrides,
+  }
+}
+
+function contextWorkItemRow(params: unknown[]) {
+  return {
+    id: OPS_WORK_ITEM_ID,
+    company_id: params[0],
+    support_packet_id: params[1],
+    domain: params[2],
+    title: params[3],
+    summary: params[4],
+    status: params[5],
+    lane: params[6],
+    severity: params[7],
+    route: params[8],
+    capture_session_id: params[9],
+    entity_type: params[10],
+    entity_id: params[11],
+    assignee_user_id: params[12],
+    created_by_user_id: params[13],
+    created_at: '2026-06-12T12:05:00.000Z',
+    updated_at: '2026-06-12T12:05:00.000Z',
+    resolved_at: null,
+    reversed_at: null,
+    reversibility_window_seconds: 86400,
+    expires_at: null,
+    metadata: JSON.parse(String(params[14] ?? '{}')),
+    dedup_key: null,
+  }
+}
+
+function handoffEventRow(params: unknown[]) {
+  return {
+    id: `event-${String(params[2])}`,
+    company_id: params[0],
+    work_item_id: params[1],
+    event_type: params[2],
+    actor_kind: params[3],
+    actor_user_id: params[4],
+    actor_ref: params[5],
+    source_system: params[6],
+    payload: JSON.parse(String(params[7] ?? '{}')),
+    metadata: JSON.parse(String(params[8] ?? '{}')),
+    idempotency_key: params[9],
+    causation_event_id: null,
+    correlation_id: null,
+    request_id: null,
+    capture_session_id: params[13],
+    sentry_trace: null,
+    sentry_baggage: null,
+    build_sha: null,
+    redaction_version: 'context-handoff-v1',
+    occurred_at: '2026-06-12T12:05:00.000Z',
+    recorded_at: '2026-06-12T12:05:00.000Z',
+  }
+}
+
+class PersistentOpsClient {
+  calls: Array<{ sql: string; params: unknown[] }> = []
+
+  async query(sql: string, params: unknown[] = []) {
+    const normalized = sql.replace(/\s+/g, ' ').trim()
+    this.calls.push({ sql: normalized, params })
+    if (normalized.startsWith('select id::text as context_work_item_id')) return { rows: [], rowCount: 0 }
+    if (normalized.startsWith('insert into support_debug_packets')) {
+      return {
+        rows: [{ id: OPS_SUPPORT_PACKET_ID, created_at: '2026-06-12T12:05:00.000Z', expires_at: params[9] }],
+        rowCount: 1,
+      }
+    }
+    if (normalized.startsWith('insert into context_work_items')) {
+      return { rows: [contextWorkItemRow(params)], rowCount: 1 }
+    }
+    if (normalized.startsWith('update context_work_items')) return { rows: [{ metadata: {} }], rowCount: 1 }
+    if (normalized.startsWith('insert into context_handoff_events')) {
+      return { rows: [handoffEventRow(params)], rowCount: 1 }
+    }
+    if (normalized.startsWith('insert into agent_feed_concerns')) {
+      return { rows: [{ id: OPS_FEED_ID }], rowCount: 1 }
+    }
+    throw new Error(`unexpected query: ${normalized}`)
   }
 }
 
@@ -702,6 +852,108 @@ describe('ops diagnostics', () => {
       callback_status: 'failed',
       callback_error: 'executor timed out',
       stale: false,
+    })
+  })
+
+  it('links routed persistent onsite actions to a support packet and app issue', async () => {
+    await withReadyOpsAgentFeed(async () => {
+      const client = new PersistentOpsClient()
+      const result = await __enqueueOnsiteDiagnosticConcernForTests(client as unknown as PoolClient, {
+        companyId: 'company-1',
+        session: persistentSession(),
+        event: persistentEvent(),
+        actionKey: 'dispatch_agent_review',
+        actionLabel: 'Dispatch agent review',
+        actorUserId: 'user_99',
+        requestedAt: '2026-06-12T12:05:00.000Z',
+      })
+
+      expect(result).toMatchObject({
+        audience: 'onsite-diagnostics',
+        concern_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+        queued: true,
+        id: OPS_FEED_ID,
+        support_packet_id: OPS_SUPPORT_PACKET_ID,
+        context_work_item_id: OPS_WORK_ITEM_ID,
+      })
+
+      const supportInsert = client.calls.find((call) => call.sql.startsWith('insert into support_debug_packets'))
+      expect(supportInsert?.params.slice(0, 5)).toEqual([
+        'company-1',
+        'user_99',
+        null,
+        '/ops',
+        OPS_CAPTURE_SESSION_ID,
+      ])
+      expect(JSON.stringify(supportInsert?.params)).toContain(OPS_SESSION_ID)
+
+      const workItemInsert = client.calls.find((call) => call.sql.startsWith('insert into context_work_items'))
+      expect(workItemInsert?.params.slice(0, 4)).toEqual([
+        'company-1',
+        OPS_SUPPORT_PACKET_ID,
+        'app_issue',
+        'Dispatch agent review for onsite diagnostics',
+      ])
+      expect(workItemInsert?.params).toContain('ops_diagnostic_session')
+      expect(workItemInsert?.params).toContain(OPS_SESSION_ID)
+
+      const feedInsert = client.calls.find((call) => call.sql.startsWith('insert into agent_feed_concerns'))
+      expect(feedInsert?.params[5]).toBe(OPS_WORK_ITEM_ID)
+      expect(feedInsert?.params[6]).toBe(OPS_CAPTURE_SESSION_ID)
+      const concern = JSON.parse(String(feedInsert?.params[4] ?? '{}')) as Record<string, unknown>
+      expect(concern).toMatchObject({
+        concern_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+        audience: 'onsite-diagnostics',
+        inputs: {
+          work_item_id: OPS_WORK_ITEM_ID,
+          support_packet_id: OPS_SUPPORT_PACKET_ID,
+          capture_session_id: OPS_CAPTURE_SESSION_ID,
+        },
+      })
+      expect(JSON.stringify(concern)).toContain('diagnostic_manifest')
+      expect(JSON.stringify(concern)).toContain(OPS_WORK_ITEM_ID)
+
+      const eventTypes = client.calls
+        .filter((call) => call.sql.startsWith('insert into context_handoff_events'))
+        .map((call) => call.params[2])
+      expect(eventTypes).toEqual(['work_item.created', 'agent.dispatch_requested'])
+
+      const manifest = __buildOpsOnsiteDiagnosticManifestForTests({
+        ...persistentSession({
+          support_packet_id: OPS_SUPPORT_PACKET_ID,
+          context_work_item_id: OPS_WORK_ITEM_ID,
+        }),
+        audit_events: [persistentEvent()],
+        agent_feed_deliveries: [
+          {
+            id: OPS_FEED_ID,
+            action_key: 'dispatch_agent_review',
+            audience: 'onsite-diagnostics',
+            concern_ref: `opsdiag:${OPS_SESSION_ID}:dispatch_agent_review`,
+            status: 'pending',
+            queued_at: '2026-06-12T12:05:00.000Z',
+            claimed_at: null,
+            completed_at: null,
+            callback_status: null,
+            callback_error: null,
+            stale: false,
+          },
+        ],
+      })
+      expect(manifest).toMatchObject({
+        support_packet_id: OPS_SUPPORT_PACKET_ID,
+        context_work_item_id: OPS_WORK_ITEM_ID,
+        readiness: {
+          work_evidence: 'work_item_attached',
+          agent_handoff: 'queued',
+        },
+      })
+      expect(manifest.evidence.refs).toContainEqual(
+        expect.objectContaining({ type: 'support_debug_packet', id: OPS_SUPPORT_PACKET_ID }),
+      )
+      expect(manifest.evidence.refs).toContainEqual(
+        expect.objectContaining({ type: 'context_work_item', id: OPS_WORK_ITEM_ID }),
+      )
     })
   })
 
