@@ -1316,8 +1316,10 @@ async function captureOnsiteDesktopEvidence(
   const now = new Date()
   const retentionExpiresAt = new Date(now.getTime() + OPS_DESKTOP_EVIDENCE_RETENTION_DAYS * 24 * 60 * 60 * 1000)
 
+  let stored = false
   try {
     await ctx.storage.put(storageKey, downloaded.bytes, downloaded.contentType)
+    stored = true
     const artifactId = await runTx(companyId, async (client) => {
       await insertOpsDesktopCaptureSessionTx(client, {
         companyId,
@@ -1378,6 +1380,13 @@ async function captureOnsiteDesktopEvidence(
       error: null,
     }
   } catch (err) {
+    if (stored) {
+      try {
+        await ctx.storage.deleteObject(storageKey)
+      } catch {
+        // Preserve the attach failure; orphan cleanup is best-effort.
+      }
+    }
     return desktopEvidenceResult('failed', err instanceof Error ? err.message : 'desktop evidence attach failed')
   }
 }

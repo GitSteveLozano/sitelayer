@@ -38,6 +38,7 @@ class MemoryStorage implements BlueprintStorage {
   backend = 'local-fs' as const
   bucket = null
   writes: Array<{ key: string; contents: Buffer; contentType: string | undefined }> = []
+  deletes: string[] = []
 
   async put(key: string, contents: Buffer, contentType?: string): Promise<void> {
     this.writes.push({ key, contents, contentType })
@@ -55,8 +56,8 @@ class MemoryStorage implements BlueprintStorage {
     throw new Error('not implemented')
   }
 
-  async deleteObject(_storagePath: string): Promise<void> {
-    throw new Error('not implemented')
+  async deleteObject(storagePath: string): Promise<void> {
+    this.deletes.push(storagePath)
   }
 
   async getDownloadUrl(_key: string, _options?: DownloadUrlOptions): Promise<string | null> {
@@ -984,6 +985,70 @@ describe('ops diagnostics', () => {
     expect(JSON.stringify(artifactInsert?.params)).toContain('ops_diagnostic_desktop_capture')
     expect(JSON.stringify(queries)).not.toContain('/tmp/')
     expect(JSON.stringify(queries)).not.toContain('/mnt/')
+  })
+
+  it('deletes uploaded desktop evidence when DB attachment fails', async () => {
+    const storage = new MemoryStorage()
+    const fetchImpl: typeof fetch = async () =>
+      new Response(Buffer.from('orphan candidate'), { headers: { 'content-type': 'video/mp4' } })
+    const runTx = async <T>(): Promise<T> => {
+      throw new Error('capture artifact insert failed')
+    }
+
+    const result = await __captureOnsiteDesktopEvidenceForTests(
+      {
+        requireCapability: async () => true,
+        sendJson: () => undefined,
+        company: { id: 'company-1' } as ActiveCompany,
+        storage,
+        buildSha: 'build-test',
+        fetchImpl,
+      },
+      { screenCaptureUrl: 'http://screen.local', fetchImpl, timeoutMs: 250 },
+      {
+        session: {
+          id: '11111111-1111-4111-8111-111111111111',
+          state: 'active',
+          created_at: '2026-06-12T12:00:00.000Z',
+          expires_at: '2026-06-12T13:00:00.000Z',
+          operator_user_id: 'user_42',
+          label: null,
+          intent: 'capture_desktop_context',
+          plan: {
+            status: 'ready',
+            control_level: 'capture',
+            recommended_entry: 'capture_desktop_context',
+            can_capture_desktop: true,
+            can_route_work: false,
+            can_dispatch_agent_review: false,
+            blockers: [],
+            actions: [],
+          },
+          audit_events: [],
+        },
+        event: {
+          id: '22222222-2222-4222-8222-222222222222',
+          at: '2026-06-12T12:05:00.000Z',
+          actor_user_id: 'user_99',
+          type: 'action.requested',
+          action_key: 'capture_desktop_context',
+          effect: 'audit_only',
+          summary: 'Requested Attach desktop evidence.',
+        },
+        actionKey: 'capture_desktop_context',
+        actorUserId: 'user_99',
+      },
+      runTx,
+    )
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      error: 'capture artifact insert failed',
+      artifact_id: null,
+      storage_key: null,
+    })
+    expect(storage.writes).toHaveLength(1)
+    expect(storage.deletes).toEqual([storage.writes[0]!.key])
   })
 
   it('maps persisted desktop evidence rows back to reopenable session state', () => {
