@@ -172,7 +172,6 @@ const panelStyle: CSSProperties = {
   gap: 10,
   padding: 12,
   border: '1px solid #e2dccc',
-  borderRadius: 8,
   background: '#fffdf7',
 }
 const titleStyle: CSSProperties = { fontWeight: 700, fontSize: 13, color: '#3f372c' }
@@ -193,7 +192,6 @@ const marksRowStyle: CSSProperties = { display: 'flex', gap: 6, flexWrap: 'wrap'
 const markChipStyle: CSSProperties = {
   fontSize: 12,
   padding: '3px 8px',
-  borderRadius: 999,
   border: '1px solid #e2dccc',
   background: '#f5f1e8',
   color: '#8a7f70',
@@ -214,7 +212,6 @@ const playerContainerActiveStyle: CSSProperties = {
   minHeight: 200,
   maxHeight: 420,
   overflow: 'auto',
-  borderRadius: 6,
   border: '1px solid #e2dccc',
   background: '#fff',
 }

@@ -27,8 +27,7 @@ export function MaterialsTab({ bills, project }: { bills: BootstrapResponse['mat
           <div
             style={{
               padding: '14px 16px',
-              border: '1px solid var(--m-line)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               background: 'var(--m-card-soft)',
             }}
           >

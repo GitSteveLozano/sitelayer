@@ -457,8 +457,7 @@ function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose 
             placeholder="Reason (e.g. doctor's appointment)"
             rows={3}
             style={{
-              border: '1px solid var(--m-line)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               padding: '10px 12px',
               fontSize: 14,
               resize: 'vertical',

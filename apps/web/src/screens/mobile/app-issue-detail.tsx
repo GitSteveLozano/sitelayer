@@ -206,8 +206,7 @@ function MobileAppIssueDetail({ issueId, canTriage }: { issueId: string; canTria
                       style={{
                         fontSize: 13,
                         padding: '6px 8px',
-                        borderRadius: 8,
-                        border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+                        border: '2px solid var(--m-ink)',
                       }}
                     >
                       <option value={2}>Tier 2</option>
@@ -360,8 +359,7 @@ export function CaptureAnalysisPanel({
               maxHeight: 360,
               overflow: 'auto',
               padding: 12,
-              borderRadius: 8,
-              border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+              border: '2px solid var(--m-ink)',
               background: 'var(--m-surface-2, #fbfaf6)',
             }}
           >

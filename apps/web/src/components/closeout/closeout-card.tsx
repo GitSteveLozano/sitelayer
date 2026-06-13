@@ -35,8 +35,7 @@ export function CloseoutCard({
             padding: 14,
             fontSize: 12,
             color: 'var(--m-ink-3)',
-            border: '1px solid var(--m-line)',
-            borderRadius: 12,
+            border: '2px solid var(--m-ink)',
             background: 'var(--m-card-soft)',
           }}
         >
@@ -63,8 +62,7 @@ export function CloseoutCard({
     <div style={{ padding: '0 16px 16px' }}>
       <div
         style={{
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
+          border: '2px solid var(--m-ink)',
           overflow: 'hidden',
           background: 'var(--m-card)',
         }}

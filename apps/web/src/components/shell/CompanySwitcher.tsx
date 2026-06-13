@@ -118,8 +118,7 @@ export function CompanySwitcher() {
           minWidth: 0,
           fontSize: 13,
           padding: '4px 8px',
-          borderRadius: 4,
-          border: '1px solid var(--m-line, #3a342d)',
+          border: '2px solid var(--m-ink)',
           background: 'var(--m-surface, #ffffff)',
           color: 'var(--m-ink, #1a1a1a)',
         }}

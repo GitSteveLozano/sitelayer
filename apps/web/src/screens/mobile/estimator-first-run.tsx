@@ -107,7 +107,6 @@ export function EstimatorFirstRunScreen() {
                     style={{
                       height: 4,
                       flex: 1,
-                      borderRadius: 2,
                       background: i <= step ? 'var(--m-accent)' : 'var(--m-line-2)',
                     }}
                   />
@@ -118,7 +117,6 @@ export function EstimatorFirstRunScreen() {
                 style={{
                   width: 56,
                   height: 56,
-                  borderRadius: 14,
                   background: 'var(--m-accent-soft)',
                   color: 'var(--m-accent-ink)',
                   display: 'inline-flex',

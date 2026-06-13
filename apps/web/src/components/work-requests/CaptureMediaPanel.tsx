@@ -145,7 +145,6 @@ const rowStyle: CSSProperties = {
   gap: 8,
   padding: 12,
   border: '1px solid #e2dccc',
-  borderRadius: 8,
   background: '#fffdf7',
 }
 const metaStyle: CSSProperties = {
@@ -153,7 +152,7 @@ const metaStyle: CSSProperties = {
   fontSize: 12,
   color: '#6b6155',
 }
-const mediaStyle: CSSProperties = { width: '100%', maxHeight: 360, borderRadius: 6, background: '#000' }
+const mediaStyle: CSSProperties = { width: '100%', maxHeight: 360, background: '#000' }
 const textStyle: CSSProperties = {
   whiteSpace: 'pre-wrap',
   fontSize: 12,
@@ -162,7 +161,6 @@ const textStyle: CSSProperties = {
   margin: 0,
   padding: 8,
   background: '#f5f1e8',
-  borderRadius: 6,
 }
 const errorStyle: CSSProperties = { color: '#b4231f', fontSize: 12 }
 const linkStyle: CSSProperties = { fontSize: 13, color: '#2d5fa6', alignSelf: 'center' }

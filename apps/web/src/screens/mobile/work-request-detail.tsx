@@ -697,8 +697,7 @@ function ReporterReceiptStrip({
           display: 'grid',
           gap: 8,
           padding: 12,
-          border: '1.5px solid var(--m-line)',
-          borderRadius: 8,
+          border: '2px solid var(--m-ink)',
           background: 'var(--m-card)',
         }}
       >

@@ -106,15 +106,13 @@ export function EstimatorInviteScreen() {
                     gap: 12,
                     padding: '12px 14px',
                     background: 'var(--m-card)',
-                    border: '1px solid var(--m-line)',
-                    borderRadius: 12,
+                    border: '2px solid var(--m-ink)',
                   }}
                 >
                   <span
                     style={{
                       width: 36,
                       height: 36,
-                      borderRadius: 8,
                       flexShrink: 0,
                       background: 'var(--m-accent-soft)',
                       color: 'var(--m-accent-ink)',

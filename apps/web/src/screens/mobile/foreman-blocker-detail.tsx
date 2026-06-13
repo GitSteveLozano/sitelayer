@@ -338,7 +338,7 @@ export function ForemanBlockerDetailMobile({
                   key={p.id}
                   src={attachmentFileUrl(issueId, p.storage_key)}
                   alt="Worker photo"
-                  style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 10 }}
+                  style={{ width: '100%', maxHeight: 320, objectFit: 'cover' }}
                 />
               ))}
             </div>

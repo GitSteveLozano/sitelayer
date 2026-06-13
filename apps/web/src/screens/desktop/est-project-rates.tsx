@@ -168,8 +168,7 @@ export function ProjectRatesModal({ projectId, open, onClose, onSaved }: Project
                   fontFamily: 'var(--m-num)',
                   fontSize: 14,
                   padding: '6px 8px',
-                  border: '1px solid var(--m-ink-4, rgba(0,0,0,0.2))',
-                  borderRadius: 6,
+                  border: '2px solid var(--m-ink)',
                   background: 'var(--m-paper)',
                 }}
               />

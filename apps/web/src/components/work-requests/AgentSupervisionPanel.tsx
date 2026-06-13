@@ -683,8 +683,7 @@ const voiceConfirmStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
   padding: 10,
-  borderRadius: 8,
-  border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+  border: '2px solid var(--m-ink)',
   background: 'var(--m-surface-2, #fbfaf6)',
 }
 const voiceConfirmTextStyle: CSSProperties = { fontSize: 13, color: 'var(--m-ink)' }
@@ -700,8 +699,7 @@ const detailCardStyle = (tone: StepTone): CSSProperties => ({
   display: 'grid',
   gap: 6,
   padding: 12,
-  borderRadius: 8,
-  border: `1px solid ${tone === 'error' ? '#e7b7b3' : 'var(--m-line, rgba(0,0,0,0.12))'}`,
+  border: `2px solid ${tone === 'error' ? '#b4231f' : 'var(--m-ink)'}`,
   background: tone === 'error' ? '#fdf3f2' : 'var(--m-surface-2, #fbfaf6)',
 })
 const columnsStyle: CSSProperties = {
@@ -713,8 +711,7 @@ const columnStyle: CSSProperties = {
   display: 'grid',
   gap: 8,
   padding: 12,
-  borderRadius: 8,
-  border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
+  border: '2px solid var(--m-ink)',
   background: 'var(--m-surface-2, #fbfaf6)',
   alignContent: 'start',
 }
@@ -748,9 +745,8 @@ const stepChipStyle = (active: boolean, tone: StepTone): CSSProperties => ({
   gap: 6,
   fontSize: 12,
   padding: '5px 10px',
-  borderRadius: 999,
   cursor: 'pointer',
-  border: `1px solid ${active ? 'var(--m-ink)' : tone === 'error' ? '#e7b7b3' : 'var(--m-line, rgba(0,0,0,0.12))'}`,
+  border: `1.5px solid ${active ? 'var(--m-ink)' : tone === 'error' ? '#b4231f' : 'var(--m-ink)'}`,
   background: active ? 'var(--m-ink)' : '#fff',
   color: active ? '#fff' : tone === 'error' ? '#b4231f' : 'var(--m-ink-2)',
 })
@@ -761,8 +757,7 @@ const stepDotStyle = (tone: StepTone): CSSProperties => ({
   background: tone === 'error' ? '#b4231f' : tone === 'agent' ? '#2d5fa6' : '#9a9082',
 })
 const promptDetailsStyle: CSSProperties = {
-  border: '1px solid var(--m-line, rgba(0,0,0,0.12))',
-  borderRadius: 8,
+  border: '2px solid var(--m-ink)',
   padding: '8px 12px',
   background: 'var(--m-surface-2, #fbfaf6)',
 }

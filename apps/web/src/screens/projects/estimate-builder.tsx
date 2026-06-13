@@ -242,7 +242,7 @@ export function EstimateBuilderScreen() {
           primaryAction={
             <Link
               to={canvasPath(projectId)}
-              className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
+              className="w-full h-[50px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
             >
               Open takeoff
             </Link>
@@ -519,7 +519,7 @@ function LineItemRow({ line, item, pending, onEdit, pricingProfileConfig }: Line
             const next = Number(e.target.value)
             if (Number.isFinite(next)) onEdit({ service_item_code: line.service_item_code, quantity: next })
           }}
-          className="w-20 text-right num text-[12.5px] font-medium px-1.5 py-1 rounded border border-line bg-card focus:outline-none focus:border-accent"
+          className="w-20 text-right num text-[12.5px] font-medium px-1.5 py-1 border-2 border-ink bg-card focus:outline-none focus:border-accent"
         />
         <span className="text-[10.5px] text-ink-3 shrink-0">{line.unit}</span>
         <span className="text-[10.5px] text-ink-3 shrink-0">×</span>
@@ -536,7 +536,7 @@ function LineItemRow({ line, item, pending, onEdit, pricingProfileConfig }: Line
               const next = Number(e.target.value)
               if (Number.isFinite(next)) onEdit({ service_item_code: line.service_item_code, override_rate: next })
             }}
-            className="w-20 text-right num text-[12.5px] font-medium px-1.5 py-1 rounded border border-line bg-card focus:outline-none focus:border-accent"
+            className="w-20 text-right num text-[12.5px] font-medium px-1.5 py-1 border-2 border-ink bg-card focus:outline-none focus:border-accent"
           />
         </div>
         <div className="num text-[13px] font-semibold w-24 text-right shrink-0">

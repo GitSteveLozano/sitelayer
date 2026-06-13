@@ -148,7 +148,7 @@ export function TakeoffSummaryScreen() {
             primaryAction={
               <Link
                 to={canvasPath(projectId)}
-                className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
+                className="w-full h-[50px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
               >
                 Open canvas
               </Link>
@@ -202,7 +202,7 @@ function SummaryRow({
               <img
                 src={group.thumbnail}
                 alt=""
-                className="w-9 h-9 rounded-md object-cover shrink-0 border border-line"
+                className="w-9 h-9 object-cover shrink-0 border-2 border-ink"
                 aria-hidden="true"
               />
             ) : null}

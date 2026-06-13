@@ -682,7 +682,6 @@ export function MobileRunningTotals({
                           display: 'inline-block',
                           width: 48,
                           height: 4,
-                          borderRadius: 2,
                           background: 'var(--m-line)',
                           overflow: 'hidden',
                           verticalAlign: 'middle',

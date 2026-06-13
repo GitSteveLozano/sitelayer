@@ -82,7 +82,7 @@ export function ProjectSetupScreen() {
             <input
               value={form.name}
               onChange={(e) => setup.edit('name', e.target.value)}
-              className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+              className="w-full p-2.5 border-2 border-ink bg-card text-[14px] focus:outline-none focus:border-accent"
             />
           </Field>
           <Field label="Status">
@@ -103,7 +103,7 @@ export function ProjectSetupScreen() {
                 onChange={(e) => setup.edit('siteLat', e.target.value)}
                 inputMode="decimal"
                 placeholder="49.8951"
-                className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
+                className="w-full p-2.5 border-2 border-ink bg-card text-[14px] num focus:outline-none focus:border-accent"
               />
             </Field>
             <Field label="Lng">
@@ -112,7 +112,7 @@ export function ProjectSetupScreen() {
                 onChange={(e) => setup.edit('siteLng', e.target.value)}
                 inputMode="decimal"
                 placeholder="-97.1384"
-                className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
+                className="w-full p-2.5 border-2 border-ink bg-card text-[14px] num focus:outline-none focus:border-accent"
               />
             </Field>
           </div>
@@ -143,7 +143,7 @@ export function ProjectSetupScreen() {
               <button
                 type="button"
                 onClick={() => setup.edit('autoEnabled', true)}
-                className={`flex-1 px-3 py-2 rounded border text-[13px] ${
+                className={`flex-1 px-3 py-2 border text-[13px] ${
                   form.autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
                 }`}
               >
@@ -152,7 +152,7 @@ export function ProjectSetupScreen() {
               <button
                 type="button"
                 onClick={() => setup.edit('autoEnabled', false)}
-                className={`flex-1 px-3 py-2 rounded border text-[13px] ${
+                className={`flex-1 px-3 py-2 border text-[13px] ${
                   !form.autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
                 }`}
               >
@@ -200,7 +200,7 @@ export function ProjectSetupScreen() {
               onChange={(e) => setup.edit('budgetDollars', e.target.value)}
               inputMode="decimal"
               placeholder="2400"
-              className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
+              className="w-full p-2.5 border-2 border-ink bg-card text-[14px] num focus:outline-none focus:border-accent"
             />
           </Field>
         </div>
@@ -264,7 +264,7 @@ function MapPreview({ lat, lng, radius }: MapPreviewProps) {
   // shape, not satellite imagery.
   // Real map preview lands when Leaflet is added (Phase 5 polish).
   return (
-    <div className="mt-3 relative aspect-[2/1] rounded-md overflow-hidden border border-line bg-card-soft">
+    <div className="mt-3 relative aspect-[2/1] overflow-hidden border-2 border-ink bg-card-soft">
       <svg viewBox="0 0 200 100" className="absolute inset-0 w-full h-full">
         <defs>
           <pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse">

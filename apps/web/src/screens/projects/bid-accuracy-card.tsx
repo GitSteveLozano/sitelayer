@@ -57,25 +57,21 @@ export function BidAccuracyCard({ projectId, onDismiss, compact = false, onCompa
   if (accuracy.isPending) {
     if (compact) {
       return (
-        <div className="rounded-full border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">
-          Loading bid accuracy…
-        </div>
+        <div className="border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">Loading bid accuracy…</div>
       )
     }
-    return (
-      <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">Loading bid accuracy…</div>
-    )
+    return <div className="border border-dashed border-line p-3 text-[12px] text-ink-3">Loading bid accuracy…</div>
   }
   if (accuracy.isError || !accuracy.data || !accuracy.data.summary) {
     if (compact) {
       return (
-        <div className="rounded-full border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">
+        <div className="border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">
           No bid-accuracy signal yet
         </div>
       )
     }
     return (
-      <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">
+      <div className="border border-dashed border-line p-3 text-[12px] text-ink-3">
         No bid-accuracy signal yet — close a few jobs and the keystone fills in.
       </div>
     )
@@ -98,7 +94,7 @@ export function BidAccuracyCard({ projectId, onDismiss, compact = false, onCompa
         type="button"
         onClick={onCompactClick}
         aria-label={`Bid accuracy — predicted margin ${sign}${marginAbs}%, ${confLabel} confidence. Tap for details.`}
-        className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-accent/50 bg-accent/5 px-2.5 py-1 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent/30"
+        className="inline-flex items-center gap-1.5 border border-dashed border-accent/50 bg-accent/5 px-2.5 py-1 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent/30"
       >
         <Spark size={11} state={confidence === 'high' ? 'strong' : 'accent'} />
         <ConfidencePill confidence={confidence} label={confLabel} />

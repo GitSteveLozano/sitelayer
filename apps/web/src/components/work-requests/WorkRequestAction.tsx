@@ -97,8 +97,7 @@ export function WorkRequestAction({
           display: 'grid',
           gap: 10,
           padding: 12,
-          border: '1px solid var(--m-line)',
-          borderRadius: 8,
+          border: '2px solid var(--m-ink)',
           background: 'var(--m-card)',
         }}
       >

@@ -546,11 +546,7 @@ function PhotoAttach({
       </div>
       {value ? (
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <img
-            src={value.url}
-            alt="Attached"
-            style={{ width: 120, height: 120, borderRadius: 10, objectFit: 'cover' }}
-          />
+          <img src={value.url} alt="Attached" style={{ width: 120, height: 120, objectFit: 'cover' }} />
           <MButton size="sm" variant="ghost" onClick={() => onChange(null)}>
             Remove
           </MButton>

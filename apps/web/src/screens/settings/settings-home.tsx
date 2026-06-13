@@ -109,8 +109,7 @@ export function MobileSettingsHome({
               textAlign: 'left',
               padding: 14,
               background: 'var(--m-card)',
-              border: '1px solid var(--m-line)',
-              borderRadius: 14,
+              border: '2px solid var(--m-ink)',
               display: 'flex',
               alignItems: 'center',
               gap: 12,
@@ -132,7 +131,7 @@ export function MobileSettingsHome({
                   gap: 4,
                 }}
               >
-                <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--m-green)' }} />
+                <span style={{ width: 6, height: 6, background: 'var(--m-green)' }} />
                 Workspace active
               </div>
             </div>
@@ -681,7 +680,6 @@ function IntegrationGlyph({ label, connected, tone }: { label: string; connected
       style={{
         width: 32,
         height: 32,
-        borderRadius: 8,
         background: bg,
         color: connected ? '#fff' : 'var(--m-ink-3)',
         display: 'inline-flex',
@@ -724,8 +722,7 @@ function shortDate(iso: string): string {
 
 const feedbackStyles: Record<string, CSSProperties> = {
   card: {
-    border: '1px solid var(--m-line)',
-    borderRadius: 12,
+    border: '2px solid var(--m-ink)',
     background: 'var(--m-card)',
     padding: 12,
     marginBottom: 18,
@@ -739,8 +736,7 @@ const feedbackStyles: Record<string, CSSProperties> = {
     marginBottom: 10,
   },
   input: {
-    border: '1px solid var(--m-line)',
-    borderRadius: 8,
+    border: '2px solid var(--m-ink)',
     padding: '9px 10px',
     font: 'inherit',
     fontSize: 14,
@@ -752,15 +748,13 @@ const feedbackStyles: Record<string, CSSProperties> = {
   primary: {
     width: '100%',
     border: 0,
-    borderRadius: 9,
     padding: '10px 12px',
     background: 'var(--m-accent)',
     color: 'var(--m-accent-ink)',
     fontWeight: 700,
   },
   secondary: {
-    border: '1px solid var(--m-line)',
-    borderRadius: 8,
+    border: '2px solid var(--m-ink)',
     padding: '8px 10px',
     background: '#fff',
     color: 'var(--m-ink)',
@@ -768,8 +762,7 @@ const feedbackStyles: Record<string, CSSProperties> = {
   },
   result: { marginTop: 10, display: 'grid', gap: 8 },
   url: {
-    border: '1px solid var(--m-line)',
-    borderRadius: 8,
+    border: '2px solid var(--m-ink)',
     padding: 8,
     background: 'var(--m-card-soft)',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -781,7 +774,6 @@ const feedbackStyles: Record<string, CSSProperties> = {
     color: '#b91c1c',
     background: '#fef2f2',
     border: '1px solid #fecaca',
-    borderRadius: 8,
     padding: 8,
     fontSize: 12,
   },
@@ -798,7 +790,6 @@ const feedbackStyles: Record<string, CSSProperties> = {
   inviteMeta: { fontSize: 12, color: 'var(--m-ink-3)', marginTop: 2 },
   revoke: {
     border: '1px solid #fecaca',
-    borderRadius: 8,
     padding: '7px 9px',
     background: '#fff',
     color: '#b91c1c',

@@ -402,9 +402,8 @@ function MobileProjectNewMobile({ companySlug }: { companySlug: string }) {
                     fontSize: 12,
                     fontWeight: 700,
                     letterSpacing: '0.06em',
-                    borderRadius: 8,
                     cursor: 'pointer',
-                    border: active ? '1px solid var(--m-accent)' : '1px solid var(--m-line)',
+                    border: active ? '2px solid var(--m-accent)' : '2px solid var(--m-ink)',
                     background: active ? 'var(--m-accent)' : 'transparent',
                     color: active ? 'var(--m-on-accent, #fff)' : 'var(--m-ink-2)',
                   }}

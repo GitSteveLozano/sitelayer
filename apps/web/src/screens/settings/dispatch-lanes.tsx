@@ -90,7 +90,7 @@ function LaneRow({ lane }: { lane: DispatchLane }) {
             <button
               type="button"
               onClick={() => setShowPauseModal(true)}
-              className="text-[11px] px-3 py-1 rounded border border-line hover:bg-card-soft"
+              className="text-[11px] px-3 py-1 border-2 border-ink hover:bg-card-soft"
             >
               Pause
             </button>
@@ -98,7 +98,7 @@ function LaneRow({ lane }: { lane: DispatchLane }) {
             <button
               type="button"
               onClick={() => setShowResumeModal(true)}
-              className="text-[11px] px-3 py-1 rounded border border-line hover:bg-card-soft"
+              className="text-[11px] px-3 py-1 border-2 border-ink hover:bg-card-soft"
             >
               Resume
             </button>
@@ -140,7 +140,7 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-5"
       onClick={onClose}
     >
-      <div className="bg-card rounded-lg p-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-card border-2 border-ink p-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         <div className="text-[14px] font-semibold mb-3">Pause lane: {lane.name}</div>
         <label className="block">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Reason</div>
@@ -149,7 +149,7 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
             onChange={(e) => setReason(e.target.value)}
             rows={3}
             placeholder="e.g. qbo_live_flip: dry-run before QBO push"
-            className="mt-1 w-full text-[13px] py-2 px-2 border border-line rounded bg-transparent focus:outline-none focus:border-accent"
+            className="mt-1 w-full text-[13px] py-2 px-2 border-2 border-ink bg-transparent focus:outline-none focus:border-accent"
           />
         </label>
         <label className="block mt-3">
@@ -160,7 +160,7 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
             type="datetime-local"
             value={resumeAfter}
             onChange={(e) => setResumeAfter(e.target.value)}
-            className="mt-1 w-full text-[13px] py-2 px-2 border border-line rounded bg-transparent focus:outline-none focus:border-accent"
+            className="mt-1 w-full text-[13px] py-2 px-2 border-2 border-ink bg-transparent focus:outline-none focus:border-accent"
           />
         </label>
         {pause.isError ? (
@@ -170,7 +170,7 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
           <button
             type="button"
             onClick={onClose}
-            className="text-[12px] px-3 py-1.5 rounded border border-line hover:bg-card-soft"
+            className="text-[12px] px-3 py-1.5 border-2 border-ink hover:bg-card-soft"
           >
             Cancel
           </button>
@@ -178,7 +178,7 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
             type="button"
             onClick={handleSubmit}
             disabled={!reason.trim() || pause.isPending}
-            className="text-[12px] px-3 py-1.5 rounded bg-bad text-white hover:opacity-80 disabled:opacity-40"
+            className="text-[12px] px-3 py-1.5 bg-bad text-white hover:opacity-80 disabled:opacity-40"
           >
             {pause.isPending ? 'Pausing…' : 'Pause lane'}
           </button>
@@ -210,7 +210,7 @@ function ResumeModal({ lane, onClose }: { lane: DispatchLane; onClose: () => voi
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-5"
       onClick={onClose}
     >
-      <div className="bg-card rounded-lg p-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-card border-2 border-ink p-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         <div className="text-[14px] font-semibold mb-3">Resume lane: {lane.name}</div>
         <label className="block">
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Reason</div>
@@ -219,7 +219,7 @@ function ResumeModal({ lane, onClose }: { lane: DispatchLane; onClose: () => voi
             onChange={(e) => setReason(e.target.value)}
             rows={3}
             placeholder="e.g. issue resolved, restoring service"
-            className="mt-1 w-full text-[13px] py-2 px-2 border border-line rounded bg-transparent focus:outline-none focus:border-accent"
+            className="mt-1 w-full text-[13px] py-2 px-2 border-2 border-ink bg-transparent focus:outline-none focus:border-accent"
           />
         </label>
         {resume.isError ? (
@@ -229,7 +229,7 @@ function ResumeModal({ lane, onClose }: { lane: DispatchLane; onClose: () => voi
           <button
             type="button"
             onClick={onClose}
-            className="text-[12px] px-3 py-1.5 rounded border border-line hover:bg-card-soft"
+            className="text-[12px] px-3 py-1.5 border-2 border-ink hover:bg-card-soft"
           >
             Cancel
           </button>
@@ -237,7 +237,7 @@ function ResumeModal({ lane, onClose }: { lane: DispatchLane; onClose: () => voi
             type="button"
             onClick={handleSubmit}
             disabled={!reason.trim() || resume.isPending}
-            className="text-[12px] px-3 py-1.5 rounded bg-good text-white hover:opacity-80 disabled:opacity-40"
+            className="text-[12px] px-3 py-1.5 bg-good text-white hover:opacity-80 disabled:opacity-40"
           >
             {resume.isPending ? 'Resuming…' : 'Resume lane'}
           </button>

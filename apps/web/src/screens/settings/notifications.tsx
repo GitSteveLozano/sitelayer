@@ -322,7 +322,7 @@ export function NotificationPreferencesScreen() {
               value={draft.sms_phone ?? ''}
               onChange={(e) => setDraft((d) => ({ ...d, sms_phone: e.target.value }))}
               placeholder="+1 555 555 0123"
-              className="w-full p-3 text-[14px] rounded border border-line-2 bg-card focus:outline-none focus:border-accent"
+              className="w-full p-3 text-[14px] border-2 border-ink bg-card focus:outline-none focus:border-accent"
             />
             <label className="block text-[12px] font-medium text-ink-3 mb-1 mt-3">Email</label>
             <input
@@ -330,7 +330,7 @@ export function NotificationPreferencesScreen() {
               value={draft.email ?? ''}
               onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
               placeholder="you@example.com"
-              className="w-full p-3 text-[14px] rounded border border-line-2 bg-card focus:outline-none focus:border-accent"
+              className="w-full p-3 text-[14px] border-2 border-ink bg-card focus:outline-none focus:border-accent"
             />
           </div>
 

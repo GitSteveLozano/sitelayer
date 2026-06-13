@@ -77,7 +77,6 @@ export function InviteTeammateScreen() {
                 display: 'grid',
                 gridTemplateColumns: 'repeat(2, 1fr)',
                 border: '2px solid var(--m-ink)',
-                borderRadius: 12,
                 overflow: 'hidden',
               }}
             >
@@ -138,7 +137,7 @@ export function InviteTeammateScreen() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--m-ink-3)', marginBottom: 8 }}>
                   Pending invites
                 </div>
-                <div style={{ border: '2px solid var(--m-ink)', borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ border: '2px solid var(--m-ink)', overflow: 'hidden' }}>
                   {pendingInvites.map((row, i) => (
                     <div
                       key={row.id}

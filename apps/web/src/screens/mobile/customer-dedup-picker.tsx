@@ -185,9 +185,8 @@ export function CustomerDedupPicker({ typedName, linkedCustomerId, onLink, onCre
         <div style={dimLabelStyle}>You typed</div>
         <div
           style={{
-            border: '1px solid var(--m-line)',
+            border: '2px solid var(--m-ink)',
             background: 'var(--m-card-soft)',
-            borderRadius: 12,
             padding: '10px 14px',
             fontWeight: 600,
             color: 'var(--m-ink)',

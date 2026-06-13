@@ -35,8 +35,7 @@ export function LogTab({ project }: { project: ProjectRow; navigate: (path: stri
           <div
             style={{
               padding: '14px 16px',
-              border: '1px solid var(--m-line)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               fontSize: 13,
               color: 'var(--m-red)',
             }}
@@ -59,8 +58,7 @@ export function LogTab({ project }: { project: ProjectRow; navigate: (path: stri
           <div
             style={{
               padding: '14px 16px',
-              border: '1px solid var(--m-line)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               background: 'var(--m-card-soft)',
             }}
           >

@@ -79,7 +79,7 @@ export function LaborPayrollRunCreateScreen() {
                 setPeriodStart(e.target.value)
                 entry.setPeriod(e.target.value, periodEnd)
               }}
-              className="bg-card-soft border border-line rounded-md px-2 py-1 text-ink-2"
+              className="bg-card-soft border-2 border-ink px-2 py-1 text-ink-2"
             />
           </label>
           <label className="flex items-center justify-between text-[12px] py-1.5 gap-3">
@@ -91,7 +91,7 @@ export function LaborPayrollRunCreateScreen() {
                 setPeriodEnd(e.target.value)
                 entry.setPeriod(periodStart, e.target.value)
               }}
-              className="bg-card-soft border border-line rounded-md px-2 py-1 text-ink-2"
+              className="bg-card-soft border-2 border-ink px-2 py-1 text-ink-2"
             />
           </label>
         </div>

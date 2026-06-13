@@ -97,7 +97,7 @@ export function GeneratePayrollExportSheet({ open, onClose, runs, defaultRunId }
                 setRunId(e.target.value)
                 setGenerated(null)
               }}
-              className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+              className="w-full p-3 border-2 border-ink bg-card text-[14px] focus:outline-none focus:border-accent"
             >
               <option value="">Select…</option>
               {runs.map((r) => (
@@ -119,7 +119,7 @@ export function GeneratePayrollExportSheet({ open, onClose, runs, defaultRunId }
               setFormat(e.target.value as PayrollExportFormat)
               setGenerated(null)
             }}
-            className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+            className="w-full p-3 border-2 border-ink bg-card text-[14px] focus:outline-none focus:border-accent"
           >
             {PAYROLL_EXPORT_FORMATS.map((f) => (
               <option key={f.value} value={f.value}>
@@ -130,7 +130,7 @@ export function GeneratePayrollExportSheet({ open, onClose, runs, defaultRunId }
         </div>
 
         {generated ? (
-          <div className="rounded border border-line-2 bg-card-soft p-3">
+          <div className="border-2 border-ink bg-card-soft p-3">
             <div className="text-[12px] text-ink-2">
               Export ready. Download it to import into your payroll provider.
             </div>

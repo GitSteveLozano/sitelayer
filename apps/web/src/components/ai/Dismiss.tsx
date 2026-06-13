@@ -23,7 +23,7 @@ export function Dismiss({ onDismiss, className, label = 'Dismiss suggestion' }: 
       aria-label={label}
       className={cn(
         'inline-flex items-center justify-center shrink-0',
-        'w-[22px] h-[22px] rounded-full border border-line bg-transparent text-ink-3',
+        'w-[22px] h-[22px] border-2 border-ink bg-transparent text-ink-3',
         'hover:bg-card-soft hover:text-ink',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1',
         className,

@@ -88,7 +88,7 @@ export function PricingProfilePicker({ onProfileResolved }: PricingProfilePicker
             setPinnedId(next)
           }
         }}
-        className="px-1.5 py-1 rounded border border-line bg-card text-[11.5px] font-medium text-ink-1 focus:outline-none focus:border-accent"
+        className="px-1.5 py-1 border-2 border-ink bg-card text-[11.5px] font-medium text-ink-1 focus:outline-none focus:border-accent"
       >
         {list.map((p) => (
           <option key={p.id} value={p.id}>

@@ -141,7 +141,7 @@ function DiffBlock({ label, value }: { label: string; value: unknown }) {
   return (
     <div>
       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
-      <pre className="mt-1 text-[11px] font-mono p-2 rounded bg-card-soft overflow-x-auto whitespace-pre-wrap">
+      <pre className="mt-1 text-[11px] font-mono p-2 bg-card-soft overflow-x-auto whitespace-pre-wrap">
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>

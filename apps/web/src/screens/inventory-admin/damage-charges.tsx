@@ -62,7 +62,7 @@ export function DamageChargesAdminScreen() {
               const v = e.target.value
               setParams(v ? { project: v } : {})
             }}
-            className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[14px]"
+            className="mt-1 w-full border-2 border-ink bg-base p-2 text-[14px]"
           >
             <option value="">— pick a project —</option>
             {(projects.data?.projects ?? []).map((p) => (
@@ -145,7 +145,7 @@ export function DamageChargesAdminScreen() {
               <select
                 name="kind"
                 defaultValue="damage"
-                className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[14px]"
+                className="mt-1 w-full border-2 border-ink bg-base p-2 text-[14px]"
               >
                 {KINDS.map((k) => (
                   <option key={k.value} value={k.value}>
@@ -158,7 +158,7 @@ export function DamageChargesAdminScreen() {
               <span className="text-[12px] text-ink-3">Description</span>
               <input
                 name="description"
-                className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[14px]"
+                className="mt-1 w-full border-2 border-ink bg-base p-2 text-[14px]"
                 placeholder="e.g. 2x cuplock standard, bent"
                 required
               />
@@ -172,7 +172,7 @@ export function DamageChargesAdminScreen() {
                   min="0.01"
                   name="quantity"
                   defaultValue="1"
-                  className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[14px]"
+                  className="mt-1 w-full border-2 border-ink bg-base p-2 text-[14px]"
                   required
                 />
               </label>
@@ -183,7 +183,7 @@ export function DamageChargesAdminScreen() {
                   step="0.01"
                   min="0.01"
                   name="unit_amount"
-                  className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[14px]"
+                  className="mt-1 w-full border-2 border-ink bg-base p-2 text-[14px]"
                   required
                 />
               </label>
@@ -315,7 +315,7 @@ function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () 
             value={waiveReason}
             onChange={(e) => setWaiveReason(e.target.value)}
             rows={3}
-            className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[13px]"
+            className="mt-1 w-full border-2 border-ink bg-base p-2 text-[13px]"
             placeholder="Why this charge is being waived"
           />
         </label>

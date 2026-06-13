@@ -929,7 +929,6 @@ export function ForemanCrewMap({ projects, workers, labor, today, onOpenProject 
                   left: '50%',
                   top: -10,
                   transform: 'translateX(-50%)',
-                  borderRadius: 999,
                   background: '#1c1816',
                   color: '#f3ecdf',
                   padding: '3px 8px',
@@ -985,7 +984,6 @@ export function ForemanCrewMap({ projects, workers, labor, today, onOpenProject 
                 style={{
                   display: 'block',
                   marginTop: 2,
-                  borderRadius: 999,
                   background: '#1c1816',
                   color: '#f3ecdf',
                   padding: '2px 6px',
@@ -1010,7 +1008,6 @@ export function ForemanCrewMap({ projects, workers, labor, today, onOpenProject 
               left: 16,
               right: 16,
               bottom: 14,
-              borderRadius: 10,
               background: 'var(--m-amber)',
               color: '#fffaf2',
               padding: '10px 12px',
@@ -1123,8 +1120,7 @@ function MapZoom({ label }: { label: string }) {
         // 44×44 minimum (WCAG 2.1) — map zoom is core navigation.
         width: 44,
         height: 44,
-        border: '1px solid var(--m-line)',
-        borderRadius: 12,
+        border: '2px solid var(--m-ink)',
         background: '#fff',
         color: 'var(--m-ink)',
         fontSize: 22,
@@ -1141,8 +1137,7 @@ function MapStat({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
-        borderRadius: 10,
-        border: '1px solid var(--m-line)',
+        border: '2px solid var(--m-ink)',
         background: 'var(--m-card)',
         padding: '9px 10px',
       }}

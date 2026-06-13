@@ -273,8 +273,8 @@ export function PhotoMeasureScreen() {
                       onClick={() => setRefAxis(a)}
                       className={
                         refAxis === a
-                          ? 'flex-1 py-2 rounded-md text-[13px] font-semibold bg-accent text-white'
-                          : 'flex-1 py-2 rounded-md text-[13px] font-semibold bg-card-soft text-ink-2'
+                          ? 'flex-1 py-2 text-[13px] font-semibold bg-accent text-white'
+                          : 'flex-1 py-2 text-[13px] font-semibold bg-card-soft text-ink-2'
                       }
                     >
                       {a === 'w' ? 'Width →' : 'Height ↓'}
@@ -308,14 +308,14 @@ export function PhotoMeasureScreen() {
                 </div>
                 {computed ? (
                   <div className="mt-3 grid grid-cols-2 gap-2 text-center">
-                    <div className="bg-card-soft rounded-md py-2">
+                    <div className="bg-card-soft py-2">
                       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Width</div>
                       <div className="font-mono tabular-nums text-[18px] font-semibold mt-1">
                         {computed.w.toFixed(2)}
                         <span className="text-[12px] text-ink-3 font-normal ml-1">{refUnit}</span>
                       </div>
                     </div>
-                    <div className="bg-card-soft rounded-md py-2">
+                    <div className="bg-card-soft py-2">
                       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Height</div>
                       <div className="font-mono tabular-nums text-[18px] font-semibold mt-1">
                         {computed.h.toFixed(2)}

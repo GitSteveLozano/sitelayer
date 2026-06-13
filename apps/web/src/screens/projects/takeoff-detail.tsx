@@ -118,7 +118,7 @@ export function TakeoffDetailScreen() {
           <img
             src={measurement.image_thumbnail}
             alt={`${measurement.service_item_code} measurement`}
-            className="w-full rounded-lg border border-line"
+            className="w-full border-2 border-ink"
           />
         ) : (
           <div className="m-card">

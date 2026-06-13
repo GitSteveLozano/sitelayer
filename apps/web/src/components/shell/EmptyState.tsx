@@ -27,7 +27,7 @@ export function EmptyState({ title, body, icon, primaryAction, secondaryAction, 
     <div className={cn('flex flex-col items-center text-center px-8 py-12', className)}>
       <div
         aria-hidden="true"
-        className="w-16 h-16 rounded-[20px] bg-accent-soft text-accent-ink flex items-center justify-center mb-4"
+        className="w-16 h-16 bg-accent-soft text-accent-ink flex items-center justify-center mb-4"
       >
         {icon ?? (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" width="28" height="28">

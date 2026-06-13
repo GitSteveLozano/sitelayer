@@ -73,7 +73,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
               alignItems: 'center',
               gap: 8,
               background: 'var(--m-card-soft)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               padding: '0 12px',
               height: 42,
             }}

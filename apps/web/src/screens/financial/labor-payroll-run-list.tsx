@@ -41,7 +41,7 @@ export function LaborPayrollRunListScreen() {
         </div>
         <Link
           to="/financial/labor-payroll-runs/new"
-          className="shrink-0 mt-1 px-3 py-1.5 rounded-full text-[12px] font-medium bg-accent text-white"
+          className="shrink-0 mt-1 px-3 py-1.5 text-[12px] font-medium bg-accent text-white"
         >
           + New run
         </Link>
@@ -53,7 +53,7 @@ export function LaborPayrollRunListScreen() {
             key={s}
             type="button"
             onClick={() => setFilter(s)}
-            className={`px-3 py-1.5 rounded-full text-[12px] font-medium border shrink-0 ${
+            className={`px-3 py-1.5 text-[12px] font-medium border shrink-0 ${
               filter === s ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
             }`}
           >

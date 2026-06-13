@@ -345,7 +345,6 @@ function SuccessState({
           width: 56,
           height: 56,
           margin: '0 auto 16px',
-          borderRadius: 14,
           background: 'var(--m-green-soft, var(--m-accent-soft))',
           color: 'var(--m-green)',
           display: 'inline-flex',

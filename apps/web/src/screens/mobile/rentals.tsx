@@ -121,7 +121,7 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
               alignItems: 'center',
               gap: 8,
               background: 'var(--m-card-soft)',
-              borderRadius: 12,
+              border: '2px solid var(--m-ink)',
               padding: '0 12px',
               height: 42,
             }}
@@ -292,8 +292,7 @@ function UtilizationCard({
       style={{
         margin: '12px 16px 4px',
         background: 'var(--m-card)',
-        border: '1px solid var(--m-line)',
-        borderRadius: 12,
+        border: '2px solid var(--m-ink)',
         padding: '14px 14px 12px',
         display: 'flex',
         flexDirection: 'column',
