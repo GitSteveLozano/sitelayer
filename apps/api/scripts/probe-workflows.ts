@@ -112,6 +112,23 @@ const SURFACES: WorkflowSurface[] = [
     snapPath: (id) => `/api/time-review-runs/${id}`,
     eventsPath: (id) => `/api/time-review-runs/${id}/events`,
   },
+  {
+    name: 'crew-schedule',
+    list: '/api/schedules',
+    listField: 'schedules',
+    snapPath: (id) => `/api/schedules/${id}`,
+    eventsPath: (id) => `/api/schedules/${id}/events`,
+  },
+  {
+    // daily_log's snapshot lives at the `/snapshot` suffix (the bare
+    // /:id GET returns the raw row, not the WorkflowSnapshot); the
+    // list/events shape otherwise matches the others.
+    name: 'daily-log',
+    list: '/api/daily-logs',
+    listField: 'dailyLogs',
+    snapPath: (id) => `/api/daily-logs/${id}/snapshot`,
+    eventsPath: (id) => `/api/daily-logs/${id}/events`,
+  },
 ]
 
 interface RowReport {

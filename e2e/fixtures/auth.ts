@@ -149,3 +149,100 @@ export async function dispatchWorkflowEvent<T = unknown>(
   }
   return (await response.json()) as T
 }
+
+/** The minimal snapshot contract every deterministic workflow GET/POST
+ * returns: a literal `state` string and a monotonically-incrementing
+ * `state_version` (the same shape `applyEventLog` asserts on, one tier
+ * down at the reducer). Extra fields ride along untouched. */
+export interface JourneySnapshot {
+  state: string
+  state_version: number
+  [k: string]: unknown
+}
+
+/** One leg of a journey: dispatch `event` (with any extra payload merged
+ * into the POST body) and assert the snapshot lands in `expectedState`. */
+export interface JourneyStep {
+  event: string
+  /** Extra event-body fields merged alongside `{ event, state_version }`. */
+  payload?: Record<string, unknown>
+  expectedState: string
+}
+
+/** The two REST paths for one workflow entity (see
+ * docs/DETERMINISTIC_WORKFLOWS.md): a snapshot GET and an events POST. */
+export interface JourneyEntity {
+  /** GET → `{ state, state_version, ... }` (the workflow snapshot). */
+  snapshotPath: string
+  /** POST `{ event, state_version }` → the next snapshot. */
+  eventsPath: string
+}
+
+/** What `runJourney` returns: the initial + terminal snapshots and the
+ * full per-step trail (each entry is the snapshot AFTER that step), so a
+ * caller can make extra assertions on intermediate states. */
+export interface JourneyResult<T extends JourneySnapshot = JourneySnapshot> {
+  initial: T
+  terminal: T
+  /** Snapshot after each step, in order (`trail.length === steps.length`). */
+  trail: T[]
+}
+
+/**
+ * HTTP-tier journey replay — the e2e twin of
+ * `packages/workflows/src/replay.ts:applyEventLog`.
+ *
+ * Where `applyEventLog` walks a persisted `workflow_event_log` through the
+ * registered reducer and asserts "each transition lands the expected
+ * snapshot" (schema match + `state_version` increments by exactly 1 + no
+ * gaps + reducer output == persisted `snapshot_after`), `runJourney` does
+ * the same proof one tier UP — against the LIVE API, over real HTTP. It
+ * fetches the baseline snapshot, then for each step POSTs the event with
+ * the current `state_version` (so a stale version 409s, exactly like the
+ * optimistic-concurrency guard the reducer relies on) and asserts:
+ *
+ *   - the snapshot after the step is in `expectedState`, AND
+ *   - `state_version` bumped by exactly 1 (the no-gap invariant),
+ *
+ * after every step AND that the terminal snapshot is the last step's
+ * `expectedState`. The Playwright assertions ARE the contract: a divergent
+ * server state (a transition that didn't land, an unexpected version jump)
+ * fails the journey at the first divergence, the same place `applyEventLog`
+ * records its first `issue`.
+ *
+ * Additive: takes the role `Page` (header fixtures already attached) and
+ * drives `dispatchWorkflowEvent` / `fetchWorkflowSnapshot` — no new
+ * transport. Returns the initial + terminal snapshots and the per-step
+ * trail for any further assertions the caller wants to layer on.
+ */
+export async function runJourney<T extends JourneySnapshot = JourneySnapshot>(
+  page: Page,
+  entity: JourneyEntity,
+  steps: readonly JourneyStep[],
+): Promise<JourneyResult<T>> {
+  const initial = await fetchWorkflowSnapshot<T>(page, entity.snapshotPath)
+  let snap = initial
+  const trail: T[] = []
+
+  for (const step of steps) {
+    const expectedVersion = snap.state_version + 1
+    const next = await dispatchWorkflowEvent<T>(page, entity.eventsPath, {
+      event: step.event,
+      state_version: snap.state_version,
+      ...(step.payload ?? {}),
+    })
+    // Per-step proof — mirrors applyEventLog's "snapshot_after matches" +
+    // "state_version increments by exactly 1, no gaps" assertions.
+    expect(next.state, `after ${step.event}`).toBe(step.expectedState)
+    expect(next.state_version, `state_version after ${step.event}`).toBe(expectedVersion)
+    trail.push(next)
+    snap = next
+  }
+
+  // Terminal proof — the journey ended exactly where the last step said.
+  // (No-op when steps is empty; the terminal is then the baseline.)
+  const terminalExpected = steps.length > 0 ? steps[steps.length - 1]!.expectedState : initial.state
+  expect(snap.state, 'terminal state').toBe(terminalExpected)
+
+  return { initial, terminal: snap, trail }
+}
