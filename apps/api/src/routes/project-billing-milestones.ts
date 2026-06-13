@@ -16,6 +16,18 @@ import { isValidUuid, parseJsonBody } from '../http-utils.js'
 // coercer owns that). `.loose()` keeps unknown keys.
 const NumericInputSchema = z.union([z.number(), z.string()])
 
+type MilestoneStatus = 'not_yet' | 'invoiced' | 'paid'
+
+const MILESTONE_STATUSES: readonly MilestoneStatus[] = ['not_yet', 'invoiced', 'paid']
+
+// Reject an out-of-domain `status` at PARSE time (→ 400) rather than relying
+// only on the downstream `isMilestoneStatus` runtime guard. The create path
+// previously coerced an unknown status to `not_yet` and the patch path 400'd
+// after parse — both now fail fast and uniformly here. The runtime guard is
+// kept as belt-and-suspenders for entries that bypass these top-level schemas
+// (e.g. inner `milestones[]` objects validated by `coerceMilestoneInput`).
+const MilestoneStatusSchema = z.enum(MILESTONE_STATUSES as [MilestoneStatus, ...MilestoneStatus[]])
+
 const MilestoneCreateBodySchema = z
   .object({
     milestones: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -23,7 +35,7 @@ const MilestoneCreateBodySchema = z
     pct: NumericInputSchema.nullish(),
     amount: NumericInputSchema.nullish(),
     sort_order: NumericInputSchema.nullish(),
-    status: z.string().optional(),
+    status: MilestoneStatusSchema.optional(),
     estimate_push_id: z.union([z.string(), z.null()]).optional(),
     contract_value: NumericInputSchema.nullish(),
   })
@@ -31,7 +43,7 @@ const MilestoneCreateBodySchema = z
 
 const MilestonePatchBodySchema = z
   .object({
-    status: z.string().optional(),
+    status: MilestoneStatusSchema.optional(),
     label: z.string().optional(),
     pct: NumericInputSchema.nullish(),
     amount: NumericInputSchema.nullish(),
@@ -53,8 +65,6 @@ const MILESTONE_COLUMNS = `
   id, company_id, project_id, label, pct, amount, sort_order, status,
   estimate_push_id, invoiced_at, paid_at, tier_origin, created_at, updated_at
 `
-
-type MilestoneStatus = 'not_yet' | 'invoiced' | 'paid'
 
 type MilestoneRow = {
   id: string
@@ -108,8 +118,6 @@ function rowToMilestone(row: MilestoneRow): Milestone {
     updated_at: row.updated_at,
   }
 }
-
-const MILESTONE_STATUSES: readonly MilestoneStatus[] = ['not_yet', 'invoiced', 'paid']
 
 function isMilestoneStatus(value: unknown): value is MilestoneStatus {
   return typeof value === 'string' && (MILESTONE_STATUSES as readonly string[]).includes(value)
